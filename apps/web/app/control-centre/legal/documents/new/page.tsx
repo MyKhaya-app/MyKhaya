@@ -42,6 +42,7 @@ export default function NewLegalDocumentPage() {
           key,
           display_name: fieldValue(data, "display_name").trim(),
           audience: data.get("audience"),
+          scope: data.get("scope"),
           action_verb: data.get("action_verb"),
           acceptance_required: data.get("acceptance_required") === "on",
         },
@@ -102,6 +103,14 @@ export default function NewLegalDocumentPage() {
                     child
                   </option>
                 </select>
+              </label>
+              <label>
+                Scope
+                <select name="scope" defaultValue="global">
+                  <option value="global">Global — applies across MyKhaya</option>
+                  <option value="founding_beta">Founding Beta — applies to Beta registration and enrolment</option>
+                </select>
+                <small>Founding Beta documents are only required in the Beta flow.</small>
               </label>
               <label>
                 Action for adult audience

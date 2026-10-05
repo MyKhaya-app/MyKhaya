@@ -249,7 +249,7 @@ export function LegalGate() {
                 .acceptLegalDocument({
                   document_key: doc.document_key,
                   document_version_id: versionId,
-                  context: "policy_update",
+                  context: "in_app_reacceptance",
                   platform: platform(),
                 })
                 .then(() => undefined)

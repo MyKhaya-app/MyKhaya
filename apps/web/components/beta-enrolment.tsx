@@ -3,7 +3,13 @@
 import { FormEvent, useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
-import { api, ApiError, type BetaEligibilityState, type PublicSignupState } from "@mykhaya/api-client";
+import {
+  api,
+  ApiError,
+  type BetaEligibilityState,
+  type PublicLegalDocumentSummary,
+  type PublicSignupState,
+} from "@mykhaya/api-client";
 import { FormStatus } from "@/components/form-status";
 import { useAuth } from "@/components/auth-provider";
 
@@ -14,6 +20,7 @@ export function BetaEnrolment() {
   const { status, user } = useAuth();
   const [state, setState] = useState<PublicSignupState | null>(null);
   const [eligibility, setEligibility] = useState<BetaEligibilityState | null>(null);
+  const [betaTerms, setBetaTerms] = useState<PublicLegalDocumentSummary | null>(null);
   const [homeName, setHomeName] = useState("");
   const [termsAccepted, setTermsAccepted] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -26,10 +33,11 @@ export function BetaEnrolment() {
 
   useEffect(() => {
     if (status !== "ready") return;
-    Promise.all([api.publicSignupState(), api.betaEligibility()])
-      .then(([signupState, betaEligibility]) => {
+    Promise.all([api.publicSignupState(), api.betaEligibility(), api.publicLegalDocuments()])
+      .then(([signupState, betaEligibility, documents]) => {
         setState(signupState);
         setEligibility(betaEligibility);
+        setBetaTerms(documents.find((document) => document.scope === "founding_beta") ?? null);
         if (betaEligibility.home_name) setHomeName(betaEligibility.home_name);
       })
       .catch((reason: ApiError) => {
@@ -40,13 +48,13 @@ export function BetaEnrolment() {
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!state?.beta_terms_version || !termsAccepted || busy) return;
+    if ((!state?.beta_terms_version && !betaTerms?.current_version) || !termsAccepted || busy) return;
     setBusy(true);
     setError("");
     try {
       await api.joinBeta({
         home_name: homeName.trim(),
-        terms_version: state.beta_terms_version,
+        terms_version: betaTerms?.current_version ?? state?.beta_terms_version ?? "",
         invitation_token: invitation ?? undefined,
       });
       setDone(true);
@@ -65,5 +73,6 @@ export function BetaEnrolment() {
     return <section className="standard-page"><div className="card feature-card"><p className="eyebrow">Founding Beta</p><h1>Your Home already has a paid plan</h1><p>{eligibility.reason ?? "Existing paid Homes cannot be converted through the public Founding Beta."}</p><p>Your current subscription is unchanged. No payment or subscription action has occurred.</p><Link className="button" href="/home">Return home</Link> <Link className="button secondary" href="/founding-beta">Learn about the Beta</Link></div></section>;
   }
   const existingHome = Boolean(eligibility.home_id);
-  return <section className="standard-page"><div className="card feature-card"><p className="eyebrow">Founding Beta</p><h1>{existingHome ? `Enrol ${eligibility.home_name} in the Founding Beta` : "Create a Founding Beta Home"}</h1><p>{existingHome ? "The same Home will be retained. All existing data and members will remain, and the Home will become complimentary Ultimate. No second Home will be created." : "Create a Home with complimentary Ultimate access for its lifetime. No payment or card is required."}</p><form onSubmit={submit}>{!existingHome && <label>Home name<input value={homeName} onChange={(event) => setHomeName(event.target.value)} maxLength={100} required /></label>}<label className="check-row"><input type="checkbox" checked={termsAccepted} onChange={(event) => setTermsAccepted(event.target.checked)} required /><span>I accept the Founding Beta Terms (version {state?.beta_terms_version ?? "current"}).</span></label><FormStatus error={error} /><button disabled={busy || !state?.beta_terms_version}>{busy ? "Enrolling…" : existingHome ? "Enrol this Home" : "Create Beta Home"}</button></form></div></section>;
+  const termsVersion = betaTerms?.current_version ?? state?.beta_terms_version ?? "current";
+  return <section className="standard-page"><div className="card feature-card"><p className="eyebrow">Founding Beta</p><h1>{existingHome ? `Enrol ${eligibility.home_name} in the Founding Beta` : "Create a Founding Beta Home"}</h1><p>{existingHome ? "The same Home will be retained. All existing data and members will remain, and the Home will become complimentary Ultimate. No second Home will be created." : "Create a Home with complimentary Ultimate access for its lifetime. No payment or card is required."}</p><form onSubmit={submit}>{!existingHome && <label>Home name<input value={homeName} onChange={(event) => setHomeName(event.target.value)} maxLength={100} required /></label>}<label className="check-row"><input type="checkbox" checked={termsAccepted} onChange={(event) => setTermsAccepted(event.target.checked)} required /><span>I accept the <Link href="/legal/founding-beta-terms">Founding Beta Terms</Link> (version {termsVersion}).</span></label><FormStatus error={error} /><button disabled={busy || ((!state?.beta_terms_version && !betaTerms?.current_version))}>{busy ? "Enrolling…" : existingHome ? "Enrol this Home" : "Create Beta Home"}</button></form></div></section>;
 }

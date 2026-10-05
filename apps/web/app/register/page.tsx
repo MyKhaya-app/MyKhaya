@@ -23,6 +23,7 @@ const LEGAL_PAGE_BY_KEY: Record<string, string> = {
   privacy: "/legal/privacy",
   children_privacy: "/legal/children",
   cookies: "/legal/cookies",
+  founding_beta_terms: "/legal/founding-beta-terms",
 };
 
 export default function Register() {
@@ -107,7 +108,10 @@ export default function Register() {
     }
     try {
       const requiredLegal = legalDocuments.filter(
-        (document) => document.audience === "adult" && document.acceptance_required,
+        (document) =>
+          document.audience === "adult" &&
+          document.acceptance_required &&
+          (document.scope === "global" || (betaRequested && document.scope === "founding_beta")),
       );
       const missingLegal = requiredLegal.filter(
         (document) => !document.current_version_id || !legalChecked[document.key],
@@ -122,7 +126,8 @@ export default function Register() {
         setBusy(false);
         return;
       }
-      if (missingLegal.length || (betaRequested && !betaTermsAccepted)) {
+      const sharedBetaTerms = requiredLegal.find((document) => document.scope === "founding_beta");
+      if (missingLegal.length || (betaRequested && !sharedBetaTerms && !betaTermsAccepted)) {
         setError("Please review and confirm the required legal documents before continuing.");
         setBusy(false);
         return;
@@ -142,7 +147,9 @@ export default function Register() {
             : "web"
           : "web",
         beta_home_name: betaRequested ? d.get("home_name") : undefined,
-        beta_terms_version: betaRequested ? signupState?.beta_terms_version : undefined,
+        beta_terms_version: betaRequested
+          ? sharedBetaTerms?.current_version ?? signupState?.beta_terms_version
+          : undefined,
         beta_invitation_token: betaRequested ? betaInvitation : undefined,
       };
       const result = isNativeShell()
@@ -249,8 +256,13 @@ export default function Register() {
               Please review the current documents. The version shown is recorded with your
               account.
             </p>
-            {legalDocuments.map((document) => {
-              const required = document.audience === "adult" && document.acceptance_required;
+            {legalDocuments
+              .filter((document) => document.scope === "global" || betaRequested)
+              .map((document) => {
+              const required =
+                document.audience === "adult" &&
+                document.acceptance_required &&
+                (document.scope === "global" || betaRequested);
               return (
                 <label className="check-row" key={document.key}>
                   {required && (
@@ -278,10 +290,11 @@ export default function Register() {
                   </span>
                 </label>
               );
-            })}
+              })}
           </fieldset>
         )}
-        {betaRequested && !unavailableReason && (
+        {betaRequested && !unavailableReason &&
+          !legalDocuments.some((document) => document.scope === "founding_beta") && (
           <fieldset className="auth-legal-consent">
             <legend>Founding Beta registration</legend>
             <label>

@@ -49,6 +49,7 @@ from mykhaya.models import (
     LegalActionVerb,
     LegalAudience,
     LegalDocument,
+    LegalDocumentScope,
     LegalDocumentVersion,
     LegalDocumentVersionStatus,
     LegalRecordType,
@@ -94,6 +95,7 @@ async def public_documents(db: AsyncSession = Depends(get_db)) -> list[PublicLeg
                 key=document.key,
                 display_name=document.display_name,
                 audience=document.audience,
+                scope=document.scope,
                 action_verb=document.action_verb,
                 acceptance_required=document.acceptance_required,
                 current_version=current.version,
@@ -179,7 +181,9 @@ async def legal_status(
     adult_documents = (
         await db.scalars(
             select(LegalDocument).where(
-                LegalDocument.audience == LegalAudience.adult, LegalDocument.archived_at.is_(None)
+                LegalDocument.audience == LegalAudience.adult,
+                LegalDocument.archived_at.is_(None),
+                LegalDocument.scope == LegalDocumentScope.global_,
             )
         )
     ).all()

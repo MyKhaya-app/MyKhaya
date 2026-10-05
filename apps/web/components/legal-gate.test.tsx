@@ -70,7 +70,7 @@ describe("LegalGate", () => {
     await waitFor(() => expect(acceptLegalDocument).toHaveBeenCalledWith({
       document_key: "test-terms",
       document_version_id: "version-1",
-      context: "policy_update",
+      context: "in_app_reacceptance",
       platform: "web",
     }));
   });

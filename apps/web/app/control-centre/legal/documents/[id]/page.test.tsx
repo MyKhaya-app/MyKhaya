@@ -46,6 +46,7 @@ const baseDocument: LegalDocument = {
   key: "terms",
   display_name: "Terms & Conditions",
   audience: "adult",
+  scope: "global",
   action_verb: "accept",
   acceptance_required: true,
   archived_at: null,

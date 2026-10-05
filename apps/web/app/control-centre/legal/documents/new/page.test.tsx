@@ -45,6 +45,7 @@ describe("New legal document", () => {
       key: "children_privacy",
       display_name: "Family & Children's Privacy Notice",
       audience: "child",
+      scope: "global",
       action_verb: "accept",
       acceptance_required: true,
     });

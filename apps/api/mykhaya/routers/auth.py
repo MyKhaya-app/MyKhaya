@@ -1337,7 +1337,9 @@ async def register(
     # this check — it must never become a second account-discovery signal
     # alongside the dummy-hash password-timing equalisation below.
     resolved_legal_acceptances = await validate_signup_acceptances(
-        db, [(item.document_key, item.document_version_id) for item in body.legal_acceptances]
+        db,
+        [(item.document_key, item.document_version_id) for item in body.legal_acceptances],
+        beta=bool(body.beta_home_name),
     )
 
     existing = await db.scalar(select(User).where(User.email == email))
@@ -1352,9 +1354,19 @@ async def register(
         db.add(AuthIdentity(user_id=user.id, password_hash=password_hash.hash(body.password)))
         if body.beta_home_name:
             programme = await current_programme(db)
-            if body.beta_terms_version is None:
+            beta_resolved = [
+                item
+                for item in resolved_legal_acceptances
+                if item.document.scope.value == "founding_beta"
+            ]
+            if body.beta_terms_version is None and not beta_resolved:
                 raise HTTPException(
                     status.HTTP_422_UNPROCESSABLE_ENTITY, "Founding Beta terms are required."
+                )
+            if beta_resolved and body.beta_terms_version != beta_resolved[0].version.version:
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT,
+                    "The Founding Beta terms have changed. Please review them again.",
                 )
             db.add(
                 BetaPendingRegistration(
@@ -1372,6 +1384,10 @@ async def register(
                 )
             )
         for resolved in resolved_legal_acceptances:
+            # The Beta Terms are presented before verification, but their
+            # authoritative acceptance belongs to the verified final join.
+            if resolved.document.scope.value == "founding_beta":
+                continue
             record_type = (
                 LegalRecordType.user_acceptance
                 if resolved.document.action_verb == LegalActionVerb.accept
@@ -1382,7 +1398,11 @@ async def register(
                     record_type=record_type,
                     document_version_id=resolved.version.id,
                     user_id=user.id,
-                    context=LegalAcceptanceContext.signup,
+                    context=(
+                        LegalAcceptanceContext.beta_registration
+                        if body.beta_home_name
+                        else LegalAcceptanceContext.signup
+                    ),
                     platform=body.platform,
                     ip_address=resolve_client_ip(request, settings),
                     user_agent=request.headers.get("user-agent", "")[:300] or None,

@@ -1914,6 +1914,13 @@ class LegalAudience(StrEnum):
     child = "child"
 
 
+class LegalDocumentScope(StrEnum):
+    """The product surface to which a legal document applies."""
+
+    global_ = "global"
+    founding_beta = "founding_beta"
+
+
 class LegalActionVerb(StrEnum):
     """The verb PCC/consumer UI should use for an adult-audience document's
     user_acceptance/user_acknowledgement record — e.g. Terms are "accepted",
@@ -1987,6 +1994,9 @@ class LegalRecordType(StrEnum):
 
 class LegalAcceptanceContext(StrEnum):
     signup = "signup"
+    beta_registration = "beta_registration"
+    beta_enrolment = "beta_enrolment"
+    in_app_reacceptance = "in_app_reacceptance"
     login_reauth = "login_reauth"
     policy_update = "policy_update"
     subscription_purchase = "subscription_purchase"
@@ -2021,6 +2031,15 @@ class LegalDocument(UuidTimeMixin, Base):
             name="legal_audience",
             values_callable=lambda enum: [item.value for item in enum],
         )
+    )
+    scope: Mapped[LegalDocumentScope] = mapped_column(
+        Enum(
+            LegalDocumentScope,
+            name="legal_document_scope",
+            values_callable=lambda enum: [item.value for item in enum],
+        ),
+        default=LegalDocumentScope.global_,
+        server_default=LegalDocumentScope.global_.value,
     )
     action_verb: Mapped[LegalActionVerb] = mapped_column(
         Enum(

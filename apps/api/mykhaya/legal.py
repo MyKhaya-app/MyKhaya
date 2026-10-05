@@ -30,6 +30,7 @@ from mykhaya.models import (
     LegalDocument,
     LegalDocumentVersion,
     LegalDocumentVersionStatus,
+    LegalDocumentScope,
     LegalReacceptanceScope,
     LegalRecordType,
     Membership,
@@ -273,7 +274,7 @@ async def own_child_profile(db: AsyncSession, user_id: uuid.UUID) -> ChildProfil
     )
 
 
-async def required_adult_documents(db: AsyncSession) -> list[LegalDocument]:
+async def required_adult_documents(db: AsyncSession, *, beta: bool = False) -> list[LegalDocument]:
     """Every non-archived adult-audience document an administrator has
     marked as acceptance_required — the set signup (and the adult legal
     gate) must satisfy. Does not filter on whether a version is actually
@@ -285,6 +286,11 @@ async def required_adult_documents(db: AsyncSession) -> list[LegalDocument]:
             LegalDocument.audience == LegalAudience.adult,
             LegalDocument.acceptance_required.is_(True),
             LegalDocument.archived_at.is_(None),
+            LegalDocument.scope.in_(
+                [LegalDocumentScope.global_, LegalDocumentScope.founding_beta]
+                if beta
+                else [LegalDocumentScope.global_]
+            ),
         )
     )
     return list(rows)
@@ -297,7 +303,7 @@ class ResolvedSignupAcceptance:
 
 
 async def validate_signup_acceptances(
-    db: AsyncSession, submitted: list[tuple[str, uuid.UUID]]
+    db: AsyncSession, submitted: list[tuple[str, uuid.UUID]], *, beta: bool = False
 ) -> list[ResolvedSignupAcceptance]:
     """Validates a signup request's claimed document/version acceptances
     against the backend's actual current state, server-side, before an
@@ -321,7 +327,7 @@ async def validate_signup_acceptances(
             current published version (the version changed under the user,
             or the client sent something stale/incorrect).
     """
-    required = await required_adult_documents(db)
+    required = await required_adult_documents(db, beta=beta)
     submitted_by_key = dict(submitted)
     resolved: list[ResolvedSignupAcceptance] = []
     for document in required:
