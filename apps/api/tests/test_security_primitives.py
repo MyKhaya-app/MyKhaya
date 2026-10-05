@@ -17,7 +17,10 @@ def test_derived_tokens_are_purpose_bound_and_tamper_evident() -> None:
     token = derived_token(identifier, "verify_email", "a" * 32)
     assert decode_derived_token(token, "verify_email", "a" * 32) == identifier
     assert decode_derived_token(token, "reset_password", "a" * 32) is None
-    assert decode_derived_token(token[:-1] + "A", "verify_email", "a" * 32) is None
+    # Swap the final character for a *different* one: a random token already
+    # ending in "A" made the old unconditional "A" substitution a no-op.
+    tampered = token[:-1] + ("B" if token[-1] == "A" else "A")
+    assert decode_derived_token(tampered, "verify_email", "a" * 32) is None
     assert token not in hash_secret(token, "a" * 32)
 
 
