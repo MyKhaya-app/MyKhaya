@@ -88,6 +88,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const path = usePathname();
   const router = useRouter();
   const platformControlCentre = isPlatformControlCentre();
+  // Capacitor is unavailable during SSR and may only become observable after
+  // the first client render. Keep the root route in a neutral restoring state
+  // until that answer is known.
+  const [runtimeNative, setRuntimeNative] = useState<boolean | null>(null);
+  useEffect(() => {
+    setRuntimeNative(isNativeShell());
+  }, []);
   // Native shells start at the live frontend origin (`/`) and restore their
   // bearer session asynchronously. Start in restoring state in that case so
   // the first render cannot be mistaken for an anonymous browser session.
@@ -95,10 +102,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // shell's startup entry point. Keep those two meanings separate so a
   // browser visit never triggers cookie renewal/redirects while Capacitor
   // still restores its bearer session from the same root URL.
-  const nativeStartup = isNativeShell() && (!isPublicPath(path) || path === "/") && !platformControlCentre;
+  const nativeStartup = runtimeNative === true && (!isPublicPath(path) || path === "/") && !platformControlCentre;
   const [user, setUser] = useState<User | null>(null);
-  const [status, setStatus] = useState<AuthStatus>(nativeStartup ? "initializing" : "signed_out");
-  const [initialSessionLoading, setInitialSessionLoading] = useState(nativeStartup);
+  const [status, setStatus] = useState<AuthStatus>(path === "/" || nativeStartup ? "initializing" : "signed_out");
+  const [initialSessionLoading, setInitialSessionLoading] = useState(path === "/" || nativeStartup);
   const [sessionRefreshing, setSessionRefreshing] = useState(false);
   const [legalStatus, setLegalStatus] = useState<LegalStatusResponse | null>(null);
   const [legalStatusError, setLegalStatusError] = useState<string | null>(null);
@@ -129,10 +136,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     console.info("[BIOMETRIC DEBUG]", "auth_state", { route: path, native: nativeStartup, status, initialSessionLoading });
   }, [path, nativeStartup, status, initialSessionLoading]);
 
-  const redirectToLogin = useCallback(() => {
+  type AuthRedirectReason = "no_session_after_restore" | "session_expired";
+  const redirectToLogin = useCallback((reason: AuthRedirectReason) => {
     const destination = typeof window === "undefined" ? "" : `${window.location.pathname}${window.location.search}`;
+    if (process.env.NODE_ENV !== "production") {
+      console.info("[AUTH_NAV]", {
+        event: "auth_redirect_to_login",
+        reason,
+        pathname: typeof window === "undefined" ? path : window.location.pathname,
+        native: isNativeShell(),
+        userPresent: Boolean(user),
+      });
+    }
     router.replace(destination && destination !== "/login" ? `/login?next=${encodeURIComponent(destination)}` : "/login");
-  }, [router]);
+  }, [path, router, user]);
 
   const loadSession = useCallback(async (initial: boolean) => {
     if (initial) setInitialSessionLoading(true);
@@ -146,7 +163,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           setUser(null);
           setStatus("signed_out");
           recordAuthDiagnostic("NATIVE_BOOTSTRAP_RESULT_SIGNED_OUT");
-          redirectToLogin();
+          redirectToLogin("no_session_after_restore");
           return false;
         }
         setUser(restored);
@@ -199,7 +216,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             setUser(null);
             setStatus("signed_out");
             recordAuthDiagnostic("LOGIN_REDIRECT");
-            redirectToLogin();
+            redirectToLogin("session_expired");
             return false;
           }
         }
@@ -219,10 +236,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [redirectToLogin, applyLegalStatus]);
 
   useEffect(() => {
+    if (path === "/" && runtimeNative === null) {
+      return;
+    }
     if (
       platformControlCentre
       || isPublicPath(path)
-      || (!isNativeShell() && path === "/")
+      || (runtimeNative === false && path === "/")
     ) {
       setInitialSessionLoading(false);
       if (status !== "ready") setStatus("signed_out");
@@ -233,7 +253,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (bootstrapped.current || status === "ready") return;
     bootstrapped.current = true;
     void loadSession(true);
-  }, [path, status, loadSession, platformControlCentre]);
+  }, [path, status, loadSession, platformControlCentre, runtimeNative]);
 
   useUserUpdatedListener(setUser);
 

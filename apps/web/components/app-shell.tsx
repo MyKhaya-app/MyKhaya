@@ -135,7 +135,9 @@ export function AppShell({
     );
   }
   if (status === "legal_action_required") return <LegalGate />;
-  if (status === "signed_out") return null;
+  if (status === "signed_out") {
+    return <main className="app-bootstrap-state" role="status">Taking you to sign in…</main>;
+  }
 
   return (
     <NotificationProvider>

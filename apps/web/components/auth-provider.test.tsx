@@ -193,6 +193,23 @@ describe("AuthProvider", () => {
     expect(screen.queryByText("checking")).not.toBeInTheDocument();
   });
 
+  it("keeps a native root in restore state until the bearer session is resolved", async () => {
+    nativeShellState.value = true;
+    pathname = "/";
+    let resolveBootstrap!: (value: unknown) => void;
+    bootstrapNativeSession.mockReturnValue(new Promise((resolve) => { resolveBootstrap = resolve; }));
+
+    render(<AuthProvider><Probe /></AuthProvider>);
+
+    expect(screen.getByText("checking")).toBeInTheDocument();
+    expect(router.replace).not.toHaveBeenCalled();
+    expect(bootstrapNativeSession).toHaveBeenCalledTimes(1);
+
+    resolveBootstrap({ id: "native-u1", display_name: "Owner", principal_type: "adult" });
+    await waitFor(() => expect(screen.getByText("ready")).toBeInTheDocument());
+    expect(router.replace).not.toHaveBeenCalled();
+  });
+
   it("keeps the page available during background refresh", async () => {
     render(<AuthProvider><Probe /></AuthProvider>);
     await waitFor(() => expect(screen.getByText("ready")).toBeInTheDocument());

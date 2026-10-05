@@ -13,6 +13,7 @@ import { PublicBetaOffer } from "@/components/marketing/public-beta-offer";
 import { isNativeShell } from "@/components/native-runtime";
 import { useAuth } from "@/components/auth-provider";
 import { MaintenanceScreen } from "@/components/maintenance";
+import { LegalGate } from "@/components/legal-gate";
 import { genericUnlockPromptCopy } from "@/components/native-biometric";
 import { api, type PublicSignupState } from "@mykhaya/api-client";
 
@@ -64,7 +65,7 @@ function PublicWelcome({ signupState }: { signupState: PublicSignupState | null 
 
 function NativeRootGate() {
   const router = useRouter();
-  const { status, initialSessionLoading, retryInitialSession } = useAuth();
+  const { status, initialSessionLoading, retryInitialSession, legalStatusError, retryLegalStatus } = useAuth();
 
   useEffect(() => {
     console.info("[BIOMETRIC DEBUG]", "root_route_state", { route: "/", status, initialSessionLoading });
@@ -72,6 +73,20 @@ function NativeRootGate() {
 
   useEffect(() => {
     if (status === "ready") router.replace("/home");
+  }, [router, status]);
+
+  useEffect(() => {
+    if (status !== "signed_out") return;
+    if (process.env.NODE_ENV !== "production") {
+      console.info("[AUTH_NAV]", {
+        event: "auth_redirect_to_login",
+        reason: "no_session_after_restore",
+        pathname: "/",
+        native: true,
+        userPresent: false,
+      });
+    }
+    router.replace("/login");
   }, [router, status]);
 
   if (status === "maintenance") return <MaintenanceScreen onRecovered={retryInitialSession} />;
@@ -93,6 +108,19 @@ function NativeRootGate() {
         <button className="tertiary" onClick={() => router.replace("/login")}>Sign in with password</button>
       </main>
     );
+  }
+  if (status === "legal_check_error") {
+    return (
+      <main className="app-bootstrap-state" role="alert">
+        <h1>We could not check your legal documents</h1>
+        <p>{legalStatusError ?? "Please try again before continuing to MyKhaya."}</p>
+        <button onClick={retryLegalStatus}>Try again</button>
+      </main>
+    );
+  }
+  if (status === "legal_action_required") return <LegalGate />;
+  if (status === "signed_out") {
+    return <main className="app-bootstrap-state" role="status">Taking you to sign in…</main>;
   }
   if (initialSessionLoading || status === "initializing" || status === "ready") {
     return <main className="app-bootstrap-state" role="status">Checking your MyKhaya session…</main>;
