@@ -15,6 +15,9 @@ SEMVER_RE = re.compile(
     r"(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?"
     r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$"
 )
+RELEASE_TAG_RE = re.compile(r"^v" + SEMVER_RE.pattern[1:])
+
+
 class ValidationError(RuntimeError):
     pass
 
@@ -59,16 +62,6 @@ def workspace_package_manifests(workspace_file: Path = Path("pnpm-workspace.yaml
     return manifests
 
 
-def root_version() -> str:
-    path = Path("VERSION")
-    if not path.is_file():
-        raise ValidationError("VERSION does not exist")
-    value = path.read_text(encoding="utf-8").strip()
-    if not SEMVER_RE.fullmatch(value):
-        raise ValidationError(f"VERSION is not valid semantic versioning: {value!r}")
-    return value
-
-
 def component_versions() -> dict[str, str]:
     versions: dict[str, str] = {}
     api_data = tomllib.loads(Path("apps/api/pyproject.toml").read_text(encoding="utf-8"))
@@ -79,25 +72,45 @@ def component_versions() -> dict[str, str]:
     return versions
 
 
-def validate_tag(version: str) -> None:
+def validate_release_tag(tag: str) -> None:
+    if not RELEASE_TAG_RE.fullmatch(tag):
+        raise ValidationError(f"invalid MyKhaya release tag: {tag!r}")
+
+
+def release_tag_from_context(explicit: str | None = None) -> str | None:
+    if explicit:
+        return explicit
+    configured = os.getenv("MYKHAYA_RELEASE_TAG", "").strip()
+    if configured:
+        return configured
     ref = os.getenv("GITHUB_REF", "")
-    if not ref.startswith("refs/tags/"):
-        return
-    tag = ref.removeprefix("refs/tags/")
-    if tag != f"v{version}":
-        raise ValidationError(f"release tag {tag!r} does not match VERSION {version!r}")
+    return ref.removeprefix("refs/tags/") if ref.startswith("refs/tags/") else None
+
+
+def validate_build_metadata() -> None:
+    channel = os.getenv("MYKHAYA_BUILD_CHANNEL", "").strip()
+    version = os.getenv("MYKHAYA_VERSION", "").strip()
+    if channel == "stable":
+        tag = release_tag_from_context()
+        if not tag:
+            raise ValidationError("stable builds require a release tag context")
+        validate_release_tag(tag)
+        if version and version != tag:
+            raise ValidationError(f"stable MYKHAYA_VERSION {version!r} does not match {tag!r}")
+    elif channel == "development":
+        if version and version != "dev":
+            raise ValidationError("development MYKHAYA_VERSION must be 'dev'")
+    elif channel:
+        raise ValidationError(f"unsupported MYKHAYA_BUILD_CHANNEL: {channel!r}")
 
 
 def main() -> int:
-    version = root_version()
-    mismatches = {
-        path: value for path, value in component_versions().items() if value != version
-    }
-    if mismatches:
-        details = ", ".join(f"{path}={value}" for path, value in mismatches.items())
-        raise ValidationError(f"component versions do not match VERSION {version}: {details}")
-    validate_tag(version)
-    print(f"Version validation passed for VERSION={version}")
+    explicit = sys.argv[1] if len(sys.argv) > 1 and not sys.argv[1].startswith("-") else None
+    tag = release_tag_from_context(explicit)
+    if tag:
+        validate_release_tag(tag)
+    validate_build_metadata()
+    print(f"Release metadata validation passed for {tag}" if tag else "Build metadata validation passed")
     return 0
 
 

@@ -222,6 +222,19 @@ describe("AppShell — content scroll region", () => {
   });
 });
 
+describe("AppShell — maintenance", () => {
+  it("renders the maintenance screen instead of the app while the API reports maintenance", async () => {
+    authState.status = "maintenance";
+    try {
+      render(<AppShell><div>app content</div></AppShell>);
+      expect(await screen.findByTestId("maintenance-screen")).toBeInTheDocument();
+      expect(screen.queryByText("app content")).toBeNull();
+    } finally {
+      authState.status = "ready";
+    }
+  });
+});
+
 describe("AppShell — authenticated navigation", () => {
   it("leaves the browser MFA route outside the authenticated shell", async () => {
     pathname = "/mfa";

@@ -34,6 +34,8 @@ export default function Login() {
   const router = useRouter(),
     params = useSearchParams();
   const invitation = params.get("invitation");
+  const beta = params.get("beta") === "1";
+  const betaInvitation = params.get("beta_invitation");
   const calendarShare = params.get("calendar_share");
   const appleResult = params.get("apple");
   const mfaExpired = params.get("mfa_error") === "expired";
@@ -154,6 +156,16 @@ export default function Login() {
     if (isNativeShell()) {
       router.push("/home");
       return;
+    }
+    if (beta) {
+      const pending = await api.betaPending();
+      if (pending.pending && pending.home_name && pending.terms_version) {
+        await api.joinBeta({
+          home_name: pending.home_name,
+          terms_version: pending.terms_version,
+          invitation_token: betaInvitation ?? undefined,
+        });
+      }
     }
     if (invitation) await api.post("/invitations/accept", { token: invitation });
     // A calendar share, unlike a household invitation, isn't auto-accepted
@@ -315,6 +327,11 @@ export default function Login() {
       {appleResult === "link_required" && (
         <p className="notice">
           Sign in with your existing account first. Apple can then be linked from your security settings.
+        </p>
+      )}
+      {appleResult === "registration_unavailable" && (
+        <p className="notice">
+          New accounts can’t be created with Apple right now. If you already have a MyKhaya account, sign in with your password.
         </p>
       )}
       {appleResult === "error" && (

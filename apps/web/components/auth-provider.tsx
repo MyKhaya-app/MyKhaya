@@ -9,6 +9,7 @@ import { recordAuthDiagnostic } from "./auth-diagnostics";
 import { bootstrapNativeSession } from "./native-auth";
 import { hasEverBeenBackgrounded, markUnlocked, startAppLockTracking, wasBackgroundedLongEnoughToLock } from "./native-app-lock";
 import { initializeNativePush, reconcileNativePush } from "./native-push";
+import { isMaintenanceError } from "./maintenance";
 import { isNativeShell, isPlatformControlCentre } from "./native-runtime";
 import { useUserUpdatedListener } from "./user-events";
 
@@ -23,6 +24,7 @@ type AuthStatus =
   | "ready"
   | "offline"
   | "locked"
+  | "maintenance"
   | "legal_action_required"
   | "signed_out";
 type AuthContextValue = {
@@ -153,6 +155,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       recordAuthDiagnostic("AUTHENTICATED");
       return true;
     } catch (cause) {
+      // PCC maintenance mode: the API answers 503 `maintenance_mode` to every
+      // consumer request. That is not a lost session and not a connectivity
+      // problem, so it gets its own status (and screen) and never signs the
+      // user out.
+      if (isMaintenanceError(cause)) {
+        setStatus("maintenance");
+        return false;
+      }
       if (isNativeShell() && cause instanceof Error && cause.name === "NativeBiometricUnlockError") {
         setStatus("locked");
         recordAuthDiagnostic("NATIVE_BIOMETRIC_LOCKED");
@@ -166,6 +176,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           recordAuthDiagnostic("RENEW_RESULT_200");
           return true;
         } catch (renewalCause) {
+          if (isMaintenanceError(renewalCause)) {
+            setStatus("maintenance");
+            return false;
+          }
           if (renewalCause instanceof ApiError && renewalCause.status === 401) {
             setUser(null);
             setStatus("signed_out");

@@ -8,7 +8,6 @@ WORKDIR /workspace
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.json .prettierignore ./
 COPY packages ./packages
 COPY apps/web ./apps/web
-COPY VERSION ./VERSION
 ENV MYKHAYA_VERSION=$MYKHAYA_VERSION MYKHAYA_COMMIT_SHA=$MYKHAYA_COMMIT_SHA MYKHAYA_BUILD_TIME=$MYKHAYA_BUILD_TIME MYKHAYA_BUILD_CHANNEL=$MYKHAYA_BUILD_CHANNEL
 RUN pnpm install --frozen-lockfile
 RUN pnpm --filter @mykhaya/web build
@@ -48,7 +47,6 @@ COPY --from=builder --chown=mykhaya:mykhaya /workspace/apps/web/.next/static ./a
 # directly. This silently broke the service worker/PWA install path in every
 # deployment of this image until now.
 COPY --from=builder --chown=mykhaya:mykhaya /workspace/apps/web/public ./apps/web/public
-COPY --from=builder --chown=mykhaya:mykhaya /workspace/VERSION /app/VERSION
 ENV MYKHAYA_VERSION=$MYKHAYA_VERSION MYKHAYA_COMMIT_SHA=$MYKHAYA_COMMIT_SHA MYKHAYA_BUILD_TIME=$MYKHAYA_BUILD_TIME MYKHAYA_BUILD_CHANNEL=$MYKHAYA_BUILD_CHANNEL
 USER 10001:10001
 EXPOSE 3000

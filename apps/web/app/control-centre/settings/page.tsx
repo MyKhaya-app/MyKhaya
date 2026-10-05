@@ -155,7 +155,7 @@ function normaliseSyslogSettings(value: SyslogSettings): SyslogSettings {
 
 // Sections render in this order regardless of API response order; any
 // section not listed here (there shouldn't be one) falls back to the end.
-const SECTION_ORDER = ["General", "Registration & Access", "Home Limits", "Support", "Regional", "Legal"];
+const SECTION_ORDER = ["General", "Signup", "Registration & Access", "Home Limits", "Support", "Regional", "Legal"];
 
 function groupBySection(items: SettingItem[]): [string, SettingItem[]][] {
   const bySection = new Map<string, SettingItem[]>();
@@ -329,6 +329,50 @@ function SettingRow({ item, onSaved }: { item: SettingItem; onSaved: () => Promi
           await save(confirmReason);
         }}
       />
+    </CcCard>
+  );
+}
+
+const SIGNUP_MODES = [
+  { value: "normal", label: "Normal", help: "Allow ordinary account signup; Beta joining follows programme availability." },
+  { value: "beta_only", label: "Beta only", help: "Only the approved Founding Beta registration path is available." },
+  { value: "mixed", label: "Mixed", help: "Allow both ordinary signup and eligible Founding Beta joining." },
+  { value: "closed", label: "Closed", help: "Do not accept new account or Beta registrations." },
+] as const;
+
+function SignupModeCard({ item, onSaved }: { item: SettingItem; onSaved: () => Promise<void> }) {
+  const [value, setValue] = useState(String(item.value ?? "normal"));
+  const [reason, setReason] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState("");
+  useEffect(() => setValue(String(item.value ?? "normal")), [item.value]);
+  const selected = SIGNUP_MODES.find((mode) => mode.value === value) ?? SIGNUP_MODES[0];
+  async function save(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!reason.trim() || reason.trim().length < 10 || busy) return;
+    setBusy(true); setError("");
+    try {
+      await platformApi.put(`/settings/${item.key}`, { value, reason, confirmed: true });
+      setReason("");
+      await onSaved();
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Unable to save Signup Mode.");
+    } finally { setBusy(false); }
+  }
+  return (
+    <CcCard title="Signup" description="The single authoritative runtime control for normal and Founding Beta registration.">
+      <form className="setting-row-form" onSubmit={save}>
+        <CcField label="Signup Mode" help={selected.help}>
+          <select value={value} onChange={(event) => setValue(event.target.value)}>
+            {SIGNUP_MODES.map((mode) => <option key={mode.value} value={mode.value}>{mode.label}</option>)}
+          </select>
+        </CcField>
+        <CcField label="Reason for this change" help="Changes are recorded in the existing Platform audit log.">
+          <input value={reason} minLength={10} maxLength={500} required onChange={(event) => setReason(event.target.value)} />
+        </CcField>
+        <button type="submit" disabled={busy || value === String(item.value ?? "normal")}>{busy ? "Saving…" : "Save"}</button>
+      </form>
+      {error && <CcNotice tone="error">{error}</CcNotice>}
     </CcCard>
   );
 }
@@ -571,7 +615,7 @@ export default function PlatformSettingsPage() {
                   {syslogResult && <p role="status" className="cc-page-meta">{syslogResult}</p>}
                 </CcCard>
               )}
-              {groupBySection(data.settings).map(([section, items]) => (
+                  {groupBySection(data.settings.filter((item) => item.key !== "signup_mode")).map(([section, items]) => (
                 <section key={section} className="platform-settings-section">
                   <h2>{section}</h2>
                   <div className="settings-section-rows">
@@ -581,6 +625,10 @@ export default function PlatformSettingsPage() {
                   </div>
                 </section>
               ))}
+              {(() => {
+                const signup = data.settings.find((item) => item.key === "signup_mode");
+                return signup ? <SignupModeCard item={signup} onSaved={load} /> : null;
+              })()}
             </>
           )
         )}

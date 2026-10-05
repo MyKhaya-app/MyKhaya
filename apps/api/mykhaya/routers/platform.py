@@ -69,6 +69,8 @@ from mykhaya.models import (
     AuditEvent,
     AuthIdentity,
     BackupRun,
+    BetaEnrollment,
+    BetaProgramme,
     BillingInterval,
     CalendarEvent,
     CalendarEventLabel,
@@ -2861,6 +2863,18 @@ async def user_detail(
             )
         )
     ).all()
+    beta_participation = (
+        await db.execute(
+            select(
+                BetaProgramme.slug,
+                BetaEnrollment.home_id,
+                BetaEnrollment.terms_version,
+                BetaEnrollment.joined_at,
+            )
+            .join(BetaEnrollment, BetaEnrollment.programme_id == BetaProgramme.id)
+            .where(BetaEnrollment.joined_user_id == user_id)
+        )
+    ).all()
     return {
         "id": user.id,
         "email": user.email,
@@ -2876,6 +2890,7 @@ async def user_detail(
             {"id": group.id, "name": group.name, "role": membership.role}
             for membership, group in memberships
         ],
+        "founding_beta_participant": bool(beta_participation),
         "sessions": [
             {
                 "id": row.id,
@@ -3813,6 +3828,7 @@ async def _subscription_response(
         current_period_start=subscription.current_period_start if subscription else None,
         current_period_end=subscription.current_period_end if subscription else None,
         complimentary_reason=subscription.complimentary_reason if subscription else None,
+        complimentary_source=subscription.complimentary_source if subscription else None,
         complimentary_note=subscription.complimentary_note if subscription else None,
         complimentary_granted_by=subscription.complimentary_granted_by if subscription else None,
         complimentary_granted_by_display_name=granted_by_name,
@@ -3900,6 +3916,13 @@ async def home_detail(
         )
     ).all()
     subscription = await get_home_subscription(db, group_id)
+    beta = await db.execute(
+        select(BetaEnrollment, BetaProgramme, User)
+        .join(BetaProgramme, BetaProgramme.id == BetaEnrollment.programme_id)
+        .join(User, User.id == BetaEnrollment.joined_user_id)
+        .where(BetaEnrollment.home_id == group_id)
+    )
+    beta_row = beta.first()
     platform_policy, platform_methods = await _consumer_platform_values(db)
     home_policy = group.mfa_policy.value
     home_effective = (
@@ -3913,6 +3936,22 @@ async def home_detail(
         "active": group.is_active,
         "lifecycle": _lifecycle_state(group.is_active, group.archived_at),
         "subscription": await _subscription_response(db, subscription),
+        "founding_beta": (
+            {
+                "programme": beta_row[1].name,
+                "slug": beta_row[1].slug,
+                "joined_at": beta_row[0].joined_at,
+                "joined_by": beta_row[2].display_name,
+                "terms_version": beta_row[0].terms_version,
+                "entitlement_source": subscription.complimentary_source if subscription else None,
+                "capacity_exempt": beta_row[0].capacity_exempt,
+                "complimentary_ultimate": bool(
+                    subscription and subscription.complimentary_source == "founding_beta_lifetime"
+                ),
+            }
+            if beta_row
+            else None
+        ),
         "authentication_mfa": {
             "configured": home_policy,
             "effective": home_effective,
@@ -6114,6 +6153,16 @@ async def update_setting(
         validate_setting_value(definition, body.value)
     except ValueError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    if (
+        key == "email_verification_required"
+        and body.value is False
+        and settings.environment == "production"
+        and settings.email_verification_enabled
+    ):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "Email verification cannot be switched off in production.",
+        )
     row = await db.scalar(
         select(PlatformSetting).where(PlatformSetting.key == key).with_for_update()
     )

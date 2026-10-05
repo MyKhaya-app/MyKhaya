@@ -1,12 +1,14 @@
 import Link from "next/link";
 import { Logo } from "@/components/logo";
+import type { PublicSignupState } from "@mykhaya/api-client";
+import { signupCtaLabel, signupDestination } from "@/components/public-signup";
 
 /** The public site's header — Logo, in-page section links, and exactly two
  *  actions. The section links are anchors within this same page (see
  *  docs/design/visual-identity.md's "one question per screen" — a marketing
  *  page's one question is "should I sign up"), not a separate site to
  *  navigate around. */
-export function PublicHeader() {
+export function PublicHeader({ signupState = null }: { signupState?: PublicSignupState | null }) {
   return (
     <header className="mk-header">
       <nav aria-label="Primary">
@@ -21,8 +23,8 @@ export function PublicHeader() {
           <Link className="button secondary" href="/login">
             Sign in
           </Link>
-          <Link className="button" href="/register">
-            Get started free
+          <Link className="button" href={signupDestination(signupState)}>
+            {signupCtaLabel(signupState)}
           </Link>
         </div>
       </nav>

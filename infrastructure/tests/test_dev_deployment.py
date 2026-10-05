@@ -65,6 +65,13 @@ class DevelopmentDeploymentTests(unittest.TestCase):
         self.assertLess(build, migration)
         self.assertLess(migration, app_start)
 
+    def test_dev_build_metadata_is_explicit(self) -> None:
+        script = (ROOT / "infrastructure/scripts/dev-deploy.sh").read_text(encoding="utf-8")
+        metadata = script[script.index("set_build_metadata()") : script.index("wait_healthy()")]
+        self.assertIn("MYKHAYA_VERSION=dev", metadata)
+        self.assertIn("MYKHAYA_BUILD_CHANNEL=development", metadata)
+        self.assertIn("git rev-parse HEAD", metadata)
+
     def test_caddy_is_recreated_after_configuration_changes(self) -> None:
         script = (ROOT / "infrastructure/scripts/dev-deploy.sh").read_text(encoding="utf-8")
         self.assertIn(

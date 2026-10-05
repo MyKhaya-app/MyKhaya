@@ -32,11 +32,16 @@
 
 ## Anthony's release actions
 
-1. Review `dev` and its passing checks.
-2. Merge `dev` into `main` manually.
-3. Confirm `main` checks pass.
-4. Create tag `v<VERSION>` on the intended `main` commit.
-5. Run or review release validation.
-6. Deploy the tagged revision manually.
+1. Merge approved `dev` into `main`.
+2. Confirm main CI passes.
+3. Create GitHub Release/tag `vX.Y.Z` on the intended main commit.
+4. On production run `make prod-update RELEASE=vX.Y.Z`.
+5. Confirm the reported deployed tag, SHA and health checks.
+
+The GitHub release tag is the production version source of truth and becomes the
+application version. Development always reports version `dev` and channel
+`development`; the commit SHA provides exact code traceability. Runtime code
+does not query GitHub for version information. No separate `VERSION`-file bump is
+required before creating a release.
 
 No workflow creates a tag, GitHub Release, merge or deployment automatically.

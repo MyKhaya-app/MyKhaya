@@ -94,6 +94,30 @@ beforeEach(() => {
 });
 
 describe("AuthProvider", () => {
+  it("shows the maintenance status — not signed-out or offline — when the API answers 503 maintenance_mode", async () => {
+    const { ApiError } = await import("@mykhaya/api-client");
+    const maintenance = Object.assign(new ApiError(503, "Maintenance"), {
+      status: 503,
+      code: "maintenance_mode",
+    });
+    me.mockRejectedValue(maintenance);
+
+    render(<AuthProvider><Probe /></AuthProvider>);
+
+    await waitFor(() => expect(screen.getByText("maintenance")).toBeInTheDocument());
+    expect(renew).not.toHaveBeenCalled();
+    expect(router.replace).not.toHaveBeenCalled();
+  });
+
+  it("still treats a generic 503 as offline, not maintenance", async () => {
+    const { ApiError } = await import("@mykhaya/api-client");
+    me.mockRejectedValue(Object.assign(new ApiError(503, "Down"), { status: 503 }));
+
+    render(<AuthProvider><Probe /></AuthProvider>);
+
+    await waitFor(() => expect(screen.getByText("offline")).toBeInTheDocument());
+  });
+
   it("does not bootstrap or redirect a browser MFA pre-auth route", async () => {
     // usePathname() excludes the query string; the MFA page reads the
     // transaction separately through useSearchParams().
@@ -211,6 +235,12 @@ describe("AuthProvider — native lifecycle re-lock", () => {
     bootstrapNativeSession.mockResolvedValue({ id: "native-u1", display_name: "Owner", principal_type: "adult" });
     render(<AuthProvider><Probe /></AuthProvider>);
     await waitFor(() => expect(screen.getByText("ready")).toBeInTheDocument());
+    // "ready" is visible as soon as the DOM commits, but the provider mirrors
+    // `status` into `statusRef` in a passive effect that may not have flushed
+    // yet. The resume handler reads statusRef, so a resume fired in that
+    // window is (correctly) ignored as "not ready" — which made every test
+    // below depend on scheduler timing. Flush effects before going on.
+    await act(async () => {});
     expect(startAppLockTracking).toHaveBeenCalled();
     expect(handlerBox.current).not.toBeNull();
     bootstrapNativeSession.mockClear();
@@ -282,10 +312,19 @@ describe("AuthProvider — native lifecycle re-lock", () => {
     await boot();
     appLock.hasEverBeenBackgrounded = true;
     appLock.wasBackgroundedLongEnoughToLock = true;
-    bootstrapNativeSession.mockResolvedValue(null);
+    // The re-auth's server check stays pending until released, so the order is
+    // explicit: resume -> locked -> server answers "session revoked" -> signed out.
+    let revokeSession!: (value: null) => void;
+    bootstrapNativeSession.mockReturnValue(new Promise<null>((r) => { revokeSession = r; }));
 
     fireAppState(false);
     fireAppState(true);
+
+    await waitFor(() => expect(bootstrapNativeSession).toHaveBeenCalledTimes(1));
+    expect(screen.getByText("checking")).toBeInTheDocument();
+    await act(async () => {
+      revokeSession(null);
+    });
 
     await waitFor(() => expect(screen.getByText("signed_out")).toBeInTheDocument());
     expect(router.replace).toHaveBeenCalledWith(expect.stringContaining("/login"));

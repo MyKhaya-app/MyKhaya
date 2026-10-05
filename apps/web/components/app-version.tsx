@@ -10,9 +10,9 @@ export type BuildInfo = {
   channel: string;
 };
 
-// Fetches the backend-reported build metadata (see resolve_app_version() /
+// Fetches deployment-injected backend build metadata (release tag in production,
 // build_channel in apps/api/mykhaya/config.py) — the canonical source for the
-// Web version and "development" channel shown on About (apps/web/app/about).
+// "dev" in development) shown on About (apps/web/app/about).
 export function useBuildInfo(): BuildInfo | null {
   const [build, setBuild] = useState<BuildInfo | null>(null);
 

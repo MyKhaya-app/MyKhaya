@@ -183,8 +183,8 @@ enrolment at `https://admin.dev.mykhaya.app/login` immediately afterwards.
 
 `GET /api/v1/health/build` (unauthenticated, `include_in_schema=False`) returns
 `version`, `commit`, `build_time`, `environment`, and `channel` sourced from
-`MYKHAYA_VERSION`, `MYKHAYA_COMMIT_SHA`, `MYKHAYA_BUILD_TIME`, and
-`MYKHAYA_BUILD_CHANNEL` (or the `VERSION` file baked into the image if unset):
+`MYKHAYA_VERSION=dev`, `MYKHAYA_COMMIT_SHA`, `MYKHAYA_BUILD_TIME`, and
+`MYKHAYA_BUILD_CHANNEL=development`:
 
 ```sh
 curl -fsS http://127.0.0.1:8089/api/v1/health/build

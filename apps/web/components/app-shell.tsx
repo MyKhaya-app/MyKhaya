@@ -11,6 +11,7 @@ import { ActiveHomeProvider, useActiveHome } from "./use-active-home";
 import { NativeBiometricOffer } from "./native-biometric-offer";
 import { genericUnlockPromptCopy } from "./native-biometric";
 import { LegalGate } from "./legal-gate";
+import { MaintenanceScreen } from "./maintenance";
 import { NotificationPermissionPrompt } from "./notification-permission-prompt";
 import { AroundHouseDock } from "./around-house-dock";
 import { useNativeKeyboardOpen } from "./use-native-keyboard";
@@ -103,6 +104,7 @@ export function AppShell({
   if (initialSessionLoading) {
     return <main className="app-bootstrap-state" role="status">Checking your MyKhaya session…</main>;
   }
+  if (status === "maintenance") return <MaintenanceScreen onRecovered={retryInitialSession} />;
   if (status === "offline") {
     return (
       <main className="app-bootstrap-state" role="alert">

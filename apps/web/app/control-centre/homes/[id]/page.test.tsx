@@ -104,6 +104,18 @@ function familyModules() {
 
 const freeHome = { ...activeHome, modules: freeModules() };
 const familyHome = { ...activeHome, modules: familyModules() };
+const betaHome = {
+  ...freeHome,
+  founding_beta: {
+    programme: "Founding Beta",
+    joined_at: "2026-01-02T00:00:00Z",
+    joined_by: "u1",
+    terms_version: "beta-1",
+    entitlement_source: "founding_beta_lifetime",
+    capacity_exempt: false,
+    complimentary_ultimate: true,
+  },
+};
 
 function findDialog(name: RegExp | string) {
   return screen.findByRole("dialog", { name });
@@ -140,6 +152,17 @@ describe("Home detail", () => {
     expect(screen.getByText(/jane@example.com/)).toBeInTheDocument();
     expect(screen.getByText("invitee@example.com")).toBeInTheDocument();
     expect(screen.getByText("Called about billing.")).toBeInTheDocument();
+  });
+
+  it("shows Founding Beta provenance and submits an audited capacity exemption", async () => {
+    get.mockResolvedValue(betaHome);
+    render(<DetailPage />);
+    expect(await screen.findByText("Founding Beta")).toBeInTheDocument();
+    expect(screen.getByText("founding_beta_lifetime")).toBeInTheDocument();
+    await userEvent.type(screen.getAllByLabelText("Reason for this change")[0]!, "App Review fixture");
+    await userEvent.click(screen.getByRole("checkbox", { name: /capacity exemption/i }));
+    await userEvent.click(screen.getByRole("button", { name: /save capacity exemption/i }));
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/beta/homes/home-1/capacity-exemption", { exempt: true, reason: "App Review fixture" }));
   });
 
   it("shows empty states when there are no members, invitations or notes", async () => {

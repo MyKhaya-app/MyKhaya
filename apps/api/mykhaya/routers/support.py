@@ -34,7 +34,10 @@ from mykhaya.db import get_db
 from mykhaya.dependencies import AuthContext, auth_context
 from mykhaya.features import platform_feature_enabled
 from mykhaya.models import (
+    BetaEnrollment,
+    BetaProgramme,
     FeatureKey,
+    HomeSubscription,
     SupportMessageVisibility,
     SupportTicket,
     SupportTicketAttachment,
@@ -57,6 +60,8 @@ from mykhaya.support_notifications import ticket_follow_up, ticket_received
 from mykhaya.support_reference import next_support_reference
 
 MAX_ATTACHMENTS_PER_TICKET = 5
+APPROVED_BETA_PROGRAMMES = {"founding-beta"}
+APPROVED_BETA_ENTITLEMENT_SOURCES = {"founding_beta_lifetime"}
 
 
 async def require_support_feature(
@@ -121,6 +126,16 @@ def _diagnostic_response(
         network_state=diagnostic.network_state,
         background_refresh_state=diagnostic.background_refresh_state,
         client_timestamp=diagnostic.client_timestamp,
+        beta_programme=(
+            diagnostic.beta_programme
+            if diagnostic.beta_programme in APPROVED_BETA_PROGRAMMES
+            else None
+        ),
+        entitlement_source=(
+            diagnostic.entitlement_source
+            if diagnostic.entitlement_source in APPROVED_BETA_ENTITLEMENT_SOURCES
+            else None
+        ),
     )
 
 
@@ -199,21 +214,43 @@ async def create_ticket(
     db.add(ticket)
     await db.flush()
 
-    if body.diagnostics is not None:
+    beta_context = None
+    if body.group_id is not None:
+        beta_context = (
+            await db.execute(
+                select(BetaProgramme.slug, HomeSubscription.complimentary_source)
+                .join(BetaEnrollment, BetaEnrollment.programme_id == BetaProgramme.id)
+                .join(HomeSubscription, HomeSubscription.group_id == BetaEnrollment.home_id)
+                .where(BetaEnrollment.home_id == body.group_id)
+            )
+        ).one_or_none()
+    if body.diagnostics is not None or beta_context is not None:
         db.add(
             SupportTicketDiagnostic(
                 ticket_id=ticket.id,
-                app_version=body.diagnostics.app_version,
-                build_number=body.diagnostics.build_number,
-                platform=body.diagnostics.platform,
-                os_version=body.diagnostics.os_version,
-                runtime=body.diagnostics.runtime,
-                notification_permission=body.diagnostics.notification_permission,
-                push_registration_state=body.diagnostics.push_registration_state,
-                api_connectivity=body.diagnostics.api_connectivity,
-                network_state=body.diagnostics.network_state,
-                background_refresh_state=body.diagnostics.background_refresh_state,
-                client_timestamp=body.diagnostics.client_timestamp,
+                app_version=body.diagnostics.app_version if body.diagnostics else None,
+                build_number=body.diagnostics.build_number if body.diagnostics else None,
+                platform=body.diagnostics.platform if body.diagnostics else None,
+                os_version=body.diagnostics.os_version if body.diagnostics else None,
+                runtime=body.diagnostics.runtime if body.diagnostics else None,
+                notification_permission=body.diagnostics.notification_permission
+                if body.diagnostics
+                else None,
+                push_registration_state=body.diagnostics.push_registration_state
+                if body.diagnostics
+                else None,
+                api_connectivity=body.diagnostics.api_connectivity if body.diagnostics else None,
+                network_state=body.diagnostics.network_state if body.diagnostics else None,
+                background_refresh_state=body.diagnostics.background_refresh_state
+                if body.diagnostics
+                else None,
+                client_timestamp=body.diagnostics.client_timestamp if body.diagnostics else None,
+                beta_programme=beta_context[0]
+                if beta_context and beta_context[0] in APPROVED_BETA_PROGRAMMES
+                else None,
+                entitlement_source=beta_context[1]
+                if beta_context and beta_context[1] in APPROVED_BETA_ENTITLEMENT_SOURCES
+                else None,
             )
         )
         audit(

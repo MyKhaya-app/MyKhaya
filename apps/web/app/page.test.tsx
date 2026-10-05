@@ -85,7 +85,7 @@ describe("Welcome (public marketing homepage)", () => {
       text?.includes("Less organising"),
     );
     const pricingIndex = headingText.findIndex((text) =>
-      text?.includes("A plan for every family"),
+      text?.includes("Simple plans for modern family life"),
     );
     const finalCtaIndex = headingText.findIndex((text) =>
       text?.includes("Ready to bring"),

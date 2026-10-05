@@ -71,6 +71,7 @@ type HomeDetail = {
   modules: ModuleState[];
   notes: { id: string; body: string; created_at: string }[];
   authentication_mfa: HomeMfaState;
+  founding_beta: { programme: string; joined_at: string; joined_by: string; terms_version: string; entitlement_source: string | null; capacity_exempt: boolean; complimentary_ultimate: boolean } | null;
 };
 
 const safeError = (error: unknown, fallback: string) =>
@@ -109,6 +110,7 @@ export default function PlatformHomeDetail() {
   const [moveMemberTarget, setMoveMemberTarget] = useState<HomeDetail["members"][number] | null>(null);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteBlockers, setDeleteBlockers] = useState<string[] | null>(null);
+  const [exemptionReason, setExemptionReason] = useState("");
   const { guarded, modal } = useReauthGuard();
 
   async function load() {
@@ -125,6 +127,28 @@ export default function PlatformHomeDetail() {
   useEffect(() => {
     void load();
   }, [id]);
+
+  const updateCapacityExemption = guarded(async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!data?.founding_beta || exemptionReason.trim().length < 3) return;
+    setBusy("capacity-exemption");
+    setError("");
+    try {
+      const form = new FormData(event.currentTarget);
+      await platformApi.post(`/beta/homes/${encodeURIComponent(id)}/capacity-exemption`, {
+        exempt: form.get("exempt") === "on",
+        reason: exemptionReason.trim(),
+      });
+      setExemptionReason("");
+      setMessage("Capacity exemption updated and audited.");
+      await load();
+    } catch (cause) {
+      if (cause instanceof ApiError && cause.status === 403) throw cause;
+      setError(safeError(cause, "Unable to update the capacity exemption."));
+    } finally {
+      setBusy("");
+    }
+  });
 
   // suspend/reactivate and feature-flag updates all hit endpoints the
   // backend guards with require_recent_auth() (see
@@ -303,7 +327,7 @@ export default function PlatformHomeDetail() {
               eyebrow="Home account"
               title={
                 <>
-                  {data.name} <CcBadge tone={statusTone}>{statusLabel}</CcBadge>
+                  {data.name} <CcBadge tone={statusTone}>{statusLabel}</CcBadge>{data.founding_beta && <CcBadge tone="info">Founding Beta</CcBadge>}
                 </>
               }
               description="Home content is not available in this interface."
@@ -329,6 +353,25 @@ export default function PlatformHomeDetail() {
                 />
               </CcSection>
             </CcColumns>
+
+            {data.founding_beta && <CcSection title="Founding Beta">
+              <CcCard>
+                <CcMetadataGrid>
+                  <CcMetadataItem label="Programme">{data.founding_beta.programme}</CcMetadataItem>
+                  <CcMetadataItem label="Joined">{new Date(data.founding_beta.joined_at).toLocaleString()}</CcMetadataItem>
+                  <CcMetadataItem label="Joined by">{data.founding_beta.joined_by}</CcMetadataItem>
+                  <CcMetadataItem label="Terms version">{data.founding_beta.terms_version}</CcMetadataItem>
+                  <CcMetadataItem label="Entitlement source">{data.founding_beta.entitlement_source ?? "Not recorded"}</CcMetadataItem>
+                  <CcMetadataItem label="Capacity">{data.founding_beta.capacity_exempt ? "Exempt — does not consume a public place" : "Counted"}</CcMetadataItem>
+                  <CcMetadataItem label="Complimentary Ultimate"><CcBadge tone={data.founding_beta.complimentary_ultimate ? "success" : "neutral"}>{data.founding_beta.complimentary_ultimate ? "Active" : "Not active"}</CcBadge></CcMetadataItem>
+                </CcMetadataGrid>
+                <form className="pcc-beta-exemption-form" onSubmit={updateCapacityExemption}>
+                  <label><input name="exempt" type="checkbox" defaultChecked={data.founding_beta.capacity_exempt} /> Capacity exemption for this platform-managed Home</label>
+                  <CcField label="Reason for this change"><input required minLength={3} maxLength={300} value={exemptionReason} onChange={(event) => setExemptionReason(event.target.value)} /></CcField>
+                  <button type="submit" disabled={busy === "capacity-exemption"}>{busy === "capacity-exemption" ? "Saving…" : "Save capacity exemption"}</button>
+                </form>
+              </CcCard>
+            </CcSection>}
 
             <CcSection title="Memberships">
               <CcRecordList variant="grid" emptyMessage="No members yet.">

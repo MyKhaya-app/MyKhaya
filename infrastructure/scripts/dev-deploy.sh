@@ -212,7 +212,7 @@ preflight() {
 }
 
 set_build_metadata() {
-  MYKHAYA_VERSION=$(tr -d '\r\n' < VERSION)
+  MYKHAYA_VERSION=dev
   MYKHAYA_COMMIT_SHA=$(git rev-parse HEAD)
   MYKHAYA_BUILD_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
   MYKHAYA_BUILD_CHANNEL=development

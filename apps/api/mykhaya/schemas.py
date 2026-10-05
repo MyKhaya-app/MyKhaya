@@ -57,6 +57,12 @@ class RegisterRequest(StrictModel):
     # mykhaya.legal.validate_signup_acceptances.
     legal_acceptances: list[SignupLegalAcceptanceItem] = Field(default_factory=list)
     platform: LegalPlatform = LegalPlatform.web
+    # Beta onboarding is staged on the unverified account and consumed only
+    # after email verification. These fields are additive and ignored for the
+    # normal signup mode.
+    beta_home_name: str | None = Field(default=None, min_length=1, max_length=100)
+    beta_terms_version: str | None = Field(default=None, min_length=1, max_length=80)
+    beta_invitation_token: str | None = Field(default=None, min_length=32, max_length=500)
 
     @field_validator("display_name")
     @classmethod
@@ -1854,6 +1860,8 @@ class SupportTicketDiagnosticResponse(BaseModel):
     network_state: str | None
     background_refresh_state: str | None
     client_timestamp: datetime | None
+    beta_programme: str | None = None
+    entitlement_source: str | None = None
 
 
 class SupportTicketCreate(StrictModel):

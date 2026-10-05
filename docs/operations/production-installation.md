@@ -32,9 +32,9 @@ Cloudflare -> NetBird Proxy -> Caddy -> web/API
 
 ## Updates and rollback
 
-Set `MYKHAYA_PRODUCTION=1`, `MYKHAYA_RELEASE_TAG` to the approved exact tag, and
-create `/var/lib/mykhaya/last-backup.ok` only after an encrypted off-host backup has
-been verified. Then run `make prod-update`.
+Create `/var/lib/mykhaya/last-backup.ok` only after an encrypted off-host backup has
+been verified. Then run `make prod-update RELEASE=vX.Y.Z` for the approved
+GitHub release tag.
 
 The command refuses dirty trees, non-release commits, missing configuration, and
 missing backup evidence. For a compatible code-only rollback, redeploy the previous

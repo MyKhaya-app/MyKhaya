@@ -32,6 +32,7 @@ from mykhaya.security import password_hash
 PUBLIC_CONFIG_KEYS = {
     "service_status_url",
     "support_enabled",
+    "maintenance_mode",
     "status_overall",
     "status_overall_message",
 }

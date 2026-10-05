@@ -11,17 +11,68 @@ import { PublicHero } from "@/components/marketing/public-hero";
 import { PublicPricing } from "@/components/marketing/public-pricing";
 import { isNativeShell } from "@/components/native-runtime";
 import { useAuth } from "@/components/auth-provider";
+import { MaintenanceScreen } from "@/components/maintenance";
 import { genericUnlockPromptCopy } from "@/components/native-biometric";
+import { api, type PublicSignupState } from "@mykhaya/api-client";
 
-function PublicWelcome() {
+function PublicWelcome({ signupState }: { signupState: PublicSignupState | null }) {
+  if (signupState?.signup_mode === "closed") {
+    return (
+      <main className="mk-page">
+        <PublicHeader signupState={signupState} />
+        <section className="mk-closed-state" aria-labelledby="signup-closed-heading">
+          <p className="eyebrow">MyKhaya</p>
+          <h1 id="signup-closed-heading">New sign-ups are currently closed.</h1>
+          <p>Existing members can still sign in to their Home.</p>
+          <div className="mk-hero-actions">
+            {signupState.waitlist_available ? (
+              <a className="button" href="/waitlist">Join the waitlist</a>
+            ) : null}
+            <a className="button secondary" href="/login">Sign in</a>
+          </div>
+        </section>
+        <PublicFooter />
+      </main>
+    );
+  }
+  if (signupState?.signup_mode === "beta_only") {
+    return <BetaWelcome signupState={signupState} />;
+  }
   return (
     <main className="mk-page">
-      <PublicHeader />
-      <PublicHero />
+      <PublicHeader signupState={signupState} />
+      <PublicHero signupState={signupState} />
       <PublicFeatures />
       <PublicBenefits />
       <PublicPricing />
-      <PublicFinalCta />
+      <PublicFinalCta signupState={signupState} />
+      <PublicFooter />
+    </main>
+  );
+}
+
+function BetaWelcome({ signupState }: { signupState: PublicSignupState }) {
+  return (
+    <main className="mk-page">
+      <PublicHeader signupState={signupState} />
+      <section className="mk-beta-hero" aria-labelledby="beta-heading">
+        <p className="eyebrow">Founding Beta</p>
+        <h1 id="beta-heading">Help shape a calmer home.</h1>
+        <p>
+          Join a limited testing cohort for MyKhaya. Founding members receive
+          Complimentary Ultimate access for the lifetime of their Home.
+        </p>
+        <p>There is no cost to join. Places are limited while we learn together.</p>
+        <div className="mk-hero-actions">
+          <a className="button large" href="/founding-beta">Join the Beta</a>
+          <a className="button secondary large" href="/login">Sign in</a>
+        </div>
+        {signupState.joinable_count !== null && (
+          <p className="mk-beta-places" role="status">
+            {signupState.joinable_count} places currently available
+          </p>
+        )}
+      </section>
       <PublicFooter />
     </main>
   );
@@ -39,6 +90,7 @@ function NativeRootGate() {
     if (status === "ready") router.replace("/home");
   }, [router, status]);
 
+  if (status === "maintenance") return <MaintenanceScreen onRecovered={retryInitialSession} />;
   if (status === "offline") {
     return (
       <main className="app-bootstrap-state" role="alert">
@@ -61,7 +113,7 @@ function NativeRootGate() {
   if (initialSessionLoading || status === "initializing" || status === "ready") {
     return <main className="app-bootstrap-state" role="status">Checking your MyKhaya session…</main>;
   }
-  return <PublicWelcome />;
+  return <PublicWelcome signupState={null} />;
 }
 
 export default function Welcome() {
@@ -78,8 +130,13 @@ export default function Welcome() {
   // render the SSR-identical branch first, flip to the native branch only
   // after mount, once isNativeShell() is safe to read.
   const [native, setNative] = useState(false);
+  const [signupState, setSignupState] = useState<PublicSignupState | null>(null);
   useEffect(() => {
     setNative(isNativeShell());
   }, []);
-  return native ? <NativeRootGate /> : <PublicWelcome />;
+  useEffect(() => {
+    if (native) return;
+    api.publicSignupState().then(setSignupState).catch(() => setSignupState(null));
+  }, [native]);
+  return native ? <NativeRootGate /> : <PublicWelcome signupState={signupState} />;
 }

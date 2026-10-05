@@ -29,7 +29,8 @@ Where implementation and documentation conflict, stop, identify the correct inte
 - `main` is stable; only Anthony merges, tags and deploys it.
 - Do not create release or hotfix branches, automate promotion, force-push or rewrite history.
 - Stable releases require semantic versioning and stable tags (`vMAJOR.MINOR.PATCH`).
-- `VERSION` is branch-independent and every component must use the same value.
+- GitHub release tags are the production version authority; development reports
+  `dev`, and package manifests may retain independent packaging versions.
 - Version, commit and build metadata must be safe to expose internally and must not include secrets.
 - Public status endpoints must not expose internal build identifiers.
 

@@ -1438,6 +1438,163 @@ class PlatformSetting(UuidTimeMixin, Base):
     )
 
 
+class SignupMode(StrEnum):
+    normal = "normal"
+    beta_only = "beta_only"
+    mixed = "mixed"
+    closed = "closed"
+
+
+class BetaProgrammeStatus(StrEnum):
+    active = "active"
+    archived = "archived"
+
+
+class BetaWaitlistStatus(StrEnum):
+    waiting = "waiting"
+    invited = "invited"
+    joined = "joined"
+    expired = "expired"
+    declined = "declined"
+    removed = "removed"
+
+
+class BetaInvitationStatus(StrEnum):
+    reserved = "reserved"
+    redeemed = "redeemed"
+    expired = "expired"
+    cancelled = "cancelled"
+
+
+class BetaPendingRegistration(UuidTimeMixin, Base):
+    __tablename__ = "beta_pending_registrations"
+    __table_args__ = (
+        UniqueConstraint("token_hash", name="uq_beta_pending_registration_token"),
+        Index("ix_beta_pending_registration_user_expires", "user_id", "expires_at"),
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    programme_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("beta_programmes.id", ondelete="CASCADE"), index=True
+    )
+    home_name: Mapped[str] = mapped_column(String(100))
+    terms_version: Mapped[str] = mapped_column(String(80))
+    token_hash: Mapped[str] = mapped_column(String(64))
+    invitation_token_hash: Mapped[str | None] = mapped_column(String(64))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    consumed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class BetaProgramme(UuidTimeMixin, Base):
+    __tablename__ = "beta_programmes"
+    slug: Mapped[str] = mapped_column(String(80), unique=True, index=True)
+    name: Mapped[str] = mapped_column(String(160))
+    max_homes: Mapped[int] = mapped_column(Integer)
+    waitlist_enabled: Mapped[bool] = mapped_column(Boolean, server_default="true")
+    show_remaining_publicly: Mapped[bool] = mapped_column(Boolean, server_default="false")
+    terms_version: Mapped[str] = mapped_column(String(80))
+    invitation_ttl_days: Mapped[int] = mapped_column(Integer, server_default="7")
+    status: Mapped[BetaProgrammeStatus] = mapped_column(
+        Enum(BetaProgrammeStatus, name="beta_programme_status"),
+        default=BetaProgrammeStatus.active,
+        server_default=BetaProgrammeStatus.active.value,
+    )
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("platform_administrators.id", ondelete="SET NULL")
+    )
+    updated_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("platform_administrators.id", ondelete="SET NULL")
+    )
+
+
+class BetaWaitlistEntry(UuidTimeMixin, Base):
+    __tablename__ = "beta_waitlist_entries"
+    __table_args__ = (
+        UniqueConstraint(
+            "programme_id", "normalized_email", name="uq_beta_waitlist_programme_email"
+        ),
+        Index("ix_beta_waitlist_programme_status", "programme_id", "status"),
+    )
+    programme_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("beta_programmes.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(160))
+    email: Mapped[str] = mapped_column(String(320))
+    normalized_email: Mapped[str] = mapped_column(String(320))
+    country: Mapped[str] = mapped_column(String(2))
+    household_size: Mapped[int | None] = mapped_column(Integer)
+    use_case: Mapped[str | None] = mapped_column(String(500))
+    marketing_consent: Mapped[bool] = mapped_column(Boolean, server_default="false")
+    status: Mapped[BetaWaitlistStatus] = mapped_column(
+        Enum(BetaWaitlistStatus, name="beta_waitlist_status"),
+        default=BetaWaitlistStatus.waiting,
+        server_default=BetaWaitlistStatus.waiting.value,
+        index=True,
+    )
+
+
+class BetaInvitation(UuidTimeMixin, Base):
+    __tablename__ = "beta_invitations"
+    __table_args__ = (Index("ix_beta_invitation_programme_status", "programme_id", "status"),)
+    programme_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("beta_programmes.id", ondelete="CASCADE"), index=True
+    )
+    waitlist_entry_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("beta_waitlist_entries.id", ondelete="SET NULL"), index=True
+    )
+    email: Mapped[str] = mapped_column(String(320))
+    token_hash: Mapped[str] = mapped_column(String(64), unique=True)
+    reserved_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    status: Mapped[BetaInvitationStatus] = mapped_column(
+        Enum(BetaInvitationStatus, name="beta_invitation_status"),
+        default=BetaInvitationStatus.reserved,
+        server_default=BetaInvitationStatus.reserved.value,
+    )
+    accepted_home_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("groups.id", ondelete="SET NULL")
+    )
+    invited_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("platform_administrators.id", ondelete="SET NULL")
+    )
+
+
+class BetaEnrollment(UuidTimeMixin, Base):
+    __tablename__ = "beta_enrollments"
+    __table_args__ = (
+        UniqueConstraint("programme_id", "home_id", name="uq_beta_enrollment_programme_home"),
+        UniqueConstraint(
+            "programme_id", "joined_user_id", name="uq_beta_enrollment_programme_user"
+        ),
+        UniqueConstraint(
+            "programme_id", "normalized_email", name="uq_beta_enrollment_programme_email"
+        ),
+        Index("ix_beta_enrollment_programme_counted", "programme_id", "capacity_exempt"),
+    )
+    programme_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("beta_programmes.id", ondelete="RESTRICT"), index=True
+    )
+    home_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("groups.id", ondelete="RESTRICT"), index=True
+    )
+    joined_user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT"), index=True
+    )
+    normalized_email: Mapped[str] = mapped_column(String(320), index=True)
+    joined_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    joined_by_user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("users.id", ondelete="RESTRICT")
+    )
+    terms_version: Mapped[str] = mapped_column(String(80))
+    source_invitation_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("beta_invitations.id", ondelete="SET NULL")
+    )
+    capacity_exempt: Mapped[bool] = mapped_column(Boolean, server_default="false")
+
+
 class FeatureFlag(UuidTimeMixin, Base):
     __tablename__ = "feature_flags"
     key: Mapped[FeatureKey] = mapped_column(Enum(FeatureKey, name="feature_key"), unique=True)
@@ -3457,6 +3614,10 @@ class HomeSubscription(UuidTimeMixin, Base):
     # Complimentary access — a first-class MyKhaya concept, not a fake/100%-off
     # Stripe subscription. Only ever set via the Platform Control Centre.
     complimentary_reason: Mapped[str | None] = mapped_column(String(200))
+    # Durable machine-readable grant source. ``founding_beta_lifetime`` is
+    # intentionally distinct from ordinary PCC complimentary grants and is
+    # never inferred from plan/provider values.
+    complimentary_source: Mapped[str | None] = mapped_column(String(80))
     # Operator-only context (e.g. "friend of the founder, see ticket #123") —
     # never returned to household users. See routers.platform's household-facing
     # response builder, which omits this field entirely for non-admin callers.
@@ -4025,6 +4186,8 @@ class SupportTicketDiagnostic(UuidTimeMixin, Base):
     network_state: Mapped[str | None] = mapped_column(String(20))
     background_refresh_state: Mapped[str | None] = mapped_column(String(20))
     client_timestamp: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    beta_programme: Mapped[str | None] = mapped_column(String(80))
+    entitlement_source: Mapped[str | None] = mapped_column(String(80))
     ticket: Mapped["SupportTicket"] = orm_relationship(back_populates="diagnostic")
 
 

@@ -9,8 +9,6 @@ pyproject.toml floor of fastapi==0.116.0) — it was MyKhaya not distinguishing
 "blank" from "explicitly overridden".
 """
 
-import importlib.metadata
-
 import pytest
 from fastapi import FastAPI
 
@@ -35,7 +33,7 @@ def test_resolve_app_version_returns_non_empty_from_source_tree() -> None:
     metadata — both are kept in sync by validate_version.py)."""
     version = resolve_app_version()
     assert version
-    assert version != "unknown"
+    assert version == "dev"
 
 
 def test_settings_default_version_is_never_empty(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -72,21 +70,7 @@ def test_placeholder_unknown_override_does_not_block_a_better_source(
     actually available from package metadata or the repository VERSION
     file."""
     monkeypatch.setenv("MYKHAYA_VERSION", "unknown")
-    assert resolve_app_version() != "unknown"
-
-
-def test_missing_package_metadata_falls_back_to_repo_version_file(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.delenv("MYKHAYA_VERSION", raising=False)
-
-    def _raise_not_found(_name: str) -> str:
-        raise importlib.metadata.PackageNotFoundError
-
-    monkeypatch.setattr(importlib.metadata, "version", _raise_not_found)
-    version = resolve_app_version()
-    assert version
-    assert version != "unknown"
+    assert resolve_app_version() == "dev"
 
 
 def test_app_module_constructs_fastapi_with_non_empty_version() -> None:
