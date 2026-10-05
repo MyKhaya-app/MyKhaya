@@ -13,8 +13,8 @@ from mykhaya.models import (
     LegalAcceptanceContext,
     LegalActionVerb,
     LegalAudience,
-    LegalDocumentVersionStatus,
     LegalDocumentScope,
+    LegalDocumentVersionStatus,
     LegalPlatform,
     LegalReacceptanceScope,
 )

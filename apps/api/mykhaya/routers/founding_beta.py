@@ -64,8 +64,7 @@ from mykhaya.platform_audit import platform_audit
 from mykhaya.platform_runtime import evaluate_signup_policy, registration_enabled
 from mykhaya.platform_security import PlatformContext, require_recent_auth, require_roles
 from mykhaya.rate_limit import enforce_rate_limit
-from mykhaya.security import normalise_email
-from mykhaya.security import resolve_client_ip
+from mykhaya.security import normalise_email, resolve_client_ip
 
 public_router = APIRouter(prefix="/public", tags=["founding-beta-public"])
 router = APIRouter(prefix="/beta", tags=["founding-beta"])

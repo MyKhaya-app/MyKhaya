@@ -41,7 +41,6 @@ from mykhaya.models import (
     LegalDocument,
     LegalDocumentVersion,
     LegalDocumentVersionStatus,
-    LegalDocumentScope,
 )
 from mykhaya.platform_audit import platform_audit
 from mykhaya.platform_security import PlatformContext, require_recent_auth, require_roles

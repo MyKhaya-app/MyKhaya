@@ -85,6 +85,8 @@ async def create_and_publish_document(
     action_verb: str = "accept",
     version: str = "1.0",
     reacceptance_scope: str = "new_users_only",
+    scope: str = "global",
+    acceptance_required: bool = True,
 ) -> dict[str, Any]:
     created = await admin_unsafe(
         admin,
@@ -95,6 +97,8 @@ async def create_and_publish_document(
             "display_name": display_name,
             "audience": audience,
             "action_verb": action_verb,
+            "scope": scope,
+            "acceptance_required": acceptance_required,
         },
     )
     assert created.status_code == 201, created.text

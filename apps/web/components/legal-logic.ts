@@ -80,6 +80,10 @@ export function audienceLabel(audience: LegalAudience): string {
   return audience === "adult" ? "Adult" : "Child (via guardian)";
 }
 
+export function documentScopeLabel(scope: LegalDocumentScope): string {
+  return scope === "founding_beta" ? "Founding Beta" : "Global";
+}
+
 export function actionVerbLabel(verb: LegalActionVerb): string {
   return verb === "accept" ? "Accept" : "Acknowledge";
 }
