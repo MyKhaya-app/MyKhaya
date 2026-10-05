@@ -22,10 +22,10 @@ from mykhaya.founding_beta import (
 )
 from mykhaya.founding_beta_schemas import (
     BetaCapacityExemptionUpdate,
+    BetaEligibilityResponse,
     BetaInvitationItem,
     BetaInvitationResponse,
     BetaInvitationResponsePage,
-    BetaEligibilityResponse,
     BetaInviteCreate,
     BetaInviteResponse,
     BetaJoinRequest,
@@ -209,9 +209,7 @@ async def eligibility(
                 home_name=owned[0].name,
                 reason="A paid Home cannot be enrolled through the Founding Beta.",
             )
-        return BetaEligibilityResponse(
-            eligible=True, home_id=owned[0].id, home_name=owned[0].name
-        )
+        return BetaEligibilityResponse(eligible=True, home_id=owned[0].id, home_name=owned[0].name)
     return BetaEligibilityResponse(eligible=True)
 
 
