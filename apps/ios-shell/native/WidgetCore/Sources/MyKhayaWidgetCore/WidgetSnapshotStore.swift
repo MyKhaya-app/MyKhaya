@@ -31,7 +31,7 @@ public enum WidgetSnapshotStore {
     /// scripts/setup-widget-extension.rb and docs/mobile/ios-widgets.md).
     /// Reused, not invented fresh: matches the `app.mykhaya.mobile` bundle
     /// ID convention used throughout apps/ios-shell.
-    public static let appGroupIdentifier = "group.app.mykhaya.mobile"
+    public static let appGroupIdentifier = "group.app.mykhaya.mobile.prod"
 
     private static let fileName = "widget-snapshot.json"
 
