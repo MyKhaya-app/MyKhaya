@@ -67,5 +67,15 @@ services:
       {
         MYKHAYA_DATABASE_URL: "postgresql+asyncpg://mykhaya_app:${MYKHAYA_DB_PASSWORD}@postgres-test:5432/mykhaya",
         MYKHAYA_REDIS_URL: "redis://redis-test:6379/0",
-        MYKHAYA_TRUSTED_PROXY_CIDRS: '["172.16.0.2/32"]',
+        MYKHAYA_VERSION: "dev",
+        MYKHAYA_COMMIT_SHA: "unknown",
+        MYKHAYA_BUILD_TIME: "unknown",
+        MYKHAYA_BUILD_CHANNEL: "development",
+        MYKHAYA_ADMIN_URL: "http://admin.localhost:8080",
+        MYKHAYA_STATUS_URL: "http://status.localhost:8080",
+        MYKHAYA_CORS_ORIGINS: '["http://localhost:8080","http://admin.localhost:8080"]',
+        MYKHAYA_TRUSTED_HOSTS: '["localhost","127.0.0.1","admin.localhost","status.localhost"]',
+        MYKHAYA_ADMIN_ALLOWED_NETWORKS: '["127.0.0.0/8","::1/128"]',
+        MYKHAYA_ADMIN_MFA_REQUIRED: "false",
+        MYKHAYA_TRUSTED_PROXY_CIDRS: '["172.16.0.0/24"]',
       }
