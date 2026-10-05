@@ -65,7 +65,18 @@ function isPublicPath(path: string) {
   // "/legal" (Terms/Privacy/Children's Privacy/Cookies) must never trigger
   // session bootstrap for a signed-out visitor — see app-shell.tsx's
   // identical PUBLIC_PATH_PREFIXES entry.
-  return ["/login", "/register", "/forgot-password", "/reset-password", "/verify-email", "/onboarding", "/mfa", "/legal"].some(
+  return [
+    "/login",
+    "/register",
+    "/forgot-password",
+    "/reset-password",
+    "/verify-email",
+    "/mfa",
+    "/legal",
+    "/founding-beta",
+    "/signup-choice",
+    "/waitlist",
+  ].some(
     (prefix) => path === prefix || path.startsWith(`${prefix}/`),
   );
 }

@@ -17,7 +17,7 @@ export function PublicHeader({ signupState = null }: { signupState?: PublicSignu
         </Link>
         <div className="mk-header-links">
           <a href="#features">Features</a>
-          <a href="#pricing">Pricing</a>
+          <a href="#pricing">{signupState?.signup_mode === "beta_only" ? "Beta" : "Pricing"}</a>
         </div>
         <div className="mk-header-actions">
           <Link className="button secondary" href="/login">

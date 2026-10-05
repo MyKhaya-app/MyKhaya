@@ -27,6 +27,31 @@
   font-weight: 700;
 }
 
+.mk-beta-public-list {
+  margin: 1.5rem auto;
+  max-width: 34rem;
+  text-align: left;
+}
+
+.mk-beta-offer-card {
+  background: var(--colour-white, #fff);
+  border: 1px solid var(--mk-border, #d8ded5);
+  border-radius: var(--radius-card, 1.25rem);
+  box-shadow: var(--shadow-card);
+  margin: 2rem auto 0;
+  max-width: 38rem;
+  padding: clamp(1.25rem, 4vw, 2.25rem);
+  text-align: left;
+}
+
+.mk-beta-offer-card h3 {
+  margin-top: 0;
+}
+
+.mk-beta-offer-card .button {
+  margin-top: 1rem;
+}
+
 .mk-closed-state {
   margin: 0 auto;
   max-width: 720px;

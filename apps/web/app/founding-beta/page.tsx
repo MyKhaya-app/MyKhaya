@@ -1,12 +1,8 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import Link from "next/link";
-import { useSearchParams } from "next/navigation";
-import { api, ApiError, type PublicSignupState } from "@mykhaya/api-client";
-import { AuthCard } from "@/components/auth-card";
-import { FormStatus } from "@/components/form-status";
+import { PublicFoundingBeta } from "@/components/public-founding-beta";
 
+/*
 export default function FoundingBeta() {
   const params = useSearchParams();
   const invitation = params.get("invitation");
@@ -98,4 +94,9 @@ export default function FoundingBeta() {
       <p className="auth-footer"><Link href="/login">Already a member? Sign in</Link></p>
     </AuthCard>
   );
+}
+*/
+
+export default function FoundingBeta() {
+  return <PublicFoundingBeta />;
 }

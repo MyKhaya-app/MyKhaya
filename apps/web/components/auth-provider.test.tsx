@@ -143,6 +143,21 @@ describe("AuthProvider", () => {
     expect(router.replace).not.toHaveBeenCalled();
   });
 
+  it.each(["/founding-beta", "/signup-choice", "/waitlist"])(
+    "keeps %s public without session bootstrap or renewal",
+    async (publicPath) => {
+      pathname = publicPath;
+      me.mockRejectedValue(new (await import("@mykhaya/api-client")).ApiError(401, "Unauthenticated"));
+
+      render(<AuthProvider><Probe /></AuthProvider>);
+
+      await waitFor(() => expect(screen.getByText("signed_out")).toBeInTheDocument());
+      expect(me).not.toHaveBeenCalled();
+      expect(renew).not.toHaveBeenCalled();
+      expect(router.replace).not.toHaveBeenCalled();
+    },
+  );
+
   it("shows initial bootstrap state, then remains ready without reloading", async () => {
     let resolve!: (value: unknown) => void;
     me.mockReturnValue(new Promise((r) => { resolve = r; }));

@@ -1,6 +1,6 @@
 "use client";
 import { FormEvent, useEffect, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import type { FamilyPricing, HomeJoinCodeLookup } from "@mykhaya/shared-types";
 import type { PublicLegalDocumentSummary } from "@mykhaya/api-client";
 import { api, ApiError } from "@mykhaya/api-client";
@@ -19,6 +19,7 @@ import { clearOnboardingIntent, readOnboardingIntent } from "@/components/onboar
 import type { BillingIntervalChoice } from "@/components/onboarding-intent";
 import { nativeLogout } from "@/components/native-auth";
 import { isNativeShell } from "@/components/native-runtime";
+import { BetaEnrolment } from "@/components/beta-enrolment";
 
 type Step = "choice" | "join-code" | "join-confirm" | "join-sent" | "home" | "plan";
 
@@ -37,6 +38,7 @@ type Step = "choice" | "join-code" | "join-confirm" | "join-sent" | "home" | "pl
 // Neither branch is forced: an account may sit Home-less indefinitely.
 export default function Onboarding() {
   const router = useRouter();
+  const params = useSearchParams();
   const [step, setStep] = useState<Step>("choice");
   const [error, setError] = useState(""),
     [busy, setBusy] = useState(false);
@@ -146,6 +148,8 @@ export default function Onboarding() {
       setBusy(false);
     }
   }
+
+  if (params.get("beta") === "1") return <BetaEnrolment />;
 
   if (step === "choice") {
     return (

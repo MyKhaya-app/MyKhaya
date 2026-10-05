@@ -9,6 +9,7 @@ import { PublicFooter } from "@/components/marketing/public-footer";
 import { PublicHeader } from "@/components/marketing/public-header";
 import { PublicHero } from "@/components/marketing/public-hero";
 import { PublicPricing } from "@/components/marketing/public-pricing";
+import { PublicBetaOffer } from "@/components/marketing/public-beta-offer";
 import { isNativeShell } from "@/components/native-runtime";
 import { useAuth } from "@/components/auth-provider";
 import { MaintenanceScreen } from "@/components/maintenance";
@@ -36,7 +37,17 @@ function PublicWelcome({ signupState }: { signupState: PublicSignupState | null 
     );
   }
   if (signupState?.signup_mode === "beta_only") {
-    return <BetaWelcome signupState={signupState} />;
+    return (
+      <main className="mk-page">
+        <PublicHeader signupState={signupState} />
+        <PublicHero signupState={signupState} />
+        <PublicFeatures />
+        <PublicBenefits />
+        <PublicBetaOffer signupState={signupState} />
+        <PublicFinalCta signupState={signupState} />
+        <PublicFooter />
+      </main>
+    );
   }
   return (
     <main className="mk-page">
@@ -46,33 +57,6 @@ function PublicWelcome({ signupState }: { signupState: PublicSignupState | null 
       <PublicBenefits />
       <PublicPricing />
       <PublicFinalCta signupState={signupState} />
-      <PublicFooter />
-    </main>
-  );
-}
-
-function BetaWelcome({ signupState }: { signupState: PublicSignupState }) {
-  return (
-    <main className="mk-page">
-      <PublicHeader signupState={signupState} />
-      <section className="mk-beta-hero" aria-labelledby="beta-heading">
-        <p className="eyebrow">Founding Beta</p>
-        <h1 id="beta-heading">Help shape a calmer home.</h1>
-        <p>
-          Join a limited testing cohort for MyKhaya. Founding members receive
-          Complimentary Ultimate access for the lifetime of their Home.
-        </p>
-        <p>There is no cost to join. Places are limited while we learn together.</p>
-        <div className="mk-hero-actions">
-          <a className="button large" href="/founding-beta">Join the Beta</a>
-          <a className="button secondary large" href="/login">Sign in</a>
-        </div>
-        {signupState.joinable_count !== null && (
-          <p className="mk-beta-places" role="status">
-            {signupState.joinable_count} places currently available
-          </p>
-        )}
-      </section>
       <PublicFooter />
     </main>
   );

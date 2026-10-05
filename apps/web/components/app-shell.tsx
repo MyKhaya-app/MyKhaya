@@ -74,6 +74,7 @@ export function AppShell({
       !loading &&
       !homes.length &&
       path !== "/onboarding" &&
+      path !== "/beta/enrol" &&
       path !== "/calendar-shares/accept" &&
       path !== "/calendar/shared"
     )
@@ -166,7 +167,6 @@ const PUBLIC_PATH_PREFIXES = [
   "/forgot-password",
   "/reset-password",
   "/verify-email",
-  "/onboarding",
   // Browser MFA is a short-lived pre-auth route. It must render without the
   // normal application shell/session while the handoff is completed.
   "/mfa",
@@ -175,6 +175,9 @@ const PUBLIC_PATH_PREFIXES = [
   // signup — without ever triggering session bootstrap/redirect. See
   // app/legal/[slug]/page.tsx and AuthProvider's own identical exclusion.
   "/legal",
+  "/founding-beta",
+  "/signup-choice",
+  "/waitlist",
 ];
 const EXCLUDED_SHELL_PATH_PREFIXES = [
   "/control-centre",
