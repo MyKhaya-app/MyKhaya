@@ -283,7 +283,7 @@
 			mainGroup = 504EC2FB1FED79650016851F;
 			packageReferences = (
 				D4C12C0A2AAA248700AAC8A2 /* XCLocalSwiftPackageReference "CapApp-SPM" */,
-				1C589E9612A185EAAB71592E /* XCLocalSwiftPackageReference "../../native/WidgetCore" */,
+				1C589E9612A185EAAB71592E /* XCLocalSwiftPackageReference "WidgetCore" */,
 			);
 			productRefGroup = 504EC3051FED79650016851F /* Products */;
 			projectDirPath = "";
@@ -517,7 +517,7 @@
 				MARKETING_VERSION = 0.1.30;
 				MYKHAYA_APNS_BUILD_ENVIRONMENT = development;
 				OTHER_SWIFT_FLAGS = "$(inherited) \"-D\" \"COCOAPODS\" \"-DDEBUG\"";
-				PRODUCT_BUNDLE_IDENTIFIER = app.mykhaya.mobile;
+				PRODUCT_BUNDLE_IDENTIFIER = app.mykhaya.mobile.prod;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
@@ -548,7 +548,7 @@
 				);
 				MARKETING_VERSION = 0.1.30;
 				MYKHAYA_APNS_BUILD_ENVIRONMENT = production;
-				PRODUCT_BUNDLE_IDENTIFIER = app.mykhaya.mobile;
+				PRODUCT_BUNDLE_IDENTIFIER = app.mykhaya.mobile.prod;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SUPPORTS_MACCATALYST = NO;
@@ -570,9 +570,9 @@
 				DEVELOPMENT_TEAM = M86392YDLQ;
 				INFOPLIST_FILE = ../../MyKhayaWidgets/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
-				MARKETING_VERSION = 0.1.30;
-				PRODUCT_BUNDLE_IDENTIFIER = app.mykhaya.mobile.widgets;
+				PRODUCT_BUNDLE_IDENTIFIER = app.mykhaya.mobile.prod.widgets;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = YES;
 				SWIFT_VERSION = 5.0;
@@ -590,9 +590,9 @@
 				DEVELOPMENT_TEAM = M86392YDLQ;
 				INFOPLIST_FILE = ../../MyKhayaWidgets/Info.plist;
 				IPHONEOS_DEPLOYMENT_TARGET = 16.0;
-				MARKETING_VERSION = 0.1.30;
-				PRODUCT_BUNDLE_IDENTIFIER = app.mykhaya.mobile.widgets;
+				PRODUCT_BUNDLE_IDENTIFIER = app.mykhaya.mobile.prod.widgets;
 				PRODUCT_NAME = "$(TARGET_NAME)";
+				REGISTER_APP_GROUPS = YES;
 				SDKROOT = iphoneos;
 				SKIP_INSTALL = YES;
 				SWIFT_VERSION = 5.0;
@@ -634,7 +634,7 @@
 /* End XCConfigurationList section */
 
 /* Begin XCLocalSwiftPackageReference section */
-		1C589E9612A185EAAB71592E /* XCLocalSwiftPackageReference "../../native/WidgetCore" */ = {
+		1C589E9612A185EAAB71592E /* XCLocalSwiftPackageReference "WidgetCore" */ = {
 			isa = XCLocalSwiftPackageReference;
 			relativePath = ../../native/WidgetCore;
 		};
@@ -652,12 +652,12 @@
 		};
 		8CD280D37148B47A5CEACB7E /* MyKhayaWidgetCore */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 1C589E9612A185EAAB71592E /* XCLocalSwiftPackageReference "../../native/WidgetCore" */;
+			package = 1C589E9612A185EAAB71592E /* XCLocalSwiftPackageReference "WidgetCore" */;
 			productName = MyKhayaWidgetCore;
 		};
 		CD327E4107396F3949BB3E67 /* MyKhayaWidgetCore */ = {
 			isa = XCSwiftPackageProductDependency;
-			package = 1C589E9612A185EAAB71592E /* XCLocalSwiftPackageReference "../../native/WidgetCore" */;
+			package = 1C589E9612A185EAAB71592E /* XCLocalSwiftPackageReference "WidgetCore" */;
 			productName = MyKhayaWidgetCore;
 		};
 /* End XCSwiftPackageProductDependency section */
