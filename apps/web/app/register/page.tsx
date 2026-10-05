@@ -178,12 +178,11 @@ export default function Register() {
       setBusy(false);
     }
   }
-  const betaUnavailable = betaRequested && signupState !== null && !signupState.beta_joining_available && !betaInvitation;
   const unavailableReason = maintenance
     ? "MyKhaya is undergoing maintenance. Please try again shortly."
-    : betaRequested && (!signupState?.registration_open || betaUnavailable)
-      ? "Founding Beta joining is currently unavailable. Join the waitlist or check back later."
-    : registrationUnavailableReason(signupState, Boolean(invitation));
+    : betaRequested
+      ? registrationUnavailableReason(signupState, Boolean(betaInvitation), true)
+      : registrationUnavailableReason(signupState, Boolean(invitation));
   return (
     <AuthCard
       title="Create your account"

@@ -23,7 +23,7 @@ describe("registrationUnavailableReason", () => {
       { ...open, registration_open: false, normal_signup_available: false },
       false,
     );
-    expect(reason).toMatch(/currently closed/);
+    expect(reason).toMatch(/currently paused/);
     expect(reason).toMatch(/still sign in/);
   });
 
@@ -39,5 +39,21 @@ describe("registrationUnavailableReason", () => {
     const inviteOnly = { ...open, invitation_required: true };
     expect(registrationUnavailableReason(inviteOnly, false)).toMatch(/invitation only/);
     expect(registrationUnavailableReason(inviteOnly, true)).toBeNull();
+  });
+
+  it("allows Beta registration when Beta joining is available even though normal signup is closed", () => {
+    expect(
+      registrationUnavailableReason(
+        { ...open, signup_mode: "beta_only", normal_signup_available: false, beta_joining_available: true },
+        false,
+        true,
+      ),
+    ).toBeNull();
+  });
+
+  it("reports Beta-specific blocked reasons", () => {
+    expect(registrationUnavailableReason({ ...open, beta_joining_available: false, waitlist_available: true }, false, true)).toMatch(/waiting list/);
+    expect(registrationUnavailableReason({ ...open, invitation_required: true }, false, true)).toMatch(/valid Founding Beta invitation/);
+    expect(registrationUnavailableReason({ ...open, signup_mode: "closed", registration_open: false }, false, true)).toMatch(/currently closed/);
   });
 });

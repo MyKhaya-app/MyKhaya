@@ -3,17 +3,19 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import Register from "./page";
 
-const { push, post, publicLegalDocuments, nativeRegister, nativeShellState } = vi.hoisted(() => ({
+const { push, post, publicLegalDocuments, publicSignupState, nativeRegister, nativeShellState, searchParams } = vi.hoisted(() => ({
   push: vi.fn(),
   post: vi.fn(),
   publicLegalDocuments: vi.fn(),
+  publicSignupState: vi.fn(),
   nativeRegister: vi.fn(),
   nativeShellState: { value: false },
+  searchParams: { value: "" },
 }));
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push }),
-  useSearchParams: () => new URLSearchParams(),
+  useSearchParams: () => new URLSearchParams(searchParams.value),
 }));
 
 vi.mock("@/components/native-runtime", () => ({
@@ -33,6 +35,7 @@ vi.mock("@mykhaya/api-client", async (importOriginal) => {
       ...actual.api,
       post,
       publicLegalDocuments,
+      publicSignupState,
     },
   };
 });
@@ -40,9 +43,19 @@ vi.mock("@mykhaya/api-client", async (importOriginal) => {
 beforeEach(() => {
   vi.clearAllMocks();
   nativeShellState.value = false;
+  searchParams.value = "";
   nativeRegister.mockResolvedValue({ message: "Check your inbox.", verification_required: true });
   post.mockResolvedValue({ message: "Check your inbox.", verification_required: true });
   publicLegalDocuments.mockResolvedValue([]);
+  publicSignupState.mockResolvedValue({
+    signup_mode: "normal",
+    registration_open: true,
+    invitation_required: false,
+    normal_signup_available: true,
+    beta_joining_available: false,
+    waitlist_available: false,
+    joinable_count: null,
+  });
 });
 
 async function submitRegistration() {
@@ -77,5 +90,26 @@ describe("registration transport", () => {
     })));
     expect(nativeRegister).not.toHaveBeenCalled();
     expect(push).toHaveBeenCalledWith("/verify-email");
+  });
+});
+
+describe("Founding Beta registration availability", () => {
+  it("enables Beta registration when Beta joining is available in beta-only mode", async () => {
+    searchParams.value = "beta=1";
+    publicSignupState.mockResolvedValue({
+      signup_mode: "beta_only",
+      registration_open: true,
+      invitation_required: false,
+      normal_signup_available: false,
+      beta_joining_available: true,
+      waitlist_available: false,
+      joinable_count: 4,
+      beta_terms_version: "2026-01",
+    });
+    render(<Register />);
+
+    expect(await screen.findByText(/You.re registering for the Founding Beta/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create account" })).toBeEnabled();
+    expect(screen.queryByText(/can.t be created from this page/)).not.toBeInTheDocument();
   });
 });
