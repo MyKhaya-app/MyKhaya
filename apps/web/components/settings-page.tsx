@@ -1,6 +1,5 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import Link from "next/link";
 import {
   Baby,
@@ -26,8 +25,9 @@ import {
   Users,
   type LucideIcon,
 } from "lucide-react";
-import type { BillingStatus, FeatureMatrix, User } from "@mykhaya/shared-types";
-import { api } from "@mykhaya/api-client";
+import type { BillingStatus } from "@mykhaya/shared-types";
+import { useAuth } from "./auth-provider";
+import { featureEnabled, useHomeAccess } from "./home-access";
 import { AppShellContent } from "./app-shell";
 import { HeroFlower } from "./hero-flower";
 import { useActiveHome } from "./use-active-home";
@@ -216,65 +216,40 @@ export function SettingsPage({
   backLink?: { href: string; label: string };
   children?: React.ReactNode;
 }) {
-  const [user, setUser] = useState<User | null>(null);
-  const { activeHome, activeHomeId } = useActiveHome();
-  const [featureMatrix, setFeatureMatrix] = useState<FeatureMatrix | null>(null);
-  const [billingStatus, setBillingStatus] = useState<BillingStatus | null>(null);
-  useEffect(() => {
-    api.me().then(setUser).catch(() => undefined);
-  }, []);
-  useEffect(() => {
-    setFeatureMatrix(null);
-    setBillingStatus(null);
-    if (!activeHomeId) return;
-    let cancelled = false;
-    api
-      .featureMatrix(activeHomeId)
-      .then((next) => {
-        if (!cancelled) setFeatureMatrix(next);
-      })
-      .catch(() => {
-        if (!cancelled) setFeatureMatrix(null);
-      });
-    api
-      .billingStatus(activeHomeId)
-      .then((next) => {
-        if (!cancelled) setBillingStatus(next);
-      })
-      .catch(() => {
-        if (!cancelled) setBillingStatus(null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [activeHomeId]);
-  const isAdult = user?.principal_type !== "managed_child";
-  const isHomeAdmin = activeHome?.relationship === "home_admin";
+  // Every input below is resolved state, never a guess: the signed-in user
+  // comes from AuthProvider (already settled before the shell renders), the
+  // Home list from ActiveHomeProvider, and plan/feature state from the shared,
+  // per-Home cached HomeAccess. A row whose visibility or lock depends on
+  // something still unresolved renders as a same-sized skeleton instead of
+  // being shown "available" and then corrected.
+  const { user } = useAuth();
+  const { activeHome, loading: homesLoading } = useActiveHome();
+  const { access } = useHomeAccess();
 
-  function visible(item: MoreItem): boolean {
-    if (item.gate === "homeAdmin" && !(isAdult && isHomeAdmin)) return false;
-    if (item.gate === "adult" && !isAdult) return false;
-    // No featureKey: unaffected, matching every row's current behaviour
-    // exactly (Nudges/Lists/Meal Plans and everything else).
-    if (!item.featureKey) return true;
-    // Platform/Home module state not yet loaded, or genuinely unavailable
-    // — hidden, never a dead link, matching the Home dashboard quick
-    // actions' own `{featureOn && (...)}` treatment for the same modules.
-    return Boolean(
-      featureMatrix?.features.some(
-        (feature) => feature.feature === item.featureKey && feature.enabled,
-      ),
-    );
+  function rowState(item: MoreItem): "show" | "pending" | "hidden" {
+    if (item.gate !== "all") {
+      if (!user) return "pending";
+      const isAdult = user.principal_type !== "managed_child";
+      if (!isAdult) return "hidden";
+      if (item.gate === "homeAdmin") {
+        if (homesLoading) return "pending";
+        if (activeHome?.relationship !== "home_admin") return "hidden";
+      }
+    }
+    // No featureKey: unaffected by module state.
+    if (!item.featureKey) return "show";
+    if (access.state === "loading") return "pending";
+    // Genuinely unavailable (or the state could not be loaded) — hidden,
+    // never a dead link, matching the Home dashboard quick actions.
+    if (access.state === "error") return "hidden";
+    return featureEnabled(access.value.features, item.featureKey) ? "show" : "hidden";
   }
 
   function locked(item: MoreItem): boolean {
-    if (!item.entitlementKey) return false;
-    // Unknown/loading is deliberately not Free. A lock is only valid after
-    // the current Home's billing response positively says this entitlement
-    // is unavailable. This prevents Family users seeing a transient Free
-    // presentation while the request hydrates, and prevents an old Home's
-    // response from determining the new Home's UI.
-    return billingStatus?.[item.entitlementKey] === false;
+    if (!item.entitlementKey || access.state !== "ready") return false;
+    // A lock is only valid after the current Home's billing response
+    // positively says this entitlement is unavailable.
+    return access.value.billing[item.entitlementKey] === false;
   }
 
   return (
@@ -306,13 +281,27 @@ export function SettingsPage({
         ) : (
           <div className="more-groups">
             {MORE_GROUPS.map((group) => {
-              const items = group.items.filter(visible);
+              const items = group.items
+                .map((item) => ({ item, state: rowState(item) }))
+                .filter(({ state }) => state !== "hidden");
               if (items.length === 0) return null;
               return (
                 <section className="card more-group" key={group.label}>
                   <p className="more-group-label">{group.label}</p>
                   <div className="more-group-rows">
-                    {items.map((item) => {
+                    {items.map(({ item, state }) => {
+                      if (state === "pending") {
+                        return (
+                          <div className="more-row more-row-skeleton" key={item.href} aria-hidden="true">
+                            <span className="more-icon-tile skeleton-block" />
+                            <span className="more-row-text">
+                              <span className="skeleton-line skeleton-line-title" />
+                              <span className="skeleton-line skeleton-line-detail" />
+                            </span>
+                            <span />
+                          </div>
+                        );
+                      }
                       const itemLocked = locked(item);
                       return (
                         <Link

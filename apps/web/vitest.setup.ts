@@ -1,4 +1,4 @@
-import { vi } from "vitest";
+import { afterEach, vi } from "vitest";
 import "@testing-library/jest-dom/vitest";
 import { configure } from "@testing-library/react";
 
@@ -56,6 +56,31 @@ const defaultAuthContext = () => ({
 vi.mock("@/components/auth-provider", () => ({ useAuth: defaultAuthContext }));
 vi.mock("./components/auth-provider", () => ({ useAuth: defaultAuthContext }));
 
+// Same idea for PCC: every Control Centre page renders inside PlatformShell,
+// which now renders nothing until the administrator session resolves as
+// authenticated (see components/platform-session.ts). Page tests don't care
+// about auth, so default to a resolved, fully-authenticated administrator; a
+// test of the session/gate itself opts out with vi.unmock(...) and drives the
+// real module.
+const defaultPlatformSession = () => ({
+  usePlatformSession: () => ({
+    state: "authenticated" as const,
+    actor: {
+      id: "test-operator",
+      email: "operator@example.com",
+      display_name: "Test Operator",
+      role: "platform_owner",
+      mfa_enrolled: true,
+      session_status: "full" as const,
+    },
+    retry: vi.fn(),
+  }),
+  clearPlatformSession: vi.fn(),
+  resetPlatformSessionForTests: vi.fn(),
+});
+vi.mock("@/components/platform-session", () => defaultPlatformSession());
+vi.mock("./components/platform-session", () => defaultPlatformSession());
+
 // jsdom doesn't implement matchMedia — standard polyfill so components that
 // feature-detect display-mode (e.g. AppShell's auth diagnostics) don't throw
 // in every test that renders through it. Always reports "no match"; no test
@@ -80,3 +105,11 @@ if (typeof window !== "undefined" && !window.matchMedia) {
 if (typeof window !== "undefined") {
   window.scrollTo = vi.fn();
 }
+
+// PCC's resolved administrator session is module-scoped (shared across pages);
+// never let one test's session leak into the next.
+// Imported lazily so it resolves through the current test file's own module
+// mocks (e.g. a mocked @mykhaya/api-client), not the setup file's.
+afterEach(async () => {
+  (await import("./components/platform-session")).resetPlatformSessionForTests();
+});

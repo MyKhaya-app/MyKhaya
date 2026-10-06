@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useState } from "react";
+import { FormEvent, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   startAuthentication,
@@ -8,6 +8,7 @@ import {
 } from "@simplewebauthn/browser";
 import { ApiError, platformApi } from "@mykhaya/api-client";
 import { resolveLoginDestination } from "@/components/platform-mfa-logic";
+import { clearPlatformSession } from "@/components/platform-session";
 import type { PlatformActor } from "@/components/platform-types";
 import { CcAuthShell } from "@/components/control-centre/auth-shell";
 import { CcNotice } from "@/components/control-centre/status-message";
@@ -24,6 +25,12 @@ export default function PlatformLogin() {
   const [busy, setBusy] = useState(false);
   const [method, setMethod] = useState<VerifyMethod>("passkey");
   const [availableFactors, setAvailableFactors] = useState<Factor[]>([]);
+
+  // Arriving here means any previously-resolved administrator session is gone
+  // or about to be replaced; never let the next shell reuse it.
+  useEffect(() => {
+    clearPlatformSession();
+  }, []);
 
   function proceed(actor: PlatformActor) {
     const destination = resolveLoginDestination(actor.session_status);

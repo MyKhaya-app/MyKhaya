@@ -31,4 +31,14 @@ describe("primaryNavDestinationsFor", () => {
   it("includes all destinations when no principal type is given", () => {
     expect(primaryNavDestinationsFor().map((d) => d.id)).toHaveLength(4);
   });
+
+  it("keeps Family in place, flagged pending, while the plan is unresolved", () => {
+    const items = primaryNavDestinationsFor("adult", "pending");
+    expect(items.map((d) => d.id)).toEqual(["home", "calendar", "family", "more"]);
+    expect(items.filter((d) => d.pending).map((d) => d.id)).toEqual(["family"]);
+  });
+
+  it("still never offers Family to a managed child while pending", () => {
+    expect(primaryNavDestinationsFor("managed_child", "pending").map((d) => d.id)).not.toContain("family");
+  });
 });

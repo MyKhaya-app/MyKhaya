@@ -94,6 +94,26 @@ beforeEach(() => {
 });
 
 describe("AuthProvider", () => {
+  it("starts unresolved on a protected route, never signed_out, until the session answers", async () => {
+    let resolveMe!: (value: unknown) => void;
+    me.mockReturnValue(new Promise((resolve) => { resolveMe = resolve; }));
+    const seen: string[] = [];
+    function Recorder() {
+      const auth = useAuth();
+      seen.push(auth.initialSessionLoading ? "checking" : auth.status);
+      return null;
+    }
+
+    render(<AuthProvider><Recorder /></AuthProvider>);
+    await waitFor(() => expect(me).toHaveBeenCalled());
+    expect(seen).not.toContain("signed_out");
+    expect(seen[0]).toBe("checking");
+
+    await act(async () => { resolveMe({ id: "u1", display_name: "Owner", principal_type: "adult" }); });
+    await waitFor(() => expect(seen.at(-1)).toBe("ready"));
+    expect(seen).not.toContain("signed_out");
+  });
+
   it("shows the maintenance status — not signed-out or offline — when the API answers 503 maintenance_mode", async () => {
     const { ApiError } = await import("@mykhaya/api-client");
     const maintenance = Object.assign(new ApiError(503, "Maintenance"), {

@@ -2,6 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import NotificationChannelsPage from "./page";
 
+// Exercises the real administrator-session resolution (this file mocks /auth/me
+// itself), not the global authenticated default from vitest.setup.ts.
+vi.unmock("@/components/platform-session");
+vi.unmock("./components/platform-session");
+
 const stableRouter = { replace: vi.fn(), push: vi.fn() };
 vi.mock("next/navigation", () => ({
   usePathname: () => "/notifications/channels",
@@ -125,7 +130,7 @@ describe("NotificationChannelsPage", () => {
       path === "/auth/me" ? Promise.resolve(actor) : new Promise(() => {}),
     );
     render(<NotificationChannelsPage />);
-    expect(screen.getByRole("status")).toHaveTextContent("Loading");
+    expect(await screen.findByText(/Loading/)).toBeInTheDocument();
   });
 
   it("shows an error notice when the health request fails", async () => {

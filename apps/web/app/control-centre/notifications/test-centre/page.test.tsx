@@ -3,6 +3,11 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import NotificationTestCentrePage from "./page";
 
+// Exercises the real administrator-session resolution (this file mocks /auth/me
+// itself), not the global authenticated default from vitest.setup.ts.
+vi.unmock("@/components/platform-session");
+vi.unmock("./components/platform-session");
+
 const stableRouter = { replace: vi.fn(), push: vi.fn() };
 vi.mock("next/navigation", () => ({
   usePathname: () => "/notifications/test-centre",

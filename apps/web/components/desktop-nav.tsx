@@ -6,6 +6,7 @@ import { Calendar, Home, MoreHorizontal, Users } from "lucide-react";
 import type { PrincipalType } from "@mykhaya/shared-types";
 import {
   primaryNavDestinationsFor,
+  type FamilyAccessState,
   type PrimaryNavDestination,
 } from "./primary-nav-destinations";
 import { Logo } from "./logo";
@@ -22,7 +23,7 @@ export function DesktopNav({
   familyAccess,
 }: {
   principalType?: PrincipalType;
-  familyAccess?: boolean;
+  familyAccess?: FamilyAccessState;
 }) {
   const items = primaryNavDestinationsFor(principalType, familyAccess);
   const path = usePathname();
@@ -34,14 +35,16 @@ export function DesktopNav({
         <span>MyKhaya</span>
       </div>
       <div className="desktop-nav-links">
-        {items.map(({ id, href, label }) => {
+        {items.map(({ id, href, label, pending }) => {
           const Icon = ICONS[id];
           return (
             <Link
               key={href}
               href={href}
-              className={`desktop-nav-link${path === href || path.startsWith(`${href}/`) ? " active" : ""}`}
+              className={`desktop-nav-link${path === href || path.startsWith(`${href}/`) ? " active" : ""}${pending ? " nav-pending" : ""}`}
               aria-current={path === href || path.startsWith(`${href}/`) ? "page" : undefined}
+              aria-hidden={pending || undefined}
+              tabIndex={pending ? -1 : undefined}
             >
               <Icon size={18} strokeWidth={1.8} aria-hidden="true" />
               <span>{label}</span>

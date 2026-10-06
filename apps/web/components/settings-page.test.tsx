@@ -13,6 +13,13 @@ vi.mock("next/navigation", () => ({
   usePathname: () => "/settings",
 }));
 
+let authUser: { id: string; display_name: string; principal_type: string } | null = {
+  id: "u1",
+  display_name: "Megan",
+  principal_type: "adult",
+};
+vi.mock("./auth-provider", () => ({ useAuth: () => ({ user: authUser, status: "ready" }) }));
+
 let activeHomeValue: { id: string; name: string; relationship: string } | null = {
   id: "home-1",
   name: "Hales Home",
@@ -34,7 +41,6 @@ vi.mock("@mykhaya/api-client", async (importOriginal) => {
     ...actual,
     api: {
       ...actual.api,
-      me: vi.fn(),
       featureMatrix: vi.fn(),
       billingStatus: vi.fn(),
     },
@@ -102,11 +108,9 @@ function mockModuleState(
 beforeEach(() => {
   vi.clearAllMocks();
   activeHomeValue = { id: "home-1", name: "Hales Home", relationship: "home_admin" };
-  (api.me as ReturnType<typeof vi.fn>).mockResolvedValue({
-    id: "u1",
-    display_name: "Megan",
-    principal_type: "adult",
-  });
+  authUser = { id: "u1", display_name: "Megan", principal_type: "adult" };
+  (api.billingStatus as ReturnType<typeof vi.fn>).mockReset();
+  (api.featureMatrix as ReturnType<typeof vi.fn>).mockReset();
   mockModuleState();
   global.fetch = vi.fn().mockRejectedValue(new Error("no build info in tests"));
 });
@@ -215,11 +219,7 @@ describe("More — Security lives in You, not a separate block", () => {
   });
 
   it("hides Security from a managed Child, same as before", async () => {
-    (api.me as ReturnType<typeof vi.fn>).mockResolvedValue({
-      id: "child-1",
-      display_name: "Riley",
-      principal_type: "managed_child",
-    });
+    authUser = { id: "child-1", display_name: "Riley", principal_type: "managed_child" };
     render(<SettingsPage />);
     await screen.findByRole("heading", { name: "Help & Support" });
     expect(screen.queryByRole("heading", { name: "Security" })).not.toBeInTheDocument();
@@ -268,11 +268,7 @@ describe("More — permission gating", () => {
   });
 
   it("hides every adult-only row for a managed Child", async () => {
-    (api.me as ReturnType<typeof vi.fn>).mockResolvedValue({
-      id: "child-1",
-      display_name: "Riley",
-      principal_type: "managed_child",
-    });
+    authUser = { id: "child-1", display_name: "Riley", principal_type: "managed_child" };
     render(<SettingsPage />);
 
     await screen.findByRole("heading", { name: "Help & Support" });
@@ -348,43 +344,61 @@ describe("More — green hero header", () => {
 // a hardcoded always-active link, and never fully hidden just because it's
 // not entitled on the current plan.
 describe("More — entitlement loading state", () => {
-  it("does not render transient locks while Family entitlement is unknown", async () => {
+  const family = {
+    ...({} as BillingStatus),
+    nudges_enabled: true,
+    meals_enabled: true,
+    wishlists_enabled: true,
+    lists_enabled: true,
+  };
+  const free = { ...family, nudges_enabled: false, meals_enabled: false, wishlists_enabled: false };
+  const moduleRows = ["Nudges", "Lists", "Meal Plans", "Wishlists"];
+
+  it("renders neutral placeholders, never premium rows, while entitlement is unresolved", async () => {
     const billing = deferred<BillingStatus>();
     mockModuleState();
     (api.billingStatus as ReturnType<typeof vi.fn>).mockReturnValue(billing.promise);
     const { container } = render(<SettingsPage />);
 
-    await screen.findByRole("heading", { name: "Nudges" });
+    // Feature matrix has resolved; billing has not. Module rows must stay
+    // placeholders — available-looking rows here are the flash being removed.
+    await screen.findByRole("heading", { name: "Help & Support" });
+    await waitFor(() => expect(api.featureMatrix).toHaveBeenCalled());
+    for (const name of moduleRows) expect(screen.queryByRole("heading", { name })).not.toBeInTheDocument();
+    expect(container.querySelectorAll(".more-row-skeleton").length).toBeGreaterThan(0);
     expect(container.querySelectorAll(".more-row-lock")).toHaveLength(0);
-    billing.resolve({
-      ...({} as BillingStatus),
-      nudges_enabled: true,
-      meals_enabled: true,
-      wishlists_enabled: true,
-      lists_enabled: true,
-    });
-    await waitFor(() => expect(container.querySelectorAll(".more-row-lock")).toHaveLength(0));
+
+    billing.resolve(family);
+    await screen.findByRole("heading", { name: "Nudges" });
+    expect(container.querySelectorAll(".more-row-skeleton")).toHaveLength(0);
+    expect(container.querySelectorAll(".more-row-lock")).toHaveLength(0);
   });
 
-  it("shows locks only after unknown entitlement resolves to Free", async () => {
+  it("first shows module rows already locked when the plan resolves to Free", async () => {
     const billing = deferred<BillingStatus>();
     mockModuleState();
     (api.billingStatus as ReturnType<typeof vi.fn>).mockReturnValue(billing.promise);
     const { container } = render(<SettingsPage />);
 
-    await screen.findByRole("heading", { name: "Nudges" });
-    expect(container.querySelectorAll(".more-row-lock")).toHaveLength(0);
-    billing.resolve({
-      ...({} as BillingStatus),
-      nudges_enabled: false,
-      meals_enabled: false,
-      wishlists_enabled: false,
-      lists_enabled: true,
-    });
-    await waitFor(() => expect(container.querySelectorAll(".more-row-lock").length).toBeGreaterThan(0));
+    await screen.findByRole("heading", { name: "Help & Support" });
+    expect(screen.queryByRole("heading", { name: "Nudges" })).not.toBeInTheDocument();
+    billing.resolve(free);
+    const nudges = await screen.findByRole("heading", { name: "Nudges" });
+    // Locked from its very first render — no unlocked intermediate.
+    expect(nudges.closest("a")?.className).toContain("more-row-locked");
+    expect(container.querySelectorAll(".more-row-lock").length).toBeGreaterThan(0);
   });
 
-  it("clears the previous Home entitlement while switching Homes", async () => {
+  it("fails closed (hides module rows) when entitlement cannot be loaded", async () => {
+    mockModuleState();
+    (api.billingStatus as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("down"));
+    render(<SettingsPage />);
+    await screen.findByRole("heading", { name: "Help & Support" });
+    await waitFor(() => expect(document.querySelectorAll(".more-row-skeleton")).toHaveLength(0));
+    for (const name of moduleRows) expect(screen.queryByRole("heading", { name })).not.toBeInTheDocument();
+  });
+
+  it("does not carry the previous Home's entitlement into the next Home", async () => {
     const familyBilling = deferred<BillingStatus>();
     const freeBilling = deferred<BillingStatus>();
     mockModuleState();
@@ -393,27 +407,25 @@ describe("More — entitlement loading state", () => {
       .mockReturnValueOnce(freeBilling.promise);
     const { container, rerender } = render(<SettingsPage />);
 
+    familyBilling.resolve(family);
     await screen.findByRole("heading", { name: "Nudges" });
-    familyBilling.resolve({
-      ...({} as BillingStatus),
-      nudges_enabled: true,
-      meals_enabled: true,
-      wishlists_enabled: true,
-      lists_enabled: true,
-    });
-    await waitFor(() => expect(container.querySelectorAll(".more-row-lock")).toHaveLength(0));
+    expect(container.querySelectorAll(".more-row-lock")).toHaveLength(0);
 
     activeHomeValue = { id: "home-2", name: "Other Home", relationship: "home_admin" };
     rerender(<SettingsPage />);
-    expect(container.querySelectorAll(".more-row-lock")).toHaveLength(0);
-    freeBilling.resolve({
-      ...({} as BillingStatus),
-      nudges_enabled: false,
-      meals_enabled: false,
-      wishlists_enabled: false,
-      lists_enabled: true,
-    });
-    await waitFor(() => expect(container.querySelectorAll(".more-row-lock").length).toBeGreaterThan(0));
+    // New Home unresolved: placeholders, not the old Home's Family rows.
+    expect(screen.queryByRole("heading", { name: "Nudges" })).not.toBeInTheDocument();
+    freeBilling.resolve(free);
+    const nudges = await screen.findByRole("heading", { name: "Nudges" });
+    expect(nudges.closest("a")?.className).toContain("more-row-locked");
+  });
+
+  it("shows no adult/admin rows until the signed-in user is known, then never for a Child", async () => {
+    authUser = null;
+    const { container } = render(<SettingsPage />);
+    await screen.findByRole("heading", { name: "Help & Support" });
+    expect(screen.queryByRole("heading", { name: "Security" })).not.toBeInTheDocument();
+    expect(container.querySelectorAll(".more-row-skeleton").length).toBeGreaterThan(0);
   });
 });
 

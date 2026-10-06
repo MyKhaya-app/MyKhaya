@@ -1,6 +1,5 @@
 "use client";
 
-import { useEffect, useState } from "react";
 import Link from "next/link";
 import {
   CalendarPlus,
@@ -14,24 +13,9 @@ import {
   UtensilsCrossed,
   WalletCards,
 } from "lucide-react";
-import { api } from "@mykhaya/api-client";
 import { canAddMember } from "./member-entitlement-logic";
+import { featureEnabled, useHomeAccess } from "./home-access";
 import { useActiveHome } from "./use-active-home";
-
-type DockState = {
-  calendar: boolean;
-  inviteFamily: boolean;
-  nudges: { released: boolean; entitled: boolean };
-  meals: { released: boolean; entitled: boolean };
-  lists: { released: boolean; entitled: boolean };
-  wishlists: { released: boolean; entitled: boolean };
-  driveway: boolean;
-  budget: boolean;
-};
-
-function featureEnabled(features: { feature: string; enabled: boolean }[], feature: string) {
-  return features.some((item) => item.feature === feature && item.enabled);
-}
 
 function QuickAction({
   href,
@@ -58,56 +42,25 @@ function QuickAction({
 }
 
 export function AroundHouseDock() {
-  const { activeHomeId, activeHome } = useActiveHome();
+  const { activeHome } = useActiveHome();
+  const { access } = useHomeAccess();
   const canInviteFamily = activeHome?.capabilities.includes("members.invite") ?? false;
-  const [dockState, setDockState] = useState<DockState | null>(null);
 
-  useEffect(() => {
-    if (!activeHomeId || !activeHome) {
-      setDockState(null);
-      return;
-    }
-
-    let cancelled = false;
-    setDockState(null);
-    Promise.all([api.billingStatus(activeHomeId), api.featureMatrix(activeHomeId)])
-      .then(([billing, matrix]) => {
-        if (cancelled) return;
-        setDockState({
-          calendar: featureEnabled(matrix.features, "calendar"),
-          inviteFamily: canAddMember(billing.member_usage) && canInviteFamily,
-          nudges: {
-            released: featureEnabled(matrix.features, "nudges"),
-            entitled: billing.nudges_enabled,
-          },
-          meals: {
-            released: featureEnabled(matrix.features, "meals"),
-            entitled: billing.meals_enabled,
-          },
-          lists: {
-            released: featureEnabled(matrix.features, "shopping"),
-            entitled: billing.lists_enabled,
-          },
-          wishlists: {
-            released: featureEnabled(matrix.features, "wish_lists"),
-            entitled: billing.wishlists_enabled,
-          },
-          driveway: billing.driveway_enabled,
-          budget: billing.budget_enabled,
-        });
-      })
-      .catch(() => {
-        if (!cancelled) setDockState(null);
-      });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [activeHomeId, canInviteFamily]);
-
-  // Unknown Home/feature state fails closed: the shell does not render dead
-  // shortcuts while the current Home is changing or its access state loads.
-  if (!dockState) return null;
+  // Unresolved or failed Home/feature state renders nothing: the dock never
+  // shows dead shortcuts while the current Home's access loads. (It floats
+  // above the page, so an absent dock reserves no layout.)
+  if (!activeHome || access.state !== "ready") return null;
+  const { billing, features: matrix } = access.value;
+  const dockState = {
+    calendar: featureEnabled(matrix, "calendar"),
+    inviteFamily: canAddMember(billing.member_usage) && canInviteFamily,
+    nudges: { released: featureEnabled(matrix, "nudges"), entitled: billing.nudges_enabled },
+    meals: { released: featureEnabled(matrix, "meals"), entitled: billing.meals_enabled },
+    lists: { released: featureEnabled(matrix, "shopping"), entitled: billing.lists_enabled },
+    wishlists: { released: featureEnabled(matrix, "wish_lists"), entitled: billing.wishlists_enabled },
+    driveway: billing.driveway_enabled,
+    budget: billing.budget_enabled,
+  };
 
   const actions = [
     dockState.calendar && (
