@@ -195,3 +195,56 @@ describe("middleware matcher", () => {
     expect(matcherRegExp.test("/")).toBe(true);
   });
 });
+
+describe("PCC login redirect before render", () => {
+  const admin = (path: string, headers: Record<string, string> = {}) =>
+    middleware(
+      new NextRequest(`http://admin.localhost${path}`, {
+        headers: { host: "admin.localhost", "sec-fetch-site": "none", ...headers },
+      }),
+    );
+
+  it("redirects a cookie-less browser to /login before anything renders", () => {
+    const response = admin("/users");
+    expect(response.status).toBe(307);
+    expect(response.headers.get("location")).toBe("http://admin.localhost/login");
+    expect(response.headers.get("x-middleware-rewrite")).toBeNull();
+    expect(response.headers.get("cache-control")).toBe("no-store");
+    expect(response.headers.get("content-security-policy")).toContain("script-src");
+  });
+
+  it("redirects the PCC root too", () => {
+    expect(admin("/").status).toBe(307);
+  });
+
+  it.each(["/login", "/accept-invitation"])("leaves public route %s alone", (path) => {
+    const response = admin(path);
+    expect(response.status).not.toBe(307);
+    expect(response.headers.get("x-middleware-rewrite")).toContain(`/control-centre${path}`);
+  });
+
+  it("lets a request carrying a session cookie through to the client gate / API", () => {
+    const response = admin("/users", { cookie: "mk_admin_session=abc" });
+    expect(response.status).not.toBe(307);
+    expect(response.headers.get("x-middleware-rewrite")).toContain("/control-centre/users");
+  });
+
+  it("does not treat a missing SameSite=Strict cookie as authoritative on cross-site navigation", () => {
+    expect(admin("/users", { "sec-fetch-site": "cross-site" }).status).not.toBe(307);
+  });
+
+  it("does not redirect when the browser sends no Fetch-Metadata", () => {
+    const response = middleware(
+      new NextRequest("http://admin.localhost/users", { headers: { host: "admin.localhost" } }),
+    );
+    expect(response.status).not.toBe(307);
+  });
+
+  it("never redirects the consumer host", () => {
+    const response = middleware(
+      new NextRequest("http://localhost/home", { headers: { host: "localhost", "sec-fetch-site": "none" } }),
+    );
+    expect(response.status).not.toBe(307);
+  });
+});
+

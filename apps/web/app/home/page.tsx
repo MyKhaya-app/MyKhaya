@@ -34,6 +34,7 @@ import { useDesktopShellActive } from "@/components/use-desktop-shell";
 import { canAddMember } from "@/components/member-entitlement-logic";
 import { MealPlansTodayCard } from "@/components/meal-plans-today-card";
 import { subscribeToPush } from "@/components/push-subscribe";
+import { featureEnabled, useHomeAccess } from "@/components/home-access";
 import { useActiveHome } from "@/components/use-active-home";
 import {
   birthdayDateLabel,
@@ -259,26 +260,33 @@ export default function HomePage() {
   const [user, setUser] = useState<User | null>(null);
   const [summary, setSummary] = useState<HomeSummary | null>(null);
   const [upcoming, setUpcoming] = useState<EventOccurrence[]>([]);
-  const [calendarEnabled, setCalendarEnabled] = useState(false);
-  const [mealsFeatureOn, setMealsFeatureOn] = useState(false);
-  const [mealsEnabled, setMealsEnabled] = useState(false);
-  const [listsFeatureOn, setListsFeatureOn] = useState(false);
-  const [listsEnabled, setListsEnabled] = useState(false);
-  const [wishlistsFeatureOn, setWishlistsFeatureOn] = useState(false);
-  const [wishlistsEnabled, setWishlistsEnabled] = useState(false);
-  const [nudgesFeatureOn, setNudgesFeatureOn] = useState(false);
-  const [nudgesEntitled, setNudgesEntitled] = useState(false);
-  const [budgetEnabled, setBudgetEnabled] = useState(false);
-  const [drivewayEnabled, setDrivewayEnabled] = useState(false);
   const [members, setMembers] = useState<Member[]>([]);
   const [birthdays, setBirthdays] = useState<BirthdayEntry[]>([]);
   const [routines, setRoutines] = useState<Routine[]>([]);
   const [reminders, setReminders] = useState<Reminder[]>([]);
   const [todoExpanded, setTodoExpanded] = useState(false);
-  const [canInviteMore, setCanInviteMore] = useState(false);
   const [error, setError] = useState("");
   const [notifPermission, setNotifPermission] = useState<NotificationPermission | null>(null);
   const { activeHomeId, activeHome } = useActiveHome();
+  // Plan, entitlement and module state come from the shell's shared, per-Home
+  // cached access (never from per-page defaults corrected after mount): until
+  // it resolves for the *current* Home every flag is false, so nothing is
+  // shown as available — or carried over from the previous Home.
+  const { access } = useHomeAccess();
+  const homeBilling = access.state === "ready" ? access.value.billing : null;
+  const homeFeatures = access.state === "ready" ? access.value.features : undefined;
+  const calendarEnabled = featureEnabled(homeFeatures, "calendar");
+  const mealsFeatureOn = featureEnabled(homeFeatures, "meals");
+  const listsFeatureOn = featureEnabled(homeFeatures, "shopping");
+  const wishlistsFeatureOn = featureEnabled(homeFeatures, "wish_lists");
+  const nudgesFeatureOn = featureEnabled(homeFeatures, "nudges");
+  const canInviteMore = homeBilling ? canAddMember(homeBilling.member_usage) : false;
+  const mealsEnabled = homeBilling?.meals_enabled === true;
+  const listsEnabled = homeBilling?.lists_enabled === true;
+  const wishlistsEnabled = homeBilling?.wishlists_enabled === true;
+  const nudgesEntitled = homeBilling?.nudges_enabled === true;
+  const budgetEnabled = homeBilling?.budget_enabled === true;
+  const drivewayEnabled = homeBilling?.driveway_enabled === true;
 
   useEffect(() => {
     api
@@ -295,26 +303,6 @@ export default function HomePage() {
       .birthdays(activeHomeId)
       .then((response) => setBirthdays(response.items))
       .catch(() => setBirthdays([]));
-    api
-      .billingStatus(activeHomeId)
-      .then((billing) => {
-        setCanInviteMore(canAddMember(billing.member_usage));
-        setMealsEnabled(billing.meals_enabled);
-        setListsEnabled(billing.lists_enabled);
-        setWishlistsEnabled(billing.wishlists_enabled);
-        setNudgesEntitled(billing.nudges_enabled);
-        setBudgetEnabled(billing.budget_enabled);
-        setDrivewayEnabled(billing.driveway_enabled);
-      })
-      .catch(() => {
-        setCanInviteMore(false);
-        setMealsEnabled(false);
-        setListsEnabled(false);
-        setWishlistsEnabled(false);
-        setNudgesEntitled(false);
-        setBudgetEnabled(false);
-        setDrivewayEnabled(false);
-      });
     // Member roster is only used for display (event participant avatars) —
     // its own membership-gated read (Capability.members_view) isn't held by
     // every relationship (e.g. a Child), and that must never block or
@@ -330,20 +318,9 @@ export default function HomePage() {
         const enabled = matrix.features.some(
           (feature) => feature.feature === "calendar" && feature.enabled,
         );
-        setCalendarEnabled(enabled);
-        setMealsFeatureOn(
-          matrix.features.some((feature) => feature.feature === "meals" && feature.enabled),
-        );
-        setListsFeatureOn(
-          matrix.features.some((feature) => feature.feature === "shopping" && feature.enabled),
-        );
-        setWishlistsFeatureOn(
-          matrix.features.some((feature) => feature.feature === "wish_lists" && feature.enabled),
-        );
         const nudgesEnabled = matrix.features.some(
           (feature) => feature.feature === "nudges" && feature.enabled,
         );
-        setNudgesFeatureOn(nudgesEnabled);
         if (!enabled && !nudgesEnabled) {
           setSummary(null);
           setUpcoming([]);

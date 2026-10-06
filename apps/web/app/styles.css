@@ -1940,6 +1940,13 @@ textarea {
   position: relative;
   white-space: nowrap;
 }
+/* Inert placeholder for a nav destination whose availability (plan) has not
+   resolved yet: holds its slot so the bar does not re-flow, shows nothing. */
+.bottom-nav a.nav-pending,
+.desktop-nav-link.nav-pending {
+  pointer-events: none;
+  visibility: hidden;
+}
 .bottom-nav a.active {
   color: var(--colour-forest);
   font-weight: 700;
@@ -10247,7 +10254,7 @@ select.plan-meal-field-input {
 .more-row:active {
   background: var(--colour-cream-light);
 }
-.more-group-rows > a + a {
+.more-group-rows > .more-row + .more-row {
   border-top: 1px solid #f1ece1;
 }
 .more-row-text {
@@ -11720,5 +11727,42 @@ a.family-feed-row {
   }
   .legal-status-pills {
     justify-content: flex-start;
+  }
+}
+
+/* Shared neutral placeholder for permission/entitlement-sensitive content whose
+   state is still resolving (see components/resolvable.ts). Same footprint as
+   the content it stands in for; no spinner, no layout shift. */
+.skeleton-block,
+.skeleton-line {
+  animation: skeleton-pulse 1.4s ease-in-out infinite;
+  background: #efe9dc;
+  display: block;
+}
+.skeleton-line {
+  border-radius: 6px;
+  height: 0.85rem;
+}
+.skeleton-line-title {
+  margin-top: 0.2rem;
+  width: 8rem;
+}
+.skeleton-line-detail {
+  margin-top: 0.55rem;
+  max-width: 100%;
+  width: 14rem;
+}
+.more-row-skeleton {
+  pointer-events: none;
+}
+@keyframes skeleton-pulse {
+  50% {
+    opacity: 0.55;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .skeleton-block,
+  .skeleton-line {
+    animation: none;
   }
 }

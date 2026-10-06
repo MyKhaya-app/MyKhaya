@@ -8,6 +8,8 @@ import { BottomNav } from "./bottom-nav";
 import { DesktopNav } from "./desktop-nav";
 import { isNativeShell, isPlatformControlCentre } from "./native-runtime";
 import { ActiveHomeProvider, useActiveHome } from "./use-active-home";
+import { HomeAccessProvider, useHomeAccess } from "./home-access";
+import type { FamilyAccessState } from "./primary-nav-destinations";
 import { NativeBiometricOffer } from "./native-biometric-offer";
 import { genericUnlockPromptCopy } from "./native-biometric";
 import { LegalGate } from "./legal-gate";
@@ -15,7 +17,6 @@ import { MaintenanceScreen } from "./maintenance";
 import { NotificationPermissionPrompt } from "./notification-permission-prompt";
 import { AroundHouseDock } from "./around-house-dock";
 import { useNativeKeyboardOpen } from "./use-native-keyboard";
-import { api } from "@mykhaya/api-client";
 import { NotificationProvider } from "./notification-state";
 import { useActivityHeartbeat } from "./use-activity-heartbeat";
 import { useProductAnalytics } from "./use-product-analytics";
@@ -35,7 +36,10 @@ export function AppShell({
   const router = useRouter();
   const { user, status, initialSessionLoading, retryInitialSession, legalStatusError, retryLegalStatus } = useAuth();
   const { homes, activeHome, setActiveHomeId, loading, error: homesError } = useActiveHome();
-  const [familyAccess, setFamilyAccess] = useState(false);
+  const { access } = useHomeAccess();
+  // Unresolved plan is its own state, not "no family access": the Family tab
+  // holds its place (inert) until the Home's plan is known.
+  const familyAccess: FamilyAccessState = access.state === "ready" ? access.value.billing.family_access : access.state === "error" ? false : "pending";
   // Sequences the two one-shot native onboarding overlays so they never
   // compete for the screen: NotificationPermissionPrompt isn't mounted at
   // all until the (established, first-run) biometric offer has settled —
@@ -45,19 +49,6 @@ export function AppShell({
   const keyboardOpen = useNativeKeyboardOpen();
   useActivityHeartbeat(status === "ready");
   useProductAnalytics(status === "ready", path, activeHome?.id);
-
-  useEffect(() => {
-    if (!activeHome?.id) {
-      setFamilyAccess(false);
-      return;
-    }
-    let cancelled = false;
-    setFamilyAccess(false);
-    api.billingStatus(activeHome.id)
-      .then((billing) => { if (!cancelled) setFamilyAccess(billing.family_access); })
-      .catch(() => { if (!cancelled) setFamilyAccess(false); });
-    return () => { cancelled = true; };
-  }, [activeHome?.id]);
 
   useEffect(() => {
     // A Home-less user has a legitimate reason to be here: a brand-new Free
@@ -220,7 +211,9 @@ export function PersistentAppShell({ children }: { children: React.ReactNode }) 
     <>{children}</>
   ) : (
     <ActiveHomeProvider>
-      <AppShell>{children}</AppShell>
+      <HomeAccessProvider>
+        <AppShell>{children}</AppShell>
+      </HomeAccessProvider>
     </ActiveHomeProvider>
   );
 }

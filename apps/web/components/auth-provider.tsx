@@ -104,8 +104,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // still restores its bearer session from the same root URL.
   const nativeStartup = runtimeNative === true && (!isPublicPath(path) || path === "/") && !platformControlCentre;
   const [user, setUser] = useState<User | null>(null);
-  const [status, setStatus] = useState<AuthStatus>(path === "/" || nativeStartup ? "initializing" : "signed_out");
-  const [initialSessionLoading, setInitialSessionLoading] = useState(path === "/" || nativeStartup);
+  // UNKNOWN until the session is actually resolved: any route that will
+  // bootstrap a session starts "initializing" (so the very first paint — and
+  // the server-rendered HTML — is the neutral "checking" state), never
+  // "signed_out". Starting signed_out and correcting after mount flashed
+  // "Taking you to sign in…" at every authenticated refresh.
+  const sessionPending = path === "/" || nativeStartup || (!isPublicPath(path) && !platformControlCentre);
+  const [status, setStatus] = useState<AuthStatus>(sessionPending ? "initializing" : "signed_out");
+  const [initialSessionLoading, setInitialSessionLoading] = useState(sessionPending);
   const [sessionRefreshing, setSessionRefreshing] = useState(false);
   const [legalStatus, setLegalStatus] = useState<LegalStatusResponse | null>(null);
   const [legalStatusError, setLegalStatusError] = useState<string | null>(null);

@@ -2,6 +2,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import PlatformOverview from "./page";
 
+// Exercises the real administrator-session resolution (this file mocks /auth/me
+// itself), not the global authenticated default from vitest.setup.ts.
+vi.unmock("@/components/platform-session");
+vi.unmock("./components/platform-session");
+
 vi.mock("next/navigation", () => ({
   usePathname: () => "/control-centre",
   useRouter: () => ({ replace: vi.fn(), push: vi.fn() }),
@@ -66,8 +71,9 @@ describe("PlatformOverview", () => {
       path === "/auth/me" ? Promise.resolve(actor) : new Promise(() => {}),
     );
     render(<PlatformOverview />);
+    // The shell and page only render once the administrator session resolves.
+    expect(await screen.findByText("Loading platform state…")).toBeInTheDocument();
     expect(document.querySelector(".pcc-root.platform-shell")).toBeInTheDocument();
-    expect(screen.getByText("Loading platform state…")).toBeInTheDocument();
     // Let PlatformShell's own /auth/me resolution settle before the test ends,
     // so it doesn't log an act() warning against the next test.
     await waitFor(() => expect(screen.getByText(actor.display_name)).toBeInTheDocument());

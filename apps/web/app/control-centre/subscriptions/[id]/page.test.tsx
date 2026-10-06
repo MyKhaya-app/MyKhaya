@@ -4,6 +4,11 @@ import userEvent from "@testing-library/user-event";
 import type { SubscriptionDetail } from "@/components/platform-types";
 import SubscriptionDetailPage from "./page";
 
+// Exercises the real administrator-session resolution (this file mocks /auth/me
+// itself), not the global authenticated default from vitest.setup.ts.
+vi.unmock("@/components/platform-session");
+vi.unmock("./components/platform-session");
+
 vi.mock("next/navigation", () => ({
   usePathname: () => "/control-centre/subscriptions/home-1",
   useRouter: () => ({ replace: vi.fn(), push: vi.fn() }),
@@ -141,7 +146,7 @@ describe("SubscriptionDetailPage", () => {
       path === "/auth/me" ? Promise.resolve(actor) : new Promise(() => {}),
     );
     renderPage();
-    expect(screen.getByText("Loading…")).toBeInTheDocument();
+    expect(await screen.findByText("Loading…")).toBeInTheDocument();
     // Let PlatformShell's own /auth/me resolution settle before the test ends,
     // so it doesn't log an act() warning against the next test.
     await waitFor(() => expect(screen.getByText(actor.display_name)).toBeInTheDocument());

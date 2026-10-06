@@ -1,6 +1,6 @@
 services:
   caddy:
-    ports: ["80:80", "443:443", "443:443/udp"]
+    ports: ["80:80"]
     environment:
       WEB_DOMAIN: "${WEB_DOMAIN:-mykhaya.app}"
       API_DOMAIN: "${API_DOMAIN:-api.mykhaya.app}"
@@ -27,7 +27,7 @@ services:
       MYKHAYA_ADMIN_URL: "https://${ADMIN_DOMAIN:-admin.mykhaya.app}"
       MYKHAYA_STATUS_URL: "https://${STATUS_DOMAIN:-status.mykhaya.app}"
       MYKHAYA_CORS_ORIGINS: '["https://${WEB_DOMAIN:-mykhaya.app}","https://${ADMIN_DOMAIN:-admin.mykhaya.app}"]'
-      MYKHAYA_TRUSTED_HOSTS: '["api","${WEB_DOMAIN:-mykhaya.app}","${API_DOMAIN:-api.mykhaya.app}","${ADMIN_DOMAIN:-admin.mykhaya.app}","${STATUS_DOMAIN:-status.mykhaya.app}"]'
+      MYKHAYA_TRUSTED_HOSTS: '["api","127.0.0.1","localhost","${WEB_DOMAIN:-mykhaya.app}","${API_DOMAIN:-api.mykhaya.app}","${ADMIN_DOMAIN:-admin.mykhaya.app}","${STATUS_DOMAIN:-status.mykhaya.app}"]'
   worker:
     environment: *production_api_environment
   scheduler:

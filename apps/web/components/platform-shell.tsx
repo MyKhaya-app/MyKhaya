@@ -37,8 +37,7 @@ import {
   X,
 } from "lucide-react";
 import { platformApi } from "@mykhaya/api-client";
-import { resolveLoginDestination } from "./platform-mfa-logic";
-import type { PlatformActor } from "./platform-types";
+import { clearPlatformSession, usePlatformSession } from "./platform-session";
 
 type NavIcon = ComponentType<{ size?: number; strokeWidth?: number; "aria-hidden"?: boolean }>;
 type NavItem = { label: string; href: string; icon: NavIcon };
@@ -140,7 +139,7 @@ function NavLink({ item, active, nested = false }: { item: NavItem; active: bool
 export function PlatformShell({ children }: { children: React.ReactNode }) {
   const path = usePathname().replace(/^\/control-centre/, "") || "/";
   const router = useRouter();
-  const [actor, setActor] = useState<PlatformActor | null>(null);
+  const session = usePlatformSession();
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>(() =>
     Object.fromEntries(navGroups.map((group) => [group.label, true])),
   );
@@ -186,29 +185,15 @@ export function PlatformShell({ children }: { children: React.ReactNode }) {
       }
     }
   }, [expandedGroups, navStateHydrated]);
+  // Redirect only from a *resolved* unauthenticated state; the content gate
+  // below already refuses to render anything privileged in the meantime.
+  const redirectTo = session.state === "unauthenticated" ? session.destination : null;
   useEffect(() => {
-    platformApi
-      .get<PlatformActor>("/auth/me")
-      .then((value) => {
-        // A session still mid-MFA-flow must never render ordinary Control
-        // Centre content — the backend already refuses these routes for such
-        // a session, but bouncing to the flow it actually needs (enrollment,
-        // or the login page's inline verify step) is better than a raw 403.
-        const destination = resolveLoginDestination(value.session_status);
-        if (destination === "setup-mfa") {
-          router.replace("/setup-mfa");
-          return;
-        }
-        if (destination === "verify") {
-          router.replace("/login");
-          return;
-        }
-        setActor(value);
-      })
-      .catch(() => router.replace("/login"));
-  }, [router]);
+    if (redirectTo) router.replace(redirectTo);
+  }, [redirectTo, router]);
   async function signOut() {
     await platformApi.post("/auth/logout", {});
+    clearPlatformSession();
     router.replace("/login");
   }
   function renderGroup(group: NavGroup) {
@@ -227,6 +212,24 @@ export function PlatformShell({ children }: { children: React.ReactNode }) {
       </li>
     );
   }
+  // Nothing privileged (sidebar, operator identity, page content) renders until
+  // the administrator session is positively resolved as authenticated. A
+  // signed-out visitor only ever sees this neutral, content-free surface.
+  if (session.state !== "authenticated") {
+    return (
+      <div className="pcc-root pcc-session-gate" role="status" aria-busy={session.state === "resolving"}>
+        {session.state === "unavailable" ? (
+          <div className="pcc-session-gate-message">
+            <p>The Control Centre could not verify your session.</p>
+            <button className="secondary" onClick={session.retry}>Try again</button>
+          </div>
+        ) : (
+          <span className="cc-visually-hidden">Checking your session…</span>
+        )}
+      </div>
+    );
+  }
+  const { actor } = session;
   return (
     <div className={`pcc-root platform-shell ${sidebarCollapsed ? "sidebar-collapsed" : ""} ${mobileOpen ? "mobile-sidebar-open" : ""}`}>
       <aside className="tailadmin-sidebar" onMouseEnter={() => sidebarCollapsed && setSidebarCollapsed(false)}>
@@ -252,15 +255,11 @@ export function PlatformShell({ children }: { children: React.ReactNode }) {
             <div className="tailadmin-search"><Search size={18} aria-hidden /><input aria-label="Search Control Centre" placeholder="Search or type command..." /><kbd>⌘ K</kbd></div>
           </div>
           <div className="platform-topbar-account">
-            {actor ? (
-              <Link href={`/administrators/${actor.id}`} className="operator-identity">
-                <span className="operator-avatar" aria-hidden>{actor.display_name.slice(0, 1).toUpperCase()}</span>
-                <span><strong>{actor.display_name}</strong><small>{actor.role.replaceAll("_", " ")}</small></span>
-                <MoreHorizontal size={18} aria-hidden />
-              </Link>
-            ) : (
-              <strong>Loading operator…</strong>
-            )}
+            <Link href={`/administrators/${actor.id}`} className="operator-identity">
+              <span className="operator-avatar" aria-hidden>{actor.display_name.slice(0, 1).toUpperCase()}</span>
+              <span><strong>{actor.display_name}</strong><small>{actor.role.replaceAll("_", " ")}</small></span>
+              <MoreHorizontal size={18} aria-hidden />
+            </Link>
             <button className="secondary" onClick={signOut}>
               <LogOut size={16} strokeWidth={2} aria-hidden />
               Sign out

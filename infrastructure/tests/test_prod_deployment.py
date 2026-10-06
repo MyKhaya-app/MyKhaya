@@ -13,6 +13,13 @@ class ProductionDeploymentTests(unittest.TestCase):
         cls.script = (ROOT / "infrastructure/scripts/prod-deploy.sh").read_text(
             encoding="utf-8"
         )
+        cls.compose = (ROOT / "compose.production.yml").read_text(encoding="utf-8")
+        cls.caddy = (ROOT / "infrastructure/caddy/Caddyfile.production").read_text(
+            encoding="utf-8"
+        )
+        cls.health = (ROOT / "infrastructure/scripts/prod-health.sh").read_text(
+            encoding="utf-8"
+        )
 
     def test_makefile_requires_release_and_passes_tag(self) -> None:
         target = self.makefile[self.makefile.index("prod-update:") :]
@@ -62,6 +69,40 @@ class ProductionDeploymentTests(unittest.TestCase):
         )
         self.assertLess(build, start)
         self.assertIn("--no-build", self.script[start : start + 100])
+
+    def test_production_trusted_hosts_include_loopback_and_all_origins(self) -> None:
+        self.assertIn(
+            'MYKHAYA_TRUSTED_HOSTS: \'["api","127.0.0.1","localhost","${WEB_DOMAIN:-mykhaya.app}","${API_DOMAIN:-api.mykhaya.app}","${ADMIN_DOMAIN:-admin.mykhaya.app}","${STATUS_DOMAIN:-status.mykhaya.app}"]\'',
+            self.compose,
+        )
+
+    def test_production_caddy_uses_http_origins_and_https_upstream_scheme(self) -> None:
+        for address in (
+            "http://{$WEB_DOMAIN:mykhaya.app} {",
+            "http://{$API_DOMAIN:api.mykhaya.app} {",
+            "http://{$ADMIN_DOMAIN:admin.mykhaya.app} {",
+            "http://{$STATUS_DOMAIN:status.mykhaya.app} {",
+        ):
+            self.assertIn(address, self.caddy)
+        self.assertNotRegex(self.caddy, r"(?m)^\{\$[^}]+\} \{")
+        self.assertIn("header_up X-Forwarded-Proto https", self.caddy)
+
+    def test_production_publishes_only_the_http_origin_port(self) -> None:
+        self.assertIn('ports: ["80:80"]', self.compose)
+        self.assertNotIn("443:443", self.compose)
+        self.assertNotIn("443:443/udp", self.compose)
+
+    def test_production_health_checks_use_http_loopback_and_web_host(self) -> None:
+        self.assertIn(
+            "WEB_DOMAIN=${WEB_DOMAIN:-$(sed -n 's/^WEB_DOMAIN=//p' .env 2>/dev/null | tail -n 1 | tr -d '\\r')}",
+            self.health,
+        )
+        self.assertIn("WEB_DOMAIN=${WEB_DOMAIN:-mykhaya.app}", self.health)
+        for endpoint in ("live", "ready", "build"):
+            self.assertIn(f"http://127.0.0.1/api/v1/health/{endpoint}", self.health)
+        self.assertIn('-H "Host: $WEB_DOMAIN"', self.health)
+        self.assertNotIn("https://mykhaya.app", self.health)
+        self.assertNotIn("--resolve", self.health)
 
 
 if __name__ == "__main__":

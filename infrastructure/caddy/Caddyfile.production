@@ -12,11 +12,11 @@
 (mykhaya_proxy_headers) {
 	header_up Host {host}
 	header_up X-Forwarded-Host {host}
-	header_up X-Forwarded-Proto {scheme}
+	header_up X-Forwarded-Proto https
 	header_up X-Forwarded-For {client_ip}
 }
 
-{$WEB_DOMAIN:mykhaya.app} {
+http://{$WEB_DOMAIN:mykhaya.app} {
 	encode zstd gzip
 	request_body {
 		# Coarse edge limit, kept above the API's own avatar_max_upload_bytes
@@ -50,7 +50,7 @@
 		format json
 	}
 }
-{$API_DOMAIN:api.mykhaya.app} {
+http://{$API_DOMAIN:api.mykhaya.app} {
 	encode zstd gzip
 	reverse_proxy api:8000 {
 		import mykhaya_proxy_headers
@@ -69,7 +69,7 @@
 	}
 }
 
-{$ADMIN_DOMAIN:admin.mykhaya.app} {
+http://{$ADMIN_DOMAIN:admin.mykhaya.app} {
 	encode zstd gzip
 	@api path /api/*
 	reverse_proxy @api api:8000 {
@@ -95,7 +95,7 @@
 	}
 }
 
-{$STATUS_DOMAIN:status.mykhaya.app} {
+http://{$STATUS_DOMAIN:status.mykhaya.app} {
 	encode zstd gzip
 	@api path /api/*
 	reverse_proxy @api api:8000 {

@@ -40,3 +40,42 @@ and safe-area clearance. Do not introduce an inline module-specific `+ New`
 variant when the module has a single primary creation flow; preserve the
 existing search, content width, and module-specific content around these
 shared controls.
+
+## Unresolved authorisation and entitlement state
+
+Asynchronous state that decides what a user may see (session, role, plan,
+entitlements, feature settings, current Home) is modelled as
+`loading | ready | error` (`apps/web/components/resolvable.ts`), never as a
+boolean whose initial value means "allowed" or "denied".
+
+`UNKNOWN → RESOLVING → RESOLVED → RENDER`; never `ASSUME → RENDER → FETCH → CORRECT`.
+
+- Render the stable shell immediately; show a same-sized skeleton/placeholder
+  (not a full-screen spinner) for unresolved sensitive content.
+- Consumer plan/feature state comes from `useHomeAccess()`
+  (`components/home-access.tsx`): one per-Home cached resolution shared by nav,
+  dock, More and Home. Do not add new per-page `billingStatus`/`featureMatrix`
+  fetches with `useState(false)` defaults.
+- PCC session state comes from `usePlatformSession()`
+  (`components/platform-session.ts`); `PlatformShell` renders nothing
+  privileged until it is `authenticated`.
+- Gate before render; do not render protected content and redirect from
+  `useEffect` afterwards. Client-side gating is presentation only — the API
+  remains the authorisation boundary.
+- PCC: `middleware.ts` redirects a request with no `mk_admin_session` cookie to
+  `/login` before any PCC route renders (presence-only, when Fetch-Metadata shows
+  the cookie would have been sent); the client gate covers expired cookies. SSR
+  output for PCC routes must contain only the neutral gate, never the shell.
+- `e2e/auth-state-flicker.spec.ts` guards this with delayed mocked APIs and a
+  MutationObserver.
+
+### Follow-up (not yet done)
+
+- Physical iPhone / native-shell validation of the new startup and nav states.
+- Cold-load layout shift (Home sections, Family tab); consider persisting the
+  last-known plan per Home.
+- Migrate remaining feature pages (Calendar, Lists, Driveway, Meal Plans,
+  Wishlists, Nudges, Members, and the Home dashboard's own matrix, `api.me`
+  and meal-card fetches) onto `useHomeAccess()` where useful.
+- Call `HomeAccessProvider.refresh()` after checkout and complimentary-plan
+  changes.

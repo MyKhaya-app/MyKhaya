@@ -1,5 +1,22 @@
 import { NextRequest, NextResponse } from "next/server";
 import { applicationHostKind } from "./components/application-host";
+const ADMIN_SESSION_COOKIE = "mk_admin_session";
+const ADMIN_PUBLIC_PATHS = ["/login", "/accept-invitation"];
+
+function shouldRedirectToAdminLogin(request: NextRequest): boolean {
+  const path = request.nextUrl.pathname;
+  if (path.startsWith("/api/")) return false;
+  if (ADMIN_PUBLIC_PATHS.some((prefix) => path === prefix || path.startsWith(`${prefix}/`))) return false;
+  if (request.method !== "GET" && request.method !== "HEAD") return false;
+  if (request.cookies.has(ADMIN_SESSION_COOKIE)) return false;
+  // The session cookie is SameSite=Strict, so it is legitimately absent on a
+  // cross-site navigation (a link from email/chat) even for a signed-in
+  // administrator. Only treat absence as authoritative when the browser would
+  // have sent the cookie; otherwise leave it to the client-side gate.
+  const site = request.headers.get("sec-fetch-site");
+  return site === "none" || site === "same-origin" || site === "same-site";
+}
+
 export function middleware(request: NextRequest) {
   const host = request.headers.get("host") ?? "";
   const hostKind = applicationHostKind(host);
@@ -40,7 +57,14 @@ export function middleware(request: NextRequest) {
   headers.set("x-nonce", nonce);
   headers.set("Content-Security-Policy", csp);
   let response: NextResponse;
-  if (adminHost) {
+  if (adminHost && shouldRedirectToAdminLogin(request)) {
+    // Earliest possible point: a browser with no PCC session cookie is sent to
+    // the login page before any PCC route renders or any JS runs, so there is
+    // nothing to paint. Presence-only UX optimisation — never an authorisation
+    // decision; every /platform API still validates the session server-side.
+    const proto = request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim() || request.nextUrl.protocol.replace(":", "");
+    response = NextResponse.redirect(`${proto}://${host}/login`, 307);
+  } else if (adminHost) {
     const url = request.nextUrl.clone();
     url.pathname = `/control-centre${url.pathname === "/" ? "" : url.pathname}`;
     response = NextResponse.rewrite(url, { request: { headers } });

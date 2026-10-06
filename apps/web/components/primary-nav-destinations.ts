@@ -30,12 +30,20 @@ export const PRIMARY_NAV_DESTINATIONS: readonly PrimaryNavDestination[] = [
   { id: "more", href: "/settings", label: "More", adultOnly: false },
 ];
 
+/** `"pending"` = the Home's plan has not resolved yet. The Family tab is then
+ *  kept in the list (so the nav does not re-flow when it resolves) but must be
+ *  rendered as an inert placeholder — see `NavDestination.pending`. */
+export type FamilyAccessState = boolean | "pending";
+export type ResolvedNavDestination = PrimaryNavDestination & { pending?: boolean };
+
 export function primaryNavDestinationsFor(
   principalType?: PrincipalType,
-  familyAccess = true,
-): readonly PrimaryNavDestination[] {
+  familyAccess: FamilyAccessState = true,
+): readonly ResolvedNavDestination[] {
   return PRIMARY_NAV_DESTINATIONS.filter((item) => {
-    if (item.id === "family" && !familyAccess) return false;
+    if (item.id === "family" && familyAccess === false) return false;
     return !item.adultOnly || principalType !== "managed_child";
-  });
+  }).map((item) =>
+    item.id === "family" && familyAccess === "pending" ? { ...item, pending: true } : item,
+  );
 }
