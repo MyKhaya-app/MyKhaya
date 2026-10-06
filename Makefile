@@ -92,6 +92,10 @@ caddy-check:
 		-e MYKHAYA_DEV_PROXY_TRUSTED_CIDRS=100.64.0.0/10 \
 		-v "$(CURDIR)/infrastructure/caddy/Caddyfile.dev:/etc/caddy/Caddyfile:ro" \
 		caddy:2.10.0-alpine caddy validate --config /etc/caddy/Caddyfile
+	docker run --rm \
+		-e MYKHAYA_CADDY_TRUSTED_PROXY_CIDRS=100.64.0.0/10 \
+		-v "$(CURDIR)/infrastructure/caddy/Caddyfile.production:/etc/caddy/Caddyfile:ro" \
+		caddy:2.10.0-alpine caddy validate --config /etc/caddy/Caddyfile
 web-check:
 	docker build --target check -f apps/web/Dockerfile .
 # The single canonical pre-release command: everything the `quality` GitHub
