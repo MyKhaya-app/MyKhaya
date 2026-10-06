@@ -28,8 +28,24 @@ def upgrade() -> None:
             server_default="global",
         ),
     )
-    for value in ("beta_registration", "beta_enrolment", "in_app_reacceptance"):
-        op.execute(sa.text(f"ALTER TYPE legal_acceptance_context ADD VALUE IF NOT EXISTS '{value}'"))
+    op.execute(
+        sa.text(
+            "ALTER TYPE legal_acceptance_context "
+            "ADD VALUE IF NOT EXISTS 'beta_registration'"
+        )
+    )
+    op.execute(
+        sa.text(
+            "ALTER TYPE legal_acceptance_context "
+            "ADD VALUE IF NOT EXISTS 'beta_enrolment'"
+        )
+    )
+    op.execute(
+        sa.text(
+            "ALTER TYPE legal_acceptance_context "
+            "ADD VALUE IF NOT EXISTS 'in_app_reacceptance'"
+        )
+    )
 
 
 def downgrade() -> None:
