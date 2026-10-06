@@ -75,6 +75,12 @@ platform_router = APIRouter(prefix="/platform/beta", tags=["founding-beta-platfo
 async def public_signup_state(
     db: AsyncSession = Depends(get_db), settings: Settings = Depends(get_settings)
 ) -> SignupStateResponse:
+    return await resolve_signup_state(db, settings)
+
+
+async def resolve_signup_state(
+    db: AsyncSession, settings: Settings
+) -> SignupStateResponse:
     policy = await evaluate_signup_policy(db, settings)
     mode = policy.mode
     programme = await current_programme(db)

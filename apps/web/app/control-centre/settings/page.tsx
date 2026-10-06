@@ -2,7 +2,7 @@
 
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { Settings as SettingsIcon } from "lucide-react";
-import { api, platformApi, type PublicSignupState } from "@mykhaya/api-client";
+import { platformApi, type PublicSignupState } from "@mykhaya/api-client";
 import { PlatformShell } from "@/components/platform-shell";
 import { CcConfirmDialog } from "@/components/control-centre/dialog";
 import { titleCase } from "@/components/platform-format";
@@ -456,7 +456,7 @@ export default function PlatformSettingsPage() {
     try {
       const [settings, publicState, dvlaStatus, syslogStatus, diagnostics] = await Promise.all([
         platformApi.get<SettingsResponse>("/settings"),
-        api.publicSignupState(),
+        platformApi.get<PublicSignupState>("/signup-state"),
         platformApi.get<DrivewayDvlaStatus>("/integrations/dvla"),
         platformApi.get<SyslogSettings>("/logging/syslog"),
         platformApi.get<SyslogDiagnostics>("/logging/syslog/diagnostics"),

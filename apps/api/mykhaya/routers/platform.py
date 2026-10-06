@@ -56,6 +56,7 @@ from mykhaya.entitlements import (
     resolve_effective_plan,
     resolve_effective_state,
 )
+from mykhaya.founding_beta_schemas import SignupStateResponse
 from mykhaya.household_permissions import default_profile, home_admin_count, legacy_role
 from mykhaya.mailer import resolve_smtp_config, send_email
 from mykhaya.managed_demo_homes import ManagedDemoError, ManagedDemoService
@@ -299,6 +300,7 @@ from mykhaya.platform_settings import (
 )
 from mykhaya.rate_limit import enforce_rate_limit
 from mykhaya.routers.features import module_state
+from mykhaya.routers.founding_beta import resolve_signup_state
 from mykhaya.secrets_crypto import (
     SecretDecryptionError,
     decrypt_secret,
@@ -5865,6 +5867,16 @@ async def settings_list(
             },
         ],
     }
+
+
+@router.get("/signup-state", response_model=SignupStateResponse)
+async def platform_signup_state(
+    _: PlatformContext = Depends(require_roles(*ALL_ROLES)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> SignupStateResponse:
+    """Return registration state to PCC without using the consumer surface."""
+    return await resolve_signup_state(db, settings)
 
 
 async def _syslog_row(db: AsyncSession) -> PlatformSetting | None:
