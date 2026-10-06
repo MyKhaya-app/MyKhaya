@@ -62,6 +62,10 @@ boolean whose initial value means "allowed" or "denied".
 - Gate before render; do not render protected content and redirect from
   `useEffect` afterwards. Client-side gating is presentation only — the API
   remains the authorisation boundary.
+- PCC: `middleware.ts` redirects a request with no `mk_admin_session` cookie to
+  `/login` before any PCC route renders (presence-only, when Fetch-Metadata shows
+  the cookie would have been sent); the client gate covers expired cookies. SSR
+  output for PCC routes must contain only the neutral gate, never the shell.
 - `e2e/auth-state-flicker.spec.ts` guards this with delayed mocked APIs and a
   MutationObserver.
 

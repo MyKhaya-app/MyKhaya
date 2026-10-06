@@ -49,59 +49,104 @@ function adminUrl(baseURL: string | undefined, path: string) {
   return `${url.origin}${path}`;
 }
 
-test.describe("PCC session gate", () => {
-  test("a logged-out visit never paints authenticated PCC content before the login redirect", async ({ page, baseURL }) => {
+// The edge (middleware) redirects a PCC request that carries no session cookie
+// to /login before anything renders. Tests of the *client* gate therefore
+// present a session cookie, the way a browser with a (possibly expired)
+// session would.
+async function withSessionCookie(page: Page, baseURL: string | undefined) {
+  await page.context().addCookies([
+    { name: "mk_admin_session", value: "test-session", url: adminUrl(baseURL, "/") },
+  ]);
+}
+
+const OPERATOR = {
+  id: "op-1",
+  email: "op@example.com",
+  display_name: "Operator One",
+  role: "platform_owner",
+  mfa_enrolled: true,
+  session_status: "full",
+};
+
+test.describe("PCC first paint", () => {
+  test("a fresh, cookie-less browser is redirected at the edge: no PCC HTML is ever served", async ({ baseURL, playwright }) => {
+    const request = await playwright.request.newContext({ extraHTTPHeaders: { "sec-fetch-site": "none" } });
+    for (const path of ["/", "/users", "/homes/abc"]) {
+      const response = await request.get(adminUrl(baseURL, path), { maxRedirects: 0 });
+      expect(response.status(), path).toBe(307);
+      expect(response.headers()["location"]).toMatch(/^https?:\/\/admin\.localhost(:\d+)?\/login$/);
+      expect(await response.text()).not.toMatch(/platform-shell|tailadmin-sidebar|Control Centre navigation/);
+    }
+    await request.dispose();
+  });
+
+  test("a fresh browser context (no cookies/storage) lands on login and paints no PCC UI, with /auth/me held for 4s", async ({ browser, baseURL }) => {
+    const context = await browser.newContext();
+    const page = await context.newPage();
     await installProbe(page, PCC_PRIVILEGED);
+    let authMeCalls = 0;
     await page.route("**/api/v1/platform/auth/me", async (route) => {
-      await later();
+      authMeCalls += 1;
+      await later(4000);
       await json(route, { detail: "Not authenticated" }, 401);
     });
     await page.goto(adminUrl(baseURL, "/"));
     await expect(page).toHaveURL(/\/login$/);
     await expect(page.getByRole("heading", { name: "MyKhaya Platform Control Centre" })).toBeVisible();
+    await page.waitForTimeout(500);
     expect(await seen(page)).toEqual([]);
+    expect(authMeCalls).toBe(0);
+    await context.close();
   });
 
-  test("a refresh while logged out behaves the same", async ({ page, baseURL }) => {
-    await installProbe(page, PCC_PRIVILEGED);
-    await page.route("**/api/v1/platform/auth/me", async (route) => {
-      await later();
-      await json(route, { detail: "Not authenticated" }, 401);
+  test("with a session cookie, the server HTML is only the neutral gate — no PCC markup before JavaScript", async ({ baseURL, playwright }) => {
+    const request = await playwright.request.newContext({
+      extraHTTPHeaders: { "sec-fetch-site": "none", cookie: "mk_admin_session=test-session" },
     });
-    await page.goto(adminUrl(baseURL, "/users"));
-    await expect(page).toHaveURL(/\/login$/);
-    await page.goto(adminUrl(baseURL, "/users"));
-    await expect(page).toHaveURL(/\/login$/);
-    expect(await seen(page)).toEqual([]);
+    for (const path of ["/", "/users", "/homes/abc"]) {
+      const html = await (await request.get(adminUrl(baseURL, path), { maxRedirects: 0 })).text();
+      expect(html, path).toContain("pcc-session-gate");
+      expect(html, path).not.toMatch(
+        /platform-shell|tailadmin-sidebar|Control Centre navigation|Privileged system|operator-identity|Loading operator|Loading platform state/,
+      );
+    }
+    await request.dispose();
   });
 
-  test("an expired session is treated as logged out", async ({ page, baseURL }) => {
+  test("with JavaScript disabled, a session-cookie visit shows no PCC UI at all", async ({ browser, baseURL }) => {
+    const context = await browser.newContext({ javaScriptEnabled: false });
+    await context.addCookies([{ name: "mk_admin_session", value: "x", url: adminUrl(baseURL, "/") }]);
+    const page = await context.newPage();
+    await page.goto(adminUrl(baseURL, "/"));
+    for (const selector of Object.values(PCC_PRIVILEGED)) await expect(page.locator(selector)).toHaveCount(0);
+    await context.close();
+  });
+
+  test("an expired session (cookie present, API says 401) shows only the gate for the whole 4s check, then login", async ({ page, baseURL }) => {
+    await withSessionCookie(page, baseURL);
     await installProbe(page, PCC_PRIVILEGED);
     await page.route("**/api/v1/platform/auth/me", async (route) => {
-      await later(300);
+      await later(4000);
       await json(route, { detail: "Session expired" }, 401);
     });
-    await page.goto(adminUrl(baseURL, "/homes"));
-    await expect(page).toHaveURL(/\/login$/);
+    await page.goto(adminUrl(baseURL, "/users"));
+    await expect(page.locator(".pcc-session-gate")).toBeVisible();
+    await page.screenshot({ path: "test-results/pcc-gate-during-auth-check.png" });
+    await page.waitForTimeout(2000);
+    await expect(page.locator(".platform-shell")).toHaveCount(0);
+    await expect(page).toHaveURL(/\/login$/, { timeout: 8000 });
     expect(await seen(page)).toEqual([]);
   });
 
-  test("a refresh while authenticated shows a neutral gate, then the shell — never the login page", async ({ page, baseURL }) => {
+  test("a refresh while authenticated shows the gate, then the shell — never the login page", async ({ page, baseURL }) => {
+    await withSessionCookie(page, baseURL);
     await installProbe(page, { login: ".platform-login" });
     await page.route("**/api/v1/platform/auth/me", async (route) => {
-      await later();
-      await json(route, {
-        id: "op-1",
-        email: "op@example.com",
-        display_name: "Operator One",
-        role: "platform_owner",
-        mfa_enrolled: true,
-        session_status: "full",
-      });
+      await later(2000);
+      await json(route, OPERATOR);
     });
     await page.route("**/api/v1/platform/overview", (route) => json(route, { detail: "n/a" }, 500));
     await page.goto(adminUrl(baseURL, "/"));
-    // While resolving: content-free gate only.
     await expect(page.locator(".pcc-session-gate")).toBeVisible();
     await expect(page.locator(".platform-shell")).toHaveCount(0);
     await expect(page.locator(".operator-identity")).toContainText("Operator One");
@@ -109,7 +154,29 @@ test.describe("PCC session gate", () => {
     expect(await seen(page)).toEqual([]);
   });
 
+  test("authenticated navigation between PCC pages does not re-show the gate", async ({ page, baseURL }) => {
+    await withSessionCookie(page, baseURL);
+    await installProbe(page, {});
+    await page.route("**/api/v1/platform/auth/me", (route) => json(route, OPERATOR));
+    await page.route("**/api/v1/platform/**", (route) =>
+      route.request().url().includes("/auth/me") ? route.fallback() : json(route, { detail: "n/a" }, 500),
+    );
+    await page.goto(adminUrl(baseURL, "/"));
+    await expect(page.locator(".operator-identity")).toBeVisible();
+    await page.evaluate(() => {
+      const w = window as unknown as { __gateAgain: boolean };
+      w.__gateAgain = false;
+      new MutationObserver(() => {
+        if (document.querySelector(".pcc-session-gate")) w.__gateAgain = true;
+      }).observe(document, { childList: true, subtree: true });
+    });
+    await page.locator('a.menu-item[href="/control-centre/health"], a.menu-item[href="/health"]').first().click();
+    await expect(page.locator(".operator-identity")).toBeVisible();
+    expect(await page.evaluate(() => (window as unknown as { __gateAgain: boolean }).__gateAgain)).toBe(false);
+  });
+
   test("a failed session check is 'could not verify', not a flash of PCC and not a silent redirect", async ({ page, baseURL }) => {
+    await withSessionCookie(page, baseURL);
     await installProbe(page, PCC_PRIVILEGED);
     await page.route("**/api/v1/platform/auth/me", (route) => route.abort());
     await page.goto(adminUrl(baseURL, "/"));
