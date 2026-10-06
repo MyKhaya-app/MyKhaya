@@ -15,6 +15,9 @@ const SLUG_TO_KEY: Record<string, string> = {
   privacy: "privacy",
   children: "children_privacy",
   cookies: "cookies",
+  // Already linked from registration and Beta enrolment; previously unmapped,
+  // so the link rendered "Document not found".
+  "founding-beta-terms": "founding_beta_terms",
 };
 
 function readableDate(value: string | null): string | null {

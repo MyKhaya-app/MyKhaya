@@ -2,10 +2,17 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { ArrowRight, CreditCard, Gift, Users, type LucideIcon } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { api, ApiError, type PublicSignupState } from "@mykhaya/api-client";
 import { PublicFooter } from "@/components/marketing/public-footer";
 import { PublicHeader } from "@/components/marketing/public-header";
+
+const BENEFITS: { title: string; detail: string; icon: LucideIcon; tone: "sage" | "blue" | "sand" }[] = [
+  { title: "Complimentary Ultimate for life", detail: "Full access to all features.", icon: Gift, tone: "sage" },
+  { title: "No payment card required", detail: "Join without any payment details.", icon: CreditCard, tone: "blue" },
+  { title: "Limited places while we test", detail: "A small number of households.", icon: Users, tone: "sand" },
+];
 
 export function PublicFoundingBeta() {
   const router = useRouter();
@@ -52,42 +59,57 @@ export function PublicFoundingBeta() {
   const waitlist = state?.waitlist_available === true && !canJoin;
 
   return (
-    <div className="mk-page mk-page-centred">
-      <PublicHeader signupState={state} />
+    <div className="mk-page mk-beta-page">
+      <PublicHeader signupState={state} compactOnMobile />
       <main className="mk-beta-main">
-      <section className="mk-beta-hero" aria-labelledby="beta-heading">
-        <p className="eyebrow">Founding Beta</p>
-        <h1 id="beta-heading">Help shape a calmer home.</h1>
-        <p>We’re inviting a limited number of households to help us test and improve MyKhaya.</p>
-        <ul className="mk-plan-list mk-beta-public-list">
-          <li>Complimentary Ultimate access for the lifetime of your Home</li>
-          <li>All Ultimate features, with no payment or card required</li>
-          <li>An opportunity to help shape MyKhaya</li>
-        </ul>
-        {invitation && invitationValid === false && <p className="notice error" role="alert">This Beta invitation is invalid, expired, cancelled or already used.</p>}
-        {invitation && invitationValid === true && invitationExpiresAt && (
-          <p className="notice success" role="status">This place is reserved for you until {new Date(invitationExpiresAt).toLocaleString("en-GB")}.</p>
-        )}
-        {error && <p className="notice error" role="alert">{error}</p>}
-        {canJoin ? (
-          <button className="button large" type="button" onClick={() => void joinBeta()} disabled={checkingSession}>
-            {checkingSession ? "Checking your sign-in…" : "Join the Beta"}
-          </button>
-        ) : waitlist ? (
-          <>
-            <p className="notice">The next places are being offered from the waitlist first.</p>
-            <Link className="button large" href="/waitlist">Join the waitlist</Link>
-          </>
-        ) : (
-          <p className="notice" role="status">Founding Beta joining is currently unavailable. Please check back later.</p>
-        )}
-        {state?.joinable_count !== null && state?.joinable_count !== undefined && canJoin && (
-          <p className="mk-beta-places" role="status">{state.joinable_count} places currently available</p>
-        )}
-        <p className="auth-footer"><Link href="/login">Already a member? Sign in</Link></p>
-      </section>
+        <section className="mk-beta" aria-labelledby="beta-heading">
+          <div className="mk-beta-intro">
+            <p className="eyebrow mk-beta-eyebrow">Founding Beta</p>
+            <h1 id="beta-heading">Help shape a calmer home.</h1>
+            <p className="mk-beta-lede">Join a small group of households testing and improving MyKhaya.</p>
+          </div>
+
+          <section className="mk-beta-benefits" aria-labelledby="beta-benefits-heading">
+            <h2 id="beta-benefits-heading">What you get</h2>
+            <ul>
+              {BENEFITS.map(({ title, detail, icon: Icon, tone }) => (
+                <li key={title}>
+                  <span className={`mk-beta-benefit-icon ${tone}`} aria-hidden="true">
+                    <Icon size={24} strokeWidth={1.75} />
+                  </span>
+                  <span className="mk-beta-benefit-text">
+                    <strong>{title}</strong>
+                    <span>{detail}</span>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          </section>
+
+          <div className="mk-beta-actions">
+            {invitation && invitationValid === false && <p className="notice error" role="alert">This Beta invitation is invalid, expired, cancelled or already used.</p>}
+            {invitation && invitationValid === true && invitationExpiresAt && (
+              <p className="notice success" role="status">This place is reserved for you until {new Date(invitationExpiresAt).toLocaleString("en-GB")}.</p>
+            )}
+            {error && <p className="notice error" role="alert">{error}</p>}
+            {canJoin ? (
+              <button className="button mk-beta-cta" type="button" onClick={() => void joinBeta()} disabled={checkingSession}>
+                {checkingSession ? "Checking your sign-in…" : <>Join the Beta <ArrowRight size={22} strokeWidth={2} aria-hidden="true" /></>}
+              </button>
+            ) : waitlist ? (
+              <>
+                <p className="notice">The next places are being offered from the waitlist first.</p>
+                <Link className="button mk-beta-cta" href="/waitlist">Join the waitlist <ArrowRight size={22} strokeWidth={2} aria-hidden="true" /></Link>
+              </>
+            ) : (
+              <p className="notice" role="status">Founding Beta joining is currently unavailable. Please check back later.</p>
+            )}
+            <p className="mk-beta-member">Already a member? <Link href="/login">Sign in</Link></p>
+            <p className="mk-beta-terms">By joining, you agree to our <Link href="/legal/founding-beta-terms">Beta Terms</Link>.</p>
+          </div>
+        </section>
       </main>
-      <PublicFooter />
+      <PublicFooter compactOnMobile />
     </div>
   );
 }

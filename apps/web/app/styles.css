@@ -2,7 +2,6 @@
   box-sizing: border-box;
 }
 
-.mk-beta-hero,
 .mk-choice {
   margin: 0 auto;
   max-width: 1040px;
@@ -10,92 +9,260 @@
   text-align: center;
 }
 
-/* Founding Beta. The outer page wrapper (header + main + footer) is a
-   full-height column; <main> is the only flexible region and centres the Beta
-   group on both axes within the space left between header and footer. Wide
-   screens only: below 1100px the page stays ordinary scrolling document flow
-   (the base .mk-beta-hero padding applies). */
-.mk-beta-hero .mk-beta-public-list {
-  margin-inline: auto; /* .mk-plan-list (later in the file) zeroes the margin */
-}
-@media (min-width: 1100px) {
-  .mk-page-centred {
-    display: flex;
-    flex-direction: column;
-    min-height: 100dvh;
-  }
-  .mk-page-centred > .mk-beta-main {
-    align-items: center;
-    display: flex;
-    flex: 1;
-    justify-content: center;
-    padding: 1.5rem 2rem; /* minimum breathing room only; centring is the flex box's job */
-  }
-  .mk-page-centred .mk-beta-hero {
-    max-width: 1120px;
-    padding: 0;
-    width: 100%;
-  }
-  .mk-page-centred .mk-beta-hero h1 {
-    font-size: clamp(2.75rem, 3.6vw, 3.75rem);
-    margin-bottom: 1.5rem;
-    max-width: 860px;
-  }
-  .mk-page-centred .mk-beta-hero > p:not(.eyebrow) {
-    font-size: 1.2rem;
-    line-height: 1.55;
-    margin-block: 1rem;
-    max-width: 720px;
-  }
-  .mk-page-centred .mk-beta-public-list {
-    font-size: 1.1rem;
-    gap: 0.85rem;
-    margin-block: 1.75rem;
-    max-width: 46rem;
-  }
-  .mk-page-centred .mk-beta-hero .button.large {
-    min-height: 56px;
-    padding-inline: 2.5rem;
-  }
-  .mk-page-centred .mk-beta-hero .auth-footer {
-    margin-top: 1.75rem;
-    max-width: 720px;
-  }
-}
-
-.mk-beta-hero h1,
 .mk-choice h1 {
   margin: 0 auto 1.25rem;
   max-width: 720px;
 }
 
-.mk-beta-hero > p:not(.eyebrow),
 .mk-choice > p:not(.eyebrow) {
   margin: 0.75rem auto;
   max-width: 650px;
 }
 
+/* --- Founding Beta (/founding-beta) -----------------------------------------
+   (Selectors that compete with the generic button/.eyebrow rules further down
+   this file are scoped under .mk-beta to win on specificity, not order.)
+   Mobile-first, matching the approved mockup: centred hero, one "What you get"
+   card, a full-width primary CTA, then the member/terms lines. The page wrapper
+   is a full-height column so <main> fills the space between header and footer;
+   on wide screens the same blocks sit in two columns, centred in that space. */
+.mk-beta-page {
+  display: flex;
+  flex-direction: column;
+  min-height: 100dvh;
+}
+.mk-beta-main {
+  display: flex;
+  flex: 1;
+  justify-content: center;
+  padding: 1.75rem 1.25rem 2.5rem;
+}
+.mk-beta {
+  display: grid;
+  gap: 1.5rem;
+  grid-template-areas: "intro" "benefits" "actions";
+  max-width: 34rem;
+  width: 100%;
+}
+.mk-beta-intro {
+  grid-area: intro;
+  text-align: center;
+}
+.mk-beta-intro .mk-beta-eyebrow {
+  letter-spacing: 0.2em;
+  margin: 0 0 0.9rem;
+}
+.mk-beta-intro h1 {
+  color: var(--colour-slate);
+  font-size: clamp(2.5rem, 11vw, 2.85rem);
+  font-weight: 800;
+  letter-spacing: -0.035em;
+  line-height: 1.04;
+  margin: 0 auto 0.85rem;
+  max-width: 11ch;
+}
+.mk-beta-lede {
+  color: var(--colour-muted);
+  font-size: 1.15rem;
+  line-height: 1.45;
+  margin: 0 auto;
+  max-width: 19.5rem;
+}
+.mk-beta-benefits {
+  background: var(--colour-white);
+  border: 1px solid #ece6db;
+  border-radius: 1.25rem;
+  box-shadow: 0 8px 24px rgb(35 48 40 / 5%);
+  grid-area: benefits;
+  padding: 1.35rem 1.35rem 0.4rem;
+}
+.mk-beta-benefits h2 {
+  color: var(--colour-muted);
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.18em;
+  margin: 0 0 0.35rem;
+  text-transform: uppercase;
+}
+.mk-beta-benefits ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.mk-beta-benefits li {
+  align-items: center;
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: 3rem minmax(0, 1fr);
+  padding: 0.85rem 0;
+}
+.mk-beta-benefits li + li {
+  border-top: 1px solid #efe9de;
+}
+.mk-beta-benefit-icon {
+  align-items: center;
+  border-radius: 0.9rem;
+  display: flex;
+  height: 3rem;
+  justify-content: center;
+  width: 3rem;
+}
+.mk-beta-benefit-icon.sage {
+  background: var(--colour-sage-soft);
+  color: var(--colour-forest);
+}
+.mk-beta-benefit-icon.blue {
+  background: #e3ecf5;
+  color: #3d5f8a;
+}
+.mk-beta-benefit-icon.sand {
+  background: #f6ecdc;
+  color: #9a6a2e;
+}
+.mk-beta-benefit-text {
+  display: grid;
+  gap: 0.15rem;
+  min-width: 0;
+}
+.mk-beta-benefit-text strong {
+  color: var(--colour-slate);
+  font-size: 1.05rem;
+  line-height: 1.3;
+}
+.mk-beta-benefit-text span {
+  color: var(--colour-muted);
+  font-size: 0.95rem;
+  line-height: 1.35;
+}
+.mk-beta-actions {
+  display: grid;
+  gap: 0.25rem;
+  grid-area: actions;
+  justify-items: center;
+  text-align: center;
+}
+.mk-beta-actions .notice {
+  margin: 0 0 0.75rem;
+  width: 100%;
+}
+.mk-beta .mk-beta-cta {
+  align-items: center;
+  background: var(--colour-forest);
+  border-radius: 0.9rem;
+  color: white;
+  display: flex;
+  font-size: 1.2rem;
+  font-weight: 700;
+  gap: 0.6rem;
+  justify-content: center;
+  min-height: 3.4rem;
+  width: 100%;
+}
+.mk-beta .mk-beta-cta:hover {
+  background: var(--colour-forest-dark);
+  color: white;
+}
+.mk-beta-member {
+  color: var(--colour-slate);
+  font-size: 1.05rem;
+  margin: 1.15rem 0 0;
+}
+.mk-beta-member a {
+  color: var(--colour-forest);
+  font-weight: 800;
+}
+.mk-beta-terms {
+  color: var(--colour-muted);
+  font-size: 0.88rem;
+  margin: 0.5rem 0 0;
+}
+.mk-beta-terms a {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+@media (min-width: 700px) {
+  .mk-beta-main {
+    align-items: center;
+    padding: 3rem 2rem;
+  }
+}
+@media (min-width: 1100px) {
+  .mk-beta {
+    align-items: center;
+    column-gap: 4.5rem;
+    grid-template-areas: "intro benefits" "actions benefits";
+    grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+    max-width: 68rem;
+    row-gap: 2rem;
+  }
+  .mk-beta-intro,
+  .mk-beta-actions {
+    justify-items: start;
+    text-align: left;
+  }
+  .mk-beta-intro {
+    align-self: end;
+  }
+  .mk-beta-actions {
+    align-self: start;
+  }
+  .mk-beta-intro h1 {
+    font-size: clamp(3.25rem, 4.4vw, 4.25rem);
+    margin-inline: 0;
+  }
+  .mk-beta-lede {
+    font-size: 1.25rem;
+    margin-inline: 0;
+    max-width: 26rem;
+  }
+  .mk-beta .mk-beta-cta {
+    max-width: 24rem;
+  }
+  .mk-beta-benefits {
+    padding: 1.75rem 1.75rem 0.6rem;
+  }
+}
+
+/* Compact public header/footer variants (PublicHeader/PublicFooter
+   `compactOnMobile`): small screens only; wide screens keep the full ones. */
+.mk-footer-compact-links {
+  display: none;
+}
+@media (max-width: 800px) {
+  .mk-header-compact-mobile .mk-header-actions .secondary {
+    display: inline-flex;
+  }
+  .mk-header-compact-mobile .mk-header-actions .button:not(.secondary) {
+    display: none;
+  }
+  .mk-footer-compact-mobile {
+    padding: 1.75rem 1.25rem 2rem;
+  }
+  .mk-footer-compact-mobile > .mk-footer-links,
+  .mk-footer-compact-mobile > .mk-footer-copyright {
+    display: none;
+  }
+  .mk-footer-compact-mobile .mk-footer-compact-links {
+    border-top: 1px solid #ece5d6;
+    display: flex;
+    justify-content: center;
+    margin-top: 1.1rem;
+    padding-top: 1rem;
+  }
+  .mk-footer-compact-links a {
+    color: var(--colour-muted);
+    font-weight: 600;
+    padding: 0 1.1rem;
+  }
+  .mk-footer-compact-links a + a {
+    border-left: 1px solid #ddd5c6;
+  }
+}
+
 .mk-beta-places {
   color: var(--mk-green, #55705a);
   font-weight: 700;
-}
-
-.mk-beta-public-list {
-  list-style: none;
-  margin: 1.65rem auto;
-  max-width: 40rem;
-  padding: 0;
-  text-align: center;
-}
-
-.mk-beta-public-list li {
-  justify-content: center;
-}
-
-.mk-beta-hero .auth-footer {
-  justify-content: center;
-  margin-inline: auto;
-  text-align: center;
 }
 
 .mk-beta-offer-card {
@@ -139,7 +306,6 @@
 }
 
 @media (max-width: 700px) {
-  .mk-beta-hero,
   .mk-choice,
   .mk-closed-state {
     padding: 4rem 1.25rem;

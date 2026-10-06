@@ -8,9 +8,17 @@ import { signupCtaLabel, signupDestination } from "@/components/public-signup";
  *  docs/design/visual-identity.md's "one question per screen" — a marketing
  *  page's one question is "should I sign up"), not a separate site to
  *  navigate around. */
-export function PublicHeader({ signupState = null }: { signupState?: PublicSignupState | null }) {
+export function PublicHeader({
+  signupState = null,
+  compactOnMobile = false,
+}: {
+  signupState?: PublicSignupState | null;
+  /** Small screens show only the logo and an outlined Sign in button (for
+   *  pages whose own body carries the primary action). Desktop unchanged. */
+  compactOnMobile?: boolean;
+}) {
   return (
-    <header className="mk-header">
+    <header className={`mk-header${compactOnMobile ? " mk-header-compact-mobile" : ""}`}>
       <nav aria-label="Primary">
         <Link href="/" className="mk-header-logo">
           <Logo />

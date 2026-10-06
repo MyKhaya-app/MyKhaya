@@ -2,16 +2,28 @@ import asyncio
 import json
 import secrets
 import shutil
+import tempfile
 import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import stripe
 import structlog
 from alembic.config import Config as AlembicConfig
 from alembic.script import ScriptDirectory
-from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
+from fastapi import (
+    APIRouter,
+    Depends,
+    File,
+    HTTPException,
+    Query,
+    Request,
+    Response,
+    UploadFile,
+    status,
+)
+from fastapi.responses import FileResponse
 from redis.asyncio import Redis
 from sqlalchemy import and_, delete, func, or_, select, text, update
 from sqlalchemy.exc import IntegrityError
@@ -57,6 +69,15 @@ from mykhaya.entitlements import (
     resolve_effective_state,
 )
 from mykhaya.founding_beta_schemas import SignupStateResponse
+from mykhaya.home_migration_pcc import (
+    PACKAGE_STORE,
+    get_package,
+    load_package,
+    migration_enabled,
+    package_summary,
+    storage_path,
+    store_package,
+)
 from mykhaya.household_permissions import default_profile, home_admin_count, legacy_role
 from mykhaya.mailer import resolve_smtp_config, send_email
 from mykhaya.managed_demo_homes import ManagedDemoError, ManagedDemoService
@@ -208,6 +229,9 @@ from mykhaya.platform_schemas import (
     HolidaySourceUpdate,
     HomeAdministratorSummary,
     HomeDeleteEligibilityResponse,
+    HomeMigrationHomeRequest,
+    HomeMigrationImportRequest,
+    HomeMigrationPackageRequest,
     HomeSubscriptionResponse,
     IncidentCreate,
     IncidentDeleteRequest,
@@ -328,6 +352,13 @@ from mykhaya.syslog_forwarding import (
     SyslogConfig,
     current_dispatcher,
     syslog_config_from_platform_value,
+)
+from mykhaya.tools.home_migration import (
+    MAX_FILE_BYTES,
+    MigrationError,
+    export_home,
+    import_home,
+    inspect_import,
 )
 
 router = APIRouter(prefix="/platform", tags=["platform-control-centre"])
@@ -5827,8 +5858,10 @@ async def settings_list(
             state = "configured"
         else:
             fallback = resolve_environment_fallback(key, settings)
-            value = fallback
-            state = "default" if fallback is not None else "unset"
+            value = False if key == "home_migration_enabled" else fallback
+            state = (
+                "default" if fallback is not None or key == "home_migration_enabled" else "unset"
+            )
         items.append(
             {
                 "key": key,
@@ -6185,13 +6218,15 @@ async def update_setting(
             "previous_effective_value": effective_previous,
             "previous_source": "environment_default" if effective_previous is not None else "unset",
         }
-        row = PlatformSetting(
-            key=key, value={"value": body.value}, updated_by=context.administrator.id
-        )
+        value_payload: dict[str, Any] = {"value": body.value}
+        if key == "home_migration_enabled" and body.value is True:
+            value_payload["enabled_at"] = datetime.now(UTC).isoformat()
+        row = PlatformSetting(key=key, value=value_payload, updated_by=context.administrator.id)
         db.add(row)
     else:
         previous_payload = {key: row.value.get("value"), "previous_source": "platform_admin"}
-        row.value = {
+        value_payload = {
+            **row.value,
             "value": body.value,
             **(
                 {"health": row.value.get("health")}
@@ -6199,12 +6234,20 @@ async def update_setting(
                 else {}
             ),
         }
+        if key == "home_migration_enabled":
+            if body.value is True:
+                value_payload["enabled_at"] = datetime.now(UTC).isoformat()
+            else:
+                value_payload.pop("enabled_at", None)
+        row.value = value_payload
         row.updated_by = context.administrator.id
     platform_audit(
         db,
         request,
         context,
-        "setting.updated",
+        "home_migration.enabled"
+        if key == "home_migration_enabled" and body.value
+        else ("home_migration.disabled" if key == "home_migration_enabled" else "setting.updated"),
         "setting",
         reason=body.reason,
         previous=previous_payload,
@@ -8470,6 +8513,359 @@ async def resolve_incident(
     )
     await db.commit()
     return {"id": row.id, "lifecycle_state": row.lifecycle_state, "resolved_at": row.resolved_at}
+
+
+# Home Migration is a control-plane capability, not a consumer feature. The
+# named helper makes the permission boundary explicit while retaining the
+# existing owner/administrator role model.
+HOME_MIGRATION_ROLES = (PlatformRole.owner, PlatformRole.administrator)
+
+
+async def _home_migration_guard(db: AsyncSession, settings: Settings) -> None:
+    row = await db.scalar(
+        select(PlatformSetting).where(PlatformSetting.key == "home_migration_enabled")
+    )
+    if not migration_enabled(row.value if row else None):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Home Migration is disabled. Enable it in PCC Settings before continuing.",
+        )
+
+
+def _home_migration_environment(settings: Settings, expected: str) -> None:
+    if settings.environment != expected:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"Home Migration {expected} operations are available only in {expected}.",
+        )
+
+
+def _package_public(row: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "id": str(row["id"]),
+        "migration_id": str(row["migration_id"]),
+        "package_checksum": row["package_checksum"],
+        "summary": row["summary"],
+        "status": row["status"],
+        "dry_run_checksum": row.get("dry_run_checksum"),
+        "dry_run_report": row.get("dry_run_report"),
+        "completed_report": row.get("completed_report"),
+        "completed_at": row.get("completed_at"),
+    }
+
+
+@router.get("/home-migration/status")
+async def home_migration_status(
+    context: PlatformContext = Depends(require_roles(*HOME_MIGRATION_ROLES)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    setting = await db.scalar(
+        select(PlatformSetting).where(PlatformSetting.key == "home_migration_enabled")
+    )
+    value = setting.value if setting else {}
+    packages = (
+        (
+            await db.execute(
+                select(PACKAGE_STORE).order_by(PACKAGE_STORE.c.created_at.desc()).limit(10)
+            )
+        )
+        .mappings()
+        .all()
+    )
+    return {
+        "enabled": migration_enabled(value),
+        "enabled_at": value.get("enabled_at"),
+        "environment": settings.environment,
+        "packages": [_package_public(dict(row)) for row in packages],
+        "operator": str(context.administrator.id),
+    }
+
+
+@router.get("/home-migration/homes")
+async def home_migration_homes(
+    q: str = Query(default="", max_length=100),
+    _: PlatformContext = Depends(require_roles(*HOME_MIGRATION_ROLES)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> list[dict[str, Any]]:
+    _home_migration_environment(settings, "development")
+    await _home_migration_guard(db, settings)
+    count_query = (
+        select(Membership.group_id, func.count().label("member_count"))
+        .group_by(Membership.group_id)
+        .subquery()
+    )
+    query = (
+        select(Group, func.coalesce(count_query.c.member_count, 0))
+        .outerjoin(count_query, count_query.c.group_id == Group.id)
+        .where(Group.is_active.is_(True), Group.archived_at.is_(None))
+        .order_by(Group.name)
+        .limit(50)
+    )
+    if q.strip():
+        query = query.where(Group.name.ilike(f"%{q.strip()}%"))
+    return [
+        {"id": str(home.id), "name": home.name, "member_count": count}
+        for home, count in (await db.execute(query)).all()
+    ]
+
+
+async def _export_package(home_id: uuid.UUID, settings: Settings) -> dict[str, Any]:
+    path = Path(tempfile.gettempdir()) / f"mykhaya-home-export-{uuid.uuid4()}.json"
+    try:
+        await export_home(home_id, path, settings)
+        return cast(
+            dict[str, Any], json.loads(await asyncio.to_thread(path.read_text, encoding="utf-8"))
+        )
+    finally:
+        await asyncio.to_thread(path.unlink, missing_ok=True)
+
+
+@router.post("/home-migration/preview-export")
+async def home_migration_preview_export(
+    body: HomeMigrationHomeRequest,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*HOME_MIGRATION_ROLES)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    _home_migration_environment(settings, "development")
+    await _home_migration_guard(db, settings)
+    try:
+        package = await _export_package(body.home_id, settings)
+    except MigrationError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    summary = package_summary(package)
+    platform_audit(
+        db, request, context, "home_migration.export_previewed", "home", body.home_id, new=summary
+    )
+    await db.commit()
+    return summary
+
+
+@router.post("/home-migration/export")
+async def home_migration_export(
+    body: HomeMigrationHomeRequest,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*HOME_MIGRATION_ROLES)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    _home_migration_environment(settings, "development")
+    await _home_migration_guard(db, settings)
+    require_recent_auth(context, settings)
+    try:
+        package = await _export_package(body.home_id, settings)
+        row = await store_package(db, settings, package, created_by=context.administrator.id)
+    except MigrationError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    platform_audit(
+        db,
+        request,
+        context,
+        "home_migration.package_exported",
+        "home",
+        body.home_id,
+        new=package_summary(package),
+    )
+    await db.commit()
+    return _package_public(row)
+
+
+@router.post("/home-migration/upload")
+async def home_migration_upload(
+    request: Request,
+    package: UploadFile = File(...),
+    context: PlatformContext = Depends(require_roles(*HOME_MIGRATION_ROLES)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    _home_migration_environment(settings, "production")
+    await _home_migration_guard(db, settings)
+    raw = await package.read(MAX_FILE_BYTES + 1)
+    if len(raw) > MAX_FILE_BYTES:
+        raise HTTPException(
+            status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "The migration package is too large."
+        )
+    try:
+        candidate = json.loads(raw)
+        if not isinstance(candidate, dict):
+            raise MigrationError("The migration package has an invalid shape.")
+        row = await store_package(db, settings, candidate, created_by=context.administrator.id)
+    except (json.JSONDecodeError, MigrationError) as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    platform_audit(
+        db,
+        request,
+        context,
+        "home_migration.package_uploaded",
+        "migration",
+        row["migration_id"],
+        new=row["summary"],
+    )
+    await db.commit()
+    return _package_public(row)
+
+
+@router.post("/home-migration/dry-run")
+async def home_migration_dry_run(
+    body: HomeMigrationPackageRequest,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*HOME_MIGRATION_ROLES)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    _home_migration_environment(settings, "production")
+    await _home_migration_guard(db, settings)
+    row = await get_package(db, body.package_id)
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That migration package was not found.")
+    try:
+        candidate = await load_package(settings, row["storage_key"])
+        report = await inspect_import(candidate, settings)
+    except MigrationError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    row_update = {
+        "dry_run_checksum": row["package_checksum"],
+        "dry_run_report": report,
+        "status": report["status"],
+    }
+    await db.execute(
+        PACKAGE_STORE.update().where(PACKAGE_STORE.c.id == body.package_id).values(**row_update)
+    )
+    platform_audit(
+        db,
+        request,
+        context,
+        "home_migration.dry_run_executed",
+        "migration",
+        row["migration_id"],
+        new={"status": report["status"], "package_checksum": row["package_checksum"]},
+    )
+    await db.commit()
+    return {**_package_public({**row, **row_update}), "report": report}
+
+
+@router.post("/home-migration/import")
+async def home_migration_import(
+    body: HomeMigrationImportRequest,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*HOME_MIGRATION_ROLES)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    _home_migration_environment(settings, "production")
+    await _home_migration_guard(db, settings)
+    require_recent_auth(context, settings)
+    row = await get_package(db, body.package_id)
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That migration package was not found.")
+    if body.confirmation != str(row["migration_id"]):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "Type the migration ID exactly to confirm the import.",
+        )
+    if (
+        row["dry_run_checksum"] != row["package_checksum"]
+        or not row["dry_run_report"]
+        or row["dry_run_report"].get("status") != "READY_TO_IMPORT"
+    ):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "A successful dry-run for this exact package is required.",
+        )
+    platform_audit(
+        db,
+        request,
+        context,
+        "home_migration.import_attempted",
+        "migration",
+        row["migration_id"],
+        new={"package_checksum": row["package_checksum"], "target_environment": "production"},
+    )
+    await db.commit()
+    try:
+        candidate = await load_package(settings, row["storage_key"])
+        report = await import_home(
+            candidate, settings, dry_run=False, target_environment="production", confirm=True
+        )
+    except (MigrationError, IntegrityError) as exc:
+        if isinstance(exc, IntegrityError):
+            message = (
+                "This migration was already completed or is being imported by another operator."
+            )
+            failure_category = "duplicate_or_concurrent_import"
+        else:
+            message = str(exc)
+            failure_category = type(exc).__name__
+        platform_audit(
+            db,
+            request,
+            context,
+            "home_migration.import_failed",
+            "migration",
+            row["migration_id"],
+            outcome="failure",
+            failure_category=failure_category,
+        )
+        await db.commit()
+        raise HTTPException(status.HTTP_409_CONFLICT, message) from exc
+    await db.execute(
+        PACKAGE_STORE.update()
+        .where(PACKAGE_STORE.c.id == body.package_id)
+        .values(completed_report=report, status="completed", completed_at=datetime.now(UTC))
+    )
+    platform_audit(
+        db,
+        request,
+        context,
+        "home_migration.import_completed",
+        "migration",
+        row["migration_id"],
+        new={"package_checksum": row["package_checksum"], "target_environment": "production"},
+    )
+    await db.commit()
+    return {"report": report, "status": "completed"}
+
+
+@router.get("/home-migration/packages/{package_id}/download")
+async def home_migration_download(
+    package_id: uuid.UUID,
+    _: PlatformContext = Depends(require_roles(*HOME_MIGRATION_ROLES)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> FileResponse:
+    row = await get_package(db, package_id)
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That migration package was not found.")
+    path = storage_path(settings, row["storage_key"])
+    if not path.is_file():
+        raise HTTPException(status.HTTP_410_GONE, "That migration package is no longer available.")
+    return FileResponse(
+        path,
+        media_type="application/json",
+        filename=f"home-migration-{row['migration_id']}.json",
+    )
+
+
+@router.get("/home-migration/packages/{package_id}/report")
+async def home_migration_report(
+    package_id: uuid.UUID,
+    _: PlatformContext = Depends(require_roles(*HOME_MIGRATION_ROLES)),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, Any]:
+    row = await get_package(db, package_id)
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That migration package was not found.")
+    return {
+        "migration_id": str(row["migration_id"]),
+        "package_checksum": row["package_checksum"],
+        "summary": row["summary"],
+        "dry_run_report": row["dry_run_report"],
+        "completed_report": row["completed_report"],
+        "status": row["status"],
+    }
 
 
 @router.delete("/incidents/{incident_id}", status_code=status.HTTP_204_NO_CONTENT)
