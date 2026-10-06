@@ -10,8 +10,21 @@
   text-align: center;
 }
 
+/* Founding Beta, wide screens: a full-height header / content / footer grid.
+   The middle row takes all remaining height and the hero centres within it, so
+   it sits between header and footer at any viewport height without margin or
+   padding nudges. Below this width the page stays ordinary document flow. */
 @media (min-width: 1100px) {
-  .mk-beta-hero { padding-block: clamp(9rem, 15vh, 13rem); }
+  .mk-page-centred {
+    display: grid;
+    grid-template-rows: auto 1fr auto;
+    min-height: 100dvh;
+  }
+  .mk-page-centred > .mk-beta-hero {
+    align-self: center;
+    padding-block: 3rem;
+    width: 100%;
+  }
 }
 
 .mk-beta-hero h1,

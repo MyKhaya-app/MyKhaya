@@ -52,7 +52,7 @@ export function PublicFoundingBeta() {
   const waitlist = state?.waitlist_available === true && !canJoin;
 
   return (
-    <main className="mk-page">
+    <main className="mk-page mk-page-centred">
       <PublicHeader signupState={state} />
       <section className="mk-beta-hero" aria-labelledby="beta-heading">
         <p className="eyebrow">Founding Beta</p>
