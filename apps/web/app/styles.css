@@ -10,20 +10,56 @@
   text-align: center;
 }
 
-/* Founding Beta, wide screens: a full-height header / content / footer grid.
-   The middle row takes all remaining height and the hero centres within it, so
-   it sits between header and footer at any viewport height without margin or
-   padding nudges. Below this width the page stays ordinary document flow. */
+/* Founding Beta. The outer page wrapper (header + main + footer) is a
+   full-height column; <main> is the only flexible region and centres the Beta
+   group on both axes within the space left between header and footer. Wide
+   screens only: below 1100px the page stays ordinary scrolling document flow
+   (the base .mk-beta-hero padding applies). */
+.mk-beta-hero .mk-beta-public-list {
+  margin-inline: auto; /* .mk-plan-list (later in the file) zeroes the margin */
+}
 @media (min-width: 1100px) {
   .mk-page-centred {
-    display: grid;
-    grid-template-rows: auto 1fr auto;
+    display: flex;
+    flex-direction: column;
     min-height: 100dvh;
   }
-  .mk-page-centred > .mk-beta-hero {
-    align-self: center;
-    padding-block: 3rem;
+  .mk-page-centred > .mk-beta-main {
+    align-items: center;
+    display: flex;
+    flex: 1;
+    justify-content: center;
+    padding: 1.5rem 2rem; /* minimum breathing room only; centring is the flex box's job */
+  }
+  .mk-page-centred .mk-beta-hero {
+    max-width: 1120px;
+    padding: 0;
     width: 100%;
+  }
+  .mk-page-centred .mk-beta-hero h1 {
+    font-size: clamp(2.75rem, 3.6vw, 3.75rem);
+    margin-bottom: 1.5rem;
+    max-width: 860px;
+  }
+  .mk-page-centred .mk-beta-hero > p:not(.eyebrow) {
+    font-size: 1.2rem;
+    line-height: 1.55;
+    margin-block: 1rem;
+    max-width: 720px;
+  }
+  .mk-page-centred .mk-beta-public-list {
+    font-size: 1.1rem;
+    gap: 0.85rem;
+    margin-block: 1.75rem;
+    max-width: 46rem;
+  }
+  .mk-page-centred .mk-beta-hero .button.large {
+    min-height: 56px;
+    padding-inline: 2.5rem;
+  }
+  .mk-page-centred .mk-beta-hero .auth-footer {
+    margin-top: 1.75rem;
+    max-width: 720px;
   }
 }
 

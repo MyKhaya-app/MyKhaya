@@ -52,8 +52,9 @@ export function PublicFoundingBeta() {
   const waitlist = state?.waitlist_available === true && !canJoin;
 
   return (
-    <main className="mk-page mk-page-centred">
+    <div className="mk-page mk-page-centred">
       <PublicHeader signupState={state} />
+      <main className="mk-beta-main">
       <section className="mk-beta-hero" aria-labelledby="beta-heading">
         <p className="eyebrow">Founding Beta</p>
         <h1 id="beta-heading">Help shape a calmer home.</h1>
@@ -85,7 +86,8 @@ export function PublicFoundingBeta() {
         )}
         <p className="auth-footer"><Link href="/login">Already a member? Sign in</Link></p>
       </section>
+      </main>
       <PublicFooter />
-    </main>
+    </div>
   );
 }
