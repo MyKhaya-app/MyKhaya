@@ -15,7 +15,7 @@ from __future__ import annotations
 import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from sqlalchemy import select
+from sqlalchemy import exists, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.config import Settings, get_settings
@@ -44,11 +44,13 @@ from mykhaya.legal_schemas import (
 )
 from mykhaya.legal_test_mode import is_test_user
 from mykhaya.models import (
+    BetaEnrollment,
     LegalAcceptance,
     LegalAcceptanceContext,
     LegalActionVerb,
     LegalAudience,
     LegalDocument,
+    LegalDocumentScope,
     LegalDocumentVersion,
     LegalDocumentVersionStatus,
     LegalRecordType,
@@ -94,6 +96,7 @@ async def public_documents(db: AsyncSession = Depends(get_db)) -> list[PublicLeg
                 key=document.key,
                 display_name=document.display_name,
                 audience=document.audience,
+                scope=document.scope,
                 action_verb=document.action_verb,
                 acceptance_required=document.acceptance_required,
                 current_version=current.version,
@@ -179,7 +182,19 @@ async def legal_status(
     adult_documents = (
         await db.scalars(
             select(LegalDocument).where(
-                LegalDocument.audience == LegalAudience.adult, LegalDocument.archived_at.is_(None)
+                LegalDocument.audience == LegalAudience.adult,
+                LegalDocument.archived_at.is_(None),
+                or_(
+                    LegalDocument.scope == LegalDocumentScope.global_,
+                    (
+                        (LegalDocument.scope == LegalDocumentScope.founding_beta)
+                        & exists(
+                            select(BetaEnrollment.id).where(
+                                BetaEnrollment.joined_user_id == auth.user.id
+                            )
+                        )
+                    ),
+                ),
             )
         )
     ).all()

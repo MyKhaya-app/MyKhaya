@@ -13,6 +13,7 @@ import { CcLegalSubnav } from "@/components/control-centre/legal-subnav";
 import {
   type LegalDocument,
   audienceLabel,
+  documentScopeLabel,
   versionStatusLabel,
   versionStatusTone,
 } from "@/components/legal-logic";
@@ -58,6 +59,15 @@ export default function LegalOverviewPage() {
       key: "audience",
       header: "Audience",
       render: (row) => audienceLabel(row.audience),
+    },
+    {
+      key: "scope",
+      header: "Scope",
+      render: (row) => (
+        <CcBadge tone={row.scope === "founding_beta" ? "info" : "neutral"}>
+          {documentScopeLabel(row.scope)}
+        </CcBadge>
+      ),
     },
     {
       key: "current",

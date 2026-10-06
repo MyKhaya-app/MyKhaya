@@ -2,7 +2,7 @@
 
 import { FormEvent, useCallback, useEffect, useState } from "react";
 import { Settings as SettingsIcon } from "lucide-react";
-import { platformApi } from "@mykhaya/api-client";
+import { api, platformApi, type PublicSignupState } from "@mykhaya/api-client";
 import { PlatformShell } from "@/components/platform-shell";
 import { CcConfirmDialog } from "@/components/control-centre/dialog";
 import { titleCase } from "@/components/platform-format";
@@ -13,6 +13,7 @@ import { CcNotice, CcLoadingState } from "@/components/control-centre/status-mes
 import { CcField } from "@/components/control-centre/form-field";
 import { CcMetadataGrid, CcMetadataItem } from "@/components/control-centre/metadata-grid";
 import { CcBadge } from "@/components/control-centre/badge";
+import { registrationSummary } from "./registration-access";
 
 type ValueType = "text" | "email" | "url" | "boolean" | "integer" | "list";
 type Risk = "normal" | "sensitive";
@@ -212,7 +213,7 @@ function isDirty(item: SettingItem, draft: string, boolDraft: boolean): boolean 
   return toDraftText(item.value) !== draft;
 }
 
-function SettingRow({ item, onSaved }: { item: SettingItem; onSaved: () => Promise<void> }) {
+function SettingRow({ item, onSaved, label, description, hideKey }: { item: SettingItem; onSaved: () => Promise<void>; label?: string; description?: string; hideKey?: boolean }) {
   const [draft, setDraft] = useState(() => toDraftText(item.value));
   const [boolDraft, setBoolDraft] = useState(() => Boolean(item.value));
   const [reason, setReason] = useState("");
@@ -263,10 +264,10 @@ function SettingRow({ item, onSaved }: { item: SettingItem; onSaved: () => Promi
   return (
     <CcCard
       className="setting-row"
-      title={item.label}
+      title={label ?? item.label}
       description={
         <>
-          {item.description} <small className="setting-row-key">{item.key}</small>
+          {description ?? item.description} {!hideKey && <small className="setting-row-key">{item.key}</small>}
         </>
       }
     >
@@ -360,7 +361,7 @@ function SignupModeCard({ item, onSaved }: { item: SettingItem; onSaved: () => P
     } finally { setBusy(false); }
   }
   return (
-    <CcCard title="Signup" description="The single authoritative runtime control for normal and Founding Beta registration.">
+    <CcCard className="registration-access-card" title="Signup Mode" description="Choose which new-account paths are available. This is narrowed by the master switch, invitation-only access and Founding Beta capacity.">
       <form className="setting-row-form" onSubmit={save}>
         <CcField label="Signup Mode" help={selected.help}>
           <select value={value} onChange={(event) => setValue(event.target.value)}>
@@ -377,8 +378,66 @@ function SignupModeCard({ item, onSaved }: { item: SettingItem; onSaved: () => P
   );
 }
 
+function ReadonlyVerificationCard({ item }: { item: SettingItem }) {
+  const required = item.value !== false;
+  return (
+    <CcCard className="registration-access-card" title="Email verification" description="Managed by deployment policy. Production cannot turn this safeguard off from PCC.">
+      <div className="registration-readonly-value">
+        <strong>{required ? "Required" : "Optional"}</strong>
+        <span>New accounts must verify their email before signing in when required.</span>
+      </div>
+    </CcCard>
+  );
+}
+
+function RegistrationSummaryCard({ items, publicState }: { items: SettingItem[]; publicState: PublicSignupState | null }) {
+  const summary = registrationSummary(items, publicState);
+  const fields = [
+    ["Signup Mode", summary.signupMode],
+    ["Normal signup", summary.normalSignup],
+    ["Founding Beta signup", summary.betaSignup],
+    ["Waitlist", summary.waitlist],
+    ["Invitation required", summary.invitation],
+    ["Email verification", summary.emailVerification],
+    ["Existing user sign-in", summary.signIn],
+  ];
+  return (
+    <CcCard className="registration-summary-card" title="Effective registration behaviour" description="This is the current answer for a new visitor. Existing users can always sign in; the master switch overrides Signup Mode, then invitation-only access and Beta capacity or waitlist rules narrow what remains.">
+      <dl className="registration-summary-grid">
+        {fields.map(([label, value]) => <div key={label}><dt>{label}</dt><dd><CcBadge tone={value === "Disabled" || value === "Closed" ? "neutral" : "info"}>{value}</CcBadge></dd></div>)}
+      </dl>
+    </CcCard>
+  );
+}
+
+function RegistrationAccessSection({ items, signup, publicState, onSaved }: { items: SettingItem[]; signup?: SettingItem; publicState: PublicSignupState | null; onSaved: () => Promise<void> }) {
+  const item = (key: string) => items.find((candidate) => candidate.key === key);
+  return (
+    <section className="platform-settings-section registration-access-section" aria-labelledby="registration-access-heading">
+      <h2 id="registration-access-heading">Registration &amp; Access</h2>
+      <RegistrationSummaryCard items={items} publicState={publicState} />
+      <div className="registration-access-group">
+        <h3>Signup availability</h3>
+        {signup && <SignupModeCard item={signup} onSaved={onSaved} />}
+      </div>
+      <div className="registration-access-group">
+        <h3>Registration safeguards</h3>
+        {item("registration_enabled") && <SettingRow item={item("registration_enabled")!} label="Allow any new registrations" description="Emergency master switch for every new account path. Turning this off closes normal and Founding Beta signup while existing users can still sign in." hideKey onSaved={onSaved} />}
+        {item("invite_only_mode") && <SettingRow item={item("invite_only_mode")!} label="Invitation-only access" description="Require a valid Home invitation for normal signup or a Beta invitation for Founding Beta signup. This narrows the selected Signup Mode." hideKey onSaved={onSaved} />}
+      </div>
+      <div className="registration-access-group">
+        <h3>Verification &amp; security</h3>
+        {item("email_verification_required") && <ReadonlyVerificationCard item={item("email_verification_required")!} />}
+        {item("allowed_registration_domains") && <SettingRow item={item("allowed_registration_domains")!} label="Allowed registration domains" hideKey onSaved={onSaved} />}
+        {item("invitation_expiry_days") && <SettingRow item={item("invitation_expiry_days")!} label="Invitation expiry" hideKey onSaved={onSaved} />}
+      </div>
+    </section>
+  );
+}
+
 export default function PlatformSettingsPage() {
   const [data, setData] = useState<SettingsResponse | null>(null);
+  const [publicSignupState, setPublicSignupState] = useState<PublicSignupState | null>(null);
   const [dvla, setDvla] = useState<DrivewayDvlaStatus | null>(null);
   const [syslog, setSyslog] = useState<SyslogSettings | null>(null);
   const [syslogDraft, setSyslogDraft] = useState<SyslogSettings | null>(null);
@@ -395,13 +454,15 @@ export default function PlatformSettingsPage() {
   const load = useCallback(async () => {
     setError("");
     try {
-      const [settings, dvlaStatus, syslogStatus, diagnostics] = await Promise.all([
+      const [settings, publicState, dvlaStatus, syslogStatus, diagnostics] = await Promise.all([
         platformApi.get<SettingsResponse>("/settings"),
+        api.publicSignupState(),
         platformApi.get<DrivewayDvlaStatus>("/integrations/dvla"),
         platformApi.get<SyslogSettings>("/logging/syslog"),
         platformApi.get<SyslogDiagnostics>("/logging/syslog/diagnostics"),
       ]);
       setData(settings);
+      setPublicSignupState(publicState);
       setDvla(dvlaStatus);
       const normalisedSyslog = normaliseSyslogSettings(syslogStatus);
       setSyslog(normalisedSyslog);
@@ -615,7 +676,7 @@ export default function PlatformSettingsPage() {
                   {syslogResult && <p role="status" className="cc-page-meta">{syslogResult}</p>}
                 </CcCard>
               )}
-                  {groupBySection(data.settings.filter((item) => item.key !== "signup_mode")).map(([section, items]) => (
+              {groupBySection(data.settings.filter((item) => item.key !== "signup_mode" && item.section !== "Registration & Access")).map(([section, items]) => (
                 <section key={section} className="platform-settings-section">
                   <h2>{section}</h2>
                   <div className="settings-section-rows">
@@ -625,10 +686,12 @@ export default function PlatformSettingsPage() {
                   </div>
                 </section>
               ))}
-              {(() => {
-                const signup = data.settings.find((item) => item.key === "signup_mode");
-                return signup ? <SignupModeCard item={signup} onSaved={load} /> : null;
-              })()}
+              <RegistrationAccessSection
+                items={data.settings.filter((item) => item.section === "Registration & Access")}
+                signup={data.settings.find((item) => item.key === "signup_mode")}
+                publicState={publicSignupState}
+                onSaved={load}
+              />
             </>
           )
         )}

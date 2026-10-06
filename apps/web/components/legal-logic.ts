@@ -1,6 +1,7 @@
 import type { CcBadgeTone } from "./control-centre/badge";
 
 export type LegalAudience = "adult" | "child";
+export type LegalDocumentScope = "global" | "founding_beta";
 export type LegalActionVerb = "accept" | "acknowledge";
 export type LegalVersionStatus =
   | "draft"
@@ -40,6 +41,7 @@ export type LegalDocument = {
   key: string;
   display_name: string;
   audience: LegalAudience;
+  scope: LegalDocumentScope;
   action_verb: LegalActionVerb;
   acceptance_required: boolean;
   archived_at: string | null;
@@ -76,6 +78,10 @@ export function versionStatusTone(status: LegalVersionStatus): CcBadgeTone {
 
 export function audienceLabel(audience: LegalAudience): string {
   return audience === "adult" ? "Adult" : "Child (via guardian)";
+}
+
+export function documentScopeLabel(scope: LegalDocumentScope): string {
+  return scope === "founding_beta" ? "Founding Beta" : "Global";
 }
 
 export function actionVerbLabel(verb: LegalActionVerb): string {

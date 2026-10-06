@@ -25,6 +25,7 @@ type AuthStatus =
   | "offline"
   | "locked"
   | "maintenance"
+  | "legal_check_error"
   | "legal_action_required"
   | "signed_out";
 type AuthContextValue = {
@@ -39,6 +40,7 @@ type AuthContextValue = {
    *  "legal_action_required"; may be null otherwise (not yet checked, or the
    *  check failed and the gate fails open — see `refreshLegalStatus`). */
   legalStatus: LegalStatusResponse | null;
+  legalStatusError: string | null;
   /** Re-fetches GET /legal/status and updates `status`/`legalStatus`
    *  accordingly — released back to "ready" only once the backend itself
    *  reports full compliance, never optimistically from client-side state.
@@ -47,6 +49,7 @@ type AuthContextValue = {
    *  authenticated, not a second security boundary, so a transient failure
    *  here must never behave like a lost/expired session. */
   refreshLegalStatus: () => Promise<LegalStatusResponse | null>;
+  retryLegalStatus: () => void;
   retryInitialSession: () => void;
   refreshSession: () => Promise<boolean>;
   setAuthenticatedUser: (user: User) => Promise<void>;
@@ -65,7 +68,18 @@ function isPublicPath(path: string) {
   // "/legal" (Terms/Privacy/Children's Privacy/Cookies) must never trigger
   // session bootstrap for a signed-out visitor — see app-shell.tsx's
   // identical PUBLIC_PATH_PREFIXES entry.
-  return ["/login", "/register", "/forgot-password", "/reset-password", "/verify-email", "/onboarding", "/mfa", "/legal"].some(
+  return [
+    "/login",
+    "/register",
+    "/forgot-password",
+    "/reset-password",
+    "/verify-email",
+    "/mfa",
+    "/legal",
+    "/founding-beta",
+    "/signup-choice",
+    "/waitlist",
+  ].some(
     (prefix) => path === prefix || path.startsWith(`${prefix}/`),
   );
 }
@@ -74,6 +88,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const path = usePathname();
   const router = useRouter();
   const platformControlCentre = isPlatformControlCentre();
+  // Capacitor is unavailable during SSR and may only become observable after
+  // the first client render. Keep the root route in a neutral restoring state
+  // until that answer is known.
+  const [runtimeNative, setRuntimeNative] = useState<boolean | null>(null);
+  useEffect(() => {
+    setRuntimeNative(isNativeShell());
+  }, []);
   // Native shells start at the live frontend origin (`/`) and restore their
   // bearer session asynchronously. Start in restoring state in that case so
   // the first render cannot be mistaken for an anonymous browser session.
@@ -81,12 +102,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // shell's startup entry point. Keep those two meanings separate so a
   // browser visit never triggers cookie renewal/redirects while Capacitor
   // still restores its bearer session from the same root URL.
-  const nativeStartup = isNativeShell() && (!isPublicPath(path) || path === "/") && !platformControlCentre;
+  const nativeStartup = runtimeNative === true && (!isPublicPath(path) || path === "/") && !platformControlCentre;
   const [user, setUser] = useState<User | null>(null);
-  const [status, setStatus] = useState<AuthStatus>(nativeStartup ? "initializing" : "signed_out");
-  const [initialSessionLoading, setInitialSessionLoading] = useState(nativeStartup);
+  const [status, setStatus] = useState<AuthStatus>(path === "/" || nativeStartup ? "initializing" : "signed_out");
+  const [initialSessionLoading, setInitialSessionLoading] = useState(path === "/" || nativeStartup);
   const [sessionRefreshing, setSessionRefreshing] = useState(false);
   const [legalStatus, setLegalStatus] = useState<LegalStatusResponse | null>(null);
+  const [legalStatusError, setLegalStatusError] = useState<string | null>(null);
   const bootstrapped = useRef(false);
 
   // The single place that turns "session is authenticated" into either
@@ -99,13 +121,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     try {
       const result = await api.legalStatus();
       setLegalStatus(result);
+      setLegalStatusError(null);
       setStatus(result.action_required ? "legal_action_required" : "ready");
       return result;
     } catch {
-      // Fail open — see refreshLegalStatus's doc comment on the context
-      // type above.
       setLegalStatus(null);
-      setStatus("ready");
+      setLegalStatusError("We could not check the required legal documents.");
+      setStatus("legal_check_error");
       return null;
     }
   }, []);
@@ -114,10 +136,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     console.info("[BIOMETRIC DEBUG]", "auth_state", { route: path, native: nativeStartup, status, initialSessionLoading });
   }, [path, nativeStartup, status, initialSessionLoading]);
 
-  const redirectToLogin = useCallback(() => {
+  type AuthRedirectReason = "no_session_after_restore" | "session_expired";
+  const redirectToLogin = useCallback((reason: AuthRedirectReason) => {
     const destination = typeof window === "undefined" ? "" : `${window.location.pathname}${window.location.search}`;
+    if (process.env.NODE_ENV !== "production") {
+      console.info("[AUTH_NAV]", {
+        event: "auth_redirect_to_login",
+        reason,
+        pathname: typeof window === "undefined" ? path : window.location.pathname,
+        native: isNativeShell(),
+        userPresent: Boolean(user),
+      });
+    }
     router.replace(destination && destination !== "/login" ? `/login?next=${encodeURIComponent(destination)}` : "/login");
-  }, [router]);
+  }, [path, router, user]);
 
   const loadSession = useCallback(async (initial: boolean) => {
     if (initial) setInitialSessionLoading(true);
@@ -131,7 +163,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           setUser(null);
           setStatus("signed_out");
           recordAuthDiagnostic("NATIVE_BOOTSTRAP_RESULT_SIGNED_OUT");
-          redirectToLogin();
+          redirectToLogin("no_session_after_restore");
           return false;
         }
         setUser(restored);
@@ -184,7 +216,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             setUser(null);
             setStatus("signed_out");
             recordAuthDiagnostic("LOGIN_REDIRECT");
-            redirectToLogin();
+            redirectToLogin("session_expired");
             return false;
           }
         }
@@ -204,10 +236,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [redirectToLogin, applyLegalStatus]);
 
   useEffect(() => {
+    if (path === "/" && runtimeNative === null) {
+      return;
+    }
     if (
       platformControlCentre
       || isPublicPath(path)
-      || (!isNativeShell() && path === "/")
+      || (runtimeNative === false && path === "/")
     ) {
       setInitialSessionLoading(false);
       if (status !== "ready") setStatus("signed_out");
@@ -218,7 +253,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     if (bootstrapped.current || status === "ready") return;
     bootstrapped.current = true;
     void loadSession(true);
-  }, [path, status, loadSession, platformControlCentre]);
+  }, [path, status, loadSession, platformControlCentre, runtimeNative]);
 
   useUserUpdatedListener(setUser);
 
@@ -312,7 +347,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     initialSessionLoading,
     sessionRefreshing,
     legalStatus,
+    legalStatusError,
     refreshLegalStatus: applyLegalStatus,
+    retryLegalStatus: () => void applyLegalStatus(),
     retryInitialSession: () => void loadSession(true),
     refreshSession: () => loadSession(false),
     setAuthenticatedUser: async (authenticatedUser) => {

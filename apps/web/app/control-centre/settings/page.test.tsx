@@ -12,12 +12,15 @@ vi.mock("@mykhaya/api-client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@mykhaya/api-client")>();
   return {
     ...actual,
+    api: { ...actual.api, publicSignupState: vi.fn() },
     platformApi: { get: vi.fn(), post: vi.fn(), put: vi.fn(), patch: vi.fn(), delete: vi.fn() },
   };
 });
 
 const { platformApi } = await import("@mykhaya/api-client");
+const { api } = await import("@mykhaya/api-client");
 const get = platformApi.get as unknown as ReturnType<typeof vi.fn>;
+const publicSignupState = api.publicSignupState as unknown as ReturnType<typeof vi.fn>;
 const put = platformApi.put as unknown as ReturnType<typeof vi.fn>;
 const post = platformApi.post as unknown as ReturnType<typeof vi.fn>;
 
@@ -87,6 +90,15 @@ function mockRoutes(
   get.mockImplementation((path: string) => {
     if (path === "/auth/me") return Promise.resolve(actor);
     if (path === "/settings") return Promise.resolve(settings);
+    if (path === "/public/signup-state") return Promise.resolve({
+      signup_mode: "normal",
+      registration_open: true,
+      invitation_required: false,
+      normal_signup_available: true,
+      beta_joining_available: false,
+      waitlist_available: false,
+      joinable_count: 0,
+    });
     if (path === "/integrations/dvla")
       return Promise.resolve({
         enabled: false,
@@ -108,6 +120,15 @@ function mockRoutes(
 
 beforeEach(() => {
   vi.clearAllMocks();
+  publicSignupState.mockResolvedValue({
+    signup_mode: "normal",
+    registration_open: true,
+    invitation_required: false,
+    normal_signup_available: true,
+    beta_joining_available: false,
+    waitlist_available: false,
+    joinable_count: 0,
+  });
   mockRoutes();
 });
 
@@ -432,7 +453,7 @@ describe("PCC Settings — enforced access controls", () => {
     const base = baseSettings();
     const registration = ["registration_enabled", "invite_only_mode"].map((key) => ({
       key,
-      label: key === "registration_enabled" ? "Allow new registrations" : "Invite-only registration",
+      label: key === "registration_enabled" ? "Allow any new registrations" : "Invitation-only access",
       description: "Server-enforced signup control.",
       section: "Registration & Access",
       value_type: "boolean",
@@ -467,8 +488,8 @@ describe("PCC Settings — enforced access controls", () => {
     mockRoutes(enforcedSettings());
     render(<PlatformSettingsPage />);
 
-    const heading = await screen.findByRole("heading", { name: "Allow new registrations" });
-    expect(screen.getByRole("heading", { name: "Invite-only registration" })).toBeInTheDocument();
+    const heading = await screen.findByRole("heading", { name: "Allow any new registrations" });
+    expect(screen.getByRole("heading", { name: "Invitation-only access" })).toBeInTheDocument();
     const row = heading.closest(".setting-row") as HTMLElement;
     await user.click(within(row).getByRole("checkbox"));
     await user.click(within(row).getByRole("button", { name: "Save" }));
@@ -477,5 +498,31 @@ describe("PCC Settings — enforced access controls", () => {
       await screen.findByText(/affects real user access or availability/),
     ).toBeInTheDocument();
     expect(screen.queryByText(/not yet enforced/i)).not.toBeInTheDocument();
+  });
+
+  it("shows effective registration summary and keeps email verification read-only", async () => {
+    const settings = enforcedSettings();
+    settings.settings.push({
+      key: "email_verification_required",
+      label: "Require email verification",
+      description: "Deployment safeguard.",
+      section: "Registration & Access",
+      value_type: "boolean",
+      risk: "sensitive",
+      runtime_effect: "effective",
+      editable: true,
+      consumer_visible: false,
+      value: true,
+      state: "default",
+    });
+    mockRoutes(settings);
+    render(<PlatformSettingsPage />);
+
+    expect(await screen.findByRole("heading", { name: "Effective registration behaviour" })).toBeInTheDocument();
+    expect(screen.getByText("Existing user sign-in")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Email verification" })).toBeInTheDocument();
+    expect(screen.getByText("Managed by deployment policy. Production cannot turn this safeguard off from PCC.")).toBeInTheDocument();
+    const verificationHeading = screen.getByRole("heading", { name: "Email verification" });
+    expect(within(verificationHeading.closest(".cc-card") as HTMLElement).queryByRole("button", { name: /^Save$/ })).not.toBeInTheDocument();
   });
 });

@@ -84,6 +84,34 @@ async def test_signup_with_no_required_documents_is_unaffected(client: AsyncClie
 
 
 @pytest.mark.asyncio
+async def test_public_legal_metadata_exposes_global_and_founding_beta_contracts(
+    client: AsyncClient, admin_client: AsyncClient, admin_factory
+) -> None:
+    owner = await admin_factory(PlatformRole.owner)
+    await admin_login(admin_client, owner)
+    terms = await create_and_publish_document(
+        admin_client, unique("terms"), "Terms & Conditions", "adult", scope="global"
+    )
+    beta_terms = await create_and_publish_document(
+        admin_client,
+        "founding_beta_terms-" + unique("test"),
+        "Founding Beta Terms",
+        "adult",
+        scope="founding_beta",
+        version="1.1",
+    )
+    response = await unsafe(client, "GET", "/api/v1/legal/documents")
+    assert response.status_code == 200
+    by_key = {item["key"]: item for item in response.json()}
+    assert by_key[terms["document"]["key"]]["scope"] == "global"
+    assert by_key[terms["document"]["key"]]["acceptance_required"] is True
+    beta_key = beta_terms["document"]["key"]
+    assert by_key[beta_key]["scope"] == "founding_beta"
+    assert by_key[beta_key]["current_version"] == "1.1"
+    assert by_key[beta_key]["acceptance_required"] is True
+
+
+@pytest.mark.asyncio
 async def test_signup_records_exact_displayed_version_with_correct_record_types(
     client: AsyncClient, admin_client: AsyncClient, admin_factory
 ) -> None:

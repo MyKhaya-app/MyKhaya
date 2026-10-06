@@ -5,9 +5,13 @@
 .mk-beta-hero,
 .mk-choice {
   margin: 0 auto;
-  max-width: 900px;
+  max-width: 1040px;
   padding: 7rem 2rem;
   text-align: center;
+}
+
+@media (min-width: 1100px) {
+  .mk-beta-hero { padding-block: clamp(9rem, 15vh, 13rem); }
 }
 
 .mk-beta-hero h1,
@@ -25,6 +29,43 @@
 .mk-beta-places {
   color: var(--mk-green, #55705a);
   font-weight: 700;
+}
+
+.mk-beta-public-list {
+  list-style: none;
+  margin: 1.65rem auto;
+  max-width: 40rem;
+  padding: 0;
+  text-align: center;
+}
+
+.mk-beta-public-list li {
+  justify-content: center;
+}
+
+.mk-beta-hero .auth-footer {
+  justify-content: center;
+  margin-inline: auto;
+  text-align: center;
+}
+
+.mk-beta-offer-card {
+  background: var(--colour-white, #fff);
+  border: 1px solid var(--mk-border, #d8ded5);
+  border-radius: var(--radius-card, 1.25rem);
+  box-shadow: var(--shadow-card);
+  margin: 2rem auto 0;
+  max-width: 38rem;
+  padding: clamp(1.25rem, 4vw, 2.25rem);
+  text-align: left;
+}
+
+.mk-beta-offer-card h3 {
+  margin-top: 0;
+}
+
+.mk-beta-offer-card .button {
+  margin-top: 1rem;
 }
 
 .mk-closed-state {

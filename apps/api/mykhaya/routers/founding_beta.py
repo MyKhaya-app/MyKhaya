@@ -40,6 +40,7 @@ from mykhaya.founding_beta_schemas import (
     BetaWaitlistResponsePage,
     SignupStateResponse,
 )
+from mykhaya.legal import current_published_version
 from mykhaya.models import (
     BetaEnrollment,
     BetaInvitation,
@@ -49,6 +50,13 @@ from mykhaya.models import (
     BetaWaitlistStatus,
     Group,
     HomeSubscription,
+    LegalAcceptance,
+    LegalAcceptanceContext,
+    LegalActionVerb,
+    LegalDocument,
+    LegalDocumentScope,
+    LegalPlatform,
+    LegalRecordType,
     PlatformRole,
     SubscriptionPlan,
 )
@@ -56,7 +64,7 @@ from mykhaya.platform_audit import platform_audit
 from mykhaya.platform_runtime import evaluate_signup_policy, registration_enabled
 from mykhaya.platform_security import PlatformContext, require_recent_auth, require_roles
 from mykhaya.rate_limit import enforce_rate_limit
-from mykhaya.security import normalise_email
+from mykhaya.security import normalise_email, resolve_client_ip
 
 public_router = APIRouter(prefix="/public", tags=["founding-beta-public"])
 router = APIRouter(prefix="/beta", tags=["founding-beta"])
@@ -177,6 +185,35 @@ async def join(
         terms_version=body.terms_version,
         invitation_token=body.invitation_token,
     )
+    beta_document = await db.scalar(
+        select(LegalDocument).where(
+            LegalDocument.key == "founding_beta_terms",
+            LegalDocument.scope == LegalDocumentScope.founding_beta,
+            LegalDocument.archived_at.is_(None),
+        )
+    )
+    if beta_document is not None:
+        version = await current_published_version(db, beta_document)
+        if version is None or version.version != body.terms_version:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "The Founding Beta terms have changed. Please review them again.",
+            )
+        db.add(
+            LegalAcceptance(
+                record_type=(
+                    LegalRecordType.user_acceptance
+                    if beta_document.action_verb == LegalActionVerb.accept
+                    else LegalRecordType.user_acknowledgement
+                ),
+                document_version_id=version.id,
+                user_id=auth.user.id,
+                context=LegalAcceptanceContext.beta_enrolment,
+                platform=LegalPlatform.web,
+                ip_address=resolve_client_ip(request, get_settings()),
+                user_agent=request.headers.get("user-agent", "")[:300] or None,
+            )
+        )
     audit(
         db,
         request,

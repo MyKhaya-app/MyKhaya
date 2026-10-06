@@ -23,6 +23,7 @@ const LEGAL_PAGE_BY_KEY: Record<string, string> = {
   privacy: "/legal/privacy",
   children_privacy: "/legal/children",
   cookies: "/legal/cookies",
+  founding_beta_terms: "/legal/founding-beta-terms",
 };
 
 export default function Register() {
@@ -107,7 +108,11 @@ export default function Register() {
     }
     try {
       const requiredLegal = legalDocuments.filter(
-        (document) => document.audience === "adult" && document.acceptance_required,
+        (document) =>
+          document.audience === "adult" &&
+          document.acceptance_required &&
+          document.action_verb === "accept" &&
+          (document.scope === "global" || (betaRequested && document.scope === "founding_beta")),
       );
       const missingLegal = requiredLegal.filter(
         (document) => !document.current_version_id || !legalChecked[document.key],
@@ -122,7 +127,8 @@ export default function Register() {
         setBusy(false);
         return;
       }
-      if (missingLegal.length || (betaRequested && !betaTermsAccepted)) {
+      const sharedBetaTerms = requiredLegal.find((document) => document.scope === "founding_beta");
+      if (missingLegal.length || (betaRequested && !sharedBetaTerms && !betaTermsAccepted)) {
         setError("Please review and confirm the required legal documents before continuing.");
         setBusy(false);
         return;
@@ -142,7 +148,9 @@ export default function Register() {
             : "web"
           : "web",
         beta_home_name: betaRequested ? d.get("home_name") : undefined,
-        beta_terms_version: betaRequested ? signupState?.beta_terms_version : undefined,
+        beta_terms_version: betaRequested
+          ? sharedBetaTerms?.current_version ?? signupState?.beta_terms_version
+          : undefined,
         beta_invitation_token: betaRequested ? betaInvitation : undefined,
       };
       const result = isNativeShell()
@@ -178,12 +186,29 @@ export default function Register() {
       setBusy(false);
     }
   }
-  const betaUnavailable = betaRequested && signupState !== null && !signupState.beta_joining_available && !betaInvitation;
   const unavailableReason = maintenance
     ? "MyKhaya is undergoing maintenance. Please try again shortly."
-    : betaRequested && (!signupState?.registration_open || betaUnavailable)
-      ? "Founding Beta joining is currently unavailable. Join the waitlist or check back later."
-    : registrationUnavailableReason(signupState, Boolean(invitation));
+    : betaRequested
+      ? registrationUnavailableReason(signupState, Boolean(betaInvitation), true)
+      : registrationUnavailableReason(signupState, Boolean(invitation));
+  const requiredContractualDocuments = legalDocuments.filter(
+    (document) =>
+      document.audience === "adult" &&
+      document.acceptance_required &&
+      document.action_verb === "accept" &&
+      (document.scope === "global" || (betaRequested && document.scope === "founding_beta")),
+  );
+  const sharedBetaTerms = requiredContractualDocuments.find(
+    (document) => document.scope === "founding_beta",
+  );
+  const legacyBetaTermsRequired = betaRequested && !sharedBetaTerms;
+  const contractualAcceptanceComplete =
+    !legalLoading &&
+    !legalLoadFailed &&
+    requiredContractualDocuments.every(
+      (document) => Boolean(document.current_version_id && legalChecked[document.key]),
+    ) &&
+    (!legacyBetaTermsRequired || betaTermsAccepted);
   return (
     <AuthCard
       title="Create your account"
@@ -247,16 +272,19 @@ export default function Register() {
           <fieldset className="auth-legal-consent">
             <legend>Before you create your account</legend>
             <p className="muted">
-              Please review the current documents. The version shown is recorded with your
-              account.
+              Please review the documents that apply to your account.
             </p>
-            {legalDocuments.map((document) => {
-              const required = document.audience === "adult" && document.acceptance_required;
-              return (
-                <label className="check-row" key={document.key}>
-                  {required && (
+            {requiredContractualDocuments.length > 0 && (
+              <>
+                <p>
+                  <strong>Required contractual acceptance</strong>
+                </p>
+                {requiredContractualDocuments.map((document) => (
+                  <label className="check-row" key={document.key}>
                     <input
                       type="checkbox"
+                      required
+                      aria-label={`I accept the ${document.display_name} (version ${document.current_version ?? "current"})`}
                       checked={legalChecked[document.key] === true}
                       onChange={(event) =>
                         setLegalChecked((current) => ({
@@ -265,24 +293,32 @@ export default function Register() {
                         }))
                       }
                     />
-                  )}
-                  <span>
-                    <Link href={LEGAL_PAGE_BY_KEY[document.key] ?? `/legal/${document.key}`}>
-                      {document.display_name}
-                    </Link>
-                    {document.current_version ? ` · version ${document.current_version}` : ""}
-                    {required
-                      ? document.action_verb === "acknowledge"
-                        ? " (I acknowledge this)"
-                        : " (I accept this)"
-                      : " (please review)"}
-                  </span>
-                </label>
-              );
-            })}
+                    <span>
+                      I accept the{" "}
+                      <Link href={LEGAL_PAGE_BY_KEY[document.key] ?? `/legal/${document.key}`}>
+                        {document.display_name}
+                      </Link>{" "}
+                      (version {document.current_version ?? "current"})
+                    </span>
+                  </label>
+                ))}
+              </>
+            )}
+            <p>
+              <strong>Informational notices</strong>
+            </p>
+            <p className="muted">
+              <Link href="/legal/privacy">Privacy Notice</Link> ·{" "}
+              <Link href="/legal/children">Family &amp; Children&rsquo;s Privacy Notice</Link> ·{" "}
+              <Link href="/legal/cookies">Cookie Policy</Link>
+            </p>
+            <p className="hint">
+              By creating an account, you confirm that these notices have been made available to
+              you.
+            </p>
           </fieldset>
         )}
-        {betaRequested && !unavailableReason && (
+        {betaRequested && !unavailableReason && legacyBetaTermsRequired && (
           <fieldset className="auth-legal-consent">
             <legend>Founding Beta registration</legend>
             <label>
@@ -340,7 +376,9 @@ export default function Register() {
           />
         </label>
         <FormStatus error={error} />
-        <button disabled={busy || Boolean(unavailableReason)}>
+        <button
+          disabled={busy || Boolean(unavailableReason) || !contractualAcceptanceComplete}
+        >
           {busy ? "Creating account…" : "Create account"}
         </button>
       </form>

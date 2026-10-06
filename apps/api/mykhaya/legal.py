@@ -28,6 +28,7 @@ from mykhaya.models import (
     LegalActionVerb,
     LegalAudience,
     LegalDocument,
+    LegalDocumentScope,
     LegalDocumentVersion,
     LegalDocumentVersionStatus,
     LegalReacceptanceScope,
@@ -105,13 +106,16 @@ async def _records_with_versions(
     document_id: uuid.UUID,
     where_clause: ColumnElement[bool],
     *,
+    compatible_document_keys: tuple[str, ...] = (),
     is_test: bool = False,
 ) -> list[tuple[LegalAcceptance, LegalDocumentVersion]]:
     rows = await db.execute(
         select(LegalAcceptance, LegalDocumentVersion)
         .join(LegalDocumentVersion, LegalDocumentVersion.id == LegalAcceptance.document_version_id)
+        .join(LegalDocument, LegalDocument.id == LegalDocumentVersion.document_id)
         .where(
-            LegalDocumentVersion.document_id == document_id,
+            (LegalDocumentVersion.document_id == document_id)
+            | LegalDocument.key.in_(compatible_document_keys),
             where_clause,
             LegalDocumentVersion.is_test.is_(is_test),
         )
@@ -137,6 +141,7 @@ async def user_document_status(
         (LegalAcceptance.user_id == user_id)
         & (LegalAcceptance.record_type == record_type)
         & LegalAcceptance.child_profile_id.is_(None),
+        compatible_document_keys=("terms_and_conditions",) if document.key == "terms" else (),
         is_test=is_test,
     )
     return _status_from_records(document, current, records, action_verb=document.action_verb)
@@ -202,7 +207,19 @@ def _status_from_records(
     satisfied_directly = any(
         acceptance.document_version_id == current.id for acceptance, _ in records
     )
-    satisfied = satisfied_directly or _grandfathered(current.reacceptance_scope, bool(records))
+    # The original Terms model used `terms_and_conditions` as its document
+    # key. A migration to the canonical `terms` key must preserve a valid
+    # acceptance of the same published version without manufacturing a new
+    # row. Context is deliberately not part of this identity: it records where
+    # acceptance happened, not whether the document/version was accepted.
+    compatible_terms_version = document.key == "terms" and any(
+        version.version == current.version for _, version in records
+    )
+    satisfied = (
+        satisfied_directly
+        or compatible_terms_version
+        or _grandfathered(current.reacceptance_scope, bool(records))
+    )
     return ActionRecordStatus(
         document_key=document.key,
         display_name=document.display_name,
@@ -273,7 +290,7 @@ async def own_child_profile(db: AsyncSession, user_id: uuid.UUID) -> ChildProfil
     )
 
 
-async def required_adult_documents(db: AsyncSession) -> list[LegalDocument]:
+async def required_adult_documents(db: AsyncSession, *, beta: bool = False) -> list[LegalDocument]:
     """Every non-archived adult-audience document an administrator has
     marked as acceptance_required — the set signup (and the adult legal
     gate) must satisfy. Does not filter on whether a version is actually
@@ -285,6 +302,11 @@ async def required_adult_documents(db: AsyncSession) -> list[LegalDocument]:
             LegalDocument.audience == LegalAudience.adult,
             LegalDocument.acceptance_required.is_(True),
             LegalDocument.archived_at.is_(None),
+            LegalDocument.scope.in_(
+                [LegalDocumentScope.global_, LegalDocumentScope.founding_beta]
+                if beta
+                else [LegalDocumentScope.global_]
+            ),
         )
     )
     return list(rows)
@@ -297,7 +319,7 @@ class ResolvedSignupAcceptance:
 
 
 async def validate_signup_acceptances(
-    db: AsyncSession, submitted: list[tuple[str, uuid.UUID]]
+    db: AsyncSession, submitted: list[tuple[str, uuid.UUID]], *, beta: bool = False
 ) -> list[ResolvedSignupAcceptance]:
     """Validates a signup request's claimed document/version acceptances
     against the backend's actual current state, server-side, before an
@@ -321,7 +343,7 @@ async def validate_signup_acceptances(
             current published version (the version changed under the user,
             or the client sent something stale/incorrect).
     """
-    required = await required_adult_documents(db)
+    required = await required_adult_documents(db, beta=beta)
     submitted_by_key = dict(submitted)
     resolved: list[ResolvedSignupAcceptance] = []
     for document in required:

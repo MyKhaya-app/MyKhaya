@@ -13,6 +13,7 @@ from mykhaya.models import (
     LegalAcceptanceContext,
     LegalActionVerb,
     LegalAudience,
+    LegalDocumentScope,
     LegalDocumentVersionStatus,
     LegalPlatform,
     LegalReacceptanceScope,
@@ -26,6 +27,7 @@ class PublicLegalDocumentSummary(BaseModel):
     key: str
     display_name: str
     audience: LegalAudience
+    scope: LegalDocumentScope
     action_verb: LegalActionVerb
     acceptance_required: bool
     current_version: str | None
@@ -106,6 +108,7 @@ class PlatformLegalDocumentCreate(StrictModel):
     key: str = Field(min_length=1, max_length=50)
     display_name: str = Field(min_length=1, max_length=200)
     audience: LegalAudience
+    scope: LegalDocumentScope = LegalDocumentScope.global_
     action_verb: LegalActionVerb = LegalActionVerb.accept
     acceptance_required: bool = True
 
@@ -115,6 +118,7 @@ class PlatformLegalDocumentResponse(BaseModel):
     key: str
     display_name: str
     audience: LegalAudience
+    scope: LegalDocumentScope
     action_verb: LegalActionVerb
     acceptance_required: bool
     archived_at: datetime | None

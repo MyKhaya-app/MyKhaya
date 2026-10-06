@@ -120,6 +120,7 @@ async def _document_response(
         key=document.key,
         display_name=document.display_name,
         audience=document.audience,
+        scope=document.scope,
         action_verb=document.action_verb,
         acceptance_required=document.acceptance_required,
         archived_at=document.archived_at,
@@ -170,6 +171,7 @@ async def create_document(
         key=body.key,
         display_name=body.display_name,
         audience=body.audience,
+        scope=body.scope,
         action_verb=body.action_verb,
         acceptance_required=body.acceptance_required,
     )

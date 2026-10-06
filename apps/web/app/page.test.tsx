@@ -7,9 +7,11 @@ import Welcome from "./page";
 const { nativeState, authState, replace } = vi.hoisted(() => ({
   nativeState: { value: false, platform: "ios" as "ios" | "android" | "web" },
   authState: {
-    status: "signed_out" as "initializing" | "ready" | "offline" | "signed_out" | "locked",
+    status: "signed_out" as "initializing" | "ready" | "offline" | "signed_out" | "locked" | "legal_check_error" | "legal_action_required",
     initialSessionLoading: false,
     retryInitialSession: vi.fn(),
+    legalStatusError: null as string | null,
+    retryLegalStatus: vi.fn(),
   },
   replace: vi.fn(),
 }));
@@ -68,6 +70,7 @@ beforeEach(() => {
   nativeState.platform = "ios";
   authState.status = "signed_out";
   authState.initialSessionLoading = false;
+  authState.legalStatusError = null;
 });
 
 describe("Welcome (public marketing homepage)", () => {
@@ -221,5 +224,16 @@ describe("Welcome (public marketing homepage)", () => {
 
     await screen.findByRole("heading", { name: /unlock mykhaya/i });
     expect(screen.queryByText(/face id|touch id/i)).not.toBeInTheDocument();
+  });
+
+  it("shows a recoverable legal-check error at the native root", async () => {
+    nativeState.value = true;
+    authState.status = "legal_check_error";
+    authState.legalStatusError = "Legal service unavailable";
+    render(<Welcome />);
+
+    expect(await screen.findByRole("heading", { name: /could not check your legal documents/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /try again/i })).toBeInTheDocument();
+    expect(replace).not.toHaveBeenCalledWith("/login");
   });
 });

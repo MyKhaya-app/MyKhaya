@@ -109,6 +109,14 @@ describe("AuthProvider", () => {
     expect(router.replace).not.toHaveBeenCalled();
   });
 
+  it("shows a recoverable legal-check error instead of failing into an empty shell", async () => {
+    legalStatus.mockRejectedValueOnce(new Error("legal API unavailable"));
+
+    render(<AuthProvider><Probe /></AuthProvider>);
+
+    await waitFor(() => expect(screen.getByText("legal_check_error")).toBeInTheDocument());
+  });
+
   it("still treats a generic 503 as offline, not maintenance", async () => {
     const { ApiError } = await import("@mykhaya/api-client");
     me.mockRejectedValue(Object.assign(new ApiError(503, "Down"), { status: 503 }));
@@ -143,6 +151,21 @@ describe("AuthProvider", () => {
     expect(router.replace).not.toHaveBeenCalled();
   });
 
+  it.each(["/founding-beta", "/signup-choice", "/waitlist"])(
+    "keeps %s public without session bootstrap or renewal",
+    async (publicPath) => {
+      pathname = publicPath;
+      me.mockRejectedValue(new (await import("@mykhaya/api-client")).ApiError(401, "Unauthenticated"));
+
+      render(<AuthProvider><Probe /></AuthProvider>);
+
+      await waitFor(() => expect(screen.getByText("signed_out")).toBeInTheDocument());
+      expect(me).not.toHaveBeenCalled();
+      expect(renew).not.toHaveBeenCalled();
+      expect(router.replace).not.toHaveBeenCalled();
+    },
+  );
+
   it("shows initial bootstrap state, then remains ready without reloading", async () => {
     let resolve!: (value: unknown) => void;
     me.mockReturnValue(new Promise((r) => { resolve = r; }));
@@ -168,6 +191,23 @@ describe("AuthProvider", () => {
     resolveLegal({ action_required: true, documents: [], children: [], child_self: null });
     await waitFor(() => expect(screen.getByText("legal_action_required")).toBeInTheDocument());
     expect(screen.queryByText("checking")).not.toBeInTheDocument();
+  });
+
+  it("keeps a native root in restore state until the bearer session is resolved", async () => {
+    nativeShellState.value = true;
+    pathname = "/";
+    let resolveBootstrap!: (value: unknown) => void;
+    bootstrapNativeSession.mockReturnValue(new Promise((resolve) => { resolveBootstrap = resolve; }));
+
+    render(<AuthProvider><Probe /></AuthProvider>);
+
+    expect(screen.getByText("checking")).toBeInTheDocument();
+    expect(router.replace).not.toHaveBeenCalled();
+    expect(bootstrapNativeSession).toHaveBeenCalledTimes(1);
+
+    resolveBootstrap({ id: "native-u1", display_name: "Owner", principal_type: "adult" });
+    await waitFor(() => expect(screen.getByText("ready")).toBeInTheDocument());
+    expect(router.replace).not.toHaveBeenCalled();
   });
 
   it("keeps the page available during background refresh", async () => {

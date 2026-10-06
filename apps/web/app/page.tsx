@@ -9,9 +9,11 @@ import { PublicFooter } from "@/components/marketing/public-footer";
 import { PublicHeader } from "@/components/marketing/public-header";
 import { PublicHero } from "@/components/marketing/public-hero";
 import { PublicPricing } from "@/components/marketing/public-pricing";
+import { PublicBetaOffer } from "@/components/marketing/public-beta-offer";
 import { isNativeShell } from "@/components/native-runtime";
 import { useAuth } from "@/components/auth-provider";
 import { MaintenanceScreen } from "@/components/maintenance";
+import { LegalGate } from "@/components/legal-gate";
 import { genericUnlockPromptCopy } from "@/components/native-biometric";
 import { api, type PublicSignupState } from "@mykhaya/api-client";
 
@@ -36,7 +38,17 @@ function PublicWelcome({ signupState }: { signupState: PublicSignupState | null 
     );
   }
   if (signupState?.signup_mode === "beta_only") {
-    return <BetaWelcome signupState={signupState} />;
+    return (
+      <main className="mk-page">
+        <PublicHeader signupState={signupState} />
+        <PublicHero signupState={signupState} />
+        <PublicFeatures />
+        <PublicBenefits />
+        <PublicBetaOffer signupState={signupState} />
+        <PublicFinalCta signupState={signupState} />
+        <PublicFooter />
+      </main>
+    );
   }
   return (
     <main className="mk-page">
@@ -51,36 +63,9 @@ function PublicWelcome({ signupState }: { signupState: PublicSignupState | null 
   );
 }
 
-function BetaWelcome({ signupState }: { signupState: PublicSignupState }) {
-  return (
-    <main className="mk-page">
-      <PublicHeader signupState={signupState} />
-      <section className="mk-beta-hero" aria-labelledby="beta-heading">
-        <p className="eyebrow">Founding Beta</p>
-        <h1 id="beta-heading">Help shape a calmer home.</h1>
-        <p>
-          Join a limited testing cohort for MyKhaya. Founding members receive
-          Complimentary Ultimate access for the lifetime of their Home.
-        </p>
-        <p>There is no cost to join. Places are limited while we learn together.</p>
-        <div className="mk-hero-actions">
-          <a className="button large" href="/founding-beta">Join the Beta</a>
-          <a className="button secondary large" href="/login">Sign in</a>
-        </div>
-        {signupState.joinable_count !== null && (
-          <p className="mk-beta-places" role="status">
-            {signupState.joinable_count} places currently available
-          </p>
-        )}
-      </section>
-      <PublicFooter />
-    </main>
-  );
-}
-
 function NativeRootGate() {
   const router = useRouter();
-  const { status, initialSessionLoading, retryInitialSession } = useAuth();
+  const { status, initialSessionLoading, retryInitialSession, legalStatusError, retryLegalStatus } = useAuth();
 
   useEffect(() => {
     console.info("[BIOMETRIC DEBUG]", "root_route_state", { route: "/", status, initialSessionLoading });
@@ -88,6 +73,20 @@ function NativeRootGate() {
 
   useEffect(() => {
     if (status === "ready") router.replace("/home");
+  }, [router, status]);
+
+  useEffect(() => {
+    if (status !== "signed_out") return;
+    if (process.env.NODE_ENV !== "production") {
+      console.info("[AUTH_NAV]", {
+        event: "auth_redirect_to_login",
+        reason: "no_session_after_restore",
+        pathname: "/",
+        native: true,
+        userPresent: false,
+      });
+    }
+    router.replace("/login");
   }, [router, status]);
 
   if (status === "maintenance") return <MaintenanceScreen onRecovered={retryInitialSession} />;
@@ -109,6 +108,19 @@ function NativeRootGate() {
         <button className="tertiary" onClick={() => router.replace("/login")}>Sign in with password</button>
       </main>
     );
+  }
+  if (status === "legal_check_error") {
+    return (
+      <main className="app-bootstrap-state" role="alert">
+        <h1>We could not check your legal documents</h1>
+        <p>{legalStatusError ?? "Please try again before continuing to MyKhaya."}</p>
+        <button onClick={retryLegalStatus}>Try again</button>
+      </main>
+    );
+  }
+  if (status === "legal_action_required") return <LegalGate />;
+  if (status === "signed_out") {
+    return <main className="app-bootstrap-state" role="status">Taking you to sign in…</main>;
   }
   if (initialSessionLoading || status === "initializing" || status === "ready") {
     return <main className="app-bootstrap-state" role="status">Checking your MyKhaya session…</main>;

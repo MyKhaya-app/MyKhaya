@@ -1695,6 +1695,21 @@
 .setting-row-form { display: grid; gap: 0.6rem; max-width: 480px; }
 .setting-row-form input[type="checkbox"] { width: auto; }
 .setting-row-caption { color: #61727a; }
+.registration-access-section { gap: 1rem; }
+.registration-access-section > h2 { margin-bottom: 0.1rem; }
+.registration-access-group { display: grid; gap: 0.7rem; }
+.registration-access-group > h3 { color: var(--cc-text); font-size: 0.82rem; margin: 0.25rem 0 0; }
+.registration-access-card { margin-bottom: 0; }
+.registration-summary-card { border-left: 3px solid var(--cc-primary); }
+.registration-summary-grid { display: grid; gap: 0.65rem 1rem; grid-template-columns: repeat(4, minmax(0, 1fr)); margin: 0; }
+.registration-summary-grid > div { display: grid; gap: 0.2rem; min-width: 0; }
+.registration-summary-grid dt { color: var(--cc-text-muted); font-size: 0.72rem; }
+.registration-summary-grid dd { margin: 0; }
+.registration-readonly-value { align-items: baseline; display: flex; flex-wrap: wrap; gap: 0.65rem; }
+.registration-readonly-value strong { color: var(--cc-text); font-size: 1rem; }
+.registration-readonly-value span { color: var(--cc-text-muted); font-size: 0.78rem; }
+@media (max-width: 900px) { .registration-summary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 560px) { .registration-summary-grid { grid-template-columns: 1fr; } }
 .record-list,
 .flag-list { background: var(--cc-surface); border: 1px solid var(--cc-border); border-radius: var(--cc-radius-sm); overflow: hidden; }
 .record-list article,

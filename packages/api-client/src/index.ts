@@ -7,9 +7,13 @@ export { ApiError } from "./errors";
 // which documents/versions are current; these types only describe its
 // responses, never a client-side re-derivation of them).
 export type LegalAudience = "adult" | "child";
+export type LegalDocumentScope = "global" | "founding_beta";
 export type LegalActionVerb = "accept" | "acknowledge";
 export type LegalAcceptanceContext =
   | "signup"
+  | "beta_registration"
+  | "beta_enrolment"
+  | "in_app_reacceptance"
   | "login_reauth"
   | "policy_update"
   | "subscription_purchase"
@@ -22,6 +26,7 @@ export type PublicLegalDocumentSummary = {
   key: string;
   display_name: string;
   audience: LegalAudience;
+  scope: LegalDocumentScope;
   action_verb: LegalActionVerb;
   acceptance_required: boolean;
   current_version: string | null;

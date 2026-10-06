@@ -1,6 +1,6 @@
 "use client";
 export const dynamic = "force-dynamic";
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { api, ApiError } from "@mykhaya/api-client";
@@ -33,6 +33,7 @@ type BrowserAuthResult =
 export default function Login() {
   const router = useRouter(),
     params = useSearchParams();
+  const signInInFlight = useRef(false);
   const invitation = params.get("invitation");
   const beta = params.get("beta") === "1";
   const betaInvitation = params.get("beta_invitation");
@@ -211,16 +212,18 @@ export default function Login() {
 
   async function submit(e: FormEvent<HTMLFormElement>) {
     e.preventDefault();
+    // One authoritative in-flight guard (a ref, so it is set synchronously -
+    // `busy` state only updates on the next render, and a second submit event
+    // in the same tick would otherwise slip through). A sign-in attempt is
+    // rate-limited server-side, so a duplicate submit costs the user allowance.
+    if (signInInFlight.current) return;
+    signInInFlight.current = true;
     setBusy(true);
     setError("");
     const d = new FormData(e.currentTarget);
     const email = ((d.get("email") as string | null) ?? "").trim();
     const password = (d.get("password") as string | null) ?? "";
     try {
-      if (isNativeShell() && window.location.hostname === "dev.mykhaya.app") {
-        const probeResults = await runNativeNetworkDiagnostics();
-        setNativeDiagnostic(`probe: ${probeResults.join(" | ")}`);
-      }
       // Native source of truth: inside Capacitor this is a bearer-token
       // sign-in against /auth/mobile/login, persisted to the iOS Keychain
       // (see components/native-auth.ts) — never the browser cookie
@@ -243,6 +246,16 @@ export default function Login() {
       recordLoginFailureDiagnostic(isNativeShell() ? "native_login" : "browser_login", err);
       if (isNativeShell() && window.location.hostname === "dev.mykhaya.app") {
         setNativeDiagnostic(getLastNativeLoginDiagnostic());
+        // Transport probes run only AFTER a failure that never reached the
+        // server (network/CORS), never before every sign-in, and never against
+        // an authentication endpoint.
+        if (!(err instanceof ApiError)) {
+          void runNativeNetworkDiagnostics().then((results) =>
+            setNativeDiagnostic(
+              `${getLastNativeLoginDiagnostic() ?? ""}; probe: ${results.join(" | ")}`,
+            ),
+          );
+        }
       }
       setError(
         err instanceof ApiError
@@ -250,6 +263,7 @@ export default function Login() {
           : "We couldn’t sign you in. Please try again.",
       );
     } finally {
+      signInInFlight.current = false;
       setBusy(false);
     }
   }

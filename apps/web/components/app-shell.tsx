@@ -33,7 +33,7 @@ export function AppShell({
 }) {
   const path = usePathname();
   const router = useRouter();
-  const { user, status, initialSessionLoading, retryInitialSession } = useAuth();
+  const { user, status, initialSessionLoading, retryInitialSession, legalStatusError, retryLegalStatus } = useAuth();
   const { homes, activeHome, setActiveHomeId, loading, error: homesError } = useActiveHome();
   const [familyAccess, setFamilyAccess] = useState(false);
   // Sequences the two one-shot native onboarding overlays so they never
@@ -74,6 +74,7 @@ export function AppShell({
       !loading &&
       !homes.length &&
       path !== "/onboarding" &&
+      path !== "/beta/enrol" &&
       path !== "/calendar-shares/accept" &&
       path !== "/calendar/shared"
     )
@@ -105,6 +106,15 @@ export function AppShell({
     return <main className="app-bootstrap-state" role="status">Checking your MyKhaya session…</main>;
   }
   if (status === "maintenance") return <MaintenanceScreen onRecovered={retryInitialSession} />;
+  if (status === "legal_check_error") {
+    return (
+      <main className="app-bootstrap-state" role="alert">
+        <h1>We could not check your legal documents</h1>
+        <p>{legalStatusError ?? "Please try again before continuing to MyKhaya."}</p>
+        <button onClick={retryLegalStatus}>Try again</button>
+      </main>
+    );
+  }
   if (status === "offline") {
     return (
       <main className="app-bootstrap-state" role="alert">
@@ -125,7 +135,9 @@ export function AppShell({
     );
   }
   if (status === "legal_action_required") return <LegalGate />;
-  if (status === "signed_out") return null;
+  if (status === "signed_out") {
+    return <main className="app-bootstrap-state" role="status">Taking you to sign in…</main>;
+  }
 
   return (
     <NotificationProvider>
@@ -166,7 +178,6 @@ const PUBLIC_PATH_PREFIXES = [
   "/forgot-password",
   "/reset-password",
   "/verify-email",
-  "/onboarding",
   // Browser MFA is a short-lived pre-auth route. It must render without the
   // normal application shell/session while the handoff is completed.
   "/mfa",
@@ -175,6 +186,9 @@ const PUBLIC_PATH_PREFIXES = [
   // signup — without ever triggering session bootstrap/redirect. See
   // app/legal/[slug]/page.tsx and AuthProvider's own identical exclusion.
   "/legal",
+  "/founding-beta",
+  "/signup-choice",
+  "/waitlist",
 ];
 const EXCLUDED_SHELL_PATH_PREFIXES = [
   "/control-centre",
