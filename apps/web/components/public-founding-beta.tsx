@@ -5,8 +5,7 @@ import Link from "next/link";
 import { ArrowRight, CreditCard, Gift, Users, type LucideIcon } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { api, ApiError, type PublicSignupState } from "@mykhaya/api-client";
-import { PublicFooter } from "@/components/marketing/public-footer";
-import { PublicHeader } from "@/components/marketing/public-header";
+import { MarketingChrome } from "@/components/marketing/site/marketing-chrome";
 
 const BENEFITS: { title: string; detail: string; icon: LucideIcon; tone: "sage" | "blue" | "sand" }[] = [
   { title: "Complimentary Ultimate for life", detail: "Full access to all features.", icon: Gift, tone: "sage" },
@@ -18,14 +17,17 @@ export function PublicFoundingBeta() {
   const router = useRouter();
   const params = useSearchParams();
   const invitation = params.get("invitation");
-  const [state, setState] = useState<PublicSignupState | null>(null);
+  const [state, setState] = useState<PublicSignupState | null | undefined>(undefined);
   const [invitationValid, setInvitationValid] = useState<boolean | null>(invitation ? null : false);
   const [invitationExpiresAt, setInvitationExpiresAt] = useState<string | null>(null);
   const [checkingSession, setCheckingSession] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
-    api.publicSignupState().then(setState).catch((reason: ApiError) => setError(reason.message));
+    api.publicSignupState().then(setState).catch((reason: ApiError) => {
+      setState(null);
+      setError(reason.message);
+    });
   }, []);
 
   useEffect(() => {
@@ -59,9 +61,8 @@ export function PublicFoundingBeta() {
   const waitlist = state?.waitlist_available === true && !canJoin;
 
   return (
-    <div className="mk-page mk-beta-page">
-      <PublicHeader signupState={state} compactOnMobile />
-      <main className="mk-beta-main">
+    <MarketingChrome ownSignupState signupState={state}>
+      <main className="mk-page mk-beta-main">
         <section className="mk-beta" aria-labelledby="beta-heading">
           <div className="mk-beta-intro">
             <p className="eyebrow mk-beta-eyebrow">Founding Beta</p>
@@ -109,7 +110,6 @@ export function PublicFoundingBeta() {
           </div>
         </section>
       </main>
-      <PublicFooter compactOnMobile />
-    </div>
+    </MarketingChrome>
   );
 }
