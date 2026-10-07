@@ -5,6 +5,7 @@ import Link from "next/link";
 import { ArrowRight, CreditCard, Gift, Users, type LucideIcon } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { api, ApiError, type PublicSignupState } from "@mykhaya/api-client";
+import { AppLinks, hasAnyAppLink, useNativeShell } from "@/components/app-links/app-links";
 import { MarketingChrome } from "@/components/marketing/site/marketing-chrome";
 
 const BENEFITS: { title: string; detail: string; icon: LucideIcon; tone: "sage" | "blue" | "sand" }[] = [
@@ -107,9 +108,29 @@ export function PublicFoundingBeta() {
             )}
             <p className="mk-beta-member">Already a member? <Link href="/login">Sign in</Link></p>
             <p className="mk-beta-terms">By joining, you agree to our <Link href="/legal/founding-beta-terms">Beta Terms</Link>.</p>
+            <BetaAppLinks ios={state?.ios_app_url} android={state?.android_app_url} />
           </div>
         </section>
       </main>
     </MarketingChrome>
+  );
+}
+
+/** "Get the beta app": the PCC iPhone/Android app links. Hidden when neither
+ *  link is set, and inside the native app. A new account can be created in
+ *  the app while sign-ups are Beta-only (Create an account → Continue to
+ *  Founding Beta → Join the Beta), so this is offered as an alternative way
+ *  in, not as a second step after joining on the web. */
+function BetaAppLinks({ ios, android }: { ios: string | null | undefined; android: string | null | undefined }) {
+  const native = useNativeShell();
+  if (native || !hasAnyAppLink(ios, android)) return null;
+  return (
+    <section className="mk-beta-apps" aria-labelledby="beta-apps-heading">
+      <p className="eyebrow mk-beta-apps-eyebrow" id="beta-apps-heading">
+        Get the beta app
+      </p>
+      <p className="mk-beta-apps-copy">Prefer your phone? You can join and use MyKhaya from the app too.</p>
+      <AppLinks ios={ios} android={android} surface="beta" label="Get the beta app" />
+    </section>
   );
 }

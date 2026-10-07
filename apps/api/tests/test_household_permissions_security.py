@@ -12,6 +12,7 @@ from mykhaya.household_permissions import (
 )
 from mykhaya.main import security_and_limits
 from mykhaya.models import HouseholdRelationship, Membership, PermissionProfile
+from mykhaya.tools.home_migration import MAX_FILE_BYTES
 
 
 def membership_with_overrides(overrides: dict[str, bool]) -> Membership:
@@ -169,7 +170,9 @@ def test_pure_local_development_can_explicitly_disable_both_controls() -> None:
     assert settings.admin_mfa_required is False
 
 
-def make_request(headers: list[tuple[bytes, bytes]], body: bytes) -> Request:
+def make_request(
+    headers: list[tuple[bytes, bytes]], body: bytes, path: str = "/api/v1/groups"
+) -> Request:
     delivered = False
 
     async def receive() -> dict[str, object]:
@@ -183,7 +186,7 @@ def make_request(headers: list[tuple[bytes, bytes]], body: bytes) -> Request:
         {
             "type": "http",
             "method": "POST",
-            "path": "/api/v1/groups",
+            "path": path,
             "raw_path": b"/api/v1/groups",
             "query_string": b"",
             "headers": headers,
@@ -209,3 +212,25 @@ async def test_request_body_guard_rejects_malformed_length_and_chunked_overflow(
 
     response = await security_and_limits(oversized, consume_body)
     assert response.status_code == 413
+
+
+@pytest.mark.asyncio
+async def test_home_migration_upload_uses_its_bounded_transport_limit() -> None:
+    upload_path = "/api/v1/platform/home-migration/upload"
+    accepted = make_request(
+        [(b"content-length", str(MAX_FILE_BYTES + 1).encode())], b"", path=upload_path
+    )
+    response = await security_and_limits(accepted, lambda request: _ok_response())
+    assert response.status_code == 200
+
+    oversized = make_request(
+        [(b"content-length", str(MAX_FILE_BYTES + 64 * 1024 + 1).encode())],
+        b"",
+        path=upload_path,
+    )
+    response = await security_and_limits(oversized, lambda request: _ok_response())
+    assert response.status_code == 413
+
+
+async def _ok_response() -> Response:
+    return Response("ok")

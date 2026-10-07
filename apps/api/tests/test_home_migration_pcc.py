@@ -1,8 +1,11 @@
+import io
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
+from types import SimpleNamespace
 
 import pytest
 import pytest_asyncio
+from fastapi import HTTPException, UploadFile
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
 from test_platform_control_centre import (
@@ -30,6 +33,7 @@ from mykhaya.models import (
     PlatformSetting,
     SecurityEvent,
 )
+from mykhaya.routers import platform as platform_router
 from mykhaya.tools.home_migration import MigrationError
 
 
@@ -106,6 +110,33 @@ def test_package_summary_and_checksum_exclude_no_personal_payload_from_state() -
     assert package_checksum(package) == package_checksum(
         {**package, "integrity_sha256": "different"}
     )
+
+
+@pytest.mark.asyncio
+async def test_oversized_package_returns_a_useful_bounded_limit_error(monkeypatch) -> None:
+    limit = 3 * 1024 * 1024
+    monkeypatch.setattr(platform_router, "MAX_FILE_BYTES", limit)
+    monkeypatch.setattr(
+        platform_router, "_home_migration_environment", lambda settings, expected: None
+    )
+
+    async def allow_migration(db, settings) -> None:
+        return None
+
+    monkeypatch.setattr(platform_router, "_home_migration_guard", allow_migration)
+    context = SimpleNamespace(administrator=SimpleNamespace(id=uuid.uuid4()))
+
+    with pytest.raises(HTTPException) as error:
+        await platform_router.home_migration_upload(
+            None,
+            UploadFile(file=io.BytesIO(b"x" * (limit + 1))),
+            context,
+            None,
+            None,
+        )
+
+    assert error.value.status_code == 413
+    assert error.value.detail == "Migration package is too large. Maximum supported size is 3 MiB."
 
 
 @pytest.mark.asyncio

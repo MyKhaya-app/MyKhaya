@@ -177,6 +177,44 @@
   text-decoration: underline;
   text-underline-offset: 2px;
 }
+/* Founding Beta confirmation card (components/beta-enrolment.tsx): the
+   "Next: get MyKhaya on your phone" step with the PCC app links. */
+.beta-get-app {
+  border-top: 1px solid #ece6db;
+  display: grid;
+  gap: 0.5rem;
+  margin: 1.25rem 0;
+  padding-top: 1.25rem;
+}
+.beta-get-app h2 {
+  font-size: 1.1rem;
+  margin: 0;
+}
+.beta-get-app p {
+  color: var(--colour-muted);
+  margin: 0 0 0.5rem;
+}
+/* "Get the beta app" block (PCC app links, see components/app-links). */
+.mk-beta-apps {
+  border-top: 1px solid #ece6db;
+  display: grid;
+  gap: 0.5rem;
+  justify-items: center;
+  margin-top: 1.5rem;
+  padding-top: 1.25rem;
+  width: 100%;
+}
+.mk-beta-apps .mk-beta-apps-eyebrow {
+  margin: 0;
+}
+.mk-beta-apps-copy {
+  color: var(--colour-muted);
+  font-size: 0.95rem;
+  margin: 0 0 0.5rem;
+}
+.mk-beta-apps .mk-applinks {
+  justify-content: center;
+}
 @media (min-width: 700px) {
   .mk-beta-main {
     align-items: center;
@@ -214,6 +252,12 @@
   }
   .mk-beta .mk-beta-cta {
     max-width: 24rem;
+  }
+  .mk-beta-apps {
+    justify-items: start;
+  }
+  .mk-beta-apps .mk-applinks {
+    justify-content: flex-start;
   }
   .mk-beta-benefits {
     padding: 1.75rem 1.75rem 0.6rem;

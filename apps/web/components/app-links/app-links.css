@@ -1,0 +1,23 @@
+/* App links (components/app-links): official store badges, custom TestFlight /
+   Android-beta buttons and the "Android coming soon" placeholder. Used on the
+   homepage (inside the marketing .mks scope), the Founding Beta page and the
+   in-app Founding Beta confirmation card, so these rules are not scoped under
+   .mks and every colour has a light fallback. mk-applink-* names avoid the
+   design's ".soon" clash with the Family chat card. Imported by the component
+   itself so it is styled wherever it renders. */
+.mk-applinks{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-start}
+.mks .mk-applinks-homepage{margin-top:4px}
+.mk-applink-badge{position:relative;display:block;line-height:0;flex:none}
+.mk-applink-badge img{display:block;height:40px;width:auto;max-width:none}
+.mks a.mk-applink-badge,.mks a.mk-applink-btn{text-decoration:none}
+/* Sits just above the badge's top-right corner so it never covers the badge text. */
+.mk-applink-pill{position:absolute;top:-15px;right:-10px;background:var(--mustard,#EBB447);color:#2E2006;font-family:inherit;font-size:.6rem;line-height:1.3;font-weight:700;letter-spacing:.08em;text-transform:uppercase;white-space:nowrap;padding:2px 7px;border-radius:999px;box-shadow:0 2px 6px -2px rgba(0,0,0,.3)}
+.mk-applink-stack{display:grid;gap:6px;justify-items:start}
+.mk-applink-btn{display:inline-flex;align-items:center;gap:10px;min-height:48px;padding:6px 16px 6px 12px;border-radius:12px;background:#141A16;color:#FFFFFF;border:1px solid #141A16;text-decoration:none;line-height:1.15;text-align:left;flex:none;transition:transform .15s ease}
+.mk-applink-btn:hover{transform:translateY(-1px);color:#FFFFFF}
+.mk-applink-btn:focus-visible{outline:3px solid var(--mustard,#EBB447);outline-offset:3px}
+.mk-applink-btn-text{display:grid;gap:1px}
+.mk-applink-btn-label{font-weight:700;font-size:1rem;white-space:nowrap}
+.mk-applink-btn-sub{font-size:.75rem;font-weight:500;opacity:.85;white-space:nowrap}
+.mk-applink-note{font-size:.8rem;color:var(--muted,#5D6960)}
+.mk-applink-placeholder{display:inline-flex;align-items:center;gap:8px;min-height:48px;padding:6px 16px;border-radius:12px;border:1px dashed #9AA79A;color:var(--muted,#5D6960);font-weight:600;font-size:.95rem;cursor:default;user-select:none;flex:none}

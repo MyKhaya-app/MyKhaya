@@ -61,6 +61,7 @@ from mykhaya.syslog_forwarding import (
     configure_structlog_forwarding,
     syslog_config_from_platform_value,
 )
+from mykhaya.tools.home_migration import MAX_FILE_BYTES
 
 settings = get_settings()
 log = structlog.get_logger()
@@ -171,6 +172,7 @@ AVATAR_MULTIPART_OVERHEAD_BYTES = 64 * 1024
 ATTACHMENT_MULTIPART_OVERHEAD_BYTES = 64 * 1024
 VEHICLE_PHOTO_MULTIPART_OVERHEAD_BYTES = 64 * 1024
 MEAL_IMAGE_MULTIPART_OVERHEAD_BYTES = 64 * 1024
+HOME_MIGRATION_MULTIPART_OVERHEAD_BYTES = 64 * 1024
 
 
 def _is_support_attachment_upload(request: Request) -> bool:
@@ -196,6 +198,10 @@ def _is_meal_image_upload(request: Request) -> bool:
         and path.startswith("/api/v1/homes/")
         and path.endswith("/meals/image")
     )
+
+
+def _is_home_migration_upload(request: Request) -> bool:
+    return request.method == "POST" and request.url.path == "/api/v1/platform/home-migration/upload"
 
 
 @app.middleware("http")
@@ -227,6 +233,8 @@ async def security_and_limits(
             )
         elif _is_meal_image_upload(request):
             body_limit = settings.meal_image_max_upload_bytes + MEAL_IMAGE_MULTIPART_OVERHEAD_BYTES
+        elif _is_home_migration_upload(request):
+            body_limit = MAX_FILE_BYTES + HOME_MIGRATION_MULTIPART_OVERHEAD_BYTES
         else:
             body_limit = settings.request_body_limit
         length = request.headers.get("content-length")

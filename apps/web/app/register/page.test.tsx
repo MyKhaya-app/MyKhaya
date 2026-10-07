@@ -213,6 +213,43 @@ describe("registration legal acceptance", () => {
     expect(submit).toBeEnabled();
   });
 
+  it("submits a new Beta user's Home name when shared Beta Terms are present", async () => {
+    searchParams.value = "beta=1";
+    publicSignupState.mockResolvedValue({
+      signup_mode: "beta_only",
+      registration_open: true,
+      invitation_required: false,
+      normal_signup_available: false,
+      beta_joining_available: true,
+      waitlist_available: false,
+      joinable_count: 4,
+      beta_terms_version: "1.1",
+    });
+    publicLegalDocuments.mockResolvedValue([termsDocument, betaTermsDocument]);
+    render(<Register />);
+    const user = userEvent.setup();
+
+    await user.type(await screen.findByLabelText("Home name"), "New Beta Home");
+    await user.type(screen.getByLabelText("Your name"), "New User");
+    await user.type(screen.getByLabelText("Email"), "new-beta@example.com");
+    await user.type(
+      screen.getByLabelText("Password", { exact: false, selector: 'input[name="password"]' }),
+      "correct horse battery staple",
+    );
+    await user.type(screen.getByLabelText("Confirm password"), "correct horse battery staple");
+    await user.click(screen.getByLabelText("I accept the MyKhaya Terms & Conditions (version 1.0)"));
+    await user.click(screen.getByLabelText("I accept the Founding Beta Terms (version 1.1)"));
+    await user.click(screen.getByRole("button", { name: "Create account" }));
+
+    await waitFor(() =>
+      expect(post).toHaveBeenCalledWith(
+        "/auth/register",
+        expect.objectContaining({ beta_home_name: "New Beta Home", beta_terms_version: "1.1" }),
+      ),
+    );
+    expect(push).toHaveBeenCalledWith("/verify-email?beta=1");
+  });
+
   it("requires only global Terms for ordinary signup and keeps notices informational", async () => {
     publicLegalDocuments.mockResolvedValue([termsDocument, betaTermsDocument, ...informationalDocuments]);
     render(<Register />);

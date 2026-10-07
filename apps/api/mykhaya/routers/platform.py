@@ -8686,7 +8686,9 @@ async def home_migration_upload(
     raw = await package.read(MAX_FILE_BYTES + 1)
     if len(raw) > MAX_FILE_BYTES:
         raise HTTPException(
-            status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "The migration package is too large."
+            status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            f"Migration package is too large. Maximum supported size is "
+            f"{MAX_FILE_BYTES // (1024 * 1024)} MiB.",
         )
     try:
         candidate = json.loads(raw)

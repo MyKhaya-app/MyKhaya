@@ -140,6 +140,23 @@ describe("Welcome (public marketing homepage)", () => {
     expect(text).not.toMatch(/\bnotes?\b/i);
   });
 
+  it.each([
+    ["App Store + Play listing", "https://apps.apple.com/gb/app/mykhaya/id1", "https://play.google.com/store/apps/details?id=app.mykhaya", true, true],
+    ["TestFlight + Play testing", "https://testflight.apple.com/join/AbCdEf12", "https://play.google.com/apps/testing/app.mykhaya", false, false],
+    ["empty", null, "https://downloads.mykhaya.app/android/beta.apk", false, false],
+  ])("wires the PCC app links (%s) from signup-state into the hero badges", async (_label, ios, android, appleLinked, googleLinked) => {
+    signupState.value = { ...NORMAL, ios_app_url: ios, android_app_url: android };
+    render(<HomePage />);
+    const badges = screen.getByRole("group", { name: "Get the app" });
+    await waitFor(() =>
+      expect(within(badges).getByAltText("Download on the App Store").closest("a")?.getAttribute("href") ?? null).toBe(
+        appleLinked ? ios : null,
+      ),
+    );
+    const google = within(badges).getByAltText(googleLinked ? "Get it on Google Play" : "Get it on Google Play, coming soon");
+    expect(google.closest("a")?.getAttribute("href") ?? null).toBe(googleLinked ? android : null);
+  });
+
   it("shows the App Store and Google Play badges under the hero ticks, as artwork only for now", async () => {
     render(<HomePage />);
     const badges = screen.getByRole("group", { name: "Get the app" });
@@ -149,7 +166,7 @@ describe("Welcome (public marketing homepage)", () => {
     expect(google).toHaveAttribute("height", "40");
     // No listing URLs yet: not links, and Google Play carries the pill.
     expect(within(badges).queryAllByRole("link")).toHaveLength(0);
-    expect(within(badges).getByText("Coming soon")).toHaveClass("mks-store-pill");
+    expect(within(badges).getByText("Coming soon")).toHaveClass("mk-applink-pill");
     // Sits after the ticks within the hero copy.
     const ticks = screen.getByText("Set up in minutes").closest("ul")!;
     expect(ticks.compareDocumentPosition(badges) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
