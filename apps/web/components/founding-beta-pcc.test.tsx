@@ -85,6 +85,64 @@ describe("Founding Beta PCC", () => {
     expect(screen.getByRole("button", { name: "Invite" })).toBeDisabled();
   });
 
+  it("offers site-wide iPhone and Android app link fields with their hints", async () => {
+    render(<FoundingBetaPcc />);
+    const ios = await screen.findByLabelText("iPhone app link");
+    const android = screen.getByLabelText("Android app link");
+    expect(screen.getByText("Used site-wide: on the public homepage and the Founding Beta page.")).toBeInTheDocument();
+    expect(ios).toHaveAccessibleDescription(
+      "Paste a TestFlight link during the beta, or the App Store link once the app is live. Leave empty to hide.",
+    );
+    expect(android).toHaveAccessibleDescription(/Google Play testing link during the beta/);
+    expect(ios).toHaveValue("");
+    expect(screen.getAllByText("Not set")).toHaveLength(2);
+  });
+
+  it("saves only the editable settings (no id/slug/name/status), including the app links", async () => {
+    const user = userEvent.setup();
+    render(<FoundingBetaPcc />);
+    await user.type(await screen.findByLabelText("iPhone app link"), "https://testflight.apple.com/join/AbCdEf12");
+    await user.type(screen.getByLabelText("Android app link"), " https://play.google.com/apps/testing/app.mykhaya ");
+    await user.type(screen.getByLabelText("Reason for this change"), "Publish the beta app links");
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+    await waitFor(() => expect(patch).toHaveBeenCalled());
+    expect(patch.mock.calls[0]![1]).toEqual({
+      max_homes: 100,
+      waitlist_enabled: true,
+      show_remaining_publicly: true,
+      invitation_ttl_days: 7,
+      terms_version: "beta-1",
+      ios_app_url: "https://testflight.apple.com/join/AbCdEf12",
+      android_app_url: "https://play.google.com/apps/testing/app.mykhaya",
+      reason: "Publish the beta app links",
+    });
+  });
+
+  it("sends empty links as empty strings so clearing a field hides the link", async () => {
+    const user = userEvent.setup();
+    get.mockImplementation((path: string) => {
+      if (path === "/beta/overview") return Promise.resolve(overview);
+      if (path === "/beta/programme") return Promise.resolve({ ...programme, ios_app_url: "https://apps.apple.com/app/id1", android_app_url: null });
+      throw new Error(`Unexpected GET ${path}`);
+    });
+    render(<FoundingBetaPcc />);
+    await user.clear(await screen.findByLabelText("iPhone app link"));
+    await user.type(screen.getByLabelText("Reason for this change"), "Hide the iPhone link");
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+    await waitFor(() => expect(patch).toHaveBeenCalled());
+    expect(patch.mock.calls[0]![1]).toMatchObject({ ios_app_url: "", android_app_url: "" });
+  });
+
+  it("shows the API's validation error for an invalid link", async () => {
+    const user = userEvent.setup();
+    patch.mockRejectedValueOnce(new Error("Use a testflight.apple.com or apps.apple.com link."));
+    render(<FoundingBetaPcc />);
+    await user.type(await screen.findByLabelText("iPhone app link"), "https://example.com/app");
+    await user.type(screen.getByLabelText("Reason for this change"), "Try a wrong link");
+    await user.click(screen.getByRole("button", { name: /save changes/i }));
+    expect(await screen.findByText("Use a testflight.apple.com or apps.apple.com link.")).toBeInTheDocument();
+  });
+
   it("submits programme settings with an explicit reason", async () => {
     const user = userEvent.setup();
     render(<FoundingBetaPcc />);

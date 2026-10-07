@@ -101,6 +101,8 @@ async def resolve_signup_state(db: AsyncSession, settings: Settings) -> SignupSt
         ),
         joinable_count=state["joinable"] if programme.show_remaining_publicly else None,
         beta_terms_version=programme.terms_version if policy.beta_path else None,
+        ios_app_url=programme.ios_app_url,
+        android_app_url=programme.android_app_url,
     )
 
 
@@ -339,6 +341,10 @@ async def update_programme_settings(
             "terms_version",
         )
     }
+    # App links are optional in the request: only change them when sent.
+    for key in ("ios_app_url", "android_app_url"):
+        if key in body.model_fields_set:
+            previous[key] = getattr(programme, key)
     for key in previous:
         setattr(programme, key, getattr(body, key))
     programme.updated_by = context.administrator.id

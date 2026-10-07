@@ -1495,6 +1495,10 @@ class BetaProgramme(UuidTimeMixin, Base):
     show_remaining_publicly: Mapped[bool] = mapped_column(Boolean, server_default="false")
     terms_version: Mapped[str] = mapped_column(String(80))
     invitation_ttl_days: Mapped[int] = mapped_column(Integer, server_default="7")
+    # Site-wide app links (homepage and Founding Beta page), managed with the
+    # rest of the programme settings in PCC. Empty = not shown.
+    ios_app_url: Mapped[str | None] = mapped_column(String(500))
+    android_app_url: Mapped[str | None] = mapped_column(String(500))
     status: Mapped[BetaProgrammeStatus] = mapped_column(
         Enum(BetaProgrammeStatus, name="beta_programme_status"),
         default=BetaProgrammeStatus.active,

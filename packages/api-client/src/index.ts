@@ -229,6 +229,10 @@ export type PublicSignupState = {
   waitlist_available: boolean;
   joinable_count: number | null;
   beta_terms_version?: string | null;
+  /** PCC "iPhone app link": a TestFlight or App Store URL, or null. */
+  ios_app_url?: string | null;
+  /** PCC "Android app link": any https URL, or null. */
+  android_app_url?: string | null;
 };
 
 export type BetaInvitationState = {

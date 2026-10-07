@@ -1,9 +1,37 @@
 import uuid
+from urllib.parse import urlsplit
 
-from pydantic import EmailStr, Field
+from pydantic import EmailStr, Field, field_validator
 
 from mykhaya.models import SignupMode
 from mykhaya.schemas import StrictModel
+
+# Hosts an iPhone app link may point at: a TestFlight public link during the
+# beta, or the App Store listing once the app is live.
+IOS_APP_LINK_HOSTS = frozenset({"testflight.apple.com", "apps.apple.com"})
+
+
+def _https_url(value: str) -> str:
+    parts = urlsplit(value)
+    if parts.scheme != "https" or not parts.hostname:
+        raise ValueError("Enter a full https:// link.")
+    if parts.username or parts.password:
+        raise ValueError("The link must not contain a username or password.")
+    return value
+
+
+def normalise_app_link(value: str | None, *, ios: bool) -> str | None:
+    """Empty means "not set". iPhone links must be https on TestFlight or the
+    App Store; Android links may be any https URL."""
+    if value is None:
+        return None
+    value = value.strip()
+    if not value:
+        return None
+    _https_url(value)
+    if ios and (urlsplit(value).hostname or "").lower() not in IOS_APP_LINK_HOSTS:
+        raise ValueError("Use a testflight.apple.com or apps.apple.com link.")
+    return value
 
 
 class SignupStateResponse(StrictModel):
@@ -15,6 +43,9 @@ class SignupStateResponse(StrictModel):
     waitlist_available: bool
     joinable_count: int | None = None
     beta_terms_version: str | None = None
+    # Site-wide app links (see BetaProgramme.ios_app_url/android_app_url).
+    ios_app_url: str | None = None
+    android_app_url: str | None = None
 
 
 class BetaWaitlistCreate(StrictModel):
@@ -89,6 +120,8 @@ class BetaProgrammeResponse(StrictModel):
     show_remaining_publicly: bool
     invitation_ttl_days: int
     terms_version: str
+    ios_app_url: str | None = None
+    android_app_url: str | None = None
     status: str
 
 
@@ -98,7 +131,20 @@ class BetaProgrammeUpdate(StrictModel):
     show_remaining_publicly: bool
     invitation_ttl_days: int = Field(ge=1, le=365)
     terms_version: str = Field(min_length=1, max_length=80)
+    # Optional: omitted = unchanged; "" or null = cleared (link hidden).
+    ios_app_url: str | None = Field(default=None, max_length=500)
+    android_app_url: str | None = Field(default=None, max_length=500)
     reason: str = Field(min_length=10, max_length=500)
+
+    @field_validator("ios_app_url")
+    @classmethod
+    def _ios_app_url(cls, value: str | None) -> str | None:
+        return normalise_app_link(value, ios=True)
+
+    @field_validator("android_app_url")
+    @classmethod
+    def _android_app_url(cls, value: str | None) -> str | None:
+        return normalise_app_link(value, ios=False)
 
 
 class BetaWaitlistItem(StrictModel):
