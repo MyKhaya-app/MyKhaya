@@ -180,6 +180,9 @@ const PUBLIC_PATH_PREFIXES = [
   "/founding-beta",
   "/signup-choice",
   "/waitlist",
+  // Public support landing page for signed-out visitors (the in-app
+  // /help-support stays behind sign-in).
+  "/support",
 ];
 const EXCLUDED_SHELL_PATH_PREFIXES = [
   "/control-centre",

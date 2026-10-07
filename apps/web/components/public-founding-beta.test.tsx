@@ -98,16 +98,18 @@ describe("Founding Beta page", () => {
     expect(await screen.findByText(/Founding Beta joining is currently unavailable/)).toBeInTheDocument();
   });
 
-  it("uses the compact header and footer variants", () => {
+  it("sits inside the shared marketing nav and footer, pinned to the light theme", async () => {
     const { container } = render(<PublicFoundingBeta />);
-    expect(container.querySelector(".mk-header.mk-header-compact-mobile")).not.toBeNull();
-    const compact = screen.getAllByRole("navigation", { name: "Footer" }).find((nav) =>
-      nav.classList.contains("mk-footer-compact-links"),
+    const scopes = container.querySelectorAll(".mks.mks-scope");
+    expect(scopes).toHaveLength(2);
+    for (const scope of scopes) expect(scope).toHaveAttribute("data-theme", "light");
+    // The page content itself is not inside the marketing scope.
+    expect(screen.getByRole("heading", { level: 1 }).closest(".mks")).toBeNull();
+    // The nav's sign-up action follows the page's own signup state (Beta).
+    const header = screen.getByRole("banner");
+    await waitFor(() =>
+      expect(within(header).getByRole("link", { name: "Join the Beta" })).toHaveAttribute("href", "/founding-beta"),
     );
-    expect(compact && within(compact).getAllByRole("link").map((link) => link.textContent)).toEqual([
-      "Status",
-      "Support",
-      "Privacy",
-    ]);
+    expect(within(screen.getByRole("contentinfo")).getByRole("link", { name: "Support" })).toHaveAttribute("href", "/support");
   });
 });

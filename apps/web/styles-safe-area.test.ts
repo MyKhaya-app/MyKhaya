@@ -35,14 +35,13 @@ describe("styles.css — shared safe-area strategy", () => {
     }
   });
 
-  it("the public marketing header (.mk-header) reads --safe-top — the specific route previously left unfixed", () => {
-    const headerBlock = css.match(/\.mk-header\s*\{([\s\S]*?)\n\}/)?.[1];
-    expect(headerBlock).toBeDefined();
-    expect(headerBlock).toContain("var(--safe-top)");
+  it("the public marketing nav (.mks .nav, app/marketing-site.css) reads --safe-top", () => {
+    const marketingCss = readFileSync(join(process.cwd(), "app", "marketing-site.css"), "utf8");
+    expect(marketingCss).toMatch(/\.mks \.nav\{[^}]*padding-top:var\(--safe-top\)/);
   });
 
   it("every top-level pre-auth/public container reads the shared vars, not a one-off literal", () => {
-    for (const selector of [".standard-page", ".auth-page", ".mk-header"]) {
+    for (const selector of [".standard-page", ".auth-page"]) {
       const pattern = new RegExp(
         `${selector.replace(".", "\\.")}\\s*\\{[\\s\\S]*?var\\(--safe-top\\)`,
       );
