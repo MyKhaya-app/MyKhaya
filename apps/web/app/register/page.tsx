@@ -49,7 +49,6 @@ export default function Register() {
     [legalLoading, setLegalLoading] = useState(true),
     [legalLoadFailed, setLegalLoadFailed] = useState(false),
     [legalChecked, setLegalChecked] = useState<Record<string, boolean>>({}),
-    [betaTermsAccepted, setBetaTermsAccepted] = useState(false),
     [busy, setBusy] = useState(false),
     [inviteContext, setInviteContext] = useState<{
       group_name: string;
@@ -107,12 +106,15 @@ export default function Register() {
       return;
     }
     try {
+      // Account creation needs the global documents only — also on the
+      // Founding Beta path. The Founding Beta Terms are accepted after email
+      // verification, in the authenticated Beta continuation.
       const requiredLegal = legalDocuments.filter(
         (document) =>
           document.audience === "adult" &&
           document.acceptance_required &&
           document.action_verb === "accept" &&
-          (document.scope === "global" || (betaRequested && document.scope === "founding_beta")),
+          document.scope === "global",
       );
       const missingLegal = requiredLegal.filter(
         (document) => !document.current_version_id || !legalChecked[document.key],
@@ -127,8 +129,7 @@ export default function Register() {
         setBusy(false);
         return;
       }
-      const sharedBetaTerms = requiredLegal.find((document) => document.scope === "founding_beta");
-      if (missingLegal.length || (betaRequested && !sharedBetaTerms && !betaTermsAccepted)) {
+      if (missingLegal.length) {
         setError("Please review and confirm the required legal documents before continuing.");
         setBusy(false);
         return;
@@ -147,10 +148,9 @@ export default function Register() {
             ? nativePlatform()
             : "web"
           : "web",
-        beta_home_name: betaRequested ? d.get("home_name") : undefined,
-        beta_terms_version: betaRequested
-          ? sharedBetaTerms?.current_version ?? signupState?.beta_terms_version
-          : undefined,
+        // Only the Beta intent: recorded server-side so it survives email
+        // verification and first sign-in without relying on this URL.
+        beta: betaRequested || undefined,
         beta_invitation_token: betaRequested ? betaInvitation : undefined,
       };
       const result = isNativeShell()
@@ -196,19 +196,14 @@ export default function Register() {
       document.audience === "adult" &&
       document.acceptance_required &&
       document.action_verb === "accept" &&
-      (document.scope === "global" || (betaRequested && document.scope === "founding_beta")),
+      document.scope === "global",
   );
-  const sharedBetaTerms = requiredContractualDocuments.find(
-    (document) => document.scope === "founding_beta",
-  );
-  const legacyBetaTermsRequired = betaRequested && !sharedBetaTerms;
   const contractualAcceptanceComplete =
     !legalLoading &&
     !legalLoadFailed &&
     requiredContractualDocuments.every(
       (document) => Boolean(document.current_version_id && legalChecked[document.key]),
-    ) &&
-    (!legacyBetaTermsRequired || betaTermsAccepted);
+    );
   return (
     <AuthCard
       title="Create your account"
@@ -253,8 +248,8 @@ export default function Register() {
       )}
       {betaRequested && (
         <p className="notice success">
-          You’re registering for the Founding Beta. Complimentary Ultimate access lasts for the
-          lifetime of your Home, subject to the Founding Beta terms.
+          You’re registering for the MyKhaya Founding Beta. After verifying your email, you’ll
+          complete your Beta enrolment and receive complimentary Ultimate access.
         </p>
       )}
       {!inviteContext && !shareContext && intent && intent.plan !== "free" && (
@@ -315,32 +310,6 @@ export default function Register() {
             <p className="hint">
               By creating an account, you confirm that these notices have been made available to
               you.
-            </p>
-          </fieldset>
-        )}
-        {betaRequested && !unavailableReason && (
-          <fieldset className="auth-legal-consent">
-            <legend>Founding Beta registration</legend>
-            <label>
-              Home name
-              <input name="home_name" autoComplete="organization" required maxLength={100} />
-            </label>
-            {legacyBetaTermsRequired && (
-              <label className="check-row">
-                <input
-                  type="checkbox"
-                  checked={betaTermsAccepted}
-                  onChange={(event) => setBetaTermsAccepted(event.target.checked)}
-                  required
-                />
-                <span>
-                  I accept the Founding Beta Terms (version {signupState?.beta_terms_version ?? "current"}).
-                </span>
-              </label>
-            )}
-            <p className="hint">
-              Your account is created first. Your Home and Beta access are handled only after email
-              verification.
             </p>
           </fieldset>
         )}

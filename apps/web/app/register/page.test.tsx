@@ -163,33 +163,31 @@ describe("Founding Beta registration availability", () => {
     });
     render(<Register />);
 
-    expect(await screen.findByText(/You.re registering for the Founding Beta/)).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: "Create account" })).toBeDisabled();
-    expect(screen.getByText(/I accept the Founding Beta Terms/)).toBeInTheDocument();
+    expect(await screen.findByText(/You.re registering for the MyKhaya Founding Beta/)).toBeInTheDocument();
+    expect(screen.getByText(/After verifying your email, you.ll complete your Beta enrolment/)).toBeInTheDocument();
     expect(screen.queryByText(/can.t be created from this page/)).not.toBeInTheDocument();
   });
 });
 
 describe("registration legal acceptance", () => {
-  it("requires both MyKhaya Terms and Founding Beta Terms for Beta signup", async () => {
+  it("Beta registration creates the account only: no Home name and no Founding Beta Terms", async () => {
     searchParams.value = "beta=1";
-    publicLegalDocuments.mockResolvedValue([
-      termsDocument,
-      betaTermsDocument,
-      ...informationalDocuments,
-    ]);
+    publicLegalDocuments.mockResolvedValue([termsDocument, betaTermsDocument, ...informationalDocuments]);
     render(<Register />);
 
     const submit = await screen.findByRole("button", { name: "Create account" });
     expect(submit).toBeDisabled();
     expect(screen.getByLabelText("I accept the MyKhaya Terms & Conditions (version 1.0)")).toBeInTheDocument();
-    expect(screen.getByLabelText("I accept the Founding Beta Terms (version 1.1)")).toBeInTheDocument();
+    // Beta Terms and Home details belong to the verified Beta continuation.
+    expect(screen.queryByText(/Founding Beta Terms/)).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Home name")).not.toBeInTheDocument();
+    expect(screen.getAllByRole("checkbox")).toHaveLength(1);
     expect(screen.getByRole("link", { name: "Privacy Notice" })).toHaveAttribute("href", "/legal/privacy");
-    expect(screen.getByRole("link", { name: "Cookie Policy" })).toHaveAttribute("href", "/legal/cookies");
-    expect(screen.getAllByRole("checkbox")).toHaveLength(2);
+    // No plan, price or payment on this page.
+    expect(screen.queryByText(/Choose your MyKhaya plan|Monthly|Annual|card/i)).not.toBeInTheDocument();
   });
 
-  it("enables Beta submit only after both contractual checkboxes are accepted", async () => {
+  it("requires the global Terms on the Beta path", async () => {
     searchParams.value = "beta=1";
     publicSignupState.mockResolvedValue({
       signup_mode: "beta_only",
@@ -205,16 +203,13 @@ describe("registration legal acceptance", () => {
     render(<Register />);
     const user = userEvent.setup();
     const submit = await screen.findByRole("button", { name: "Create account" });
-    const terms = screen.getByLabelText("I accept the MyKhaya Terms & Conditions (version 1.0)");
-    const betaTerms = screen.getByLabelText("I accept the Founding Beta Terms (version 1.1)");
-    await user.click(terms);
     expect(submit).toBeDisabled();
-    await user.click(betaTerms);
+    await user.click(screen.getByLabelText("I accept the MyKhaya Terms & Conditions (version 1.0)"));
     expect(submit).toBeEnabled();
   });
 
-  it("submits a new Beta user's Home name when shared Beta Terms are present", async () => {
-    searchParams.value = "beta=1";
+  it("sends only the Beta intent (and the global Terms) when a Beta account is created", async () => {
+    searchParams.value = "beta=1&beta_invitation=" + "i".repeat(40);
     publicSignupState.mockResolvedValue({
       signup_mode: "beta_only",
       registration_open: true,
@@ -229,8 +224,7 @@ describe("registration legal acceptance", () => {
     render(<Register />);
     const user = userEvent.setup();
 
-    await user.type(await screen.findByLabelText("Home name"), "New Beta Home");
-    await user.type(screen.getByLabelText("Your name"), "New User");
+    await user.type(await screen.findByLabelText("Your name"), "New User");
     await user.type(screen.getByLabelText("Email"), "new-beta@example.com");
     await user.type(
       screen.getByLabelText("Password", { exact: false, selector: 'input[name="password"]' }),
@@ -238,16 +232,17 @@ describe("registration legal acceptance", () => {
     );
     await user.type(screen.getByLabelText("Confirm password"), "correct horse battery staple");
     await user.click(screen.getByLabelText("I accept the MyKhaya Terms & Conditions (version 1.0)"));
-    await user.click(screen.getByLabelText("I accept the Founding Beta Terms (version 1.1)"));
     await user.click(screen.getByRole("button", { name: "Create account" }));
 
-    await waitFor(() =>
-      expect(post).toHaveBeenCalledWith(
-        "/auth/register",
-        expect.objectContaining({ beta_home_name: "New Beta Home", beta_terms_version: "1.1" }),
-      ),
-    );
-    expect(push).toHaveBeenCalledWith("/verify-email?beta=1");
+    await waitFor(() => expect(post).toHaveBeenCalled());
+    const body = post.mock.calls[0]![1] as Record<string, unknown>;
+    expect(body).toMatchObject({ beta: true, beta_invitation_token: "i".repeat(40) });
+    expect(body).not.toHaveProperty("beta_home_name");
+    expect(body).not.toHaveProperty("beta_terms_version");
+    expect(body.legal_acceptances).toEqual([
+      { document_key: termsDocument.key, document_version_id: termsDocument.current_version_id },
+    ]);
+    expect(push).toHaveBeenCalledWith(`/verify-email?beta=1&beta_invitation=${"i".repeat(40)}`);
   });
 
   it("requires only global Terms for ordinary signup and keeps notices informational", async () => {

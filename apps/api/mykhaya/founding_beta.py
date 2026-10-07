@@ -230,7 +230,7 @@ async def join_beta(
     db: AsyncSession,
     *,
     user: Any,
-    home_name: str,
+    home_name: str | None,
     terms_version: str,
     invitation_token: str | None = None,
     invitation_token_hash_value: str | None = None,
@@ -327,9 +327,16 @@ async def join_beta(
     if invitation is None and state["joinable"] <= 0:
         raise HTTPException(status.HTTP_409_CONFLICT, "The Founding Beta is currently full.")
 
-    if not owned:
+    if owned:
+        home = owned[0]
+    else:
+        new_home_name = (home_name or "").strip()
+        if not new_home_name:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY, "Please give your Home a name."
+            )
         await require_home_capacity_for_user(db, user.id)
-    home = owned[0] if owned else await create_beta_home(db, user.id, home_name)
+        home = await create_beta_home(db, user.id, new_home_name)
     if failure_injector:
         result = failure_injector("home_creation")
         if inspect.isawaitable(result):

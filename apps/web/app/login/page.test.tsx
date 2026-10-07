@@ -28,6 +28,8 @@ vi.mock("@mykhaya/api-client", async (importOriginal) => {
       homes: vi.fn(),
       passkeyLoginOptions: vi.fn(),
       passkeyLoginVerify: vi.fn(),
+      betaContinuation: vi.fn(),
+      joinBeta: vi.fn(),
     },
   };
 });
@@ -63,6 +65,16 @@ beforeEach(() => {
   window.localStorage.clear();
   nativeShell = false;
   (api.homes as ReturnType<typeof vi.fn>).mockResolvedValue([{ id: "home-1" }]);
+  (api.betaContinuation as ReturnType<typeof vi.fn>).mockResolvedValue({
+    pending: false,
+    enrolled: false,
+    enrolled_home_id: null,
+    terms: null,
+    eligible: true,
+    home_id: null,
+    home_name: null,
+    reason: null,
+  });
   // Re-asserted every test (clearAllMocks clears call history but not a
   // previous test's mockResolvedValue/mockRejectedValue implementation) —
   // these are the "everything is fine" defaults each test starts from.
@@ -433,5 +445,49 @@ describe("Login — one sign-in action is exactly one login request", () => {
     await typist.click(button);
     await waitFor(() => expect(push).toHaveBeenCalledTimes(1));
     expect(nativeLogin).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("Login — Founding Beta continuation", () => {
+  async function signIn() {
+    (api.post as ReturnType<typeof vi.fn>).mockResolvedValue(user);
+    (api.homes as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    const typist = userEvent.setup();
+    render(<Login />);
+    await typist.type(screen.getByLabelText("Email"), "new-beta@example.com");
+    await typist.type(screen.getByLabelText("Password"), "correct horse");
+    await typist.click(screen.getByRole("button", { name: /^sign in$/i }));
+  }
+
+  it("resumes the Beta continuation on first sign-in from the server-side Beta intent, without ?beta=1", async () => {
+    // The emailed verification link carries no Beta marker: the server's
+    // record of the Beta registration is what routes the user.
+    (api.betaContinuation as ReturnType<typeof vi.fn>).mockResolvedValue({
+      pending: true,
+      enrolled: false,
+      enrolled_home_id: null,
+      terms: null,
+      eligible: true,
+      home_id: null,
+      home_name: null,
+      reason: null,
+    });
+    await signIn();
+    await waitFor(() => expect(push).toHaveBeenCalledWith("/onboarding?beta=1"));
+    expect(push).not.toHaveBeenCalledWith("/onboarding");
+    // Enrolment is never done silently at login.
+    expect(api.joinBeta).not.toHaveBeenCalled();
+  });
+
+  it("keeps a Beta invitation through to the continuation", async () => {
+    searchParams = new URLSearchParams({ beta: "1", beta_invitation: "i".repeat(40) });
+    await signIn();
+    await waitFor(() => expect(push).toHaveBeenCalledWith(`/onboarding?beta=1&invitation=${"i".repeat(40)}`));
+  });
+
+  it("a normal (non-Beta) account keeps the normal onboarding destination", async () => {
+    await signIn();
+    await waitFor(() => expect(push).toHaveBeenCalledWith("/onboarding"));
+    expect(push).not.toHaveBeenCalledWith(expect.stringContaining("beta=1"));
   });
 });

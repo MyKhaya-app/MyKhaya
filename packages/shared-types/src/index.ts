@@ -1183,6 +1183,8 @@ export interface BillingStatus {
   retention_state?: "retained_free" | "restored" | "purge_pending" | "purged" | null;
   retention_deadline?: string | null;
   complimentary_expires_at: string | null;
+  /** e.g. "founding_beta_lifetime" when complimentary access is a programme benefit. */
+  complimentary_source?: string | null;
   can_manage_billing: boolean;
   has_stripe_customer: boolean;
   stripe_billing_available: boolean;

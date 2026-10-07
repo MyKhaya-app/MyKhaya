@@ -116,6 +116,7 @@ def test_mandatory_email_types_are_registered() -> None:
         "calendar_share_invitation",
         "platform_administrator_invitation",
         "mfa_email_code",
+        "founding_beta_welcome",
         "support.ticket.received",
         "support.ticket.reply",
         "support.ticket.resolved",

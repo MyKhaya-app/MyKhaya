@@ -373,6 +373,9 @@ async def billing_status(
         complimentary_expires_at=subscription.complimentary_expires_at.isoformat()
         if subscription and subscription.complimentary_expires_at
         else None,
+        complimentary_source=subscription.complimentary_source
+        if subscription and subscription.provider == SubscriptionProvider.complimentary
+        else None,
         can_manage_billing=Capability.billing_manage in capabilities,
         has_stripe_customer=bool(subscription and subscription.external_customer_id),
         # Whether *starting a new Checkout* is actually possible right now —

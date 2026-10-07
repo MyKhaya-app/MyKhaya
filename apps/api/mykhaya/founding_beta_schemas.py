@@ -69,8 +69,14 @@ class BetaInvitationResponse(StrictModel):
 
 
 class BetaJoinRequest(StrictModel):
-    home_name: str = Field(min_length=1, max_length=100)
-    terms_version: str = Field(min_length=1, max_length=80)
+    # Required for a new Beta Home; ignored when an eligible existing Free
+    # Home is enrolled (that Home keeps its own name).
+    home_name: str | None = Field(default=None, min_length=1, max_length=100)
+    # Optional: the current Founding Beta Terms are normally accepted in the
+    # continuation's Terms step (POST /legal/acceptances) before joining. A
+    # client may instead send the current version here to accept and join in
+    # one call; an already-satisfied acceptance is never recorded twice.
+    terms_version: str | None = Field(default=None, min_length=1, max_length=80)
     invitation_token: str | None = Field(default=None, min_length=32, max_length=500)
 
 
@@ -90,6 +96,32 @@ class BetaPendingResponse(StrictModel):
     pending: bool
     home_name: str | None = None
     terms_version: str | None = None
+
+
+class BetaTermsStatus(StrictModel):
+    document_key: str
+    display_name: str
+    version_id: uuid.UUID
+    version: str
+    satisfied: bool
+
+
+class BetaContinuationResponse(StrictModel):
+    """Everything the authenticated Founding Beta continuation needs to pick
+    its step: welcome + Terms -> Home -> confirm -> done."""
+
+    # This account was created through the Founding Beta and has not enrolled
+    # yet: route it to the continuation instead of normal onboarding.
+    pending: bool
+    enrolled: bool
+    enrolled_home_id: uuid.UUID | None = None
+    # The current Founding Beta Terms and whether this user has accepted that
+    # exact version (None when no Beta Terms document is published).
+    terms: BetaTermsStatus | None = None
+    eligible: bool
+    home_id: uuid.UUID | None = None
+    home_name: str | None = None
+    reason: str | None = None
 
 
 class BetaInviteCreate(StrictModel):

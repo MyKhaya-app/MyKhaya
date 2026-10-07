@@ -136,7 +136,12 @@ async def render_notification(
 
 
 async def render_notification_email(
-    db: AsyncSession, settings: Settings, template_type: str, variables: dict[str, str]
+    db: AsyncSession,
+    settings: Settings,
+    template_type: str,
+    variables: dict[str, str],
+    *,
+    footer_note: str | None = None,
 ) -> tuple[str, str, str]:
     """Like render_notification, but also returns the branded HTML companion
     (mykhaya.email_branding) for the email channel specifically — push/in-app
@@ -145,5 +150,7 @@ async def render_notification_email(
     wording is reflected in both, and user-controlled variables are
     HTML-escaped by email_branding before reaching markup."""
     subject, body = await render_notification(db, template_type, variables)
-    html = render_email_html(settings, template_type, subject, body, variables.get("link"))
+    html = render_email_html(
+        settings, template_type, subject, body, variables.get("link"), footer_note=footer_note
+    )
     return subject, body, html

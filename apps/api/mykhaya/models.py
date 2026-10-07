@@ -1478,8 +1478,11 @@ class BetaPendingRegistration(UuidTimeMixin, Base):
     programme_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("beta_programmes.id", ondelete="CASCADE"), index=True
     )
-    home_name: Mapped[str] = mapped_column(String(100))
-    terms_version: Mapped[str] = mapped_column(String(80))
+    # The durable "this account was created through the Founding Beta" intent,
+    # consumed when the verified user enrols. Home name and Beta Terms are
+    # collected after verification (null on rows created since 0114).
+    home_name: Mapped[str | None] = mapped_column(String(100))
+    terms_version: Mapped[str | None] = mapped_column(String(80))
     token_hash: Mapped[str] = mapped_column(String(64))
     invitation_token_hash: Mapped[str | None] = mapped_column(String(64))
     expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)

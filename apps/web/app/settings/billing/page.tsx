@@ -317,6 +317,12 @@ export default function PlanAndBillingSettings() {
                   <p>
                     <strong className={`state-label ${planBadgeClass("family")}`}>{planLabel}</strong>{" "}
                     <span className="state-label state-soft">Complimentary access</span>
+                    {status.complimentary_source === "founding_beta_lifetime" && (
+                      <>
+                        {" "}
+                        <span className="state-label state-soft">Founding Beta benefit</span>
+                      </>
+                    )}
                   </p>
                   <p>No payment required. Access does not expire.</p>
                   <p>{planLabel} applies to everyone in this Home.</p>

@@ -158,14 +158,17 @@ export default function Login() {
       router.push("/home");
       return;
     }
-    if (beta) {
-      const pending = await api.betaPending();
-      if (pending.pending && pending.home_name && pending.terms_version) {
-        await api.joinBeta({
-          home_name: pending.home_name,
-          terms_version: pending.terms_version,
-          invitation_token: betaInvitation ?? undefined,
-        });
+    // An account created through the Founding Beta resumes the Beta
+    // continuation on its first sign-in — decided by the server-side Beta
+    // intent, not by this page's URL (the emailed verification link carries
+    // no Beta marker). Never the commercial plan/payment onboarding.
+    const continuation = await api.betaContinuation().catch(() => null);
+    if (beta || (continuation?.pending && !continuation.enrolled)) {
+      if (continuation && !continuation.enrolled) {
+        router.push(
+          `/onboarding?beta=1${betaInvitation ? `&invitation=${encodeURIComponent(betaInvitation)}` : ""}`,
+        );
+        return;
       }
     }
     if (invitation) await api.post("/invitations/accept", { token: invitation });

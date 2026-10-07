@@ -41,6 +41,12 @@ CTA_LABELS: dict[str, str] = {
     "password_reset": "Reset password",
     "household_invitation": "Join Home",
     "platform_administrator_invitation": "Accept invitation",
+    "founding_beta_welcome": "Open MyKhaya",
+}
+
+# Card heading where it differs from the subject line (default: the subject).
+HEADINGS: dict[str, str] = {
+    "founding_beta_welcome": "Welcome to the Founding Beta",
 }
 
 
@@ -67,6 +73,8 @@ def render_html(
     body_text: str,
     cta_label: str | None = None,
     cta_url: str | None = None,
+    heading: str | None = None,
+    footer_note: str | None = None,
 ) -> str:
     """`subject`/`body_text` are the already-resolved (override-aware) plain
     text produced by mykhaya.notifications.templates.render_notification —
@@ -75,7 +83,16 @@ def render_html(
     `templates.substitute`, and are HTML-escaped here before being placed in
     markup — malicious HTML in a display name cannot be injected."""
     safe_subject = escape(subject)
+    safe_heading = escape(heading or subject)
     safe_logo = escape(logo_url(settings))
+    # Optional one-line context above the standard footer (e.g. why this
+    # email was sent). Escaped like every other interpolated value.
+    footer_note_html = (
+        f'<p style="margin:20px 0 4px;color:{_MUTED};font-family:{_FONT_STACK};'
+        f'font-size:12px;line-height:1.5;">{escape(footer_note)}</p>'
+        if footer_note
+        else ""
+    )
 
     cta_html = ""
     if cta_label and cta_url:
@@ -116,7 +133,7 @@ def render_html(
         <tr>
           <td align="center" style="padding:0 32px 8px;">
             <h1 style="margin:0;color:{_SLATE};font-family:{_FONT_STACK};
-                       font-size:20px;font-weight:700;">{safe_subject}</h1>
+                       font-size:20px;font-weight:700;">{safe_heading}</h1>
           </td>
         </tr>
         <tr>
@@ -127,6 +144,7 @@ def render_html(
         {cta_html}
         <tr>
           <td style="padding:0 32px 32px;border-top:1px solid {_CREAM};">
+            {footer_note_html}
             <p style="margin:20px 0 4px;color:{_MUTED};font-family:{_FONT_STACK};
                       font-size:12px;line-height:1.5;"
               >MyKhaya helps families stay connected and organised.</p>
@@ -144,14 +162,22 @@ def render_html(
 
 
 def render_email_html(
-    settings: Settings, template_type: str, subject: str, body_text: str, cta_url: str | None
+    settings: Settings,
+    template_type: str,
+    subject: str,
+    body_text: str,
+    cta_url: str | None,
+    *,
+    footer_note: str | None = None,
 ) -> str:
     """Convenience wrapper used by every real send site — resolves the
-    per-type CTA label (if any) and delegates to render_html."""
+    per-type CTA label and heading (if any) and delegates to render_html."""
     return render_html(
         settings,
         subject=subject,
         body_text=body_text,
         cta_label=CTA_LABELS.get(template_type),
         cta_url=cta_url,
+        heading=HEADINGS.get(template_type),
+        footer_note=footer_note,
     )

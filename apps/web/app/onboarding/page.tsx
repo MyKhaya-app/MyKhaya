@@ -50,6 +50,31 @@ export default function Onboarding() {
   const [requestedPlan, setRequestedPlan] = useState<"family" | "ultimate">("family");
   const [joinCodeInput, setJoinCodeInput] = useState("");
   const [matchedHome, setMatchedHome] = useState<HomeJoinCodeLookup | null>(null);
+  // Founding Beta accounts are routed into the Beta continuation, never the
+  // commercial plan/payment steps below. Decided by the server-side Beta
+  // intent (GET /beta/continuation) — the native shell and a fresh sign-in
+  // land here without any ?beta=1 — and held in a neutral loading state until
+  // known, so the normal onboarding never flashes first.
+  const betaRequested = params.get("beta") === "1";
+  const [route, setRoute] = useState<"loading" | "beta" | "normal">(betaRequested ? "beta" : "loading");
+  useEffect(() => {
+    if (betaRequested) {
+      setRoute("beta");
+      return;
+    }
+    let cancelled = false;
+    api
+      .betaContinuation()
+      .then((state) => {
+        if (!cancelled) setRoute(state.pending && !state.enrolled ? "beta" : "normal");
+      })
+      .catch(() => {
+        if (!cancelled) setRoute("normal");
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [betaRequested]);
 
   useEffect(() => {
     if (step !== "plan") return;
@@ -149,7 +174,17 @@ export default function Onboarding() {
     }
   }
 
-  if (params.get("beta") === "1") return <BetaEnrolment />;
+  if (route === "beta") return <BetaEnrolment />;
+  if (route === "loading") {
+    return (
+      <main className="onboarding">
+        <Logo />
+        <p role="status" className="muted">
+          Loading…
+        </p>
+      </main>
+    );
+  }
 
   if (step === "choice") {
     return (
