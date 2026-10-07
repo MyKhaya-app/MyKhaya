@@ -105,15 +105,6 @@ const ROWS: TourRow[] = [
   },
 ];
 
-const ALSO: { name: string; tag: string; text: string }[] = [
-  { name: "Lists", tag: "Family", text: "Shared shopping and to-do lists, so nothing gets forgotten or bought twice." },
-  { name: "Gift wishlists", tag: "Family", text: "Birthdays sorted. Share wishlists with grandparents, aunts and friends." },
-  { name: "Routines", tag: "Free", text: "Up to three personal routines free, and unlimited household routines on Family." },
-  { name: "Calendar tags", tag: "Free", text: "Colour-code events by type. One tag free, unlimited on Family." },
-  { name: "Notes", tag: "Free", text: "Somewhere for the details: wifi passwords, school codes, the plumber's number." },
-  { name: "Family chat", tag: "Coming soon", text: "A private space to talk, right next to the plan." },
-];
-
 export function HomeTour() {
   return (
     <section className="showcase" id="features">
@@ -160,32 +151,6 @@ export function HomeTour() {
               </div>
             </article>
           ))}
-        </div>
-
-        <div className="also">
-          <h3 className="head">Also in your home</h3>
-          <div className="also-grid">
-            {ALSO.map((item) => (
-              <div key={item.name}>
-                <div className="top">
-                  <h4>{item.name}</h4>
-                  <span className="tag">{item.tag}</span>
-                </div>
-                <p>{item.text}</p>
-              </div>
-            ))}
-          </div>
-          <div className="ultimate">
-            <div>
-              <h3>Going further with Ultimate</h3>
-              <p>Everything in Family, plus tools that run the rest of the house, with more premium modules on the way.</p>
-            </div>
-            <div className="pills">
-              <span>Budget</span>
-              <span>Driveway</span>
-              <span>More coming</span>
-            </div>
-          </div>
         </div>
       </div>
     </section>

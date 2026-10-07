@@ -50,7 +50,7 @@ export function HomeSteps() {
           <h2>Up and running in minutes.</h2>
         </div>
         <div className="steps">
-          <div className="step"><span className="num">1</span><h3>Create your home</h3><p>Sign up free with no card. Name your home and your calendar, events and notes are ready.</p></div>
+          <div className="step"><span className="num">1</span><h3>Create your home</h3><p>Sign up free with no card. Name your home and your calendar and events are ready.</p></div>
           <div className="step"><span className="num">2</span><h3>Invite your people</h3><p>On Family, add adults and children, then invite grandparents and friends from outside the household.</p></div>
           <div className="step"><span className="num">3</span><h3>Share the load</h3><p>Add events, plan meals, set nudges and build lists. Everyone stays in step.</p></div>
         </div>
@@ -120,7 +120,7 @@ export function HomeWho() {
             </div>
             <h3>Getting yourself organised</h3>
             <p>Start on your own with the free plan, then bring the household in when you&apos;re ready.</p>
-            <ul><li>Calendar, events and notes</li><li>Up to 3 personal routines</li><li>Free forever</li></ul>
+            <ul><li>Calendar and events</li><li>Up to 3 personal routines</li><li>Free forever</li></ul>
           </article>
         </div>
       </div>
@@ -129,7 +129,7 @@ export function HomeWho() {
 }
 
 const FAQ: { q: string; a: string }[] = [
-  { q: "Is MyKhaya really free?", a: "Yes. The Free plan costs £0 forever and needs no card. It includes the calendar, events, notes, one calendar tag and up to three personal routines for one person." },
+  { q: "Is MyKhaya really free?", a: "Yes. The Free plan costs £0 forever and needs no card. It includes the calendar, events, one calendar tag and up to three personal routines for one person." },
   { q: "What's the difference between Free and Family?", a: "Free is for one person getting organised. Family opens MyKhaya up to your whole household, with shared events, lists, gift wishlists, household routines, unlimited tags and routines, and invites for family and friends." },
   { q: "What's the difference between a routine, a reminder and a to-do?", a: "Routines repeat, like feeding the dog every day. Reminders are one-offs at a set time, like calling the grandparents at 9am. To-dos are jobs to tick off when they're done. Each can be personal or shared with the household." },
   { q: "Can children use MyKhaya?", a: "Yes. Children can be members of your household with their own role, so they can see their events and routines. Our children's privacy notice explains how their data is handled." },

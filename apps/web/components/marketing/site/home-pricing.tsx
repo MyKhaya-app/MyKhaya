@@ -27,7 +27,7 @@ import { useSignupStateContext } from "./signup-state-context";
 
 const PLACEHOLDER = "£—";
 
-const FREE_POINTS = ["Calendar", "Events", "Notes", "1 calendar tag", "Up to 3 personal routines", "1 person"];
+const FREE_POINTS = ["Calendar", "Events", "1 calendar tag", "Up to 3 personal routines", "1 person"];
 const FAMILY_POINTS = [
   "Everything in Free",
   "Whole household",

@@ -64,6 +64,17 @@ describe("Homepage pricing", () => {
     expect(within(card("Free")).getByText("£0")).toBeInTheDocument();
   });
 
+  it("lists only real Free plan features (no Notes)", () => {
+    renderPricing({ pricing: pricing(), error: false });
+    expect(within(card("Free")).getAllByRole("listitem").map((item) => item.textContent)).toEqual([
+      "Calendar",
+      "Events",
+      "1 calendar tag",
+      "Up to 3 personal routines",
+      "1 person",
+    ]);
+  });
+
   it("switches both paid plans between monthly and annual prices and labels", async () => {
     const user = userEvent.setup();
     renderPricing({ pricing: pricing(), error: false });
