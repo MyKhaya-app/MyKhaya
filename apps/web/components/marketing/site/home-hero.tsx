@@ -1,11 +1,9 @@
-import { signupPromiseApplies, type SignupStateValue } from "@/components/public-signup";
+import { HeroActions } from "./hero-actions";
 import { BellIcon, DishIcon } from "./icons";
-import { SignupLink } from "./signup-link";
 
 const IMG = "/images/marketing";
 
-export function HomeHero({ signupState }: { signupState: SignupStateValue }) {
-  const promise = signupPromiseApplies(signupState);
+export function HomeHero() {
   return (
     <section className="hero">
       <div className="wrap hero-grid">
@@ -20,33 +18,20 @@ export function HomeHero({ signupState }: { signupState: SignupStateValue }) {
             Shared calendars, meal plans, nudges and lists, all in one place. MyKhaya is your family&apos;s digital
             home: less stress, and more time for what really matters.
           </p>
-          <div className="hero-actions">
-            <SignupLink className="btn btn-primary" state={signupState} suffix=" →" />
-            <a className="btn btn-ghost" href="#features">
-              Take the tour
-            </a>
-          </div>
-          {/* Only promised when true for the current signup mode. Held (but
-              invisible, so nothing shifts) until the mode is known; removed
-              when sign-ups are closed. */}
-          {promise !== false && (
-            <ul className="ticks" style={promise === null ? { visibility: "hidden" } : undefined} aria-hidden={promise === null || undefined}>
-              <li>Free to start</li>
-              <li>No card required</li>
-              <li>Set up in minutes</li>
-            </ul>
-          )}
+          <HeroActions />
         </div>
 
         <div className="phones">
+          {/* p2 is the largest contentful paint: fetched first. p1/p3 are hidden
+              on small screens, so they load lazily (never, when hidden). */}
           <div className="phone p1">
-            <img src={`${IMG}/mykhaya-meal-plans.webp`} alt="MyKhaya Meal Plans screen with today's breakfast, lunch and dinner" loading="eager" />
+            <HeroShot name="mykhaya-meal-plans" alt="MyKhaya Meal Plans screen with today's breakfast, lunch and dinner" lazy />
           </div>
           <div className="phone p2">
-            <img src={`${IMG}/mykhaya-home.webp`} alt="MyKhaya Home screen showing today's swimming lesson and household nudges" loading="eager" />
+            <HeroShot name="mykhaya-home" alt="MyKhaya Home screen showing today's swimming lesson and household nudges" priority />
           </div>
           <div className="phone p3">
-            <img src={`${IMG}/mykhaya-calendar.webp`} alt="MyKhaya Calendar showing a month of shared family events" loading="eager" />
+            <HeroShot name="mykhaya-calendar" alt="MyKhaya Calendar showing a month of shared family events" lazy />
           </div>
           <div className="chip chip-a">
             <span className="ic" style={{ background: "var(--mustard-soft)" }}>
@@ -69,6 +54,24 @@ export function HomeHero({ signupState }: { signupState: SignupStateValue }) {
         </div>
       </div>
     </section>
+  );
+}
+
+/** A hero phone screenshot with a 400w variant for small screens (the phone
+ *  frame is at most 250px wide, so 400w covers ~1.6x density). */
+function HeroShot({ name, alt, priority = false, lazy = false }: { name: string; alt: string; priority?: boolean; lazy?: boolean }) {
+  return (
+    <img
+      src={`${IMG}/${name}.webp`}
+      srcSet={`${IMG}/${name}-400.webp 400w, ${IMG}/${name}.webp 600w`}
+      sizes="(max-width: 560px) 200px, (max-width: 920px) 240px, 20vw"
+      width={600}
+      height={1304}
+      alt={alt}
+      loading={lazy ? "lazy" : "eager"}
+      fetchPriority={priority ? "high" : undefined}
+      decoding="async"
+    />
   );
 }
 

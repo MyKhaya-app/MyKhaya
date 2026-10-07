@@ -1,8 +1,6 @@
 import Link from "next/link";
 import { SiteBrand } from "./site-brand";
-import { sectionHref } from "./site-nav";
-
-export const STATUS_URL = "https://status.dev.mykhaya.app/";
+import { STATUS_URL, sectionHref } from "./site-links";
 
 export function SiteFooter({ onHome }: { onHome: boolean }) {
   const year = new Date().getFullYear();
@@ -15,7 +13,7 @@ export function SiteFooter({ onHome }: { onHome: boolean }) {
             <p className="tagline">Your family, organised: calmly, together.</p>
           </div>
           <div>
-            <h4>Product</h4>
+            <h2>Product</h2>
             <ul>
               <li><a href={sectionHref("features", onHome)}>Features</a></li>
               <li><a href={sectionHref("how", onHome)}>How it works</a></li>
@@ -24,14 +22,14 @@ export function SiteFooter({ onHome }: { onHome: boolean }) {
             </ul>
           </div>
           <div>
-            <h4>Account</h4>
+            <h2>Account</h2>
             <ul>
               <li><Link href="/login">Sign in</Link></li>
               <li><Link href="/register">Create an account</Link></li>
             </ul>
           </div>
           <div>
-            <h4>Help</h4>
+            <h2>Help</h2>
             <ul>
               <li><Link href="/support">Support</Link></li>
               <li><a href={STATUS_URL}>Service status</a></li>

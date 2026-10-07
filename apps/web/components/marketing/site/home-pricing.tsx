@@ -7,7 +7,7 @@
 // ultimate_acquisition_enabled), never a hard-coded flag. Plan buttons keep
 // the previous site's sign-in-aware routing (resolveCtaDestination).
 
-import { useState, type MouseEvent } from "react";
+import { useEffect, useState, type MouseEvent } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { FamilyPricing } from "@mykhaya/shared-types";
@@ -21,7 +21,9 @@ import {
 import { resolveCtaDestination } from "@/components/cta-destination";
 import type { BillingIntervalChoice, OnboardingIntent } from "@/components/onboarding-intent";
 import type { SignupStateValue } from "@/components/public-signup";
+import { HomeFaq } from "./home-sections";
 import { SignupLink } from "./signup-link";
+import { useSignupStateContext } from "./signup-state-context";
 
 const PLACEHOLDER = "£—";
 
@@ -226,5 +228,33 @@ function BetaOffer({ signupState }: { signupState: NonNullable<SignupStateValue>
         </div>
       </div>
     </section>
+  );
+}
+
+/** Loads pricing once and renders the pricing section and the FAQ, whose
+ *  Ultimate question follows the same acquisition setting. */
+export function HomePricingAndFaq() {
+  const signupState = useSignupStateContext();
+  const [pricingState, setPricingState] = useState<PricingState>({ pricing: null, error: false });
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .familyPricing()
+      .then((pricing) => {
+        if (!cancelled) setPricingState({ pricing, error: false });
+      })
+      .catch(() => {
+        if (!cancelled) setPricingState({ pricing: null, error: true });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  const ultimatePaused = pricingState.pricing !== null && !canStartUltimateCheckout(pricingState.pricing);
+  return (
+    <>
+      <HomePricing pricingState={pricingState} signupState={signupState} />
+      <HomeFaq ultimatePaused={ultimatePaused} />
+    </>
   );
 }

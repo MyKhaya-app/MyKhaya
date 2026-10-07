@@ -2,15 +2,14 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { MarketingHome } from "@/components/marketing/site/marketing-home";
-import { useSignupState } from "@/components/marketing/site/use-signup-state";
+import { SignupStateProvider } from "@/components/marketing/site/signup-state-context";
 import { isNativeShell } from "@/components/native-runtime";
 import { useAuth } from "@/components/auth-provider";
 import { MaintenanceScreen } from "@/components/maintenance";
 import { LegalGate } from "@/components/legal-gate";
 import { genericUnlockPromptCopy } from "@/components/native-biometric";
 
-function NativeRootGate() {
+function NativeRootGate({ fallback }: { fallback: React.ReactNode }) {
   const router = useRouter();
   const { status, initialSessionLoading, retryInitialSession, legalStatusError, retryLegalStatus } = useAuth();
 
@@ -72,10 +71,13 @@ function NativeRootGate() {
   if (initialSessionLoading || status === "initializing" || status === "ready") {
     return <main className="app-bootstrap-state" role="status">Checking your MyKhaya session…</main>;
   }
-  return <MarketingHome signupState={null} />;
+  return <>{fallback}</>;
 }
 
-export default function Welcome() {
+/** The root route. In a browser it is the marketing homepage (`children`,
+ *  server-rendered by app/page.tsx); inside the native shell it is an auth
+ *  gate that forwards to /home or /login. */
+export default function Welcome({ children }: { children: React.ReactNode }) {
   // isNativeShell() always reads false during SSR (no window/Capacitor
   // there) but can read true on the very first client render inside the
   // native shell — branching on it directly, here, produced a root-level
@@ -92,7 +94,11 @@ export default function Welcome() {
   useEffect(() => {
     setNative(isNativeShell());
   }, []);
-  // Never fetched inside the native shell, whose root is an auth gate.
-  const signupState = useSignupState(!native);
-  return native ? <NativeRootGate /> : <MarketingHome signupState={signupState} />;
+  // The signup mode is never fetched inside the native shell, whose root is
+  // an auth gate.
+  return native ? (
+    <NativeRootGate fallback={children} />
+  ) : (
+    <SignupStateProvider enabled={!native}>{children}</SignupStateProvider>
+  );
 }

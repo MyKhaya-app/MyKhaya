@@ -6,7 +6,7 @@ export function HomeStory() {
     <section>
       <div className="wrap story">
         <div className="story-visual" aria-hidden="true">
-          <img className="logo-tile" src={LOGO_LARGE} alt="" width={240} height={240} />
+          <img className="logo-tile" src={LOGO_LARGE} alt="" width={240} height={240} loading="lazy" decoding="async" />
           <div className="member m1"><span className="av" style={{ background: "var(--av-j)" }}>J</span><div><b>Jamie</b><small>Adult</small></div></div>
           <div className="member m2"><span className="av" style={{ background: "var(--av-s)" }}>S</span><div><b>Sam</b><small>Child</small></div></div>
           <div className="member m3"><span className="av" style={{ background: "var(--av-t)" }}>T</span><div><b>You</b><small>Home Admin</small></div></div>

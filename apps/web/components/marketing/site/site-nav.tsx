@@ -4,21 +4,9 @@ import { useState } from "react";
 import Link from "next/link";
 import type { SignupStateValue } from "@/components/public-signup";
 import { SignupLink, signupIsSignIn } from "./signup-link";
+import { useSignupStateContext } from "./signup-state-context";
 import { SiteBrand } from "./site-brand";
-
-export const SECTION_LINKS = [
-  { id: "features", label: "Features" },
-  { id: "day", label: "A day with us" },
-  { id: "how", label: "How it works" },
-  { id: "pricing", label: "Pricing" },
-  { id: "faq", label: "FAQ" },
-] as const;
-
-/** Homepage section links are in-page anchors; on every other public page
- *  they point back to the homepage section. */
-export function sectionHref(id: string, onHome: boolean) {
-  return onHome ? `#${id}` : `/#${id}`;
-}
+import { SECTION_LINKS, sectionHref } from "./site-links";
 
 export function SiteNav({ signupState, onHome }: { signupState: SignupStateValue; onHome: boolean }) {
   const [open, setOpen] = useState(false);
@@ -70,4 +58,9 @@ export function SiteNav({ signupState, onHome }: { signupState: SignupStateValue
       </div>
     </header>
   );
+}
+
+/** The homepage nav, reading the signup mode from SignupStateProvider. */
+export function HomeNav() {
+  return <SiteNav signupState={useSignupStateContext()} onHome />;
 }

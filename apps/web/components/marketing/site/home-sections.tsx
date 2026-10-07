@@ -1,10 +1,8 @@
 import Link from "next/link";
-import { signupPromiseApplies, type SignupStateValue } from "@/components/public-signup";
 import { ArrowIcon, CardIcon, HomeIcon, LockIcon } from "./icons";
-import { SignupLink, signupIsSignIn } from "./signup-link";
 
-// The example day, how it works, our promise, who it's for, FAQ and final CTA
-// sections of the homepage — static copy from the approved design.
+// The example day, how it works, our promise, who it's for and FAQ sections of
+// the homepage — static copy from the approved design (server-rendered).
 
 const DAY: { time: string; node: "" | "c" | "m"; title: string; text: string; via: string }[] = [
   { time: "07:00", node: "m", title: "The morning summary", text: "A notification lists today's open routines, to-dos and reminders before anyone's out of bed.", via: "Notifications" },
@@ -169,40 +167,6 @@ export function HomeFaq({ ultimatePaused }: { ultimatePaused: boolean }) {
               <p>New Ultimate sign-ups are temporarily paused. You can start on Free or Family today and upgrade when Ultimate reopens.</p>
             </details>
           )}
-        </div>
-      </div>
-    </section>
-  );
-}
-
-export function HomeCta({ signupState }: { signupState: SignupStateValue }) {
-  const promise = signupPromiseApplies(signupState);
-  return (
-    <section className="cta">
-      <div className="wrap">
-        <div className="cta-box">
-          <div className="blocks" aria-hidden="true">
-            <i style={{ background: "var(--coral)" }} />
-            <i style={{ background: "var(--on-forest)" }} />
-            <i style={{ background: "var(--sage)" }} />
-            <i style={{ background: "var(--mustard)" }} />
-          </div>
-          <div>
-            <h2>Ready to bring your family together?</h2>
-            {promise === false ? (
-              <p>New sign-ups are currently closed.</p>
-            ) : (
-              <p style={promise === null ? { visibility: "hidden" } : undefined}>Free to start. No card required. Set up in minutes.</p>
-            )}
-          </div>
-          <div className="cta-actions">
-            <SignupLink className="btn btn-primary" state={signupState} suffix=" →" />
-            {!signupIsSignIn(signupState) && (
-              <Link className="btn btn-light" href="/login">
-                Sign in
-              </Link>
-            )}
-          </div>
         </div>
       </div>
     </section>

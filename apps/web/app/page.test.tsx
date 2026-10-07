@@ -3,7 +3,7 @@ import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import Welcome from "@/components/marketing/site/welcome";
+import HomePage from "./page";
 
 const { nativeState, authState, replace } = vi.hoisted(() => ({
   nativeState: { value: false, platform: "ios" as "ios" | "android" | "web" },
@@ -92,9 +92,10 @@ beforeEach(() => {
 
 describe("Welcome (public marketing homepage)", () => {
   it("renders every section of the design, in order", async () => {
-    render(<Welcome />);
+    render(<HomePage />);
 
-    const headings = (await screen.findAllByRole("heading", { level: 2 })).map((node) => node.textContent);
+    const main = await screen.findByRole("main");
+    const headings = (await within(main).findAllByRole("heading", { level: 2 })).map((node) => node.textContent);
     expect(headings).toEqual([
       "Less organising. More being together.",
       "Made for how families actually run.",
@@ -121,7 +122,7 @@ describe("Welcome (public marketing homepage)", () => {
   });
 
   it("has a section for every in-page anchor used by the nav, menu and footer", async () => {
-    const { container } = render(<Welcome />);
+    const { container } = render(<HomePage />);
     await screen.findByRole("heading", { name: "Good to know." });
     const anchors = new Set(
       Array.from(container.querySelectorAll('a[href^="#"]')).map((link) => link.getAttribute("href")!.slice(1)),
@@ -131,7 +132,7 @@ describe("Welcome (public marketing homepage)", () => {
   });
 
   it("only links to real public pages (or in-page anchors and the status page)", async () => {
-    const { container } = render(<Welcome />);
+    const { container } = render(<HomePage />);
     await screen.findByRole("heading", { name: "Good to know." });
     const allowed = new Set([
       "/",
@@ -144,7 +145,7 @@ describe("Welcome (public marketing homepage)", () => {
       "/legal/privacy",
       "/legal/children",
       "/legal/cookies",
-      "https://status.dev.mykhaya.app/",
+      "https://status.mykhaya.app/",
     ]);
     for (const link of container.querySelectorAll("a")) {
       const href = link.getAttribute("href")!;
@@ -156,7 +157,7 @@ describe("Welcome (public marketing homepage)", () => {
   });
 
   it("follows the normal signup mode: Sign in plus Get started free, with the free promise", async () => {
-    render(<Welcome />);
+    render(<HomePage />);
     const header = screen.getByRole("banner");
     await waitFor(() =>
       expect(within(header).getByRole("link", { name: "Get started free" })).toHaveAttribute("href", "/register"),
@@ -173,7 +174,7 @@ describe("Welcome (public marketing homepage)", () => {
       beta_joining_available: true,
       joinable_count: 7,
     };
-    render(<Welcome />);
+    render(<HomePage />);
     const ctas = await screen.findAllByRole("link", { name: /^Join the Beta/ });
     expect(ctas.length).toBeGreaterThanOrEqual(3);
     for (const link of ctas) expect(link).toHaveAttribute("href", "/founding-beta");
@@ -192,7 +193,7 @@ describe("Welcome (public marketing homepage)", () => {
       normal_signup_available: false,
       waitlist_available: true,
     };
-    render(<Welcome />);
+    render(<HomePage />);
     expect((await screen.findAllByRole("link", { name: /Join the waitlist/ }))[0]).toHaveAttribute("href", "/waitlist");
     expect(screen.queryByText("No card required")).not.toBeInTheDocument();
     expect(screen.queryByText(/Free to start\. No card required/)).not.toBeInTheDocument();
@@ -207,13 +208,13 @@ describe("Welcome (public marketing homepage)", () => {
       normal_signup_available: false,
       waitlist_available: false,
     };
-    render(<Welcome />);
+    render(<HomePage />);
     const header = screen.getByRole("banner");
     await waitFor(() => expect(within(header).getAllByRole("link", { name: /^Sign in/ })).toHaveLength(1));
   });
 
   it("holds the signup-mode wording invisibly until the mode is known", () => {
-    render(<Welcome />);
+    render(<HomePage />);
     const header = screen.getByRole("banner");
     // First render, before publicSignupState resolves.
     const cta = header.querySelector(".nav-cta .btn") as HTMLElement;
@@ -223,7 +224,7 @@ describe("Welcome (public marketing homepage)", () => {
 
   it("opens and closes the mobile menu", async () => {
     const user = userEvent.setup();
-    render(<Welcome />);
+    render(<HomePage />);
     const toggle = screen.getByRole("button", { name: "Open menu" });
     const menu = document.getElementById("mobile-menu")!;
     expect(menu).not.toBeVisible();
@@ -264,14 +265,14 @@ describe("Welcome (public marketing homepage)", () => {
     nativeState.value = true;
     authState.status = "initializing";
     authState.initialSessionLoading = true;
-    const view = render(<Welcome />);
+    const view = render(<HomePage />);
 
     expect(screen.getByText(/checking your mykhaya session/i)).toBeInTheDocument();
     expect(screen.queryByText(/your family\. one place/i)).not.toBeInTheDocument();
 
     authState.status = "ready";
     authState.initialSessionLoading = false;
-    view.rerender(<Welcome />);
+    view.rerender(<HomePage />);
 
     expect(screen.queryByText(/your family\. one place/i)).not.toBeInTheDocument();
     expect(replace).toHaveBeenCalledWith("/home");
@@ -281,7 +282,7 @@ describe("Welcome (public marketing homepage)", () => {
     nativeState.value = true;
     nativeState.platform = "ios";
     authState.status = "locked";
-    render(<Welcome />);
+    render(<HomePage />);
 
     expect(await screen.findByText(/face id/i)).toBeInTheDocument();
     expect(screen.getByText(/touch id/i)).toBeInTheDocument();
@@ -291,7 +292,7 @@ describe("Welcome (public marketing homepage)", () => {
     nativeState.value = true;
     nativeState.platform = "android";
     authState.status = "locked";
-    render(<Welcome />);
+    render(<HomePage />);
 
     await screen.findByRole("heading", { name: /unlock mykhaya/i });
     expect(screen.queryByText(/face id|touch id/i)).not.toBeInTheDocument();
@@ -301,7 +302,7 @@ describe("Welcome (public marketing homepage)", () => {
     nativeState.value = true;
     authState.status = "legal_check_error";
     authState.legalStatusError = "Legal service unavailable";
-    render(<Welcome />);
+    render(<HomePage />);
 
     expect(await screen.findByRole("heading", { name: /could not check your legal documents/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /try again/i })).toBeInTheDocument();

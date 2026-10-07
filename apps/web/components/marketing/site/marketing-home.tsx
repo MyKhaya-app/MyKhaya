@@ -1,43 +1,27 @@
 "use client";
 
 import "@/app/marketing-site.css";
-import { useEffect, useState } from "react";
-import { api } from "@mykhaya/api-client";
-import type { SignupStateValue } from "@/components/public-signup";
-import { canStartUltimateCheckout } from "@/components/family-pricing-logic";
 import { BackToTop } from "./back-to-top";
+import { HomeCta } from "./home-cta";
 import { HomeHero, HomeStats } from "./home-hero";
-import { HomePricing, type PricingState } from "./home-pricing";
-import { HomeCta, HomeDay, HomeFaq, HomePromise, HomeSteps, HomeWho } from "./home-sections";
+import { HomePricingAndFaq } from "./home-pricing";
+import { HomeDay, HomePromise, HomeSteps, HomeWho } from "./home-sections";
 import { HomeStory } from "./home-story";
 import { HomeTour } from "./home-tour";
 import { SiteFooter } from "./site-footer";
-import { SiteNav } from "./site-nav";
+import { HomeNav } from "./site-nav";
 
-/** The public marketing homepage (mykhaya.app). */
-export function MarketingHome({ signupState }: { signupState: SignupStateValue }) {
-  const [pricingState, setPricingState] = useState<PricingState>({ pricing: null, error: false });
-  useEffect(() => {
-    let cancelled = false;
-    api
-      .familyPricing()
-      .then((pricing) => {
-        if (!cancelled) setPricingState({ pricing, error: false });
-      })
-      .catch(() => {
-        if (!cancelled) setPricingState({ pricing: null, error: true });
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-  const ultimatePaused = pricingState.pricing !== null && !canStartUltimateCheckout(pricingState.pricing);
-
+/** The public marketing homepage (mykhaya.app). Rendered as one client
+ *  component on purpose: as server components the static sections were
+ *  serialised a second time into the RSC payload, doubling the HTML and
+ *  measurably slowing first paint on mobile (Lighthouse). Signup-mode-aware
+ *  parts read SignupStateProvider (see Welcome). */
+export function MarketingHome() {
   return (
     <div className="mks mks-home">
-      <SiteNav signupState={signupState} onHome />
+      <HomeNav />
       <main>
-        <HomeHero signupState={signupState} />
+        <HomeHero />
         <HomeStats />
         <HomeStory />
         <HomeTour />
@@ -45,9 +29,8 @@ export function MarketingHome({ signupState }: { signupState: SignupStateValue }
         <HomeSteps />
         <HomePromise />
         <HomeWho />
-        <HomePricing pricingState={pricingState} signupState={signupState} />
-        <HomeFaq ultimatePaused={ultimatePaused} />
-        <HomeCta signupState={signupState} />
+        <HomePricingAndFaq />
+        <HomeCta />
       </main>
       <SiteFooter onHome />
       <BackToTop />
