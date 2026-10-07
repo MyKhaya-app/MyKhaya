@@ -62,6 +62,7 @@ export default function Register() {
       recipient_email: string;
     } | null>(null);
   const [signupState, setSignupState] = useState<PublicSignupState | null>(null),
+    [signupStateLoaded, setSignupStateLoaded] = useState(false),
     [maintenance, setMaintenance] = useState(false);
   useEffect(() => {
     // Display-only: the API enforces registration regardless. A failed lookup
@@ -69,7 +70,8 @@ export default function Register() {
     api
       .publicSignupState()
       .then(setSignupState)
-      .catch((cause) => setMaintenance(isMaintenanceError(cause)));
+      .catch((cause) => setMaintenance(isMaintenanceError(cause)))
+      .finally(() => setSignupStateLoaded(true));
   }, []);
   useEffect(() => {
     api
@@ -204,6 +206,8 @@ export default function Register() {
     requiredContractualDocuments.every(
       (document) => Boolean(document.current_version_id && legalChecked[document.key]),
     );
+  const registrationClosed =
+    signupStateLoaded && !maintenance && Boolean(signupState) && !signupState!.registration_open;
   return (
     <AuthCard
       title="Create your account"
@@ -258,7 +262,19 @@ export default function Register() {
           after creating your Home.
         </p>
       )}
-      <form onSubmit={submit}>
+      {registrationClosed ? (
+        <section className="registration-closed" aria-labelledby="registration-closed-heading">
+          <h2 id="registration-closed-heading">Registration is currently closed</h2>
+          <p>
+            New MyKhaya accounts are not available right now. If you already have an account, you
+            can still sign in.
+          </p>
+          {signupState?.waitlist_available && (
+            <Link className="button full" href="/waitlist">Join the waitlist</Link>
+          )}
+          <Link className="button full secondary" href="/login">Sign in</Link>
+        </section>
+      ) : <form onSubmit={submit}>
         <label>
           Your name
           <input name="name" autoComplete="name" required maxLength={100} />
@@ -352,7 +368,7 @@ export default function Register() {
         >
           {busy ? "Creating account…" : "Create account"}
         </button>
-      </form>
+      </form>}
     </AuthCard>
   );
 }

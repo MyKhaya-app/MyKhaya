@@ -327,6 +327,30 @@ describe("Login — native shell uses the native bearer transport, never the bro
     expect(api.post).not.toHaveBeenCalledWith("/auth/login", expect.anything());
   });
 
+  it("resumes a pending Beta account into Beta onboarding before Home", async () => {
+    nativeShell = true;
+    nativeLogin.mockResolvedValue(user);
+    (api.betaContinuation as ReturnType<typeof vi.fn>).mockResolvedValue({
+      pending: true,
+      enrolled: false,
+      enrolled_home_id: null,
+      terms: null,
+      eligible: true,
+      home_id: null,
+      home_name: null,
+      reason: null,
+    });
+    const typist = userEvent.setup();
+    render(<Login />);
+
+    await typist.type(screen.getByLabelText("Email"), "anthony@example.com");
+    await typist.type(screen.getByLabelText("Password"), "correct horse");
+    await typist.click(screen.getByRole("button", { name: /^sign in$/i }));
+
+    await waitFor(() => expect(push).toHaveBeenCalledWith("/onboarding?beta=1"));
+    expect(push).not.toHaveBeenCalledWith("/home");
+  });
+
   it("never fetches api.homes() (cookie-only) to decide the post-login destination — always /home", async () => {
     nativeShell = true;
     nativeLogin.mockResolvedValue(user);

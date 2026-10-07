@@ -170,7 +170,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           setUser(null);
           setStatus("signed_out");
           recordAuthDiagnostic("NATIVE_BOOTSTRAP_RESULT_SIGNED_OUT");
-          redirectToLogin("no_session_after_restore");
+          if (path !== "/") redirectToLogin("no_session_after_restore");
           return false;
         }
         setUser(restored);

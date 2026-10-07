@@ -155,6 +155,11 @@ export default function Login() {
     // wiring invitations/calendar-shares/onboarding into the native
     // transport is out of scope for this task.
     if (isNativeShell()) {
+      const continuation = await api.betaContinuation().catch(() => null);
+      if (continuation?.pending && !continuation.enrolled) {
+        router.push("/onboarding?beta=1");
+        return;
+      }
       router.push("/home");
       return;
     }

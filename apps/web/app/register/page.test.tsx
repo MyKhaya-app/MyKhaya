@@ -149,6 +149,23 @@ describe("registration transport", () => {
 });
 
 describe("Founding Beta registration availability", () => {
+  it("shows an explicit closed-registration experience instead of an account form", async () => {
+    publicSignupState.mockResolvedValue({
+      signup_mode: "closed",
+      registration_open: false,
+      invitation_required: false,
+      normal_signup_available: false,
+      beta_joining_available: false,
+      waitlist_available: false,
+      joinable_count: null,
+    });
+    render(<Register />);
+
+    expect(await screen.findByRole("heading", { name: "Registration is currently closed" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Create account" })).not.toBeInTheDocument();
+    expect(screen.getAllByRole("link", { name: "Sign in" })[0]).toHaveAttribute("href", "/login");
+  });
+
   it("shows Beta registration when Beta joining is available in beta-only mode", async () => {
     searchParams.value = "beta=1";
     publicSignupState.mockResolvedValue({
