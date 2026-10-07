@@ -3,7 +3,7 @@ import { LOGO_LARGE } from "./site-brand";
 
 export function HomeStory() {
   return (
-    <section>
+    <section className="after-hero">
       <div className="wrap story">
         <div className="story-visual" aria-hidden="true">
           <img className="logo-tile" src={LOGO_LARGE} alt="" width={240} height={240} loading="lazy" decoding="async" />

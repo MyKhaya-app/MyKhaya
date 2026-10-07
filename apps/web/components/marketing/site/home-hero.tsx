@@ -74,16 +74,3 @@ function HeroShot({ name, alt, priority = false, lazy = false }: { name: string;
     />
   );
 }
-
-export function HomeStats() {
-  return (
-    <div className="band" aria-label="MyKhaya at a glance">
-      <div className="wrap stats">
-        <div className="stat"><strong>£0</strong><span>to start, on a free-forever plan</span></div>
-        <div className="stat"><strong>4</strong><span>everyday tools: calendar, meals, nudges, lists</span></div>
-        <div className="stat"><strong>1</strong><span>shared home for the whole household</span></div>
-        <div className="stat"><strong>∞</strong><span>routines and calendar tags on Family</span></div>
-      </div>
-    </div>
-  );
-}

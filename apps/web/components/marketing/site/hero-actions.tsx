@@ -2,10 +2,12 @@
 
 import { signupPromiseApplies } from "@/components/public-signup";
 import { SignupLink } from "./signup-link";
+import { StoreBadges } from "./store-badges";
 import { useSignupStateContext } from "./signup-state-context";
 
-/** The hero's signup-mode-dependent parts: the primary action and the
- *  "Free to start · No card required · Set up in minutes" ticks. */
+/** The hero's interactive parts: the signup-mode-dependent primary action and
+ *  "Free to start · No card required · Set up in minutes" ticks, then the app
+ *  store badges. */
 export function HeroActions() {
   const signupState = useSignupStateContext();
   const promise = signupPromiseApplies(signupState);
@@ -31,6 +33,7 @@ export function HeroActions() {
           <li>Set up in minutes</li>
         </ul>
       )}
+      <StoreBadges />
     </>
   );
 }

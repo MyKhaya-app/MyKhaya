@@ -3,7 +3,7 @@
 import "@/app/marketing-site.css";
 import { BackToTop } from "./back-to-top";
 import { HomeCta } from "./home-cta";
-import { HomeHero, HomeStats } from "./home-hero";
+import { HomeHero } from "./home-hero";
 import { HomePricingAndFaq } from "./home-pricing";
 import { HomeDay, HomePromise, HomeSteps, HomeWho } from "./home-sections";
 import { HomeStory } from "./home-story";
@@ -22,7 +22,6 @@ export function MarketingHome() {
       <HomeNav />
       <main>
         <HomeHero />
-        <HomeStats />
         <HomeStory />
         <HomeTour />
         <HomeDay />

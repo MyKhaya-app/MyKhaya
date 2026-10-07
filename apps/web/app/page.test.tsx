@@ -108,7 +108,6 @@ describe("Welcome (public marketing homepage)", () => {
       "Ready to bring your family together?",
     ]);
     expect(screen.getByRole("heading", { level: 1, name: /bring your family together\./i })).toBeInTheDocument();
-    expect(screen.getByLabelText("MyKhaya at a glance")).toHaveTextContent("£0");
     expect(screen.getAllByRole("heading", { level: 3 }).map((node) => node.textContent)).toEqual(
       expect.arrayContaining([
         "Your whole day on one screen.",
@@ -116,9 +115,44 @@ describe("Welcome (public marketing homepage)", () => {
         "Dinner, decided.",
         "Keep track without keeping it all in your head.",
         "What's happening with your people.",
-        "Also in your home",
       ]),
     );
+    // Family chat stays as the "coming soon" card on the Family tour row.
+    expect(screen.getByText("Private to your family. Coming soon.")).toBeInTheDocument();
+  });
+
+  it("has no stats band and no 'Also in your home' block", async () => {
+    render(<HomePage />);
+    await screen.findByRole("heading", { name: "Good to know." });
+    expect(screen.queryByLabelText("MyKhaya at a glance")).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Also in your home" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Going further with Ultimate" })).not.toBeInTheDocument();
+    // The story section follows the hero directly, with the reduced top gap.
+    const story = screen.getByRole("heading", { name: "Less organising. More being together." }).closest("section");
+    expect(story).toHaveClass("after-hero");
+  });
+
+  it("never advertises Notes, which is not a real feature", async () => {
+    const { container } = render(<HomePage />);
+    await screen.findByRole("heading", { name: "Good to know." });
+    // Only the story's "lost notes" (paper notes, not a feature) may remain.
+    const text = (container.textContent ?? "").replace("lost notes", "");
+    expect(text).not.toMatch(/\bnotes?\b/i);
+  });
+
+  it("shows the App Store and Google Play badges under the hero ticks, as artwork only for now", async () => {
+    render(<HomePage />);
+    const badges = screen.getByRole("group", { name: "Get the app" });
+    const apple = within(badges).getByAltText("Download on the App Store");
+    const google = within(badges).getByAltText("Get it on Google Play, coming soon");
+    expect(apple).toHaveAttribute("height", "40");
+    expect(google).toHaveAttribute("height", "40");
+    // No listing URLs yet: not links, and Google Play carries the pill.
+    expect(within(badges).queryAllByRole("link")).toHaveLength(0);
+    expect(within(badges).getByText("Coming soon")).toHaveClass("mks-store-pill");
+    // Sits after the ticks within the hero copy.
+    const ticks = screen.getByText("Set up in minutes").closest("ul")!;
+    expect(ticks.compareDocumentPosition(badges) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
   it("has a section for every in-page anchor used by the nav, menu and footer", async () => {

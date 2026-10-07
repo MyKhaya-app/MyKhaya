@@ -137,16 +137,16 @@ html:has(.mks-home){scroll-behavior:smooth}
   .mks .chip-a{left:0}
   .mks .chip-b{right:0}
 }
-/* Impact band */
-.mks .band{background:var(--forest);color:var(--on-forest);padding-block:clamp(40px,6vw,64px)}
-.mks .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:24px}
-.mks .stat{display:grid;gap:4px;padding-left:18px;border-left:2px solid rgba(243,241,234,.2)}
-.mks .stat strong{font-family:var(--display);font-size:clamp(2.2rem,4.5vw,3.4rem);font-weight:800;line-height:1;color:var(--mustard);font-variant-numeric:tabular-nums}
-.mks .stat span{color:var(--on-forest-muted);font-size:.95rem}
-@media (max-width:760px){
-  .mks .stats{grid-template-columns:repeat(2,1fr)}
-}
+/* App store badges (official artwork, never recoloured or cropped). Own
+   class names: the design's ".soon" collided with the Family chat card. */
+.mks .mks-store-badges{display:flex;flex-wrap:wrap;gap:12px;align-items:flex-start;margin-top:4px}
+.mks .mks-store-badge{position:relative;display:block;line-height:0;flex:none}
+.mks .mks-store-badge img{display:block;height:40px;width:auto;max-width:none}
+.mks a.mks-store-badge{text-decoration:none}
+/* Sits just above the badge's top-right corner so it never covers the badge text. */
+.mks .mks-store-pill{position:absolute;top:-15px;right:-10px;background:var(--mustard);color:#2E2006;font-size:.6rem;line-height:1.3;font-weight:700;letter-spacing:.08em;text-transform:uppercase;white-space:nowrap;padding:2px 7px;border-radius:999px;box-shadow:0 2px 6px -2px rgba(0,0,0,.3)}
 /* Story */
+.mks .after-hero{padding-top:clamp(16px,3vw,40px)}
 .mks .story{display:grid;grid-template-columns:1fr 1.1fr;gap:clamp(32px,5vw,72px);align-items:center}
 .mks .story-visual{position:relative;border-radius:30px;background:var(--mustard-soft);min-height:460px;overflow:hidden;display:grid;place-items:center;padding:32px;min-width:0}
 .mks .story-visual .logo-tile{width:min(240px,60%);height:auto;border-radius:28%;box-shadow:var(--shadow)}
@@ -199,25 +199,6 @@ html:has(.mks-home){scroll-behavior:smooth}
 @media (max-width:480px){
   .mks .tour-shots .phone{width:min(46vw,200px)}
   .mks .tour-shots .phone + .phone{margin-left:-36px}
-}
-/* Also included */
-.mks .also{margin-top:clamp(64px,8vw,96px)}
-.mks .also h3.head{font-size:1.5rem;margin-bottom:20px}
-.mks .also-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
-.mks .also-grid div{background:var(--surface);border:1px solid var(--line);border-radius:18px;padding:20px;display:grid;gap:6px;align-content:start}
-.mks .also-grid .top{display:flex;justify-content:space-between;align-items:center;gap:8px}
-.mks .also-grid h4{font-size:1.15rem}
-.mks .also-grid p{color:var(--muted);font-size:.95rem}
-.mks .ultimate{margin-top:20px;display:flex;flex-wrap:wrap;gap:16px 28px;align-items:center;justify-content:space-between;background:var(--forest);color:var(--on-forest);border-radius:22px;padding:24px 28px}
-.mks .ultimate h3{font-size:1.3rem}
-.mks .ultimate p{color:var(--on-forest-muted);max-width:60ch}
-.mks .ultimate .pills{display:flex;gap:8px;flex-wrap:wrap}
-.mks .ultimate .pills span{border:1px solid rgba(243,241,234,.3);border-radius:999px;padding:6px 14px;font-weight:600;font-size:.9rem}
-@media (max-width:900px){
-  .mks .also-grid{grid-template-columns:repeat(2,1fr)}
-}
-@media (max-width:560px){
-  .mks .also-grid{grid-template-columns:1fr}
 }
 /* Day timeline */
 .mks .day{display:grid;grid-template-columns:.8fr 1.2fr;gap:clamp(32px,5vw,72px);align-items:start}
