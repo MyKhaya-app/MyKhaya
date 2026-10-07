@@ -23,6 +23,20 @@ remote credentials, or “send to PROD” action. Uploaded packages use the
 controlled `MYKHAYA_HOME_MIGRATION_STORAGE_DIR` path and should be removed
 under the deployment retention policy after use.
 
+## Package upload limit
+
+PCC Home Migration JSON uploads are limited to 50 MiB, including multipart
+overhead. This limit is scoped to `POST /api/v1/platform/home-migration/upload`;
+the normal 1 MiB API request limit remains unchanged. The API rejects a larger
+upload with a 413 response before JSON parsing and reports the supported limit
+to the operator. Package validation, checksum verification, source-environment
+checks, and migration-ID checks still run for every accepted upload.
+
+Asset bytes included in the package are base64-encoded inside the JSON, so they
+increase the transfer size beyond their binary size. The package format is
+unchanged; keep unusually large Homes within the documented limit or remove
+unneeded local assets before export.
+
 ## Container storage
 
 The API runs read-only except for dedicated application-data mounts. Home
