@@ -12,15 +12,12 @@ vi.mock("@mykhaya/api-client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@mykhaya/api-client")>();
   return {
     ...actual,
-    api: { ...actual.api, publicSignupState: vi.fn() },
     platformApi: { get: vi.fn(), post: vi.fn(), put: vi.fn(), patch: vi.fn(), delete: vi.fn() },
   };
 });
 
 const { platformApi } = await import("@mykhaya/api-client");
-const { api } = await import("@mykhaya/api-client");
 const get = platformApi.get as unknown as ReturnType<typeof vi.fn>;
-const publicSignupState = api.publicSignupState as unknown as ReturnType<typeof vi.fn>;
 const put = platformApi.put as unknown as ReturnType<typeof vi.fn>;
 const post = platformApi.post as unknown as ReturnType<typeof vi.fn>;
 
@@ -90,7 +87,7 @@ function mockRoutes(
   get.mockImplementation((path: string) => {
     if (path === "/auth/me") return Promise.resolve(actor);
     if (path === "/settings") return Promise.resolve(settings);
-    if (path === "/public/signup-state") return Promise.resolve({
+    if (path === "/signup-state") return Promise.resolve({
       signup_mode: "normal",
       registration_open: true,
       invitation_required: false,
@@ -120,15 +117,6 @@ function mockRoutes(
 
 beforeEach(() => {
   vi.clearAllMocks();
-  publicSignupState.mockResolvedValue({
-    signup_mode: "normal",
-    registration_open: true,
-    invitation_required: false,
-    normal_signup_available: true,
-    beta_joining_available: false,
-    waitlist_available: false,
-    joinable_count: 0,
-  });
   mockRoutes();
 });
 
@@ -161,6 +149,13 @@ describe("PCC Settings — friendly labels, not raw keys", () => {
 });
 
 describe("PCC Settings — value/state rendering, never Unavailable", () => {
+  it("loads registration state through the authenticated platform surface", async () => {
+    render(<PlatformSettingsPage />);
+
+    await screen.findByRole("heading", { name: "Maintenance mode" });
+    expect(get).toHaveBeenCalledWith("/signup-state");
+  });
+
   it("shows a default-sourced value with the 'Using deployment default' caption", async () => {
     render(<PlatformSettingsPage />);
 

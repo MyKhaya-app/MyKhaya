@@ -82,8 +82,10 @@ class SignupPolicy:
     Precedence (most restrictive wins; no combination can be looser than any
     one of its inputs):
 
-    1. maintenance_mode — the whole consumer API answers 503 (a router
-       dependency, evaluated before any signup logic ever runs).
+    1. maintenance_mode — consumer API routers answer 503 (a router
+       dependency, evaluated before any signup logic ever runs). Platform
+       Control Centre routers are a separate operator control plane and are
+       deliberately not governed by this consumer-maintenance dependency.
     2. Deployment hard limit `Settings.registration_mode == "closed"`.
     3. PCC `registration_enabled == False` — master switch for *every* new
        account path (password, Founding Beta, Apple).

@@ -105,6 +105,16 @@ class DevelopmentDeploymentTests(unittest.TestCase):
         self.assertNotIn("--proxy-headers", dockerfile)
         self.assertNotIn("--forwarded-allow-ips", dockerfile)
 
+    def test_home_migration_storage_isolated_and_writable_for_api(self) -> None:
+        compose = (ROOT / "compose.yml").read_text(encoding="utf-8")
+        dev = (ROOT / "compose.dev.yml").read_text(encoding="utf-8")
+        dockerfile = (ROOT / "apps/api/Dockerfile").read_text(encoding="utf-8")
+        self.assertIn("home_migration_data:/data/home-migrations", compose)
+        self.assertIn("home_migration_data: {}", compose)
+        self.assertIn("name: mykhaya_dev_home_migration_data", dev)
+        self.assertIn("/data/home-migrations", dockerfile)
+        self.assertIn("chown mykhaya:mykhaya", dockerfile)
+
     def test_caddy_preserves_proxy_headers_for_api(self) -> None:
         for relative in (
             "infrastructure/caddy/Caddyfile.dev",

@@ -8,7 +8,9 @@ export class PlatformClient {
         : document.cookie.match(/(?:^|; )mk_admin_csrf=([^;]+)/)?.[1];
     const headers = new Headers(init.headers);
     headers.set("Accept", "application/json");
-    if (init.body) headers.set("Content-Type", "application/json");
+    // Leave multipart/form-data's boundary to fetch; JSON callers pass a
+    // string body and continue to receive the normal content type.
+    if (typeof init.body === "string") headers.set("Content-Type", "application/json");
     if (csrf && !["GET", "HEAD", "OPTIONS"].includes(init.method ?? "GET"))
       headers.set("X-CSRF-Token", decodeURIComponent(csrf));
     const response = await fetch(`/api/v1/platform${path}`, {
@@ -51,6 +53,8 @@ export class PlatformClient {
   get = <T>(path: string) => this.request<T>(path);
   post = <T>(path: string, body: unknown) =>
     this.request<T>(path, { method: "POST", body: JSON.stringify(body) });
+  upload = <T>(path: string, body: FormData) =>
+    this.request<T>(path, { method: "POST", body });
   patch = <T>(path: string, body: unknown) =>
     this.request<T>(path, { method: "PATCH", body: JSON.stringify(body) });
   put = <T>(path: string, body: unknown) =>

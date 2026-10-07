@@ -108,7 +108,7 @@ services:
     # of avatar_data, matching that module's own dedicated storage
     # abstraction (mykhaya.attachments.storage, not mykhaya.avatars.storage).
     volumes:
-      ["avatar_data:/data/avatars", "support_attachment_data:/data/support-attachments", "vehicle_photo_data:/data/vehicle-photos", "meal_image_data:/data/meal-images"]
+      ["avatar_data:/data/avatars", "support_attachment_data:/data/support-attachments", "vehicle_photo_data:/data/vehicle-photos", "meal_image_data:/data/meal-images", "home_migration_data:/data/home-migrations"]
     restart: unless-stopped
     logging: *default-logging
     cap_drop: [ALL]
@@ -323,3 +323,4 @@ volumes:
   support_attachment_data: {}
   vehicle_photo_data: {}
   meal_image_data: {}
+  home_migration_data: {}

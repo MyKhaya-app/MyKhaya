@@ -2,8 +2,7 @@
 
 import { useEffect, useState, use } from "react";
 import { ApiError, api, type PublicLegalDocumentContent } from "@mykhaya/api-client";
-import { PublicHeader } from "@/components/marketing/public-header";
-import { PublicFooter } from "@/components/marketing/public-footer";
+import { MarketingChrome } from "@/components/marketing/site/marketing-chrome";
 import { LegalMarkdown } from "@/components/legal-markdown";
 
 // Stable, memorable public URLs (§2 of the Phase 3 brief) mapped to the
@@ -15,6 +14,9 @@ const SLUG_TO_KEY: Record<string, string> = {
   privacy: "privacy",
   children: "children_privacy",
   cookies: "cookies",
+  // Already linked from registration and Beta enrolment; previously unmapped,
+  // so the link rendered "Document not found".
+  "founding-beta-terms": "founding_beta_terms",
 };
 
 function readableDate(value: string | null): string | null {
@@ -51,8 +53,7 @@ export default function PublicLegalDocumentPage({
   }, [key]);
 
   return (
-    <>
-      <PublicHeader />
+    <MarketingChrome>
       <main className="standard-page legal-document-page">
         {!key && (
           <div className="page-heading">
@@ -70,7 +71,7 @@ export default function PublicLegalDocumentPage({
             <h1>Not yet available</h1>
             <p className="muted">
               This document hasn&rsquo;t been published yet. Please check back shortly, or{" "}
-              <a href="/help-support">contact support</a> if you need it urgently.
+              <a href="/support">contact support</a> if you need it urgently.
             </p>
           </div>
         )}
@@ -96,7 +97,6 @@ export default function PublicLegalDocumentPage({
           </>
         )}
       </main>
-      <PublicFooter />
-    </>
+    </MarketingChrome>
   );
 }

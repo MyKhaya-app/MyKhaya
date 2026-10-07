@@ -171,7 +171,7 @@ describe("AuthProvider", () => {
     expect(router.replace).not.toHaveBeenCalled();
   });
 
-  it.each(["/founding-beta", "/signup-choice", "/waitlist"])(
+  it.each(["/founding-beta", "/signup-choice", "/waitlist", "/support"])(
     "keeps %s public without session bootstrap or renewal",
     async (publicPath) => {
       pathname = publicPath;

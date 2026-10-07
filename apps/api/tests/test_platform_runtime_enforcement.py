@@ -197,6 +197,8 @@ async def test_maintenance_mode_on_blocks_consumers_but_not_pcc_and_is_live(
     assert public.status_code == 200 and public.json()["maintenance_mode"] is True
     assert (await client.get("/api/v1/health/live")).status_code == 200
     assert (await admin_client.get("/api/v1/platform/settings")).status_code == 200
+    platform_signup = await admin_client.get("/api/v1/platform/signup-state")
+    assert platform_signup.status_code == 200, platform_signup.text
 
     # Switching it off in PCC restores service on the very next request.
     assert (await put(False)).status_code == 200

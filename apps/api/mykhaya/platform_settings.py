@@ -196,6 +196,19 @@ SETTINGS_SCHEMA: dict[str, SettingDefinition] = {
         risk="sensitive",
         runtime_effect="effective",
     ),
+    "home_migration_enabled": SettingDefinition(
+        key="home_migration_enabled",
+        label="Enable Home Migration",
+        description=(
+            "Allows authorised platform administrators to export or import Home migration "
+            "packages. Keep this disabled except while performing a migration."
+        ),
+        section="Operations",
+        value_type="boolean",
+        python_type=bool,
+        risk="sensitive",
+        runtime_effect="effective",
+    ),
     "default_locale": SettingDefinition(
         key="default_locale",
         label="Default language / locale",

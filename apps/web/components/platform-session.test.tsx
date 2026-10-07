@@ -142,6 +142,16 @@ describe("PlatformShell session gate", () => {
     expect(await screen.findByText("Protected PCC content")).toBeInTheDocument();
   });
 
+  it("does not turn a maintenance 503 into the consumer maintenance surface", async () => {
+    get.mockRejectedValue(new ApiError(503, "Maintenance", "maintenance_mode"));
+    const { rendered } = renderShell();
+
+    expect(await screen.findByText("The Control Centre could not verify your session.")).toBeInTheDocument();
+    expect(rendered).not.toHaveBeenCalled();
+    expect(screen.queryByTestId("maintenance-screen")).not.toBeInTheDocument();
+    expect(router.replace).not.toHaveBeenCalled();
+  });
+
   it("does not paint protected UI from a stale cached session before the server answers", async () => {
     const now = vi.spyOn(Date, "now");
     now.mockReturnValue(1_000_000);

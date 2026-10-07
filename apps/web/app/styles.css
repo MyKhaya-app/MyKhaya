@@ -2,7 +2,6 @@
   box-sizing: border-box;
 }
 
-.mk-beta-hero,
 .mk-choice {
   margin: 0 auto;
   max-width: 1040px;
@@ -10,69 +9,215 @@
   text-align: center;
 }
 
-@media (min-width: 1100px) {
-  .mk-beta-hero { padding-block: clamp(9rem, 15vh, 13rem); }
-}
-
-.mk-beta-hero h1,
 .mk-choice h1 {
   margin: 0 auto 1.25rem;
   max-width: 720px;
 }
 
-.mk-beta-hero > p:not(.eyebrow),
 .mk-choice > p:not(.eyebrow) {
   margin: 0.75rem auto;
   max-width: 650px;
 }
 
-.mk-beta-places {
-  color: var(--mk-green, #55705a);
-  font-weight: 700;
+/* --- Founding Beta (/founding-beta) -----------------------------------------
+   (Selectors that compete with the generic button/.eyebrow rules further down
+   this file are scoped under .mk-beta to win on specificity, not order.)
+   Mobile-first, matching the approved mockup: centred hero, one "What you get"
+   card, a full-width primary CTA, then the member/terms lines. The marketing
+   chrome (MarketingChrome) is a full-height column, so <main> fills the space
+   between nav and footer; on wide screens the same blocks sit in two columns,
+   centred in that space. */
+.mk-beta-main {
+  display: flex;
+  flex: 1;
+  justify-content: center;
+  padding: 1.75rem 1.25rem 2.5rem;
 }
-
-.mk-beta-public-list {
-  list-style: none;
-  margin: 1.65rem auto;
-  max-width: 40rem;
-  padding: 0;
+.mk-beta {
+  display: grid;
+  gap: 1.5rem;
+  grid-template-areas: "intro" "benefits" "actions";
+  max-width: 34rem;
+  width: 100%;
+}
+.mk-beta-intro {
+  grid-area: intro;
   text-align: center;
 }
-
-.mk-beta-public-list li {
-  justify-content: center;
+.mk-beta-intro .mk-beta-eyebrow {
+  letter-spacing: 0.2em;
+  margin: 0 0 0.9rem;
 }
-
-.mk-beta-hero .auth-footer {
-  justify-content: center;
-  margin-inline: auto;
-  text-align: center;
+.mk-beta-intro h1 {
+  color: var(--colour-slate);
+  font-size: clamp(2.5rem, 11vw, 2.85rem);
+  font-weight: 800;
+  letter-spacing: -0.035em;
+  line-height: 1.04;
+  margin: 0 auto 0.85rem;
+  max-width: 11ch;
 }
-
-.mk-beta-offer-card {
-  background: var(--colour-white, #fff);
-  border: 1px solid var(--mk-border, #d8ded5);
-  border-radius: var(--radius-card, 1.25rem);
-  box-shadow: var(--shadow-card);
-  margin: 2rem auto 0;
-  max-width: 38rem;
-  padding: clamp(1.25rem, 4vw, 2.25rem);
-  text-align: left;
-}
-
-.mk-beta-offer-card h3 {
-  margin-top: 0;
-}
-
-.mk-beta-offer-card .button {
-  margin-top: 1rem;
-}
-
-.mk-closed-state {
+.mk-beta-lede {
+  color: var(--colour-muted);
+  font-size: 1.15rem;
+  line-height: 1.45;
   margin: 0 auto;
-  max-width: 720px;
-  padding: 8rem 2rem;
+  max-width: 19.5rem;
+}
+.mk-beta-benefits {
+  background: var(--colour-white);
+  border: 1px solid #ece6db;
+  border-radius: 1.25rem;
+  box-shadow: 0 8px 24px rgb(35 48 40 / 5%);
+  grid-area: benefits;
+  padding: 1.35rem 1.35rem 0.4rem;
+}
+.mk-beta-benefits h2 {
+  color: var(--colour-muted);
+  font-size: 0.78rem;
+  font-weight: 800;
+  letter-spacing: 0.18em;
+  margin: 0 0 0.35rem;
+  text-transform: uppercase;
+}
+.mk-beta-benefits ul {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.mk-beta-benefits li {
+  align-items: center;
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: 3rem minmax(0, 1fr);
+  padding: 0.85rem 0;
+}
+.mk-beta-benefits li + li {
+  border-top: 1px solid #efe9de;
+}
+.mk-beta-benefit-icon {
+  align-items: center;
+  border-radius: 0.9rem;
+  display: flex;
+  height: 3rem;
+  justify-content: center;
+  width: 3rem;
+}
+.mk-beta-benefit-icon.sage {
+  background: var(--colour-sage-soft);
+  color: var(--colour-forest);
+}
+.mk-beta-benefit-icon.blue {
+  background: #e3ecf5;
+  color: #3d5f8a;
+}
+.mk-beta-benefit-icon.sand {
+  background: #f6ecdc;
+  color: #9a6a2e;
+}
+.mk-beta-benefit-text {
+  display: grid;
+  gap: 0.15rem;
+  min-width: 0;
+}
+.mk-beta-benefit-text strong {
+  color: var(--colour-slate);
+  font-size: 1.05rem;
+  line-height: 1.3;
+}
+.mk-beta-benefit-text span {
+  color: var(--colour-muted);
+  font-size: 0.95rem;
+  line-height: 1.35;
+}
+.mk-beta-actions {
+  display: grid;
+  gap: 0.25rem;
+  grid-area: actions;
+  justify-items: center;
   text-align: center;
+}
+.mk-beta-actions .notice {
+  margin: 0 0 0.75rem;
+  width: 100%;
+}
+.mk-beta .mk-beta-cta {
+  align-items: center;
+  background: var(--colour-forest);
+  border-radius: 0.9rem;
+  color: white;
+  display: flex;
+  font-size: 1.2rem;
+  font-weight: 700;
+  gap: 0.6rem;
+  justify-content: center;
+  min-height: 3.4rem;
+  width: 100%;
+}
+.mk-beta .mk-beta-cta:hover {
+  background: var(--colour-forest-dark);
+  color: white;
+}
+.mk-beta-member {
+  color: var(--colour-slate);
+  font-size: 1.05rem;
+  margin: 1.15rem 0 0;
+}
+.mk-beta-member a {
+  color: var(--colour-forest);
+  font-weight: 800;
+}
+.mk-beta-terms {
+  color: var(--colour-muted);
+  font-size: 0.88rem;
+  margin: 0.5rem 0 0;
+}
+.mk-beta-terms a {
+  color: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+@media (min-width: 700px) {
+  .mk-beta-main {
+    align-items: center;
+    padding: 3rem 2rem;
+  }
+}
+@media (min-width: 1100px) {
+  .mk-beta {
+    align-items: center;
+    column-gap: 4.5rem;
+    grid-template-areas: "intro benefits" "actions benefits";
+    grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr);
+    max-width: 68rem;
+    row-gap: 2rem;
+  }
+  .mk-beta-intro,
+  .mk-beta-actions {
+    justify-items: start;
+    text-align: left;
+  }
+  .mk-beta-intro {
+    align-self: end;
+  }
+  .mk-beta-actions {
+    align-self: start;
+  }
+  .mk-beta-intro h1 {
+    font-size: clamp(3.25rem, 4.4vw, 4.25rem);
+    margin-inline: 0;
+  }
+  .mk-beta-lede {
+    font-size: 1.25rem;
+    margin-inline: 0;
+    max-width: 26rem;
+  }
+  .mk-beta .mk-beta-cta {
+    max-width: 24rem;
+  }
+  .mk-beta-benefits {
+    padding: 1.75rem 1.75rem 0.6rem;
+  }
 }
 
 .mk-choice-grid {
@@ -90,9 +235,7 @@
 }
 
 @media (max-width: 700px) {
-  .mk-beta-hero,
-  .mk-choice,
-  .mk-closed-state {
+  .mk-choice {
     padding: 4rem 1.25rem;
   }
 
@@ -430,905 +573,6 @@ textarea {
   }
 }
 
-/* --- Header --------------------------------------------------------------- */
-.mk-header {
-  background: rgb(250 247 241 / 92%);
-  backdrop-filter: blur(10px);
-  /* This is the public marketing homepage's header — a sticky element
-     pinned to `top: 0`, which puts it directly under the iOS status bar/
-     Dynamic Island with no inset of its own (the previously-missing case:
-     the safe-area strategy above only ever covered .standard-page/
-     .auth-page/.platform-login/the authenticated .app-header, never this
-     page). Same shared-variable approach, applied here for the first time —
-     a no-op in an ordinary browser tab. */
-  padding: max(1rem, var(--safe-top)) max(4vw, var(--safe-right)) 1rem
-    max(4vw, var(--safe-left));
-  position: sticky;
-  top: 0;
-  z-index: 20;
-}
-.mk-header nav {
-  align-items: center;
-  display: flex;
-  gap: 1.5rem;
-  justify-content: space-between;
-  margin: auto;
-  max-width: 1500px;
-}
-.mk-header-logo .brand {
-  font-size: 1.45rem;
-  gap: 0.65rem;
-}
-.mk-header-logo .brand-mark {
-  height: 2.65rem;
-  width: 2.55rem;
-}
-.mk-header-links {
-  align-items: center;
-  display: flex;
-  flex: 1;
-  gap: 2.5rem;
-  justify-content: center;
-}
-.mk-header-links a {
-  color: var(--colour-slate);
-  font-size: 1.02rem;
-  font-weight: 600;
-}
-.mk-header-links a:hover {
-  color: var(--colour-forest);
-}
-.mk-header-actions {
-  display: flex;
-  flex-shrink: 0;
-  gap: 0.7rem;
-}
-@media (max-width: 860px) {
-  .mk-header-links {
-    display: none;
-  }
-}
-
-/* --- Hero ------------------------------------------------------------------ */
-.mk-hero {
-  align-items: center;
-  background:
-    radial-gradient(circle at 76% 42%, rgb(227 216 195 / 72%), transparent 33%),
-    radial-gradient(circle at 98% 4%, rgb(245 236 218 / 88%), transparent 34%);
-  display: grid;
-  gap: 2vw;
-  grid-template-columns: minmax(410px, 0.88fr) minmax(690px, 1.32fr);
-  margin: 0 auto;
-  max-width: 1500px;
-  min-height: 690px;
-  padding: 4.5rem 4vw 4rem;
-}
-.mk-hero-copy {
-  position: relative;
-  z-index: 3;
-}
-.mk-hero-copy .eyebrow {
-  color: var(--colour-forest);
-  font-size: 0.78rem;
-  letter-spacing: 0.2em;
-  margin-bottom: 1rem;
-  text-transform: uppercase;
-}
-.mk-hero h1 {
-  font-size: clamp(3.25rem, 5.2vw, 5.5rem);
-  letter-spacing: -0.03em;
-  line-height: 0.98;
-  margin: 0 0 1.35rem;
-}
-.mk-hero-lead {
-  color: var(--colour-muted);
-  font-size: clamp(1.08rem, 1.45vw, 1.32rem);
-  line-height: 1.55;
-  max-width: 600px;
-}
-.mk-hero-actions {
-  align-items: center;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 1rem;
-  margin-top: 2.25rem;
-}
-.mk-hero-reassurance {
-  color: var(--colour-muted);
-  display: flex;
-  flex-wrap: wrap;
-  font-size: 0.9rem;
-  font-weight: 600;
-  gap: 0.4rem 1.5rem;
-  list-style: none;
-  margin: 1.75rem 0 0;
-  padding: 0;
-}
-.mk-hero-reassurance li::before {
-  color: var(--colour-forest);
-  content: "✓";
-  margin-right: 0.4rem;
-}
-.mk-hero-art {
-  height: 680px;
-  min-width: 0;
-  position: relative;
-}
-.mk-hero-phone {
-  background: var(--colour-forest-dark);
-  border: 3px solid rgb(255 255 255 / 14%);
-  border-radius: var(--radius-shell);
-  box-shadow: var(--shadow-hero);
-  overflow: hidden;
-  position: absolute;
-}
-.mk-hero-phone img {
-  display: block;
-  height: 100%;
-  object-fit: cover;
-  object-position: top center;
-  width: 100%;
-}
-/* Three real screens, overlapping large across most of the hero's right
-   half, matching the approved reference: Meal Plans behind on the left,
-   Calendar behind on the right, Home the largest and frontmost. */
-.mk-hero-phone.meal {
-  height: 540px;
-  left: 2%;
-  top: 13%;
-  transform: rotate(-7deg);
-  width: 270px;
-  z-index: 1;
-}
-.mk-hero-phone.calendar {
-  height: 540px;
-  right: 1%;
-  top: 17%;
-  transform: rotate(7deg);
-  width: 270px;
-  z-index: 1;
-}
-.mk-hero-phone.home {
-  height: 670px;
-  left: 50%;
-  top: 0;
-  transform: translateX(-50%);
-  width: 335px;
-  z-index: 2;
-}
-
-/* --- Shared section rhythm -------------------------------------------------- */
-.mk-section {
-  margin: 0 auto;
-  max-width: 1320px;
-  padding: 4.25rem 4vw;
-}
-.mk-section-heading {
-  margin: 0 auto 2.75rem;
-  max-width: 640px;
-  text-align: center;
-}
-.mk-section-heading h2 {
-  font-size: clamp(1.6rem, 3vw, 2.15rem);
-  margin: 0.5rem 0 0;
-}
-
-/* --- Lifestyle/emotional section --------------------------------------------- */
-.mk-lifestyle {
-  max-width: none;
-  padding: 0 4vw 4.25rem;
-  width: 100%;
-}
-.mk-lifestyle-panel {
-  background: linear-gradient(
-    120deg,
-    var(--colour-forest),
-    var(--colour-forest-dark)
-  );
-  border-radius: var(--radius-shell);
-  color: var(--colour-cream-light);
-  margin: 0 auto;
-  max-width: 1500px;
-  min-height: 360px;
-  overflow: hidden;
-  padding: 4.5rem clamp(2rem, 7vw, 7rem);
-  position: relative;
-}
-.mk-lifestyle-panel::before,
-.mk-lifestyle-panel::after {
-  border: 1px solid rgb(255 255 255 / 16%);
-  border-radius: 50%;
-  content: "";
-  height: 250px;
-  position: absolute;
-  width: 250px;
-}
-.mk-lifestyle-panel::before {
-  right: -70px;
-  top: -90px;
-  transform: rotate(28deg);
-}
-.mk-lifestyle-panel::after {
-  bottom: -130px;
-  left: -55px;
-  transform: rotate(-25deg);
-}
-.mk-lifestyle-panel h2 {
-  font-size: clamp(2rem, 3.8vw, 2.75rem);
-  margin: 0 0 1.1rem;
-}
-.mk-lifestyle-panel > p {
-  color: rgb(250 247 241 / 80%);
-  font-size: 1.1rem;
-  line-height: 1.7;
-  max-width: 520px;
-}
-.mk-lifestyle-points {
-  display: grid;
-  gap: 1.25rem 2.5rem;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  list-style: none;
-  margin: 2.5rem 0 0;
-  padding: 0;
-}
-.mk-lifestyle-points li {
-  align-items: center;
-  display: flex;
-  font-weight: 700;
-  gap: 0.6rem;
-}
-.mk-lifestyle-icon {
-  align-items: center;
-  background: rgb(255 255 255 / 12%);
-  border-radius: 999px;
-  color: var(--colour-cream-light);
-  display: flex;
-  height: 40px;
-  justify-content: center;
-  width: 40px;
-}
-
-/* --- Feature showcase -------------------------------------------------------- */
-.mk-features {
-  background: var(--colour-cream);
-  margin: 0;
-  max-width: none;
-  padding: 3.25rem 4vw 4.25rem;
-  width: 100%;
-}
-.mk-features .mk-section-heading,
-.mk-features-grid {
-  margin-inline: auto;
-  max-width: 1320px;
-}
-.mk-features-grid {
-  display: grid;
-  gap: 1.25rem;
-  grid-template-columns: repeat(4, 1fr);
-  max-width: 1500px;
-}
-@media (max-width: 960px) {
-  .mk-features-grid {
-    grid-template-columns: repeat(2, 1fr);
-  }
-}
-@media (max-width: 560px) {
-  .mk-features-grid {
-    grid-template-columns: 1fr;
-  }
-}
-.mk-feature-card {
-  background: var(--colour-white);
-  border-radius: var(--radius-card);
-  box-shadow: var(--shadow-card);
-  display: grid;
-  gap: 0.7rem;
-  min-height: 220px;
-  padding: 1.45rem 1.4rem 1.3rem;
-}
-.mk-feature-icon {
-  align-items: center;
-  background: var(--colour-sage-soft);
-  border-radius: 0.85rem;
-  color: var(--colour-terracotta);
-  display: flex;
-  height: 56px;
-  justify-content: center;
-  width: 56px;
-}
-.mk-feature-card:nth-child(2) .mk-feature-icon,
-.mk-feature-card:nth-child(4) .mk-feature-icon {
-  background: var(--colour-cream);
-  color: var(--colour-terracotta);
-}
-.mk-feature-card:nth-child(3) .mk-feature-icon {
-  background: var(--colour-sage-soft);
-  color: var(--colour-forest);
-}
-.mk-feature-card h3 {
-  font-size: 1.15rem;
-  margin: 0;
-}
-.mk-feature-link {
-  color: var(--colour-forest);
-  font-weight: 700;
-  margin-top: 0.35rem;
-}
-.mk-feature-link:hover {
-  text-decoration: underline;
-}
-.mk-feature-card p {
-  color: var(--colour-muted);
-  line-height: 1.6;
-  margin: 0;
-}
-
-/* --- How it works ------------------------------------------------------------ */
-.mk-how-grid {
-  counter-reset: none;
-  display: grid;
-  gap: 2.5rem 2rem;
-  grid-template-columns: repeat(3, 1fr);
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-.mk-how-step {
-  display: grid;
-  gap: 0.6rem;
-}
-.mk-how-number {
-  align-items: center;
-  background: var(--colour-forest);
-  border-radius: 999px;
-  color: white;
-  display: flex;
-  font-size: 1rem;
-  font-weight: 800;
-  height: 40px;
-  justify-content: center;
-  width: 40px;
-}
-.mk-how-step h3 {
-  font-size: 1.05rem;
-  margin: 0;
-}
-.mk-how-step p {
-  color: var(--colour-muted);
-  line-height: 1.6;
-  margin: 0;
-}
-
-/* --- Pricing ------------------------------------------------------------------ */
-/* Scoped to .mk-pricing / .mk-plan*: nothing outside the public homepage's pricing
-   section uses these classes, so the consumer app's mobile/native geometry is untouched.
-   The local --mk-* values are the plan accent tints from the approved pricing design;
-   they are defined once here and are not used anywhere else. */
-.mk-pricing {
-  --mk-plan-green-tile: #e5eee4;
-  --mk-plan-green-tint: #f1f5ee;
-  --mk-plan-peach-tile: #fbebdf;
-  --mk-plan-lavender-tile: #efebf6;
-  --mk-plan-lavender-soft: #e9e4f3;
-  --mk-plan-lavender-ink: #6a5a7d;
-  --mk-plan-border: #eee8dc;
-  isolation: isolate;
-  position: relative;
-}
-/* Two barely-there colour washes behind the cards: plain radial gradients (no blur
-   filter), inside the section, so they cost nothing and cannot cause overflow. */
-.mk-pricing::before {
-  background:
-    radial-gradient(34rem 22rem at 96% 6%, rgb(125 143 122 / 9%), transparent 70%),
-    radial-gradient(30rem 20rem at 2% 62%, rgb(233 180 76 / 6%), transparent 70%);
-  content: "";
-  inset: 0;
-  pointer-events: none;
-  position: absolute;
-  z-index: -1;
-}
-.mk-pricing-heading {
-  margin: 0 auto 3rem;
-  max-width: 46rem;
-  text-align: center;
-}
-.mk-pricing-heading h2 {
-  color: var(--colour-slate);
-  font-size: 2.6rem;
-  letter-spacing: -0.02em;
-  line-height: 1.12;
-  margin: 0;
-}
-.mk-pricing-heading p {
-  color: var(--colour-muted);
-  font-size: 1.15rem;
-  line-height: 1.55;
-  margin: 0.9rem auto 0;
-}
-.mk-pricing-grid {
-  align-items: stretch;
-  display: grid;
-  gap: 1.5rem;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  margin: 0 auto;
-  max-width: 1180px;
-}
-.mk-plan {
-  background: var(--colour-white);
-  border: 1px solid var(--mk-plan-border);
-  border-radius: 1.75rem;
-  box-shadow: var(--shadow-card);
-  display: flex;
-  flex-direction: column;
-  gap: 1.25rem;
-  min-width: 0;
-  padding: 2rem;
-  position: relative;
-}
-.mk-plan-family {
-  background: var(--mk-plan-green-tint);
-  border: 2px solid var(--colour-forest);
-  box-shadow: var(--shadow-hero);
-  color: var(--colour-slate);
-}
-.mk-plan-badge {
-  align-items: center;
-  background: var(--colour-forest);
-  border-radius: 999px;
-  color: white;
-  display: inline-flex;
-  font-size: 0.78rem;
-  font-weight: 800;
-  gap: 0.4rem;
-  left: 50%;
-  letter-spacing: 0.06em;
-  padding: 0.45rem 1rem;
-  position: absolute;
-  text-transform: uppercase;
-  top: 0;
-  max-width: calc(100% - 1rem);
-  text-align: center;
-  transform: translate(-50%, -50%);
-}
-.mk-plan-badge svg {
-  color: var(--colour-mustard);
-  height: 0.95rem;
-  width: 0.95rem;
-}
-.mk-plan-top {
-  align-items: center;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 1.1rem;
-}
-.mk-plan-icon {
-  align-items: center;
-  border-radius: 1.15rem;
-  display: inline-flex;
-  flex: 0 0 auto;
-  height: 4.4rem;
-  justify-content: center;
-  width: 4.4rem;
-}
-.mk-plan-icon svg {
-  height: 2.1rem;
-  stroke-width: 1.6;
-  width: 2.1rem;
-}
-.mk-plan-free .mk-plan-icon {
-  background: var(--mk-plan-green-tile);
-  color: var(--colour-forest);
-}
-.mk-plan-family .mk-plan-icon {
-  background: var(--mk-plan-peach-tile);
-  color: var(--colour-terracotta);
-}
-.mk-plan-ultimate .mk-plan-icon {
-  background: var(--mk-plan-lavender-tile);
-  color: var(--mk-plan-lavender-ink);
-}
-.mk-plan-header {
-  flex: 1 1 9rem;
-  min-width: 0;
-}
-.mk-plan-header h3 {
-  font-size: 1.4rem;
-  margin: 0;
-  overflow-wrap: anywhere;
-}
-.mk-plan-tagline {
-  color: var(--colour-muted);
-  font-size: 0.92rem;
-  margin: 0.25rem 0 0;
-}
-.mk-plan-pricing {
-  display: grid;
-  gap: 0.5rem;
-}
-.mk-plan-price {
-  font-size: 3rem;
-  font-weight: 800;
-  letter-spacing: -0.02em;
-  line-height: 1.1;
-  margin: 0;
-  overflow-wrap: anywhere;
-}
-.mk-plan-price span {
-  color: var(--colour-muted);
-  font-size: 1.2rem;
-  font-weight: 600;
-  letter-spacing: 0;
-}
-.mk-plan-free .mk-plan-price {
-  margin-top: 0.4rem;
-}
-.mk-plan-hint {
-  color: var(--colour-muted);
-  font-size: 0.9rem;
-  line-height: 1.45;
-  margin: 0;
-}
-.mk-plan-loading {
-  color: var(--colour-muted);
-  margin: 0;
-}
-.mk-plan .notice {
-  margin: 0;
-}
-.mk-plan-toggle {
-  background: var(--colour-white);
-  border: 1px solid #d9d6cc;
-  border-radius: 1rem;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.25rem;
-  padding: 0.25rem;
-}
-.mk-plan-toggle button {
-  background: transparent;
-  border-radius: 0.75rem;
-  box-shadow: none;
-  color: var(--colour-slate);
-  flex: 1 1 5.5rem;
-  min-height: 44px;
-  min-width: 0;
-  padding: 0.55rem 0.5rem;
-  transform: none;
-}
-.mk-plan-toggle button:hover {
-  box-shadow: none;
-  transform: none;
-}
-.mk-plan-family .mk-plan-toggle .toggle-active {
-  background: #dce8d9;
-  color: var(--colour-forest-dark);
-}
-.mk-plan-ultimate .mk-plan-toggle .toggle-active {
-  background: var(--mk-plan-lavender-soft);
-  color: var(--mk-plan-lavender-ink);
-}
-.mk-plan-list {
-  color: var(--colour-slate);
-  display: grid;
-  gap: 0.6rem;
-  list-style: none;
-  margin: 0;
-  min-width: 0;
-  padding: 0;
-}
-.mk-plan-list li {
-  align-items: flex-start;
-  display: flex;
-  gap: 0.7rem;
-  line-height: 1.35;
-  min-width: 0;
-  overflow-wrap: anywhere;
-}
-.mk-plan-tick {
-  flex: 0 0 auto;
-  height: 1.05rem;
-  margin-top: 0.15rem;
-  width: 1.05rem;
-}
-.mk-plan-free .mk-plan-tick {
-  color: var(--colour-sage-dark);
-}
-.mk-plan-family .mk-plan-tick {
-  color: var(--colour-forest);
-}
-.mk-plan-ultimate .mk-plan-tick {
-  color: var(--mk-plan-lavender-ink);
-}
-/* The call to action always sits at the bottom of its card, whatever the list length. */
-.mk-plan-cta {
-  margin-top: auto;
-  min-height: 52px;
-  width: 100%;
-}
-.mk-plan-list + .mk-plan-cta,
-.mk-plan-list + .notice {
-  margin-top: auto;
-}
-.mk-plan-free .mk-plan-list {
-  margin-bottom: 1rem;
-}
-.mk-plan-cta-family {
-  background: var(--colour-forest);
-  color: white;
-}
-.mk-plan-cta-family:hover {
-  background: var(--colour-forest-dark);
-  color: white;
-}
-.mk-plan-cta-ultimate {
-  background: var(--mk-plan-lavender-ink);
-  color: white;
-}
-.mk-plan-cta-ultimate:hover {
-  background: #5b4c6d;
-  color: white;
-}
-
-.mk-pricing-more {
-  margin: 4rem auto 0;
-  max-width: 1180px;
-}
-.mk-pricing-more-label {
-  align-items: center;
-  color: var(--colour-muted);
-  display: flex;
-  font-size: 0.78rem;
-  font-weight: 700;
-  gap: 1.25rem;
-  letter-spacing: 0.14em;
-  margin: 0 0 2rem;
-  text-transform: uppercase;
-}
-.mk-pricing-more-label::before,
-.mk-pricing-more-label::after {
-  background: #e4dfd3;
-  content: "";
-  flex: 1;
-  height: 1px;
-}
-.mk-pricing-assurances {
-  display: grid;
-  gap: 1.5rem;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  list-style: none;
-  margin: 0;
-  padding: 0;
-}
-.mk-pricing-assurances li {
-  align-items: center;
-  display: flex;
-  gap: 0.9rem;
-  min-width: 0;
-}
-.mk-pricing-assurances strong {
-  color: var(--colour-slate);
-  display: block;
-  font-size: 0.95rem;
-}
-.mk-pricing-assurances li div span {
-  color: var(--colour-muted);
-  display: block;
-  font-size: 0.85rem;
-  line-height: 1.4;
-  margin-top: 0.15rem;
-}
-.mk-assurance-icon {
-  align-items: center;
-  border-radius: 50%;
-  display: inline-flex;
-  flex: 0 0 auto;
-  height: 3.4rem;
-  justify-content: center;
-  width: 3.4rem;
-}
-.mk-assurance-icon svg {
-  height: 1.5rem;
-  stroke-width: 1.7;
-  width: 1.5rem;
-}
-.mk-assurance-icon.green {
-  background: var(--mk-plan-green-tile);
-  color: var(--colour-forest);
-}
-.mk-assurance-icon.peach {
-  background: var(--mk-plan-peach-tile);
-  color: var(--colour-terracotta);
-}
-.mk-assurance-icon.lavender {
-  background: var(--mk-plan-lavender-tile);
-  color: var(--mk-plan-lavender-ink);
-}
-
-/* --- Final CTA ------------------------------------------------------------------ */
-.mk-final-cta {
-  background: var(--colour-sage-soft);
-  color: var(--colour-slate);
-  margin: 0;
-  max-width: none;
-  padding: 5.5rem 5vw;
-  text-align: center;
-  width: 100%;
-}
-.mk-final-cta h2 {
-  font-size: clamp(1.7rem, 3.4vw, 2.4rem);
-  margin: 0 auto 0.6rem;
-  max-width: 620px;
-}
-.mk-final-cta p {
-  color: var(--colour-muted);
-  margin: 0 auto 2rem;
-}
-.mk-final-cta-button {
-  background: var(--colour-forest);
-  color: white;
-}
-.mk-final-cta-button:hover {
-  background: var(--colour-cream);
-  color: var(--colour-forest-dark);
-}
-
-/* --- Footer ------------------------------------------------------------------ */
-.mk-footer {
-  border-top: 1px solid #ece5d6;
-  margin: 0 auto;
-  max-width: 1500px;
-  padding: 2.5rem 4vw 3rem;
-  text-align: center;
-}
-.mk-footer-brand {
-  display: grid;
-  gap: 0.5rem;
-  justify-items: center;
-}
-.mk-footer-brand p {
-  color: var(--colour-muted);
-  margin: 0;
-}
-.mk-footer-links {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 1.25rem;
-  justify-content: center;
-  margin: 1.4rem 0;
-}
-.mk-footer-links a {
-  color: var(--colour-slate);
-  font-weight: 700;
-}
-.mk-footer-copyright {
-  color: var(--colour-muted);
-  font-size: 0.85rem;
-  margin: 0;
-}
-
-@media (max-width: 1100px) {
-  .mk-pricing-grid {
-    gap: 2rem;
-    grid-template-columns: minmax(0, 1fr);
-    max-width: 32rem;
-  }
-  .mk-pricing-assurances {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-}
-@media (max-width: 520px) {
-  .mk-pricing-assurances {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
-@media (max-width: 1100px) and (min-width: 801px) {
-  .mk-hero {
-    gap: 1rem;
-    grid-template-columns: minmax(300px, 0.8fr) minmax(500px, 1.2fr);
-    min-height: 600px;
-    padding-inline: 3vw;
-  }
-  .mk-hero-art {
-    height: 590px;
-  }
-  .mk-hero-phone.meal,
-  .mk-hero-phone.calendar {
-    height: 450px;
-    width: 225px;
-  }
-  .mk-hero-phone.home {
-    height: 570px;
-    width: 285px;
-  }
-}
-@media (max-width: 800px) {
-  .mk-header {
-    padding: max(1rem, var(--safe-top)) max(1.25rem, var(--safe-right)) 1rem
-      max(1.25rem, var(--safe-left));
-  }
-  .mk-header-actions .secondary {
-    display: none;
-  }
-  .mk-hero {
-    display: block;
-    min-height: 0;
-    padding: 3vh 1.25rem 4rem;
-  }
-  .mk-hero-art {
-    height: 300px;
-    margin: 3.5rem 1rem 0;
-  }
-  .mk-hero-phone {
-    position: static;
-    width: 100% !important;
-    height: auto !important;
-    transform: none !important;
-  }
-  .mk-hero-phone.meal,
-  .mk-hero-phone.calendar {
-    display: none;
-  }
-  .mk-hero-phone.home {
-    height: 320px !important;
-  }
-  .mk-hero-phone.home img {
-    height: 320px;
-  }
-  .mk-lifestyle-points {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .mk-section {
-    padding: 3.5rem 1.25rem;
-  }
-  .mk-features {
-    padding: 3.5rem 1.25rem;
-  }
-  .mk-lifestyle {
-    padding: 0 1.25rem 3.5rem;
-  }
-  .mk-lifestyle-panel {
-    padding: 2.5rem 1.5rem;
-  }
-  .mk-how-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
-  .mk-plan {
-    padding: 1.5rem;
-  }
-  .mk-plan-icon {
-    height: 3.6rem;
-    width: 3.6rem;
-  }
-  .mk-plan-icon svg {
-    height: 1.8rem;
-    width: 1.8rem;
-  }
-  .mk-pricing-heading {
-    margin-bottom: 2.5rem;
-  }
-  .mk-pricing-heading h2 {
-    font-size: 2rem;
-  }
-  .mk-pricing-heading p {
-    font-size: 1rem;
-  }
-  .mk-plan-price {
-    font-size: 2.5rem;
-  }
-  .mk-pricing-more {
-    margin-top: 3rem;
-  }
-  .mk-final-cta {
-    padding: 3.5rem 1.25rem;
-  }
-  .mk-footer {
-    padding: 2.5rem 1.25rem 3rem;
-  }
-  .mk-footer-links {
-    flex-direction: column;
-    gap: 0.85rem;
-  }
-}
 .auth-page {
   display: grid;
   grid-template-columns: minmax(300px, 1fr) minmax(420px, 1fr);

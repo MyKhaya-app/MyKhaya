@@ -1,8 +1,9 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
-import Welcome from "./page";
+import { render, screen, waitFor, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import HomePage from "./page";
 
 const { nativeState, authState, replace } = vi.hoisted(() => ({
   nativeState: { value: false, platform: "ios" as "ios" | "android" | "web" },
@@ -15,12 +16,26 @@ const { nativeState, authState, replace } = vi.hoisted(() => ({
   },
   replace: vi.fn(),
 }));
+const { signupState } = vi.hoisted(() => ({
+  signupState: {
+    value: {
+      signup_mode: "normal",
+      registration_open: true,
+      invitation_required: false,
+      normal_signup_available: true,
+      beta_joining_available: false,
+      waitlist_available: false,
+      joinable_count: null,
+    } as Record<string, unknown>,
+  },
+}));
+const NORMAL = { ...signupState.value };
 
 // The public marketing homepage — composition/navigation coverage. Pricing
 // data/routing behaviour has its own dedicated test file
-// (components/marketing/public-pricing.test.tsx); this file is about the
-// page as a whole: every section present, in the right order, with working
-// links, and no leftover admin/dashboard-style content.
+// (components/marketing/site/home-pricing.test.tsx); this file is about the
+// page as a whole: every section present, in order, with working links and
+// anchors, signup-mode-aware actions, and the native root gate.
 
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn(), replace }),
@@ -38,6 +53,7 @@ vi.mock("@mykhaya/api-client", async (importOriginal) => {
     ...actual,
     api: {
       ...actual.api,
+      publicSignupState: vi.fn(async () => signupState.value),
       familyPricing: vi.fn(async () => ({
         plan: "family",
         options: [
@@ -71,97 +87,187 @@ beforeEach(() => {
   authState.status = "signed_out";
   authState.initialSessionLoading = false;
   authState.legalStatusError = null;
+  signupState.value = { ...NORMAL };
 });
 
 describe("Welcome (public marketing homepage)", () => {
-  it("renders every section of the new page structure, in order", async () => {
-    render(<Welcome />);
+  it("renders every section of the design, in order", async () => {
+    render(<HomePage />);
 
-    const headings = await screen.findAllByRole("heading", { level: 2 });
-    const headingText = headings.map((node) => node.textContent);
-    // Order matters — Header, Hero, Features, Lifestyle, Pricing, Final CTA,
-    // Footer, per the approved mockup's section order.
-    const featuresIndex = headingText.findIndex((text) =>
-      text?.includes("Made for how families"),
+    const main = await screen.findByRole("main");
+    const headings = (await within(main).findAllByRole("heading", { level: 2 })).map((node) => node.textContent);
+    expect(headings).toEqual([
+      "Less organising. More being together.",
+      "Made for how families actually run.",
+      "From breakfast to bedtime.",
+      "Up and running in minutes.",
+      "Built for families. Built to be trusted.",
+      "Every kind of home.",
+      "Simple plans for modern family life.",
+      "Good to know.",
+      "Ready to bring your family together?",
+    ]);
+    expect(screen.getByRole("heading", { level: 1, name: /bring your family together\./i })).toBeInTheDocument();
+    expect(screen.getAllByRole("heading", { level: 3 }).map((node) => node.textContent)).toEqual(
+      expect.arrayContaining([
+        "Your whole day on one screen.",
+        "One calendar, everyone in it.",
+        "Dinner, decided.",
+        "Keep track without keeping it all in your head.",
+        "What's happening with your people.",
+      ]),
     );
-    const lifestyleIndex = headingText.findIndex((text) =>
-      text?.includes("Less organising"),
-    );
-    const pricingIndex = headingText.findIndex((text) =>
-      text?.includes("Simple plans for modern family life"),
-    );
-    const finalCtaIndex = headingText.findIndex((text) =>
-      text?.includes("Ready to bring"),
-    );
-    expect(featuresIndex).toBeGreaterThanOrEqual(0);
-    expect(lifestyleIndex).toBeGreaterThan(featuresIndex);
-    expect(pricingIndex).toBeGreaterThan(lifestyleIndex);
-    expect(finalCtaIndex).toBeGreaterThan(pricingIndex);
+    // Family chat stays as the "coming soon" card on the Family tour row.
+    expect(screen.getByText("Private to your family. Coming soon.")).toBeInTheDocument();
   });
 
-  it("leads with the plain-English hero headline and no technical language", async () => {
-    render(<Welcome />);
-
-    expect(
-      screen.getByRole("heading", {
-        level: 1,
-        name: /bring your family together\./i,
-      }),
-    ).toBeInTheDocument();
-    expect(
-      screen.getByText(
-        /shared calendars, meals, lists and nudges — all in one place/i,
-      ),
-    ).toBeInTheDocument();
-    // No jargon a visitor would have to understand before signing up.
-    expect(
-      screen.queryByText(/household member capability/i),
-    ).not.toBeInTheDocument();
-    expect(
-      screen.queryByText(/\bhome\b.*\bentitlement\b/i),
-    ).not.toBeInTheDocument();
+  it("has no stats band and no 'Also in your home' block", async () => {
+    render(<HomePage />);
+    await screen.findByRole("heading", { name: "Good to know." });
+    expect(screen.queryByLabelText("MyKhaya at a glance")).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Also in your home" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Going further with Ultimate" })).not.toBeInTheDocument();
+    // The story section follows the hero directly, with the reduced top gap.
+    const story = screen.getByRole("heading", { name: "Less organising. More being together." }).closest("section");
+    expect(story).toHaveClass("after-hero");
   });
 
-  it("gives the header exactly the two public actions — Sign in and Get started free", async () => {
-    render(<Welcome />);
+  it("never advertises Notes, which is not a real feature", async () => {
+    const { container } = render(<HomePage />);
+    await screen.findByRole("heading", { name: "Good to know." });
+    // Only the story's "lost notes" (paper notes, not a feature) may remain.
+    const text = (container.textContent ?? "").replace("lost notes", "");
+    expect(text).not.toMatch(/\bnotes?\b/i);
+  });
 
-    const header = screen.getByRole("banner");
-    expect(header.querySelector('a[href="/login"]')).toHaveTextContent(
-      /sign in/i,
+  it("shows the App Store and Google Play badges under the hero ticks, as artwork only for now", async () => {
+    render(<HomePage />);
+    const badges = screen.getByRole("group", { name: "Get the app" });
+    const apple = within(badges).getByAltText("Download on the App Store");
+    const google = within(badges).getByAltText("Get it on Google Play, coming soon");
+    expect(apple).toHaveAttribute("height", "40");
+    expect(google).toHaveAttribute("height", "40");
+    // No listing URLs yet: not links, and Google Play carries the pill.
+    expect(within(badges).queryAllByRole("link")).toHaveLength(0);
+    expect(within(badges).getByText("Coming soon")).toHaveClass("mks-store-pill");
+    // Sits after the ticks within the hero copy.
+    const ticks = screen.getByText("Set up in minutes").closest("ul")!;
+    expect(ticks.compareDocumentPosition(badges) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("has a section for every in-page anchor used by the nav, menu and footer", async () => {
+    const { container } = render(<HomePage />);
+    await screen.findByRole("heading", { name: "Good to know." });
+    const anchors = new Set(
+      Array.from(container.querySelectorAll('a[href^="#"]')).map((link) => link.getAttribute("href")!.slice(1)),
     );
-    expect(header.querySelector('a[href="/register"]')).toHaveTextContent(
-      /get started free/i,
-    );
+    expect([...anchors].sort()).toEqual(["day", "faq", "features", "how", "pricing"]);
+    for (const id of anchors) expect(container.querySelector(`#${id}`), id).not.toBeNull();
   });
 
-  it("the hero's primary action goes to registration, not straight into pricing", async () => {
-    render(<Welcome />);
-
-    const heroLinks = screen.getAllByRole("link", {
-      name: /get started free/i,
-    });
-    expect(
-      heroLinks.some((link) => link.getAttribute("href") === "/register"),
-    ).toBe(true);
-  });
-
-  it("footer only links to real, existing pages", async () => {
-    render(<Welcome />);
-
-    const footer = screen.getByRole("contentinfo");
-    for (const link of footer.querySelectorAll("a")) {
-      expect([
-        "/login",
-        "/register",
-        "/help-support",
-        "/legal/terms",
-        "/legal/privacy",
-        "/legal/children",
-        "/legal/cookies",
-        "https://status.dev.mykhaya.app/",
-        "/",
-      ]).toContain(link.getAttribute("href"));
+  it("only links to real public pages (or in-page anchors and the status page)", async () => {
+    const { container } = render(<HomePage />);
+    await screen.findByRole("heading", { name: "Good to know." });
+    const allowed = new Set([
+      "/",
+      "/login",
+      "/register",
+      "/register?plan=free&interval=month",
+      "/register?plan=family&interval=month",
+      "/support",
+      "/legal/terms",
+      "/legal/privacy",
+      "/legal/children",
+      "/legal/cookies",
+      "https://status.mykhaya.app/",
+    ]);
+    for (const link of container.querySelectorAll("a")) {
+      const href = link.getAttribute("href")!;
+      if (href.startsWith("#")) continue;
+      expect(allowed, href).toContain(href);
     }
+    // The in-app Help & Support needs sign-in, so it is never linked from here.
+    expect(container.querySelector('a[href="/help-support"]')).toBeNull();
+  });
+
+  it("follows the normal signup mode: Sign in plus Get started free, with the free promise", async () => {
+    render(<HomePage />);
+    const header = screen.getByRole("banner");
+    await waitFor(() =>
+      expect(within(header).getByRole("link", { name: "Get started free" })).toHaveAttribute("href", "/register"),
+    );
+    expect(within(header).getByRole("link", { name: "Sign in" })).toHaveAttribute("href", "/login");
+    expect(screen.getByText("No card required").closest("ul")).toBeVisible();
+  });
+
+  it("follows Beta-only mode: Join the Beta everywhere and a Founding Beta offer in place of plans", async () => {
+    signupState.value = {
+      ...NORMAL,
+      signup_mode: "beta_only",
+      normal_signup_available: false,
+      beta_joining_available: true,
+      joinable_count: 7,
+    };
+    render(<HomePage />);
+    const ctas = await screen.findAllByRole("link", { name: /^Join the Beta/ });
+    expect(ctas.length).toBeGreaterThanOrEqual(3);
+    for (const link of ctas) expect(link).toHaveAttribute("href", "/founding-beta");
+    expect(screen.queryByRole("link", { name: /Get started free/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /Join MyKhaya at no cost during our Founding Beta/ })).toBeInTheDocument();
+    expect(screen.getByText("7 places currently available")).toBeInTheDocument();
+    // Beta is free with no card, so the hero promise still holds.
+    expect(screen.getByText("No card required")).toBeInTheDocument();
+  });
+
+  it("drops the free/no-card promise when sign-ups are closed (waitlist mode)", async () => {
+    signupState.value = {
+      ...NORMAL,
+      signup_mode: "closed",
+      registration_open: false,
+      normal_signup_available: false,
+      waitlist_available: true,
+    };
+    render(<HomePage />);
+    expect((await screen.findAllByRole("link", { name: /Join the waitlist/ }))[0]).toHaveAttribute("href", "/waitlist");
+    expect(screen.queryByText("No card required")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Free to start\. No card required/)).not.toBeInTheDocument();
+    expect(screen.getByText("New sign-ups are currently closed.")).toBeInTheDocument();
+  });
+
+  it("does not show a duplicate Sign in when sign-ups are closed without a waitlist", async () => {
+    signupState.value = {
+      ...NORMAL,
+      signup_mode: "closed",
+      registration_open: false,
+      normal_signup_available: false,
+      waitlist_available: false,
+    };
+    render(<HomePage />);
+    const header = screen.getByRole("banner");
+    await waitFor(() => expect(within(header).getAllByRole("link", { name: /^Sign in/ })).toHaveLength(1));
+  });
+
+  it("holds the signup-mode wording invisibly until the mode is known", () => {
+    render(<HomePage />);
+    const header = screen.getByRole("banner");
+    // First render, before publicSignupState resolves.
+    const cta = header.querySelector(".nav-cta .btn") as HTMLElement;
+    expect(cta.style.visibility).toBe("hidden");
+    expect(cta).toHaveAttribute("aria-hidden", "true");
+  });
+
+  it("opens and closes the mobile menu", async () => {
+    const user = userEvent.setup();
+    render(<HomePage />);
+    const toggle = screen.getByRole("button", { name: "Open menu" });
+    const menu = document.getElementById("mobile-menu")!;
+    expect(menu).not.toBeVisible();
+    await user.click(toggle);
+    expect(menu).toBeVisible();
+    expect(toggle).toHaveAttribute("aria-expanded", "true");
+    await user.click(within(menu).getByRole("link", { name: "Pricing" }));
+    expect(menu).not.toBeVisible();
+    expect(screen.getByRole("button", { name: "Open menu" })).toHaveAttribute("aria-expanded", "false");
   });
 
   it("never calls isNativeShell() synchronously in Welcome's render body (SSR-hydration-safety contract)", () => {
@@ -178,7 +284,7 @@ describe("Welcome (public marketing homepage)", () => {
     // asserts the actual structural contract by inspecting the source
     // directly: the fix (`useState` + `useEffect`) must still be in place,
     // and Welcome's body must not call isNativeShell() outside that effect.
-    const source = readFileSync(join(process.cwd(), "app", "page.tsx"), "utf8");
+    const source = readFileSync(join(process.cwd(), "components", "marketing", "site", "welcome.tsx"), "utf8");
     const welcomeBody = source
       .slice(source.indexOf("export default function Welcome"))
       .split("\n")
@@ -193,14 +299,14 @@ describe("Welcome (public marketing homepage)", () => {
     nativeState.value = true;
     authState.status = "initializing";
     authState.initialSessionLoading = true;
-    const view = render(<Welcome />);
+    const view = render(<HomePage />);
 
     expect(screen.getByText(/checking your mykhaya session/i)).toBeInTheDocument();
     expect(screen.queryByText(/your family\. one place/i)).not.toBeInTheDocument();
 
     authState.status = "ready";
     authState.initialSessionLoading = false;
-    view.rerender(<Welcome />);
+    view.rerender(<HomePage />);
 
     expect(screen.queryByText(/your family\. one place/i)).not.toBeInTheDocument();
     expect(replace).toHaveBeenCalledWith("/home");
@@ -210,7 +316,7 @@ describe("Welcome (public marketing homepage)", () => {
     nativeState.value = true;
     nativeState.platform = "ios";
     authState.status = "locked";
-    render(<Welcome />);
+    render(<HomePage />);
 
     expect(await screen.findByText(/face id/i)).toBeInTheDocument();
     expect(screen.getByText(/touch id/i)).toBeInTheDocument();
@@ -220,7 +326,7 @@ describe("Welcome (public marketing homepage)", () => {
     nativeState.value = true;
     nativeState.platform = "android";
     authState.status = "locked";
-    render(<Welcome />);
+    render(<HomePage />);
 
     await screen.findByRole("heading", { name: /unlock mykhaya/i });
     expect(screen.queryByText(/face id|touch id/i)).not.toBeInTheDocument();
@@ -230,7 +336,7 @@ describe("Welcome (public marketing homepage)", () => {
     nativeState.value = true;
     authState.status = "legal_check_error";
     authState.legalStatusError = "Legal service unavailable";
-    render(<Welcome />);
+    render(<HomePage />);
 
     expect(await screen.findByRole("heading", { name: /could not check your legal documents/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /try again/i })).toBeInTheDocument();

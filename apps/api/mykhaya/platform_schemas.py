@@ -298,6 +298,18 @@ class SettingUpdate(StrictModel):
     confirmed: Literal[True]
 
 
+class HomeMigrationHomeRequest(StrictModel):
+    home_id: uuid.UUID
+
+
+class HomeMigrationPackageRequest(SensitiveActionRequest):
+    package_id: uuid.UUID
+
+
+class HomeMigrationImportRequest(HomeMigrationPackageRequest):
+    confirmation: str = Field(min_length=1, max_length=100)
+
+
 SyslogCategory = Literal["application", "http", "security", "audit", "worker", "integration"]
 
 

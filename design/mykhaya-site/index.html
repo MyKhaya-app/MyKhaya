@@ -1,0 +1,698 @@
+<title>MyKhaya Home</title>
+<meta name="description" content="MyKhaya is your family's digital home: shared calendars, meal plans, nudges and lists in one calm place. Free to start.">
+<link rel="icon" href="images/mykhaya-logo-64.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,600;12..96,800&family=Figtree:wght@400;500;600;700&display=swap">
+<style>
+/* Layout: Hopewell's charity-site rhythm (hero → story → showcase → day → steps → promise → people → pricing → FAQ → CTA → rich footer), dressed in the MyKhaya app's own palette: forest header green, sage, coral, mustard and cream, the four colours of the logo's blocks. */
+:root{
+  --paper:#F6F4EE; --surface:#FFFEFB; --tint:#ECEEE6; --line:#E3E0D6;
+  --ink:#1E2A23; --muted:#5D6960;
+  --forest:#3E5343; --forest-deep:#2E3F33; --on-forest:#F3F1EA; --on-forest-muted:#BFCBBE;
+  --sage:#7D8F7A; --sage-deep:#536855; --accent-text:#3E5343;
+  --coral:#C9603D; --coral-soft:#F8E2D8; --on-coral:#FFFFFF;
+  --mustard:#EBB447; --mustard-soft:#FAEFD3;
+  --av-j:#B8433A; --av-s:#7A5C9A; --av-t:#DD7656;
+  --shadow:0 22px 44px -24px rgba(46,63,51,.55);
+  --display:"Bricolage Grotesque","Avenir Next","Segoe UI",system-ui,sans-serif;
+  --body:"Figtree","Helvetica Neue",Arial,system-ui,sans-serif;
+  --radius:20px;
+  --store-bg:#141A16; --store-fg:#FFFFFF;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --paper:#121814; --surface:#1A221D; --tint:#212B25; --line:#2E3A32;
+    --ink:#ECEFE8; --muted:#A6B2A8;
+    --forest:#2C3C31; --forest-deep:#0D140F; --on-forest:#F3F1EA; --on-forest-muted:#B3C1B3;
+    --sage:#9BAE97; --sage-deep:#BCCCB8; --accent-text:#BCCCB8;
+    --coral:#E07C5A; --coral-soft:#3A2419; --on-coral:#1E0F08;
+    --mustard:#F0BE58; --mustard-soft:#3A2F15;
+    --shadow:0 22px 44px -24px rgba(0,0,0,.85);
+    --store-bg:#F3F1EA; --store-fg:#141A16;
+    color-scheme:dark;
+  }
+}
+:root[data-theme="dark"]{
+  --paper:#121814; --surface:#1A221D; --tint:#212B25; --line:#2E3A32;
+  --ink:#ECEFE8; --muted:#A6B2A8;
+  --forest:#2C3C31; --forest-deep:#0D140F; --on-forest:#F3F1EA; --on-forest-muted:#B3C1B3;
+  --sage:#9BAE97; --sage-deep:#BCCCB8; --accent-text:#BCCCB8;
+  --coral:#E07C5A; --coral-soft:#3A2419; --on-coral:#1E0F08;
+  --mustard:#F0BE58; --mustard-soft:#3A2F15;
+  --shadow:0 22px 44px -24px rgba(0,0,0,.85);
+  --store-bg:#F3F1EA; --store-fg:#141A16;
+  color-scheme:dark;
+}
+
+*{box-sizing:border-box}
+html{scroll-behavior:smooth}
+body{background:var(--paper);color:var(--ink);font-family:var(--body);font-size:17px;line-height:1.6;-webkit-font-smoothing:antialiased}
+a{color:inherit}
+img{max-width:100%;display:block}
+h1,h2,h3,h4{font-family:var(--display);line-height:1.08;margin:0;text-wrap:balance;letter-spacing:-.02em}
+p{margin:0}
+.wrap{width:100%;max-width:1180px;margin-inline:auto;padding-inline:clamp(16px,4vw,32px)}
+section{padding-block:clamp(64px,9vw,112px)}
+.eyebrow{font-size:.78rem;font-weight:700;letter-spacing:.14em;text-transform:uppercase;color:var(--coral)}
+.lede{color:var(--muted);font-size:1.12rem;max-width:58ch}
+.section-head{display:grid;gap:14px;max-width:720px;margin-bottom:clamp(36px,5vw,56px)}
+.section-head h2{font-size:clamp(2rem,4.4vw,3.2rem);font-weight:800}
+.center{text-align:center;margin-inline:auto;justify-items:center}
+
+/* Buttons */
+.btn{display:inline-flex;align-items:center;gap:8px;padding:14px 24px;border-radius:999px;font-weight:700;font-size:1.05rem;text-decoration:none;border:2px solid transparent;transition:transform .2s ease,box-shadow .2s ease,border-color .2s ease;cursor:pointer}
+.btn:hover{transform:translateY(-2px)}
+.btn:focus-visible,a:focus-visible,summary:focus-visible,button:focus-visible{outline:3px solid var(--mustard);outline-offset:3px}
+.btn-primary{background:var(--coral);color:var(--on-coral);box-shadow:0 12px 26px -14px var(--coral)}
+.btn-ghost{border-color:var(--line);color:var(--ink);background:var(--surface)}
+.btn-ghost:hover{border-color:var(--sage)}
+.btn-light{border-color:rgba(243,241,234,.35);color:var(--on-forest)}
+.btn-light:hover{border-color:var(--on-forest)}
+
+/* Nav */
+.nav{position:sticky;top:env(safe-area-inset-top,0px);z-index:50;background:color-mix(in srgb,var(--paper) 86%,transparent);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);border-bottom:1px solid var(--line)}
+.nav .wrap{display:flex;align-items:center;gap:24px;min-height:72px}
+.brand{display:flex;align-items:center;gap:10px;text-decoration:none;font-family:var(--display);font-weight:800;font-size:1.35rem;letter-spacing:-.02em}
+.brand img{width:40px;height:40px;border-radius:11px;box-shadow:0 2px 8px -3px rgba(0,0,0,.25)}
+.nav-links{display:flex;gap:4px;margin-left:auto}
+.nav-links a{padding:8px 14px;border-radius:999px;text-decoration:none;font-weight:600;font-size:.95rem;color:var(--muted)}
+.nav-links a:hover{background:var(--tint);color:var(--ink)}
+.nav-cta{display:flex;gap:10px;align-items:center}
+.nav-cta .signin{font-weight:600;text-decoration:none;padding:8px 12px}
+.nav-cta .btn{padding:10px 18px;font-size:.95rem}
+.menu-btn{display:none;background:var(--surface);border:1px solid var(--line);border-radius:12px;width:44px;height:44px;color:var(--ink);font-size:1.2rem;cursor:pointer}
+.mobile-menu{border-top:1px solid var(--line);padding-block:12px}
+.mobile-menu a{display:block;padding:12px 4px;font-weight:600;text-decoration:none;border-bottom:1px solid var(--line)}
+.mobile-menu a:last-child{border:0}
+@media (max-width:920px){.nav-links,.nav-cta .signin{display:none}.menu-btn{display:inline-grid;place-items:center}.nav-cta{margin-left:auto}}
+@media (max-width:480px){.nav-cta .btn{display:none}}
+
+/* Phone frame (shared) */
+.phone{width:clamp(200px,20vw,250px);max-width:100%;aspect-ratio:600/1303;background:var(--forest-deep);border:7px solid var(--forest-deep);border-radius:38px;box-shadow:var(--shadow);overflow:hidden;flex:none}
+.phone img{width:100%;height:100%;object-fit:cover;object-position:top;border-radius:31px}
+
+/* Hero */
+.hero{padding-block:clamp(40px,6vw,80px) clamp(56px,8vw,96px);position:relative;overflow:hidden}
+.hero::before{content:"";position:absolute;inset:-10% -15% -30% 45%;background:radial-gradient(closest-side,color-mix(in srgb,var(--sage) 32%,transparent),transparent);pointer-events:none}
+.hero-grid{display:grid;grid-template-columns:1.05fr 1fr;gap:clamp(32px,5vw,64px);align-items:center;position:relative}
+.hero-copy{display:grid;gap:22px;min-width:0}
+.khaya{display:inline-flex;align-items:center;gap:10px;background:var(--surface);border:1px solid var(--line);border-radius:999px;padding:6px 14px 6px 6px;font-size:.9rem;width:max-content;max-width:100%}
+.khaya b{background:var(--forest);color:var(--on-forest);border-radius:999px;padding:3px 10px;font-weight:600;font-size:.8rem}
+.khaya i{font-style:normal;color:var(--muted)}
+.hero h1{isolation:isolate;font-size:clamp(2.7rem,7vw,5.4rem);font-weight:800;letter-spacing:-.035em}
+.hero h1 em{font-style:normal;color:var(--accent-text);position:relative;white-space:nowrap}
+.hero h1 em::after{content:"";position:absolute;left:0;right:0;bottom:.06em;height:.17em;background:var(--mustard);border-radius:6px;z-index:-1;opacity:.9}
+.hero-actions{display:flex;flex-wrap:wrap;gap:12px}
+.ticks{display:flex;flex-wrap:wrap;gap:8px 22px;list-style:none;margin:0;padding:0;color:var(--muted);font-weight:600;font-size:.95rem}
+.ticks li{display:flex;align-items:center;gap:8px}
+.ticks li::before{content:"";width:18px;height:18px;border-radius:50%;background:var(--sage) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 8.5l2.5 2.5L12 5.5' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center/12px no-repeat}
+.phones{position:relative;height:clamp(470px,50vw,600px);min-width:0}
+.phones .phone{position:absolute}
+.p1{left:0;top:64px;transform:rotate(-7deg)}
+.p2{left:50%;top:0;translate:-50% 0;z-index:2}
+.p3{right:0;top:80px;transform:rotate(7deg)}
+.chip{position:absolute;z-index:3;background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:10px 14px;box-shadow:var(--shadow);font-size:.88rem;line-height:1.35;display:flex;gap:10px;align-items:center;max-width:250px;animation:bob 6s ease-in-out infinite}
+.chip .ic{width:34px;height:34px;border-radius:10px;display:grid;place-items:center;flex:none}
+.chip .ic svg{width:18px;height:18px}
+.chip small{display:block;color:var(--muted);font-size:.76rem}
+.chip-a{left:-3%;bottom:30px}
+.chip-b{right:-2%;top:6px;animation-delay:-3s}
+@keyframes bob{50%{transform:translateY(-8px)}}
+@media (max-width:920px){.hero-grid{grid-template-columns:1fr}.phones{height:clamp(440px,112vw,560px)}}
+@media (max-width:560px){.p1,.p3{display:none}.chip-a{left:0}.chip-b{right:0}}
+
+
+
+/* App store blocks */
+.stores{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin-top:4px}
+.store{display:inline-flex;align-items:center;gap:12px;box-sizing:border-box;width:162px;height:48px;padding:0 12px;border-radius:12px;background:var(--store-bg);color:var(--store-fg);border:1px solid var(--store-bg);text-decoration:none;line-height:1.15;position:relative}
+.store svg{width:20px;height:20px;flex:none}
+.badge-img{height:40px;width:auto;display:block;border-radius:6px}
+.badge-soon{position:relative;display:block}
+.badge-soon .pill{position:absolute;top:-10px;right:-8px;background:var(--mustard);color:#2E2006;font-size:.66rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;padding:3px 8px;border-radius:999px;box-shadow:0 2px 6px -2px rgba(0,0,0,.3)}
+.store > span:last-child{display:grid;gap:1px}
+.store small{display:block;font-size:.62rem;white-space:nowrap;font-weight:500;opacity:.85}
+.store b{display:block;white-space:nowrap;font-size:.95rem;font-weight:700;letter-spacing:-.01em}
+.store.store-soon{background:transparent;color:var(--muted);border:1px dashed var(--sage)}
+.store.store-soon .pill{position:absolute;top:-10px;right:-8px;background:var(--mustard);color:#2E2006;font-size:.66rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;padding:3px 8px;border-radius:999px}
+
+/* Story */
+.after-hero{padding-top:clamp(16px,3vw,40px)}
+.story{display:grid;grid-template-columns:1fr 1.1fr;gap:clamp(32px,5vw,72px);align-items:center}
+.story-visual{position:relative;border-radius:30px;background:var(--mustard-soft);min-height:460px;overflow:hidden;display:grid;place-items:center;padding:32px;min-width:0}
+.story-visual .logo-tile{width:min(240px,60%);border-radius:28%;box-shadow:var(--shadow)}
+.member{position:absolute;display:flex;align-items:center;gap:10px;background:var(--surface);border:1px solid var(--line);border-radius:999px;padding:6px 16px 6px 6px;box-shadow:var(--shadow);font-size:.9rem;line-height:1.2}
+.member .av{width:38px;height:38px;border-radius:50%;display:grid;place-items:center;color:#fff;font-weight:700;border:2px solid var(--surface);box-shadow:0 0 0 1px var(--line)}
+.member small{display:block;color:var(--muted);font-size:.75rem}
+.m1{left:8%;top:12%}.m2{right:6%;top:40%}.m3{left:12%;bottom:12%}
+.story-copy{display:grid;gap:22px;min-width:0}
+.story-copy h2{font-size:clamp(2rem,4.4vw,3.2rem);font-weight:800}
+.pillars{display:grid;gap:14px}
+.pillar{display:grid;grid-template-columns:48px 1fr;gap:16px;align-items:start;padding:18px;border-radius:var(--radius);background:var(--surface);border:1px solid var(--line)}
+.pillar .ic{width:48px;height:48px;border-radius:14px;display:grid;place-items:center;color:var(--forest)}
+.pillar h3{font-size:1.15rem;margin-bottom:4px}
+.pillar p{color:var(--muted);font-size:.98rem}
+@media (max-width:920px){.story{grid-template-columns:1fr}.story-visual{min-height:380px}}
+
+/* Showcase (zig-zag) */
+.showcase{background:var(--tint)}
+.tour{display:grid;gap:clamp(64px,9vw,120px)}
+.tour-row{display:grid;grid-template-columns:1fr 1fr;gap:clamp(32px,6vw,88px);align-items:center}
+.tour-row:nth-child(even) .tour-shots{order:2}
+.tour-shots{position:relative;display:flex;justify-content:center;align-items:flex-start;min-width:0;padding-block:12px}
+.tour-shots .phone + .phone{margin-left:-60px;margin-top:56px}
+.tour-shots .phone:first-child{transform:rotate(-3deg);z-index:1}
+.tour-shots .phone:nth-child(2){transform:rotate(3deg)}
+.tour-shots::before{content:"";position:absolute;inset:12% 6% 0;border-radius:40px;background:var(--blob,var(--sage));opacity:.18;z-index:0}
+.tour-copy{display:grid;gap:16px;min-width:0}
+.tour-copy .kicker{display:flex;align-items:center;gap:10px}
+.tour-copy .kicker .ic{width:40px;height:40px;border-radius:12px;display:grid;place-items:center;color:var(--forest)}
+.tour-copy .kicker .ic svg{width:22px;height:22px}
+.tour-copy h3{font-size:clamp(1.8rem,3.6vw,2.6rem);font-weight:800}
+.tour-copy > p{color:var(--muted);font-size:1.08rem;max-width:52ch}
+.points{list-style:none;margin:0;padding:0;display:grid;gap:12px}
+.points li{display:grid;grid-template-columns:26px 1fr;gap:10px;align-items:start}
+.points li::before{content:"";width:22px;height:22px;margin-top:2px;border-radius:7px;background:var(--forest) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 8.5l2.5 2.5L12 5.5' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center/13px no-repeat}
+.points b{font-weight:700}
+.points span{color:var(--muted)}
+.tag{font-size:.72rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;padding:4px 10px;border-radius:999px;background:var(--surface);border:1px solid var(--line);color:var(--sage-deep);white-space:nowrap}
+.soon{position:absolute;z-index:3;right:4%;bottom:14%;background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:12px 16px;box-shadow:var(--shadow);font-size:.88rem;line-height:1.35;max-width:220px}
+.soon b{display:block}
+.soon small{color:var(--muted)}
+@media (max-width:860px){.tour-row{grid-template-columns:1fr}.tour-row:nth-child(even) .tour-shots{order:0}}
+@media (max-width:480px){.tour-shots .phone{width:min(46vw,200px)}.tour-shots .phone + .phone{margin-left:-36px}}
+
+
+/* Day timeline */
+.day{display:grid;grid-template-columns:.8fr 1.2fr;gap:clamp(32px,5vw,72px);align-items:start}
+.day .section-head{position:sticky;top:110px;margin-bottom:0}
+.timeline{list-style:none;margin:0;padding:0;display:grid;position:relative}
+.timeline::before{content:"";position:absolute;left:68px;top:10px;bottom:10px;width:2px;background:var(--line)}
+.timeline li{display:grid;grid-template-columns:56px 26px 1fr;gap:12px;align-items:start;padding-block:12px}
+.timeline time{font-family:var(--display);font-weight:700;font-variant-numeric:tabular-nums;color:var(--accent-text);padding-top:2px}
+.timeline .node{width:16px;height:16px;border-radius:50%;background:var(--paper);border:3px solid var(--sage);margin:5px 0 0 5px;position:relative;z-index:1}
+.timeline .node.c{border-color:var(--coral)}
+.timeline .node.m{border-color:var(--mustard)}
+.timeline .card{background:var(--surface);border:1px solid var(--line);border-radius:16px;padding:14px 18px;min-width:0}
+.timeline h3{font-size:1.06rem;font-family:var(--body);font-weight:700;letter-spacing:0}
+.timeline p{color:var(--muted);font-size:.95rem}
+.timeline .via{display:inline-block;margin-top:6px;font-size:.72rem;font-weight:700;letter-spacing:.08em;text-transform:uppercase;color:var(--coral)}
+.note{font-size:.85rem;color:var(--muted)}
+@media (max-width:860px){.day{grid-template-columns:1fr}.day .section-head{position:static}}
+
+/* Steps */
+.steps-sec{background:var(--surface);border-block:1px solid var(--line)}
+.steps{display:grid;grid-template-columns:repeat(3,1fr);gap:28px;position:relative}
+.steps::before{content:"";position:absolute;top:32px;left:16%;right:16%;border-top:2px dashed var(--line)}
+.step{display:grid;justify-items:center;text-align:center;gap:12px;position:relative}
+.step .num{width:64px;height:64px;border-radius:50%;display:grid;place-items:center;font-family:var(--display);font-weight:800;font-size:1.6rem;background:var(--forest);color:var(--mustard);box-shadow:0 0 0 8px var(--surface)}
+.step h3{font-size:1.35rem}
+.step p{color:var(--muted);max-width:32ch}
+@media (max-width:760px){.steps{grid-template-columns:1fr}.steps::before{display:none}}
+
+/* Trust */
+.trust{display:grid;grid-template-columns:repeat(4,1fr);gap:18px}
+.trust > div{padding:24px;border-radius:var(--radius);border:1px solid var(--line);background:var(--surface);display:grid;gap:10px;align-content:start}
+.trust svg{width:28px;height:28px;color:var(--coral)}
+.trust h3{font-size:1.15rem}
+.trust p{color:var(--muted);font-size:.96rem}
+@media (max-width:960px){.trust{grid-template-columns:repeat(2,1fr)}}
+@media (max-width:520px){.trust{grid-template-columns:1fr}}
+
+/* Who */
+.who-sec{background:var(--forest);color:var(--on-forest)}
+.who-sec .eyebrow{color:var(--mustard)}
+.who-sec .lede{color:var(--on-forest-muted)}
+.who{display:grid;grid-template-columns:repeat(3,1fr);gap:20px}
+.who article{border:1px solid rgba(243,241,234,.16);border-radius:22px;padding:26px;display:grid;gap:12px;align-content:start;background:rgba(243,241,234,.05)}
+.who .avs{display:flex}
+.who .avs span{width:42px;height:42px;border-radius:50%;border:3px solid var(--forest);margin-right:-10px;display:grid;place-items:center;font-weight:700;font-size:.9rem;color:#fff}
+.who h3{font-size:1.35rem}
+.who p{color:var(--on-forest-muted)}
+.who ul{margin:0;padding:0;list-style:none;display:grid;gap:6px;font-size:.95rem}
+.who li::before{content:"→ ";color:var(--mustard)}
+@media (max-width:900px){.who{grid-template-columns:1fr}}
+
+/* Pricing */
+.billing{display:inline-flex;background:var(--tint);border-radius:999px;padding:4px;gap:4px;margin-top:6px}
+.billing button{border:0;background:transparent;padding:8px 18px;border-radius:999px;font:600 .9rem var(--body);color:var(--muted);cursor:pointer}
+.billing button[aria-pressed="true"]{background:var(--surface);color:var(--ink);box-shadow:0 2px 8px -4px rgba(0,0,0,.25)}
+.plans{display:grid;grid-template-columns:repeat(3,1fr);gap:20px;align-items:stretch}
+.plan{background:var(--surface);border:1px solid var(--line);border-radius:24px;padding:28px;display:flex;flex-direction:column;gap:16px;position:relative}
+.plan.pop{background:var(--forest);color:var(--on-forest);border-color:var(--forest);box-shadow:var(--shadow)}
+.plan .badge{position:absolute;top:-13px;left:28px;background:var(--mustard);color:#2E2006;font-weight:700;font-size:.75rem;letter-spacing:.08em;text-transform:uppercase;padding:5px 12px;border-radius:999px}
+.plan h3{font-size:1.6rem}
+.plan .for{color:var(--muted)}
+.plan.pop .for,.plan.pop .per{color:var(--on-forest-muted)}
+.price{display:flex;align-items:baseline;gap:6px}
+.price strong{font-family:var(--display);font-size:3rem;font-weight:800;line-height:1;font-variant-numeric:tabular-nums}
+.per{color:var(--muted);font-weight:600}
+.plan ul{list-style:none;margin:0;padding:0;display:grid;gap:9px;font-size:.97rem}
+.plan li{display:flex;gap:10px;align-items:flex-start}
+.plan li::before{content:"";flex:none;width:18px;height:18px;margin-top:3px;border-radius:50%;background:var(--sage) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Cpath d='M4 8.5l2.5 2.5L12 5.5' fill='none' stroke='white' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E") center/12px no-repeat}
+.plan.pop li::before{background-color:var(--coral)}
+.plan .btn{margin-top:auto;justify-content:center}
+.plan .paused{font-size:.85rem;color:var(--muted);background:var(--tint);border-radius:12px;padding:10px 12px}
+@media (max-width:960px){.plans{grid-template-columns:1fr;max-width:520px;margin-inline:auto}}
+
+/* FAQ */
+.faq-grid{display:grid;grid-template-columns:.8fr 1.2fr;gap:clamp(32px,5vw,72px);align-items:start}
+.faq details{border-bottom:1px solid var(--line)}
+.faq summary{list-style:none;cursor:pointer;display:flex;justify-content:space-between;gap:16px;padding:20px 0;font-weight:700;font-size:1.08rem}
+.faq summary::-webkit-details-marker{display:none}
+.faq summary::after{content:"+";font-family:var(--display);font-size:1.6rem;line-height:1;color:var(--coral);transition:transform .2s}
+.faq details[open] summary::after{transform:rotate(45deg)}
+.faq details p{padding-bottom:20px;color:var(--muted);max-width:62ch}
+.help-card{margin-top:24px;padding:22px;border-radius:var(--radius);background:var(--mustard-soft);display:grid;gap:10px}
+.help-card a{font-weight:700}
+@media (max-width:860px){.faq-grid{grid-template-columns:1fr}}
+
+/* CTA */
+.cta{padding-block:0 clamp(64px,9vw,112px)}
+.cta-box{background:var(--forest);color:var(--on-forest);border-radius:32px;padding:clamp(36px,6vw,72px);display:grid;grid-template-columns:1.4fr 1fr;gap:28px;align-items:center;position:relative;overflow:hidden}
+.cta-box > *{position:relative}
+.cta-box h2{font-size:clamp(2rem,4.6vw,3.4rem);font-weight:800}
+.cta-box p{color:var(--on-forest-muted);margin-top:12px}
+.cta-actions{display:flex;flex-wrap:wrap;gap:12px;justify-content:flex-end}
+.blocks{position:absolute!important;right:-30px;bottom:-40px;display:grid;grid-template-columns:repeat(2,80px);gap:12px;opacity:.22;transform:rotate(-8deg);pointer-events:none}
+.blocks i{width:80px;height:80px;border-radius:20px}
+@media (max-width:800px){.cta-box{grid-template-columns:1fr}.cta-actions{justify-content:flex-start}}
+
+/* Footer */
+footer{background:var(--forest-deep);color:var(--on-forest-muted);padding-block:64px 32px;font-size:.95rem}
+.foot{display:grid;grid-template-columns:1.4fr repeat(3,1fr);gap:32px}
+.foot .brand{color:var(--on-forest)}
+.foot h4{color:var(--on-forest);font-family:var(--body);font-size:.8rem;letter-spacing:.14em;text-transform:uppercase;margin-bottom:14px}
+.foot ul{list-style:none;margin:0;padding:0;display:grid;gap:10px}
+.foot a{text-decoration:none}
+.foot a:hover{color:var(--on-forest);text-decoration:underline}
+.foot .tagline{margin-top:14px;max-width:34ch}
+.legal{margin-top:48px;padding-top:24px;border-top:1px solid rgba(243,241,234,.14);display:flex;flex-wrap:wrap;justify-content:space-between;gap:12px}
+.legal nav{display:flex;flex-wrap:wrap;gap:18px}
+.legal a{text-decoration:none}
+.legal a:hover{color:var(--on-forest)}
+@media (max-width:860px){.foot{grid-template-columns:1fr 1fr}}
+@media (max-width:480px){.foot{grid-template-columns:1fr}}
+
+.to-top{position:fixed;right:20px;bottom:calc(20px + env(safe-area-inset-bottom,0px));width:48px;height:48px;border-radius:50%;border:0;background:var(--coral);color:var(--on-coral);font-size:1.3rem;font-weight:800;box-shadow:var(--shadow);cursor:pointer;z-index:40;transition:opacity .3s,transform .3s}
+.to-top.away{opacity:0;transform:translateY(12px);pointer-events:none}
+
+@media (prefers-reduced-motion: no-preference){
+  .hero-copy > *{animation:rise .7s cubic-bezier(.2,.7,.2,1) both}
+  .hero-copy > *:nth-child(2){animation-delay:.08s}
+  .hero-copy > *:nth-child(3){animation-delay:.16s}
+  .hero-copy > *:nth-child(4){animation-delay:.24s}
+  .hero-copy > *:nth-child(5){animation-delay:.32s}
+  .hero-copy > *:nth-child(6){animation-delay:.4s}
+  .phones .phone{animation:pop .9s cubic-bezier(.2,.7,.2,1) both}
+  .p1{animation-delay:.35s}.p2{animation-delay:.2s}.p3{animation-delay:.5s}
+}
+@keyframes rise{from{transform:translateY(16px)}}
+@keyframes pop{from{translate:0 30px}}
+@keyframes pop2{from{translate:-50% 30px}}
+@media (prefers-reduced-motion: no-preference){.p2{animation-name:pop2}}
+@media (prefers-reduced-motion: reduce){*{animation:none!important;transition:none!important}html{scroll-behavior:auto}}
+</style>
+
+<!-- ============ NAV ============ -->
+<header class="nav">
+  <div class="wrap">
+    <a class="brand" href="https://mykhaya.app/" aria-label="MyKhaya home">
+      <img src="images/mykhaya-logo-64.png" alt="" width="40" height="40">MyKhaya
+    </a>
+    <nav class="nav-links" aria-label="Main">
+      <a href="#features">Features</a>
+      <a href="#day">A day with us</a>
+      <a href="#how">How it works</a>
+      <a href="#pricing">Pricing</a>
+      <a href="#faq">FAQ</a>
+    </nav>
+    <div class="nav-cta">
+      <a class="signin" href="https://mykhaya.app/login">Sign in</a>
+      <a class="btn btn-primary" href="https://mykhaya.app/register">Get started free</a>
+      <button class="menu-btn" id="menu-btn" aria-expanded="false" aria-controls="mobile-menu" aria-label="Open menu">☰</button>
+    </div>
+  </div>
+  <div class="wrap mobile-menu" id="mobile-menu" hidden>
+    <a href="#features">Features</a>
+    <a href="#day">A day with us</a>
+    <a href="#how">How it works</a>
+    <a href="#pricing">Pricing</a>
+    <a href="#faq">FAQ</a>
+    <a href="https://mykhaya.app/login">Sign in</a>
+    <a href="https://mykhaya.app/register">Get started free →</a>
+  </div>
+</header>
+
+<main>
+<!-- ============ HERO ============ -->
+<section class="hero">
+  <div class="wrap hero-grid">
+    <div class="hero-copy">
+      <span class="khaya"><b>khaya</b> <i>isiZulu &amp; isiXhosa for “home”</i></span>
+      <h1>Bring your family <em>together.</em></h1>
+      <p class="lede">Shared calendars, meal plans, nudges and lists, all in one place. MyKhaya is your family's digital home: less stress, and more time for what really matters.</p>
+      <div class="hero-actions">
+        <a class="btn btn-primary" href="https://mykhaya.app/register">Get started free →</a>
+        <a class="btn btn-ghost" href="#features">Take the tour</a>
+      </div>
+      <ul class="ticks"><li>Free to start</li><li>No card required</li><li>Set up in minutes</li></ul>
+      <div class="stores" aria-label="Get the app">
+        <!-- Official Apple badge. Wrap in <a href="APP_STORE_URL"> when the listing is live. Use the SVG version for crisp rendering. -->
+        <img class="badge-img" src="images/app-store-badge.png" alt="Download on the App Store" width="120" height="40">
+        <!-- Official Google Play badge. When the Android app launches, remove the pill and wrap in <a href="GOOGLE_PLAY_URL">. -->
+        <span class="badge-soon">
+          <img class="badge-img" src="images/google-play-badge.png" alt="Get it on Google Play, coming soon" width="135" height="40">
+          <span class="pill">Coming soon</span>
+        </span>
+      </div>
+    </div>
+
+    <div class="phones">
+      <div class="phone p1"><img src="images/mykhaya-meal-plans.webp" alt="MyKhaya Meal Plans screen with today's breakfast, lunch and dinner" loading="eager"></div>
+      <div class="phone p2"><img src="images/mykhaya-home.webp" alt="MyKhaya Home screen showing today's swimming lesson and household nudges" loading="eager"></div>
+      <div class="phone p3"><img src="images/mykhaya-calendar.webp" alt="MyKhaya Calendar showing a month of shared family events" loading="eager"></div>
+      <div class="chip chip-a"><span class="ic" style="background:var(--mustard-soft)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 16V11a6 6 0 1 1 12 0v5l1.5 2h-15z"/><path d="M10 20a2 2 0 0 0 4 0"/></svg></span><div><b>Don't forget</b><small>Feed the dog · Household routine</small></div></div>
+      <div class="chip chip-b"><span class="ic" style="background:var(--coral-soft)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 16h16M6 16a6 6 0 0 1 12 0M12 8V6M3 19h18"/></svg></span><div><b>Homemade Pizza</b><small>Dinner at 18:00 · 3 eating</small></div></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ STORY ============ -->
+<section class="after-hero">
+  <div class="wrap story">
+    <div class="story-visual" aria-hidden="true">
+      <img class="logo-tile" src="images/mykhaya-logo-256.png" alt="" width="240" height="240">
+      <div class="member m1"><span class="av" style="background:var(--av-j)">J</span><div><b>Jamie</b><small>Adult</small></div></div>
+      <div class="member m2"><span class="av" style="background:var(--av-s)">S</span><div><b>Sam</b><small>Child</small></div></div>
+      <div class="member m3"><span class="av" style="background:var(--av-t)">T</span><div><b>You</b><small>Home Admin</small></div></div>
+    </div>
+    <div class="story-copy">
+      <span class="eyebrow">Why families choose MyKhaya</span>
+      <h2>Less organising. More being together.</h2>
+      <p class="lede">Every home runs on a mental to-do list, and too often one person carries it. MyKhaya puts it somewhere everyone can see, so the load is shared and nothing slips.</p>
+      <div class="pillars">
+        <div class="pillar"><span class="ic" style="background:var(--coral-soft)"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="8" cy="9" r="3"/><circle cx="16" cy="9" r="3"/><path d="M3 19c.8-3 2.8-4.5 5-4.5s4.2 1.5 5 4.5M11 19c.8-3 2.8-4.5 5-4.5s4.2 1.5 5 4.5"/></svg></span><div><h3>Stronger family connections</h3><p>Everyone sees the same plan, from the school pickup to the family day out.</p></div></div>
+        <div class="pillar"><span class="ic" style="background:var(--mustard-soft)"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 14c2-4 6-4 8 0s6 4 8 0"/><path d="M4 9c2-4 6-4 8 0s6 4 8 0"/></svg></span><div><h3>Less stress, more calm</h3><p>Gentle nudges replace the nagging, and overdue jobs are flagged before they become emergencies.</p></div></div>
+        <div class="pillar"><span class="ic" style="background:var(--tint)"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></span><div><h3>More time for what matters</h3><p>Fewer group-chat threads and lost notes. More evenings that are actually free.</p></div></div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ SHOWCASE ============ -->
+<section class="showcase" id="features">
+  <div class="wrap">
+    <div class="section-head">
+      <span class="eyebrow">Take the tour</span>
+      <h2>Made for how families actually run.</h2>
+      <p class="lede">Every screen is built around one question: what does my family need to know right now?</p>
+    </div>
+
+    <div class="tour">
+      <article class="tour-row">
+        <div class="tour-shots" style="--blob:var(--sage)">
+          <div class="phone"><img src="images/mykhaya-home.webp" alt="Home screen: greeting, today's events and household nudges" loading="lazy"></div>
+          <div class="phone"><img src="images/mykhaya-home-more.webp" alt="Home screen continued: tonight's meal, coming up and quick actions" loading="lazy"></div>
+        </div>
+        <div class="tour-copy">
+          <div class="kicker"><span class="ic" style="background:var(--tint)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 11 12 4l8 7v9H4z"/><path d="M10 20v-5h4v5"/></svg></span><span class="eyebrow">Home</span></div>
+          <h3>Your whole day on one screen.</h3>
+          <p>Open the app and your family's day is waiting: what's on, what needs doing, and what's for dinner.</p>
+          <ul class="points">
+            <li><div><b>Today at a glance.</b> <span>Events with the faces of who's involved.</span></div></li>
+            <li><div><b>Nudges that need attention.</b> <span>Overdue jobs show exactly how late they are.</span></div></li>
+            <li><div><b>Around the house.</b> <span>Add an event, invite family, or jump to meal plans, lists and wishlists in one tap.</span></div></li>
+          </ul>
+        </div>
+      </article>
+
+      <article class="tour-row">
+        <div class="tour-shots" style="--blob:var(--coral)">
+          <div class="phone"><img src="images/mykhaya-calendar.webp" alt="Calendar month view with family events" loading="lazy"></div>
+          <div class="phone"><img src="images/mykhaya-calendar-day.webp" alt="Day details showing school pickup and family dinner with attendees" loading="lazy"></div>
+        </div>
+        <div class="tour-copy">
+          <div class="kicker"><span class="ic" style="background:var(--coral-soft)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="5" width="18" height="16" rx="2"/><path d="M3 10h18M8 3v4M16 3v4"/></svg></span><span class="eyebrow">Calendar</span><span class="tag">Free</span></div>
+          <h3>One calendar, everyone in it.</h3>
+          <p>School pickups, dentist appointments and family days out, all in one shared view.</p>
+          <ul class="points">
+            <li><div><b>Filter by person.</b> <span>See everyone's plans, or just one person's.</span></div></li>
+            <li><div><b>Month view with tags.</b> <span>Colour-code what matters and spot clashes early.</span></div></li>
+            <li><div><b>Tap any day.</b> <span>See who's going to what, then add an event right there.</span></div></li>
+          </ul>
+        </div>
+      </article>
+
+      <article class="tour-row">
+        <div class="tour-shots" style="--blob:var(--mustard)">
+          <div class="phone"><img src="images/mykhaya-meal-plans.webp" alt="Meal Plans: today's breakfast, lunch and dinner" loading="lazy"></div>
+          <div class="phone"><img src="images/mykhaya-meal-edit.webp" alt="Editing a meal: choose a saved meal, time, who's eating and who's cooking" loading="lazy"></div>
+        </div>
+        <div class="tour-copy">
+          <div class="kicker"><span class="ic" style="background:var(--mustard-soft)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 16h16M6 16a6 6 0 0 1 12 0M12 8V6M3 19h18"/></svg></span><span class="eyebrow">Meal plans</span></div>
+          <h3>Dinner, decided.</h3>
+          <p>Plan, cook and enjoy mealtimes together, without the 6pm “what are we having?” debate.</p>
+          <ul class="points">
+            <li><div><b>Day or week view.</b> <span>Breakfast, lunch and dinner planned in seconds.</span></div></li>
+            <li><div><b>Saved or quick meals.</b> <span>Reuse family favourites or jot down something new.</span></div></li>
+            <li><div><b>Who's eating, who's cooking.</b> <span>Set a time, assign the cook and mark meals that make leftovers.</span></div></li>
+          </ul>
+        </div>
+      </article>
+
+      <article class="tour-row">
+        <div class="tour-shots" style="--blob:var(--sage)">
+          <div class="phone"><img src="images/mykhaya-nudges.webp" alt="Nudges screen with routines, reminders and to-dos" loading="lazy"></div>
+          <div class="phone"><img src="images/mykhaya-notifications.webp" alt="Notifications with daily summaries and reminders" loading="lazy"></div>
+        </div>
+        <div class="tour-copy">
+          <div class="kicker"><span class="ic" style="background:var(--tint)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M6 16V11a6 6 0 1 1 12 0v5l1.5 2h-15z"/><path d="M10 20a2 2 0 0 0 4 0"/></svg></span><span class="eyebrow">Nudges</span></div>
+          <h3>Keep track without keeping it all in your head.</h3>
+          <p>Routines, reminders and to-dos in one place, with gentle prompts so nobody has to nag.</p>
+          <ul class="points">
+            <li><div><b>Three kinds of nudge.</b> <span>Daily routines, one-off reminders and to-dos.</span></div></li>
+            <li><div><b>Personal or household.</b> <span>Keep your own jobs private, or share chores with everyone.</span></div></li>
+            <li><div><b>A daily summary.</b> <span>Notifications tell you what's still open today, and remind you before it's late.</span></div></li>
+          </ul>
+        </div>
+      </article>
+
+      <article class="tour-row">
+        <div class="tour-shots" style="--blob:var(--coral)">
+          <div class="phone"><img src="images/mykhaya-family.webp" alt="Family screen with household members, family chat and today's plans" loading="lazy"></div>
+          <div class="soon"><b>Family chat</b><small>Private to your family. Coming soon.</small></div>
+        </div>
+        <div class="tour-copy">
+          <div class="kicker"><span class="ic" style="background:var(--coral-soft)"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="9" cy="8" r="3"/><path d="M3 20c.8-3.5 3.2-5 6-5s5.2 1.5 6 5M16 5a3 3 0 0 1 0 6M18 15c1.6.6 2.6 2.2 3 5"/></svg></span><span class="eyebrow">Family</span><span class="tag">Family plan</span></div>
+          <h3>What's happening with your people.</h3>
+          <p>A home for the whole household, with the right access for every member.</p>
+          <ul class="points">
+            <li><div><b>Roles for everyone.</b> <span>Adults, children and a Home Admin who manages the household.</span></div></li>
+            <li><div><b>Today with the family.</b> <span>Overdue jobs, tomorrow's calls and tonight's dinner in one list.</span></div></li>
+            <li><div><b>Bring in the wider family.</b> <span>Invite grandparents and close friends from outside the household.</span></div></li>
+          </ul>
+        </div>
+      </article>
+    </div>
+
+  </div>
+</section>
+
+<!-- ============ A DAY ============ -->
+<section id="day">
+  <div class="wrap day">
+    <div class="section-head">
+      <span class="eyebrow">A day with MyKhaya</span>
+      <h2>From breakfast to bedtime.</h2>
+      <p class="lede">Here's how an ordinary Monday might look when the whole household shares one home base.</p>
+      <p class="note">An illustrative example day.</p>
+    </div>
+    <ol class="timeline">
+      <li><time>07:00</time><span class="node m"></span><div class="card"><h3>The morning summary</h3><p>A notification lists today's open routines, to-dos and reminders before anyone's out of bed.</p><span class="via">Notifications</span></div></li>
+      <li><time>07:30</time><span class="node"></span><div class="card"><h3>Feed the dog</h3><p>A daily household routine. Whoever does it ticks it off, and everyone sees it's done.</p><span class="via">Nudges</span></div></li>
+      <li><time>09:00</time><span class="node c"></span><div class="card"><h3>Order school lunches</h3><p>The reminder fires on time. Missed it? Home flags it as overdue so it doesn't slip a second day.</p><span class="via">Nudges</span></div></li>
+      <li><time>15:00</time><span class="node"></span><div class="card"><h3>School pickup</h3><p>On the shared calendar with Jamie, Sam and you attached, so nobody assumes someone else is going.</p><span class="via">Calendar</span></div></li>
+      <li><time>17:00</time><span class="node c"></span><div class="card"><h3>Swimming lesson</h3><p>Already on Today's card on the Home screen, with the faces of who's going.</p><span class="via">Home</span></div></li>
+      <li><time>18:00</time><span class="node m"></span><div class="card"><h3>Homemade pizza, 3 eating</h3><p>Planned at the weekend. The cook is set and everyone knows what's for dinner.</p><span class="via">Meal plans</span></div></li>
+    </ol>
+  </div>
+</section>
+
+<!-- ============ HOW IT WORKS ============ -->
+<section class="steps-sec" id="how">
+  <div class="wrap">
+    <div class="section-head center">
+      <span class="eyebrow">How it works</span>
+      <h2>Up and running in minutes.</h2>
+    </div>
+    <div class="steps">
+      <div class="step"><span class="num">1</span><h3>Create your home</h3><p>Sign up free with no card. Name your home and your calendar and events are ready.</p></div>
+      <div class="step"><span class="num">2</span><h3>Invite your people</h3><p>On Family, add adults and children, then invite grandparents and friends from outside the household.</p></div>
+      <div class="step"><span class="num">3</span><h3>Share the load</h3><p>Add events, plan meals, set nudges and build lists. Everyone stays in step.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ TRUST ============ -->
+<section>
+  <div class="wrap">
+    <div class="section-head">
+      <span class="eyebrow">Our promise</span>
+      <h2>Built for families. Built to be trusted.</h2>
+    </div>
+    <div class="trust">
+      <div><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M3 10h18"/></svg><h3>No hidden fees</h3><p>Simple, transparent pricing. What you see is what you pay.</p></div>
+      <div><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg><h3>Cancel anytime</h3><p>You're always in control. Change or cancel your plan whenever you like.</p></div>
+      <div><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 11 12 4l8 7v9H4z"/><path d="M10 20v-5h4v5"/></svg><h3>Built for families</h3><p>Share, organise and do more together, with tools shaped around real households.</p></div>
+      <div><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg><h3>Your data, your home</h3><p>Private, secure and in your control. Read our <a href="https://mykhaya.app/legal/privacy">privacy policy</a> and <a href="https://mykhaya.app/legal/children">children's privacy</a> notice.</p></div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ WHO IT'S FOR ============ -->
+<section class="who-sec">
+  <div class="wrap">
+    <div class="section-head">
+      <span class="eyebrow">Who it's for</span>
+      <h2>Every kind of home.</h2>
+      <p class="lede">However your household is shaped, MyKhaya gives it one place to come together.</p>
+    </div>
+    <div class="who">
+      <article>
+        <div class="avs"><span style="background:var(--av-j)">J</span><span style="background:var(--av-s)">S</span><span style="background:var(--av-t)">T</span></div>
+        <h3>Busy parents</h3>
+        <p>Two diaries, school runs and endless clubs. See it all on one shared calendar.</p>
+        <ul><li>Shared family events</li><li>Kids' routines</li><li>Meal plans for the week</li></ul>
+      </article>
+      <article>
+        <div class="avs"><span style="background:var(--sage)">G</span><span style="background:var(--mustard);color:#2E2006">A</span></div>
+        <h3>Extended family</h3>
+        <p>Keep grandparents, aunts and close friends in the loop without adding them to every group chat.</p>
+        <ul><li>Invite family and friends</li><li>Gift wishlists</li><li>Reminders to call home</li></ul>
+      </article>
+      <article>
+        <div class="avs"><span style="background:var(--av-t)">M</span></div>
+        <h3>Getting yourself organised</h3>
+        <p>Start on your own with the free plan, then bring the household in when you're ready.</p>
+        <ul><li>Calendar and events</li><li>Up to 3 personal routines</li><li>Free forever</li></ul>
+      </article>
+    </div>
+  </div>
+</section>
+
+<!-- ============ PRICING ============ -->
+<section id="pricing">
+  <div class="wrap">
+    <div class="section-head center">
+      <span class="eyebrow">Pricing</span>
+      <h2>Simple plans for modern family life.</h2>
+      <p class="lede">Start free and upgrade when you're ready. Every plan includes the core tools, with more for growing households.</p>
+      <div class="billing" role="group" aria-label="Billing period">
+        <button type="button" id="bill-m" aria-pressed="true">Monthly</button>
+        <button type="button" id="bill-a" aria-pressed="false">Annual</button>
+      </div>
+    </div>
+    <div class="plans">
+      <div class="plan">
+        <div><h3>Free</h3><p class="for">For individuals getting organised</p></div>
+        <div class="price"><strong>£0</strong><span class="per">/ forever</span></div>
+        <ul><li>Calendar</li><li>Events</li><li>1 calendar tag</li><li>Up to 3 personal routines</li><li>1 person</li></ul>
+        <a class="btn btn-ghost" href="https://mykhaya.app/register">Get started free</a>
+      </div>
+      <div class="plan pop">
+        <span class="badge">Most popular</span>
+        <div><h3>Family</h3><p class="for">For the whole household</p></div>
+        <!-- Set data-monthly / data-annual to your live prices, or let your pricing script fill .js-price -->
+        <div class="price"><strong class="js-price" data-monthly="£—" data-annual="£—">£—</strong><span class="per js-per">/ month</span></div>
+        <ul><li>Everything in Free</li><li>Whole household</li><li>Unlimited calendar tags</li><li>Unlimited routines</li><li>Household routines</li><li>Shared family events</li><li>Lists</li><li>Gift wishlists</li><li>Invite household members</li><li>Invite external family and friends</li></ul>
+        <a class="btn btn-primary" href="https://mykhaya.app/register">Start Family</a>
+      </div>
+      <div class="plan">
+        <div><h3>Ultimate</h3><p class="for">For the full MyKhaya experience</p></div>
+        <div class="price"><strong class="js-price" data-monthly="£—" data-annual="£—">£—</strong><span class="per js-per">/ month</span></div>
+        <ul><li>Everything in Family</li><li>Budget</li><li>Driveway</li><li>Future premium modules</li></ul>
+        <p class="paused">New Ultimate sign-ups are temporarily paused.</p>
+        <a class="btn btn-ghost" href="#faq">More about our plans</a>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ============ FAQ ============ -->
+<section id="faq" style="padding-top:0">
+  <div class="wrap faq-grid">
+    <div class="section-head">
+      <span class="eyebrow">Questions</span>
+      <h2>Good to know.</h2>
+      <p class="lede">The things families usually ask before they move in.</p>
+      <div class="help-card"><b>Still wondering?</b><span>Our support team is happy to help.</span><a href="https://mykhaya.app/help-support">Visit Help &amp; Support →</a></div>
+    </div>
+    <div class="faq">
+      <details open><summary>Is MyKhaya really free?</summary><p>Yes. The Free plan costs £0 forever and needs no card. It includes the calendar, events, one calendar tag and up to three personal routines for one person.</p></details>
+      <details><summary>What's the difference between Free and Family?</summary><p>Free is for one person getting organised. Family opens MyKhaya up to your whole household, with shared events, lists, gift wishlists, household routines, unlimited tags and routines, and invites for family and friends.</p></details>
+      <details><summary>What's the difference between a routine, a reminder and a to-do?</summary><p>Routines repeat, like feeding the dog every day. Reminders are one-offs at a set time, like calling the grandparents at 9am. To-dos are jobs to tick off when they're done. Each can be personal or shared with the household.</p></details>
+      <details><summary>Can children use MyKhaya?</summary><p>Yes. Children can be members of your household with their own role, so they can see their events and routines. Our children's privacy notice explains how their data is handled.</p></details>
+      <details><summary>Can people outside my household join?</summary><p>Yes. On the Family plan you can invite external family and friends, which is ideal for grandparents, co-parents or the friend who does the Thursday pickup.</p></details>
+      <details><summary>Can I cancel at any time?</summary><p>Yes. There are no hidden fees, and you can change or cancel your plan whenever you like.</p></details>
+      <details><summary>Why can't I sign up for Ultimate?</summary><p>New Ultimate sign-ups are temporarily paused. You can start on Free or Family today and upgrade when Ultimate reopens.</p></details>
+    </div>
+  </div>
+</section>
+
+<!-- ============ CTA ============ -->
+<section class="cta">
+  <div class="wrap">
+    <div class="cta-box">
+      <div class="blocks" aria-hidden="true"><i style="background:var(--coral)"></i><i style="background:var(--on-forest)"></i><i style="background:var(--sage)"></i><i style="background:var(--mustard)"></i></div>
+      <div><h2>Ready to bring your family together?</h2><p>Free to start. No card required. Set up in minutes.</p></div>
+      <div class="cta-actions">
+        <a class="btn btn-primary" href="https://mykhaya.app/register">Get started free →</a>
+        <a class="btn btn-light" href="https://mykhaya.app/login">Sign in</a>
+      </div>
+    </div>
+  </div>
+</section>
+</main>
+
+<!-- ============ FOOTER ============ -->
+<footer>
+  <div class="wrap">
+    <div class="foot">
+      <div>
+        <a class="brand" href="https://mykhaya.app/"><img src="images/mykhaya-logo-64.png" alt="" width="40" height="40">MyKhaya</a>
+        <p class="tagline">Your family, organised: calmly, together.</p>
+      </div>
+      <div><h4>Product</h4><ul><li><a href="#features">Features</a></li><li><a href="#how">How it works</a></li><li><a href="#pricing">Pricing</a></li><li><a href="#faq">FAQ</a></li></ul></div>
+      <div><h4>Account</h4><ul><li><a href="https://mykhaya.app/login">Sign in</a></li><li><a href="https://mykhaya.app/register">Create an account</a></li></ul></div>
+      <div><h4>Help</h4><ul><li><a href="https://mykhaya.app/help-support">Support</a></li><li><a href="https://status.dev.mykhaya.app/">Service status</a></li></ul></div>
+    </div>
+    <div class="legal">
+      <span>© 2026 MyKhaya. All rights reserved.</span>
+      <nav aria-label="Legal"><a href="https://mykhaya.app/legal/terms">Terms</a><a href="https://mykhaya.app/legal/privacy">Privacy</a><a href="https://mykhaya.app/legal/children">Children's Privacy</a><a href="https://mykhaya.app/legal/cookies">Cookies</a></nav>
+    </div>
+  </div>
+</footer>
+
+<button class="to-top away" id="to-top" aria-label="Back to top">↑</button>
+
+<script>
+(function(){
+  var btn=document.getElementById('menu-btn'), menu=document.getElementById('mobile-menu');
+  btn.addEventListener('click',function(){var open=menu.hidden;menu.hidden=!open;btn.setAttribute('aria-expanded',String(open));btn.textContent=open?'✕':'☰';});
+  menu.addEventListener('click',function(e){if(e.target.tagName==='A'){menu.hidden=true;btn.setAttribute('aria-expanded','false');btn.textContent='☰';}});
+  var top=document.getElementById('to-top');
+  function onScroll(){top.classList.toggle('away',window.scrollY<600);}
+  window.addEventListener('scroll',onScroll,{passive:true});onScroll();
+  top.addEventListener('click',function(){window.scrollTo({top:0,behavior:'smooth'});});
+  var m=document.getElementById('bill-m'), a=document.getElementById('bill-a');
+  function setBilling(annual){
+    m.setAttribute('aria-pressed',String(!annual));a.setAttribute('aria-pressed',String(annual));
+    document.querySelectorAll('.js-price').forEach(function(el){el.textContent=el.dataset[annual?'annual':'monthly'];});
+    document.querySelectorAll('.js-per').forEach(function(el){el.textContent=annual?'/ year':'/ month';});
+  }
+  m.addEventListener('click',function(){setBilling(false);});
+  a.addEventListener('click',function(){setBilling(true);});
+})();
+</script>

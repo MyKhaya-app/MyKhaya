@@ -81,6 +81,10 @@ services:
     ports:
       - "127.0.0.1:${MYKHAYA_DEV_MAILPIT_PORT:-8025}:8025"
 
+volumes:
+  home_migration_data:
+    name: mykhaya_dev_home_migration_data
+
 # Pin the `edge`/`app` subnets compose.yml declares with no `ipam`, purely so
 # caddy above can be given a static, known-in-advance address on each — that
 # static /32 (not the subnet itself) is what MYKHAYA_TRUSTED_PROXY_CIDRS

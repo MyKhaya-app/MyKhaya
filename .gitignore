@@ -29,3 +29,6 @@ backups/
 # already gitignored separately, in apps/android-shell/android/app/.gitignore.
 firebase-service-account*.json
 *-firebase-adminsdk-*.json
+
+# Design source/handoff files (the built marketing site lives in apps/web).
+/design/
