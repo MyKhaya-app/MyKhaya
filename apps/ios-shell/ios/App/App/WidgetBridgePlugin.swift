@@ -53,7 +53,14 @@ public class WidgetBridgePlugin: CAPPlugin, CAPBridgedPlugin {
         // a same-origin relative navigation needs no knowledge of which
         // environment (dev.mykhaya.app / mykhaya.app) is currently loaded.
         let escaped = path.replacingOccurrences(of: "'", with: "%27")
-        bridge?.webView?.evaluateJavaScript("window.location.assign('\(escaped)')", completionHandler: nil)
+        // Mark the next document as an intentional deep link before loading
+        // it. The native cold-start bootstrap preserves this route instead
+        // of treating a widget's plain /login target as a restored startup
+        // route.
+        bridge?.webView?.evaluateJavaScript(
+            "sessionStorage.setItem('mykhaya.native.deep-link-start', '1'); window.location.assign('\(escaped)')",
+            completionHandler: nil
+        )
     }
 
     @objc func setSnapshot(_ call: CAPPluginCall) {

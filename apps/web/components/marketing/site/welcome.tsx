@@ -48,8 +48,8 @@ function NativeRootGate({ fallback }: { fallback: React.ReactNode }) {
         ? "/register"
         : "/login";
     if (process.env.NODE_ENV !== "production") {
-      console.info("[AUTH_NAV]", {
-        event: "native_entry_decision",
+      console.info("[NATIVE_ACQUISITION]", {
+        event: "signup_state_decision",
         native: true,
         auth_state: status,
         signup_mode: signupState?.signup_mode ?? null,

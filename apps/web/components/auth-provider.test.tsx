@@ -230,21 +230,9 @@ describe("AuthProvider", () => {
     expect(router.replace).not.toHaveBeenCalled();
   });
 
-  it("normalizes a stale native /login cold-start route back through the signup gate", async () => {
+  it("does not rewrite an explicit native /login navigation", async () => {
     nativeShellState.value = true;
     pathname = "/login";
-    window.sessionStorage.removeItem("mykhaya.native.document-started");
-
-    render(<AuthProvider><Probe /></AuthProvider>);
-
-    await waitFor(() => expect(router.replace).toHaveBeenCalledWith("/"));
-    expect(router.replace).not.toHaveBeenCalledWith("/login");
-  });
-
-  it("does not rewrite an explicit native /login navigation after startup", async () => {
-    nativeShellState.value = true;
-    pathname = "/login";
-    window.sessionStorage.setItem("mykhaya.native.document-started", "1");
 
     render(<AuthProvider><Probe /></AuthProvider>);
 
