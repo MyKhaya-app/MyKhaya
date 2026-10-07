@@ -16,9 +16,3 @@ export function sectionHref(id: string, onHome: boolean) {
 
 // Production status page (MYKHAYA_STATUS_URL in .env.production.example).
 export const STATUS_URL = "https://status.mykhaya.app/";
-
-// App store listings. Leave empty until the listing is live: an empty URL shows
-// the badge as plain (non-link) artwork, and Google Play also shows a
-// "Coming soon" pill. Set the URL to turn the badge into a link.
-export const APP_STORE_URL = "";
-export const GOOGLE_PLAY_URL = "";

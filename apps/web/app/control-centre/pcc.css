@@ -4367,3 +4367,19 @@
   justify-items: center;
   text-align: center;
 }
+
+/* Founding Beta: site-wide app links group in the programme settings form. */
+.pcc-root .pcc-beta-page .pcc-beta-app-links {
+  border-top: 1px solid var(--cc-border);
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 1rem;
+  padding-top: 1rem;
+}
+.pcc-root .pcc-beta-page .pcc-beta-app-links p {
+  color: var(--cc-text-muted);
+  margin: 0.2rem 0 0;
+}
+.pcc-root .pcc-beta-page .pcc-beta-metadata dd {
+  overflow-wrap: anywhere;
+}

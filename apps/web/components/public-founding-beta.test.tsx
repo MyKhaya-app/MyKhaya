@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { PublicFoundingBeta } from "./public-founding-beta";
 
@@ -9,6 +9,12 @@ vi.mock("next/navigation", () => ({
   useRouter: () => router,
   useSearchParams: () => new URLSearchParams(search),
   usePathname: () => "/founding-beta",
+}));
+
+const native = vi.hoisted(() => ({ value: false }));
+vi.mock("@/components/native-runtime", () => ({
+  isNativeShell: () => native.value,
+  nativePlatform: () => (native.value ? "ios" : "web"),
 }));
 
 vi.mock("@mykhaya/api-client", async (importOriginal) => {
@@ -37,6 +43,7 @@ function state(overrides: Record<string, unknown> = {}) {
 beforeEach(() => {
   vi.clearAllMocks();
   search = "";
+  native.value = false;
   signupState.mockResolvedValue(state());
 });
 
@@ -111,5 +118,80 @@ describe("Founding Beta page", () => {
       expect(within(header).getByRole("link", { name: "Join the Beta" })).toHaveAttribute("href", "/founding-beta"),
     );
     expect(within(screen.getByRole("contentinfo")).getByRole("link", { name: "Support" })).toHaveAttribute("href", "/support");
+  });
+});
+
+describe("Founding Beta page — Get the beta app (PCC app links)", () => {
+  const TESTFLIGHT = "https://testflight.apple.com/join/AbCdEf12";
+  const APP_STORE = "https://apps.apple.com/gb/app/mykhaya/id1234567890";
+  const PLAY_TESTING = "https://play.google.com/apps/testing/app.mykhaya";
+  const PLAY_LISTING = "https://play.google.com/store/apps/details?id=app.mykhaya";
+  const OTHER_ANDROID = "https://downloads.mykhaya.app/android/beta.apk";
+
+  async function block(ios: string | null, android: string | null) {
+    signupState.mockResolvedValue(state({ ios_app_url: ios, android_app_url: android }));
+    render(<PublicFoundingBeta />);
+    return within(await screen.findByRole("region", { name: "Get the beta app" }));
+  }
+
+  it("sits under the member/terms lines with its own label and copy", async () => {
+    const region = await block(TESTFLIGHT, null);
+    expect(region.getByText(/You can join and use MyKhaya from the app too/)).toBeInTheDocument();
+    const member = screen.getByText(/Already a member\?/);
+    const apps = screen.getByRole("region", { name: "Get the beta app" });
+    expect(member.compareDocumentPosition(apps) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it("TestFlight: Install on iPhone via TestFlight, with the TestFlight note", async () => {
+    const region = await block(TESTFLIGHT, null);
+    expect(region.getByRole("link", { name: /Install on iPhone/ })).toHaveAttribute("href", TESTFLIGHT);
+    expect(region.getByText("You'll need Apple's free TestFlight app.")).toBeInTheDocument();
+    expect(region.queryByAltText("Download on the App Store")).not.toBeInTheDocument();
+  });
+
+  it("App Store: the official badge linking to the listing", async () => {
+    const region = await block(APP_STORE, null);
+    expect(region.getByAltText("Download on the App Store").closest("a")).toHaveAttribute("href", APP_STORE);
+    expect(region.queryByText(/TestFlight/)).not.toBeInTheDocument();
+  });
+
+  it("Play testing: Get the Android beta", async () => {
+    const region = await block(null, PLAY_TESTING);
+    expect(region.getByRole("link", { name: "Get the Android beta" })).toHaveAttribute("href", PLAY_TESTING);
+  });
+
+  it("Play listing: the official Google Play badge", async () => {
+    const region = await block(null, PLAY_LISTING);
+    expect(region.getByAltText("Get it on Google Play").closest("a")).toHaveAttribute("href", PLAY_LISTING);
+  });
+
+  it("Other https Android link: Get the Android beta", async () => {
+    const region = await block(null, OTHER_ANDROID);
+    expect(region.getByRole("link", { name: "Get the Android beta" })).toHaveAttribute("href", OTHER_ANDROID);
+  });
+
+  it("Empty iPhone link: hidden; empty Android link: Android coming soon placeholder", async () => {
+    const region = await block(TESTFLIGHT, null);
+    expect(region.getByText("Android coming soon").closest("a")).toBeNull();
+    cleanup();
+    const iosOnlyEmpty = await block(null, OTHER_ANDROID);
+    expect(iosOnlyEmpty.queryByText(/Install on iPhone/)).not.toBeInTheDocument();
+    expect(iosOnlyEmpty.queryByAltText("Download on the App Store")).not.toBeInTheDocument();
+  });
+
+  it("hides the whole block when both links are empty", async () => {
+    signupState.mockResolvedValue(state({ ios_app_url: null, android_app_url: null }));
+    render(<PublicFoundingBeta />);
+    await waitFor(() => expect(signupState).toHaveBeenCalled());
+    await screen.findByRole("button", { name: /Join the Beta/ });
+    expect(screen.queryByRole("region", { name: "Get the beta app" })).not.toBeInTheDocument();
+  });
+
+  it("hides the block inside the native app", async () => {
+    native.value = true;
+    signupState.mockResolvedValue(state({ ios_app_url: TESTFLIGHT, android_app_url: PLAY_TESTING }));
+    render(<PublicFoundingBeta />);
+    await screen.findByRole("button", { name: /Join the Beta/ });
+    expect(screen.queryByRole("region", { name: "Get the beta app" })).not.toBeInTheDocument();
   });
 });
