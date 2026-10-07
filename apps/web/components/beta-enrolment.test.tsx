@@ -2,12 +2,21 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
+const replace = vi.hoisted(() => vi.fn());
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ replace: vi.fn(), push: vi.fn() }),
+  useRouter: () => ({ replace, push: vi.fn() }),
   useSearchParams: () => new URLSearchParams(""),
 }));
 vi.mock("./auth-provider", () => ({
-  useAuth: () => ({ status: "ready", user: { id: "u1", display_name: "Megan", principal_type: "adult" } }),
+  useAuth: () => ({
+    status: "ready",
+    user: { id: "u1", display_name: "Megan", principal_type: "adult" },
+    refreshSession: vi.fn().mockResolvedValue(true),
+  }),
+}));
+const refreshHomes = vi.hoisted(() => vi.fn().mockResolvedValue(undefined));
+vi.mock("@/components/use-active-home", () => ({
+  useActiveHome: () => ({ refreshHomes }),
 }));
 const native = vi.hoisted(() => ({ value: false }));
 vi.mock("@/components/native-runtime", () => ({
@@ -78,6 +87,7 @@ function signupState(ios: string | null = null, android: string | null = null) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  replace.mockReset();
   native.value = false;
   mock(api.publicSignupState).mockResolvedValue(signupState());
   mock(api.betaContinuation).mockResolvedValue(continuationState());
@@ -134,6 +144,7 @@ describe("Founding Beta continuation", () => {
     await completeNewUserJourney();
     expect(api.acceptLegalDocument).toHaveBeenCalledTimes(1);
     expect(api.joinBeta).toHaveBeenCalledWith({ home_name: "Hales Home", terms_version: undefined, invitation_token: undefined });
+    expect(refreshHomes).toHaveBeenCalled();
     expect(screen.getByRole("link", { name: "Enter MyKhaya" })).toHaveAttribute("href", "/home");
   });
 
@@ -152,6 +163,26 @@ describe("Founding Beta continuation", () => {
       ]),
     );
     expect(summary).toEqual({ Home: "Hales Home", Plan: "Ultimate", Cost: "Complimentary", "Payment required": "No" });
+  });
+
+  it("keeps Beta completion active until the refreshed Home state resolves", async () => {
+    let resolveHomes!: () => void;
+    refreshHomes.mockReturnValueOnce(new Promise<void>((resolve) => { resolveHomes = resolve; }));
+    const user = userEvent.setup();
+    render(<BetaEnrolment />);
+    await user.click(await screen.findByRole("checkbox", { name: /I accept/ }));
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+    await user.type(await screen.findByLabelText("Home name"), "Hales Home");
+    await user.click(screen.getByRole("button", { name: "Continue" }));
+    await user.click(await screen.findByRole("button", { name: "Join the Founding Beta" }));
+    await waitFor(() => expect(api.joinBeta).toHaveBeenCalled());
+
+    expect(screen.queryByRole("heading", { name: "Your Home is now in the Founding Beta" })).not.toBeInTheDocument();
+    expect(screen.queryByText("How would you like to use MyKhaya?")).not.toBeInTheDocument();
+
+    resolveHomes();
+    expect(await screen.findByRole("heading", { name: "Your Home is now in the Founding Beta" })).toBeInTheDocument();
+    expect(replace).toHaveBeenCalledWith("/home");
   });
 
   it("never shows plans, prices or payment, and never starts Stripe checkout", async () => {

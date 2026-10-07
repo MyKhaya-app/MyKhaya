@@ -11,6 +11,7 @@ import {
 } from "@mykhaya/api-client";
 import { FormStatus } from "@/components/form-status";
 import { useAuth } from "@/components/auth-provider";
+import { useActiveHome } from "@/components/use-active-home";
 import { AppLinks, hasAnyAppLink, useNativeShell } from "@/components/app-links/app-links";
 import { isNativeShell, nativePlatform } from "@/components/native-runtime";
 
@@ -34,7 +35,8 @@ export function BetaEnrolment() {
   const router = useRouter();
   const params = useSearchParams();
   const invitation = params.get("invitation");
-  const { status } = useAuth();
+  const { status, refreshSession } = useAuth();
+  const { refreshHomes } = useActiveHome();
   const [state, setState] = useState<PublicSignupState | null>(null);
   const [continuation, setContinuation] = useState<BetaContinuationState | null>(null);
   const [step, setStep] = useState<Step>("welcome");
@@ -118,7 +120,17 @@ export function BetaEnrolment() {
         terms_version: legacyTermsVersion ?? undefined,
         invitation_token: invitation ?? undefined,
       });
+      // `/beta/join` commits the Home, membership, entitlement and
+      // enrollment atomically. Keep the Beta continuation mounted while the
+      // two client snapshots catch up, otherwise AppShell can briefly see an
+      // authenticated user with zero Homes and redirect to generic onboarding.
+      const refreshed = await Promise.allSettled([refreshSession(), refreshHomes()]);
+      if (refreshed.some((result) => result.status === "rejected")) {
+        setError("Your Beta Home was created, but MyKhaya could not refresh your Home state. Please try again.");
+        return;
+      }
       setStep("done");
+      router.replace("/home");
     } catch (reason) {
       if (reason instanceof ApiError && reason.code === "beta_terms_required") {
         // The Beta Terms changed while this screen was open: start again from

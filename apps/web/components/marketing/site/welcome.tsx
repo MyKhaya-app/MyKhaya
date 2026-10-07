@@ -38,19 +38,28 @@ function NativeRootGate({ fallback }: { fallback: React.ReactNode }) {
 
   useEffect(() => {
     if (status !== "signed_out" || signupState === undefined) return;
-    if (signupState && (
+    const destination = signupState && (
       signupState.signup_mode === "beta_only" ||
       signupState.beta_joining_available ||
       signupState.waitlist_available
-    ) && (signupState.registration_open || signupState.waitlist_available)) {
-      router.replace("/founding-beta");
-      return;
+    ) && (signupState.registration_open || signupState.waitlist_available)
+      ? "/founding-beta"
+      : signupState && !signupState.registration_open
+        ? "/register"
+        : "/login";
+    if (process.env.NODE_ENV !== "production") {
+      console.info("[AUTH_NAV]", {
+        event: "native_entry_decision",
+        native: true,
+        auth_state: status,
+        signup_mode: signupState?.signup_mode ?? null,
+        beta_joining_available: signupState?.beta_joining_available ?? null,
+        waitlist_available: signupState?.waitlist_available ?? null,
+        registration_open: signupState?.registration_open ?? null,
+        destination,
+      });
     }
-    if (signupState && !signupState.registration_open) {
-      router.replace("/register");
-      return;
-    }
-    router.replace("/login");
+    router.replace(destination);
   }, [router, signupState, status]);
 
   if (status === "maintenance") return <MaintenanceScreen onRecovered={retryInitialSession} />;

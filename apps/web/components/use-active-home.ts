@@ -1,6 +1,6 @@
 "use client";
 
-import { createContext, createElement, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, createElement, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import type { Home } from "@mykhaya/shared-types";
 import { api } from "@mykhaya/api-client";
 import { useAuth } from "./auth-provider";
@@ -16,6 +16,7 @@ const EMPTY_ACTIVE_HOME_STATE: ActiveHomeState = {
   setActiveHomeId: () => undefined,
   loading: true,
   error: false,
+  refreshHomes: async () => undefined,
 };
 const ActiveHomeContext = createContext<ActiveHomeState>(EMPTY_ACTIVE_HOME_STATE);
 
@@ -25,23 +26,30 @@ function useActiveHomeState({ enabled = true }: { enabled?: boolean } = {}) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(false);
 
+  const refreshHomes = useCallback(async () => {
+    setLoading(true);
+    try {
+      const rows = await api.homes();
+      setError(false);
+      setHomes(rows);
+      const stored = typeof window === "undefined" ? null : window.localStorage.getItem(STORAGE_KEY);
+      const next = rows.find((row) => row.id === stored)?.id ?? rows[0]?.id ?? null;
+      setActiveHomeId(next);
+      if (next && typeof window !== "undefined") {
+        window.localStorage.setItem(STORAGE_KEY, next);
+      }
+    } catch {
+      setError(true);
+      throw new Error("Could not refresh Homes.");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     if (!enabled) return;
-    api
-      .homes()
-      .then((rows) => {
-        setError(false);
-        setHomes(rows);
-        const stored = typeof window === "undefined" ? null : window.localStorage.getItem(STORAGE_KEY);
-        const next = rows.find((row) => row.id === stored)?.id ?? rows[0]?.id ?? null;
-        setActiveHomeId(next);
-        if (next && typeof window !== "undefined") {
-          window.localStorage.setItem(STORAGE_KEY, next);
-        }
-      })
-      .catch(() => setError(true))
-      .finally(() => setLoading(false));
-  }, [enabled]);
+    void refreshHomes().catch(() => undefined);
+  }, [enabled, refreshHomes]);
 
   useEffect(() => {
     if (!activeHomeId || typeof window === "undefined") return;
@@ -64,6 +72,7 @@ function useActiveHomeState({ enabled = true }: { enabled?: boolean } = {}) {
     setActiveHomeId,
     loading,
     error,
+    refreshHomes,
   };
 }
 

@@ -13,6 +13,8 @@ import { isMaintenanceError } from "./maintenance";
 import { isNativeShell, isPlatformControlCentre } from "./native-runtime";
 import { useUserUpdatedListener } from "./user-events";
 
+const NATIVE_DOCUMENT_STARTED_KEY = "mykhaya.native.document-started";
+
 // legal_action_required sits between a fully-authenticated session and
 // ordinary app access — modelled on the existing "locked" (native biometric
 // re-lock/MFA) interrupt AppShell already renders full-screen for, not as a
@@ -117,6 +119,36 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [legalStatus, setLegalStatus] = useState<LegalStatusResponse | null>(null);
   const [legalStatusError, setLegalStatusError] = useState<string | null>(null);
   const bootstrapped = useRef(false);
+
+  useEffect(() => {
+    if (runtimeNative !== true || path === "/" || platformControlCentre) return;
+
+    let documentStarted = false;
+    try {
+      documentStarted = window.sessionStorage.getItem(NATIVE_DOCUMENT_STARTED_KEY) === "1";
+      if (!documentStarted) window.sessionStorage.setItem(NATIVE_DOCUMENT_STARTED_KEY, "1");
+    } catch {
+      // Session storage is only a navigation hint; a restricted WebView must
+      // not prevent the normal auth bootstrap from running.
+    }
+
+    // Capacitor's live WebView can restore its last public URL after a cold
+    // launch. If that URL is /login, the root acquisition gate is bypassed
+    // and Beta-enabled signed-out users see the generic login screen. Only
+    // normalize the first native document; later /login navigation is an
+    // explicit in-app sign-in action and must remain intact.
+    if (!documentStarted && path === "/login") {
+      if (process.env.NODE_ENV !== "production") {
+        console.info("[AUTH_NAV]", {
+          event: "native_cold_start_route_normalized",
+          from: path,
+          to: "/",
+          native: true,
+        });
+      }
+      router.replace("/");
+    }
+  }, [path, platformControlCentre, router, runtimeNative]);
 
   // The single place that turns "session is authenticated" into either
   // "ready" or "legal_action_required" — every auth-success path below
