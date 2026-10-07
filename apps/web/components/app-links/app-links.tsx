@@ -1,13 +1,14 @@
 "use client";
 
+import "./app-links.css";
 import { useEffect, useState } from "react";
 import { Smartphone } from "lucide-react";
 import { isNativeShell } from "@/components/native-runtime";
 import { androidLinkKind, iosLinkKind } from "./app-link-kind";
 
 // The one place the site turns the PCC "iPhone app link" / "Android app link"
-// settings into buttons. Shown on the homepage hero and the Founding Beta
-// page; styles are in app/marketing-site.css (mk-applink-*).
+// settings into buttons. Shown on the homepage hero, the Founding Beta page
+// and the in-app Founding Beta confirmation card; styles in ./app-links.css.
 
 const IMG = "/images/marketing";
 

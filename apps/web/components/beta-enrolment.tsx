@@ -12,6 +12,7 @@ import {
 } from "@mykhaya/api-client";
 import { FormStatus } from "@/components/form-status";
 import { useAuth } from "@/components/auth-provider";
+import { AppLinks, hasAnyAppLink, useNativeShell } from "@/components/app-links/app-links";
 
 export function BetaEnrolment() {
   const router = useRouter();
@@ -66,7 +67,7 @@ export function BetaEnrolment() {
   }
 
   if (done) {
-    return <section className="standard-page"><div className="card feature-card"><p className="eyebrow">Founding Beta</p><h1>Your Home is now in the Founding Beta</h1><p>Your existing data and members remain in place, with complimentary Ultimate access.</p><Link className="button" href="/home">Return home</Link></div></section>;
+    return <section className="standard-page"><div className="card feature-card"><p className="eyebrow">Founding Beta</p><h1>Your Home is now in the Founding Beta</h1><p>Your existing data and members remain in place, with complimentary Ultimate access.</p><GetTheAppStep ios={state?.ios_app_url} android={state?.android_app_url} /><Link className="button" href="/home">Return home</Link></div></section>;
   }
   if (!user || !eligibility) return <main className="standard-page"><p role="status">Loading your Beta options…</p></main>;
   if (!eligibility.eligible) {
@@ -75,4 +76,19 @@ export function BetaEnrolment() {
   const existingHome = Boolean(eligibility.home_id);
   const termsVersion = betaTerms?.current_version ?? state?.beta_terms_version ?? "current";
   return <section className="standard-page"><div className="card feature-card"><p className="eyebrow">Founding Beta</p><h1>{existingHome ? `Enrol ${eligibility.home_name} in the Founding Beta` : "Create a Founding Beta Home"}</h1><p>{existingHome ? "The same Home will be retained. All existing data and members will remain, and the Home will become complimentary Ultimate. No second Home will be created." : "Create a Home with complimentary Ultimate access for its lifetime. No payment or card is required."}</p><form onSubmit={submit}>{!existingHome && <label>Home name<input value={homeName} onChange={(event) => setHomeName(event.target.value)} maxLength={100} required /></label>}<label className="check-row"><input type="checkbox" checked={termsAccepted} onChange={(event) => setTermsAccepted(event.target.checked)} required /><span>I accept the <Link href="/legal/founding-beta-terms">Founding Beta Terms</Link> (version {termsVersion}).</span></label><FormStatus error={error} /><button disabled={busy || ((!state?.beta_terms_version && !betaTerms?.current_version))}>{busy ? "Enrolling…" : existingHome ? "Enrol this Home" : "Create Beta Home"}</button></form></div></section>;
+}
+
+/** "Next: get MyKhaya on your phone", from the PCC iPhone/Android app links
+ *  (same link-type rules as the homepage and Founding Beta page). Hidden when
+ *  neither link is set, and when this card is shown inside the native app. */
+function GetTheAppStep({ ios, android }: { ios: string | null | undefined; android: string | null | undefined }) {
+  const native = useNativeShell();
+  if (native || !hasAnyAppLink(ios, android)) return null;
+  return (
+    <section className="beta-get-app" aria-labelledby="beta-get-app-heading">
+      <h2 id="beta-get-app-heading">Next: get MyKhaya on your phone</h2>
+      <p>Install the app and sign in with this account to take your Home with you.</p>
+      <AppLinks ios={ios} android={android} surface="beta" label="Get the app" />
+    </section>
+  );
 }

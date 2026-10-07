@@ -177,6 +177,23 @@
   text-decoration: underline;
   text-underline-offset: 2px;
 }
+/* Founding Beta confirmation card (components/beta-enrolment.tsx): the
+   "Next: get MyKhaya on your phone" step with the PCC app links. */
+.beta-get-app {
+  border-top: 1px solid #ece6db;
+  display: grid;
+  gap: 0.5rem;
+  margin: 1.25rem 0;
+  padding-top: 1.25rem;
+}
+.beta-get-app h2 {
+  font-size: 1.1rem;
+  margin: 0;
+}
+.beta-get-app p {
+  color: var(--colour-muted);
+  margin: 0 0 0.5rem;
+}
 /* "Get the beta app" block (PCC app links, see components/app-links). */
 .mk-beta-apps {
   border-top: 1px solid #ece6db;
