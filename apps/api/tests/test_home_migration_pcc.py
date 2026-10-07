@@ -15,7 +15,12 @@ from test_platform_control_centre import (
 
 from mykhaya.config import get_settings
 from mykhaya.db import SessionFactory
-from mykhaya.home_migration_pcc import migration_enabled, package_checksum, package_summary
+from mykhaya.home_migration_pcc import (
+    migration_enabled,
+    package_checksum,
+    package_summary,
+    store_package,
+)
 from mykhaya.main import app
 from mykhaya.models import (
     AdministrativeAuditEvent,
@@ -25,6 +30,7 @@ from mykhaya.models import (
     PlatformSetting,
     SecurityEvent,
 )
+from mykhaya.tools.home_migration import MigrationError
 
 
 @pytest_asyncio.fixture
@@ -100,6 +106,41 @@ def test_package_summary_and_checksum_exclude_no_personal_payload_from_state() -
     assert package_checksum(package) == package_checksum(
         {**package, "integrity_sha256": "different"}
     )
+
+
+@pytest.mark.asyncio
+async def test_package_storage_failure_is_reported_without_exposing_filesystem_details(
+    tmp_path, caplog
+) -> None:
+    storage_root = tmp_path / "storage-file"
+    storage_root.write_text("not a directory", encoding="utf-8")
+    package = {
+        "format": "mykhaya-home-migration",
+        "version": 1,
+        "migration_id": "11111111-1111-1111-1111-111111111111",
+        "source_environment": "development",
+        "source_home_id": "22222222-2222-2222-2222-222222222222",
+        "exported_at": "2026-01-01T00:00:00+00:00",
+        "home": {"id": "22222222-2222-2222-2222-222222222222", "name": "Test Home"},
+        "members": [
+            {"id": "33333333-3333-3333-3333-333333333333", "email": "redacted@example.test"}
+        ],
+        "data": {"todos": []},
+        "files": [],
+    }
+    package["integrity_sha256"] = package_checksum(package)
+    settings = get_settings().model_copy(update={"home_migration_storage_dir": str(storage_root)})
+
+    with pytest.raises(
+        MigrationError,
+        match=(
+            "Migration package storage is unavailable. "
+            "Check the Home Migration storage configuration."
+        ),
+    ):
+        await store_package(None, settings, package, created_by=uuid.uuid4())
+
+    assert str(storage_root) not in caplog.text
 
 
 @pytest.mark.asyncio

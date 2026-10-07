@@ -92,6 +92,11 @@ class ProductionDeploymentTests(unittest.TestCase):
         self.assertNotIn("443:443", self.compose)
         self.assertNotIn("443:443/udp", self.compose)
 
+    def test_production_home_migration_storage_isolated_from_dev(self) -> None:
+        base = (ROOT / "compose.yml").read_text(encoding="utf-8")
+        self.assertIn("home_migration_data:/data/home-migrations", base)
+        self.assertIn("name: mykhaya_prod_home_migration_data", self.compose)
+
     def test_production_health_checks_use_http_loopback_and_web_host(self) -> None:
         self.assertIn(
             "WEB_DOMAIN=${WEB_DOMAIN:-$(sed -n 's/^WEB_DOMAIN=//p' .env 2>/dev/null | tail -n 1 | tr -d '\\r')}",

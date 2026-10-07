@@ -15,6 +15,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+import structlog
 from sqlalchemy import JSON, Column, DateTime, String, Table, Uuid, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -39,6 +40,7 @@ PACKAGE_STORE = Table(
     Column("created_at", DateTime(timezone=True), nullable=False),
     Column("completed_at", DateTime(timezone=True), nullable=True),
 )
+log = structlog.get_logger("home_migration")
 
 
 def package_checksum(package: dict[str, Any]) -> str:
@@ -97,10 +99,21 @@ async def store_package(
     package_id = uuid.uuid4()
     storage_key = f"{package_id}.json"
     path = storage_path(settings, storage_key)
-    await asyncio.to_thread(path.parent.mkdir, parents=True, exist_ok=True)
-    await asyncio.to_thread(
-        path.write_text, json.dumps(package, sort_keys=True) + "\n", encoding="utf-8"
-    )
+    try:
+        await asyncio.to_thread(path.parent.mkdir, parents=True, exist_ok=True)
+        await asyncio.to_thread(
+            path.write_text, json.dumps(package, sort_keys=True) + "\n", encoding="utf-8"
+        )
+    except OSError as exc:
+        log.exception("home_migration.package_storage_unavailable", storage_key=storage_key)
+        try:
+            await asyncio.to_thread(path.unlink, missing_ok=True)
+        except OSError:
+            log.warning("home_migration.package_storage_cleanup_failed", storage_key=storage_key)
+        raise MigrationError(
+            "Migration package storage is unavailable. "
+            "Check the Home Migration storage configuration."
+        ) from exc
     row = {
         "id": package_id,
         "migration_id": uuid.UUID(package["migration_id"]),

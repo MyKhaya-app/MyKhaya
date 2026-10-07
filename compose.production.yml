@@ -36,3 +36,7 @@ services:
     environment: *production_api_environment
   mailpit:
     profiles: [development-only]
+
+volumes:
+  home_migration_data:
+    name: mykhaya_prod_home_migration_data

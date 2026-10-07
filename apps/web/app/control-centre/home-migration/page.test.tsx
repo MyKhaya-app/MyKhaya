@@ -22,11 +22,17 @@ describe("Home Migration PCC page", () => {
     expect(upload).not.toHaveBeenCalled();
   });
 
-  it("shows only the DEV export workflow when enabled", async () => {
+  it("shows only the DEV export workflow with clean member labels", async () => {
     get.mockResolvedValue({ enabled: true, enabled_at: "2026-01-01T00:00:00Z", environment: "development", packages: [] });
-    get.mockResolvedValueOnce({ enabled: true, enabled_at: "2026-01-01T00:00:00Z", environment: "development", packages: [] }).mockResolvedValueOnce([{ id: "home-1", name: "Test Home", member_count: 2 }]);
+    get.mockResolvedValueOnce({ enabled: true, enabled_at: "2026-01-01T00:00:00Z", environment: "development", packages: [] }).mockResolvedValueOnce([
+      { id: "home-1", name: "Hales Home", member_count: 4 },
+      { id: "home-2", name: "Developer Home", member_count: 1 },
+    ]);
     render(<HomeMigrationPage />);
     await waitFor(() => expect(screen.getByText("Export a Home")).toBeTruthy());
     expect(screen.queryByText("Import a Home into PROD")).toBeNull();
+    expect(screen.getByRole("option", { name: "Hales Home \u00b7 4 members" })).toBeTruthy();
+    expect(screen.getByRole("option", { name: "Developer Home \u00b7 1 member" })).toBeTruthy();
+    expect(screen.queryByText(/[\u00c3\u00c2\u00e2\ufffd]/)).toBeNull();
   });
 });

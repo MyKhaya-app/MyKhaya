@@ -23,6 +23,17 @@ remote credentials, or “send to PROD” action. Uploaded packages use the
 controlled `MYKHAYA_HOME_MIGRATION_STORAGE_DIR` path and should be removed
 under the deployment retention policy after use.
 
+## Container storage
+
+The API runs read-only except for dedicated application-data mounts. Home
+Migration packages use `/data/home-migrations`, backed by a persistent named
+volume mounted only at that path. The DEV Compose overlay names it
+`mykhaya_dev_home_migration_data`; the PROD overlay names it
+`mykhaya_prod_home_migration_data`. The volumes are persistent across API
+recreation but are never shared between environments and are not served by
+the web or Caddy containers. The API image creates the mount point for the
+non-root `mykhaya` user; do not replace this with a world-writable directory.
+
 ## DEV export
 
 Run locally against the DEV API configuration:
