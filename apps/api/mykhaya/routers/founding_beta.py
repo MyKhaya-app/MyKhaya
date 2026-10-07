@@ -78,9 +78,7 @@ async def public_signup_state(
     return await resolve_signup_state(db, settings)
 
 
-async def resolve_signup_state(
-    db: AsyncSession, settings: Settings
-) -> SignupStateResponse:
+async def resolve_signup_state(db: AsyncSession, settings: Settings) -> SignupStateResponse:
     policy = await evaluate_signup_policy(db, settings)
     mode = policy.mode
     programme = await current_programme(db)
