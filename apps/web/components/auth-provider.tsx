@@ -79,6 +79,7 @@ function isPublicPath(path: string) {
     "/founding-beta",
     "/signup-choice",
     "/waitlist",
+    "/support",
   ].some(
     (prefix) => path === prefix || path.startsWith(`${prefix}/`),
   );
