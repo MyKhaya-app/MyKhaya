@@ -318,24 +318,26 @@ export default function Register() {
             </p>
           </fieldset>
         )}
-        {betaRequested && !unavailableReason && legacyBetaTermsRequired && (
+        {betaRequested && !unavailableReason && (
           <fieldset className="auth-legal-consent">
             <legend>Founding Beta registration</legend>
             <label>
               Home name
               <input name="home_name" autoComplete="organization" required maxLength={100} />
             </label>
-            <label className="check-row">
-              <input
-                type="checkbox"
-                checked={betaTermsAccepted}
-                onChange={(event) => setBetaTermsAccepted(event.target.checked)}
-                required
-              />
-              <span>
-                I accept the Founding Beta Terms (version {signupState?.beta_terms_version ?? "current"}).
-              </span>
-            </label>
+            {legacyBetaTermsRequired && (
+              <label className="check-row">
+                <input
+                  type="checkbox"
+                  checked={betaTermsAccepted}
+                  onChange={(event) => setBetaTermsAccepted(event.target.checked)}
+                  required
+                />
+                <span>
+                  I accept the Founding Beta Terms (version {signupState?.beta_terms_version ?? "current"}).
+                </span>
+              </label>
+            )}
             <p className="hint">
               Your account is created first. Your Home and Beta access are handled only after email
               verification.

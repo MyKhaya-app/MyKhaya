@@ -11,8 +11,17 @@ import { isNativeShell } from "@/components/native-runtime";
 export default function VerifyEmail() {
   const params = useSearchParams(),
     token = params.get("token"),
+    beta = params.get("beta") === "1",
+    betaInvitation = params.get("beta_invitation"),
     invitation = params.get("invitation"),
     calendarShare = params.get("calendar_share");
+  const continuation = beta
+    ? `/login?beta=1${betaInvitation ? `&beta_invitation=${encodeURIComponent(betaInvitation)}` : ""}`
+    : invitation
+      ? `/login?invitation=${encodeURIComponent(invitation)}`
+      : calendarShare
+        ? `/login?calendar_share=${encodeURIComponent(calendarShare)}`
+        : "/login";
   const [message, setMessage] = useState(
       token
         ? "Verifying your email…"
@@ -45,13 +54,7 @@ export default function VerifyEmail() {
       </p>
       <Link
         className="button full"
-        href={
-          invitation
-            ? `/login?invitation=${encodeURIComponent(invitation)}`
-            : calendarShare
-              ? `/login?calendar_share=${encodeURIComponent(calendarShare)}`
-              : "/login"
-        }
+        href={continuation}
       >
         Continue to sign in
       </Link>
