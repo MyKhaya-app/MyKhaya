@@ -205,6 +205,50 @@ describe("Founding Beta registration availability — Beta only via the normal c
   });
 });
 
+describe("Founding Beta registration with a valid Beta invitation, past a non-empty waitlist", () => {
+  const token = "t".repeat(40);
+  it.each([
+    [
+      "invitation-only, places free",
+      { invitation_required: true, beta_joining_available: false, waitlist_available: true },
+    ],
+    [
+      "invitation not required, places full",
+      { invitation_required: false, beta_joining_available: false, waitlist_available: true },
+    ],
+  ])("%s: the form is usable and sends the invitation", async (_label, availability) => {
+    searchParams.value = `beta=1&beta_invitation=${token}`;
+    publicSignupState.mockResolvedValue({
+      signup_mode: "beta_only",
+      registration_open: true,
+      normal_signup_available: false,
+      joinable_count: null,
+      ...availability,
+    });
+    publicLegalDocuments.mockResolvedValue([termsDocument]);
+    render(<Register />);
+    const user = userEvent.setup();
+
+    await user.type(await screen.findByLabelText("Your name"), "Ivy Invitee");
+    await user.type(screen.getByLabelText("Email"), "invitee@example.com");
+    await user.type(
+      screen.getByLabelText("Password", { exact: false, selector: 'input[name="password"]' }),
+      "correct horse battery staple",
+    );
+    await user.type(screen.getByLabelText("Confirm password"), "correct horse battery staple");
+    await user.click(screen.getByLabelText("I accept the MyKhaya Terms & Conditions (version 1.0)"));
+
+    expect(screen.queryByText(/invitation is required/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/using the waiting list/i)).not.toBeInTheDocument();
+    const submit = screen.getByRole("button", { name: "Create account" });
+    expect(submit).toBeEnabled();
+    await user.click(submit);
+
+    await waitFor(() => expect(post).toHaveBeenCalled());
+    expect(post.mock.calls[0]![1]).toMatchObject({ beta: true, beta_invitation_token: token });
+  });
+});
+
 describe("registration legal acceptance", () => {
   it("Beta registration creates the account only: no Home name and no Founding Beta Terms", async () => {
     searchParams.value = "beta=1";

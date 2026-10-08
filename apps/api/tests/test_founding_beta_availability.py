@@ -5,14 +5,20 @@ enforced on POST /beta/join, and the waitlist response never reveals whether an
 email is already listed."""
 
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any
 
 import pytest
 from httpx import AsyncClient
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, update
 from test_calendar import PASSWORD, client, unsafe  # noqa: F401
+from test_platform_control_centre import (  # noqa: F401
+    admin_client,
+    admin_factory,
+    login,
+)
+from test_platform_control_centre import unsafe as admin_unsafe
 
 from mykhaya.config import get_settings
 from mykhaya.db import SessionFactory
@@ -20,10 +26,14 @@ from mykhaya.founding_beta import FOUNDING_BETA_SLUG
 from mykhaya.main import app
 from mykhaya.models import (
     ActionToken,
+    BetaInvitation,
+    BetaInvitationStatus,
     BetaProgramme,
     BetaWaitlistEntry,
     BetaWaitlistStatus,
     LegalDocument,
+    PlatformAdministrator,
+    PlatformRole,
     PlatformSetting,
     TokenPurpose,
     User,
@@ -77,6 +87,7 @@ async def _isolated_beta() -> AsyncIterator[None]:
         }
         saved_settings = {key: (row.value if row else None) for key, row in rows.items()}
         before = set(await db.scalars(select(BetaWaitlistEntry.id)))
+        invitations_before = set(await db.scalars(select(BetaInvitation.id)))
         parked = list(
             await db.scalars(
                 select(BetaWaitlistEntry).where(
@@ -105,9 +116,26 @@ async def _isolated_beta() -> AsyncIterator[None]:
         )
         assert programme is not None
         programme.max_homes, programme.waitlist_enabled = saved_programme
+        # Entries a test added are retired rather than deleted (an invitation
+        # may reference them); any invitation it left reserved is released so
+        # it no longer holds a place.
         added = set(await db.scalars(select(BetaWaitlistEntry.id))) - before
         if added:
-            await db.execute(delete(BetaWaitlistEntry).where(BetaWaitlistEntry.id.in_(added)))
+            await db.execute(
+                update(BetaWaitlistEntry)
+                .where(BetaWaitlistEntry.id.in_(added))
+                .values(status=BetaWaitlistStatus.removed)
+            )
+        new_invitations = set(await db.scalars(select(BetaInvitation.id))) - invitations_before
+        if new_invitations:
+            await db.execute(
+                update(BetaInvitation)
+                .where(
+                    BetaInvitation.id.in_(new_invitations),
+                    BetaInvitation.status == BetaInvitationStatus.reserved,
+                )
+                .values(status=BetaInvitationStatus.cancelled)
+            )
         for entry_id in parked_ids:
             entry = await db.get(BetaWaitlistEntry, entry_id)
             if entry is not None:
@@ -397,3 +425,159 @@ async def test_beta_join_still_works_without_an_invitation_when_none_is_required
 
     response = await _join_with_current_terms(client)
     assert response.status_code == 200, response.text
+
+
+# ------------------------------------- a valid Beta invitation always gets in
+
+
+async def _waiting_entry(email: str) -> uuid.UUID:
+    """A waitlist entry as the public form creates it (inserted directly, since
+    the public form is closed while places are open to everyone)."""
+    async with SessionFactory() as db:
+        programme = await db.scalar(
+            select(BetaProgramme).where(BetaProgramme.slug == FOUNDING_BETA_SLUG)
+        )
+        assert programme is not None
+        entry = BetaWaitlistEntry(
+            programme_id=programme.id,
+            name="Wait Lister",
+            email=email,
+            normalized_email=email,
+            country="GB",
+            marketing_consent=False,
+        )
+        db.add(entry)
+        await db.commit()
+        return entry.id
+
+
+async def _entry_status(entry_id: uuid.UUID) -> BetaWaitlistStatus:
+    async with SessionFactory() as db:
+        entry = await db.get(BetaWaitlistEntry, entry_id)
+        assert entry is not None
+        return entry.status
+
+
+async def _fill_remaining_places() -> None:
+    """Make the programme full (joinable 0) without touching anyone's
+    reservation: capacity = joined + reserved."""
+    from mykhaya.founding_beta import capacity
+
+    async with SessionFactory() as db:
+        programme = await db.scalar(
+            select(BetaProgramme).where(BetaProgramme.slug == FOUNDING_BETA_SLUG)
+        )
+        assert programme is not None
+        state = await capacity(db, programme)
+        programme.max_homes = state["joined"] + state["reserved"]
+        await db.commit()
+        assert (await capacity(db, programme))["joinable"] == 0
+
+
+async def _verify_and_sign_in(http: AsyncClient, email: str) -> None:
+    async with SessionFactory() as db:
+        user = await db.scalar(select(User).where(User.email == email))
+        assert user is not None
+        token = await db.scalar(
+            select(ActionToken)
+            .where(ActionToken.user_id == user.id, ActionToken.purpose == TokenPurpose.verify_email)
+            .order_by(ActionToken.created_at.desc())
+        )
+        assert token is not None
+        raw = derived_token(
+            token.id, TokenPurpose.verify_email.value, get_settings().secret_key.get_secret_value()
+        )
+    verified = await unsafe(http, "POST", "/api/v1/auth/verify-email", json={"token": raw})
+    assert verified.status_code == 200, verified.text
+    signed_in = await unsafe(
+        http, "POST", "/api/v1/auth/login", json={"email": email, "password": PASSWORD}
+    )
+    assert signed_in.status_code == 200, signed_in.text
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("invite_only", "places_full"),
+    [(True, False), (False, True)],
+    ids=["invitation-only, places free", "invitation not required, places full"],
+)
+async def test_an_invited_person_registers_and_joins_past_a_non_empty_waitlist(
+    client: AsyncClient,  # noqa: F811
+    admin_client: AsyncClient,  # noqa: F811
+    admin_factory: Callable[[PlatformRole], Awaitable[PlatformAdministrator]],  # noqa: F811
+    invite_only: bool,
+    places_full: bool,
+) -> None:
+    await _set("signup_mode", "beta_only")
+    await _set("invite_only_mode", invite_only)
+    await _programme_settings(places_free=True, waitlist_enabled=True)
+    invitee = _email("invitee")
+    invitee_entry = await _waiting_entry(invitee)
+    other_entry = await _waiting_entry(_email("still-waiting"))
+
+    # The Control Centre invites the invitee: they leave "waiting" at once.
+    admin = await admin_factory(PlatformRole.owner)
+    await login(admin_client, admin)
+    invited = await admin_unsafe(
+        admin_client,
+        "POST",
+        "/api/v1/platform/beta/invitations",
+        json={"waitlist_entry_id": str(invitee_entry)},
+    )
+    assert invited.status_code == 201, invited.text
+    token = invited.json()["token"]
+    assert await _entry_status(invitee_entry) == BetaWaitlistStatus.invited
+    assert await _entry_status(other_entry) == BetaWaitlistStatus.waiting
+    if places_full:
+        await _fill_remaining_places()
+
+    # Someone is still waiting, so public joining is closed...
+    state = await _signup_state(client)
+    assert state["beta_joining_available"] is False
+    assert state["invitation_required"] is invite_only
+    # ...and in invitation-only mode a Beta registration without one is refused.
+    if invite_only:
+        refused = await unsafe(
+            client,
+            "POST",
+            "/api/v1/auth/register",
+            json={
+                "email": _email("uninvited"),
+                "display_name": "No Invite",
+                "password": PASSWORD,
+                "beta": True,
+            },
+        )
+        assert refused.status_code == 403, refused.text
+
+    # (a) Registration through the Beta, carrying the invitation.
+    registered = await unsafe(
+        client,
+        "POST",
+        "/api/v1/auth/register",
+        json={
+            "email": invitee,
+            "display_name": "Ivy Invitee",
+            "password": PASSWORD,
+            "beta": True,
+            "beta_invitation_token": token,
+        },
+    )
+    assert registered.status_code == 202, registered.text
+    await _verify_and_sign_in(client, invitee)
+
+    # (b) Joining: the invitation is resumed from the registration (no token
+    # resent) and gets past both the waiting list and a full programme.
+    joined = await _join_with_current_terms(client)
+    assert joined.status_code == 200, joined.text
+
+    async with SessionFactory() as db:
+        invitation = await db.scalar(
+            select(BetaInvitation).where(BetaInvitation.waitlist_entry_id == invitee_entry)
+        )
+        assert invitation is not None
+        assert invitation.status == BetaInvitationStatus.redeemed
+        assert invitation.accepted_home_id == uuid.UUID(joined.json()["home_id"])
+    assert await _entry_status(invitee_entry) == BetaWaitlistStatus.joined
+    # Only the invitee moved; the other person is still waiting.
+    assert await _entry_status(other_entry) == BetaWaitlistStatus.waiting
