@@ -52,6 +52,13 @@ async def invite_only_enabled(db: AsyncSession) -> bool:
     return await _flag(db, "invite_only_mode", False)
 
 
+async def registration_invitation_required(db: AsyncSession, settings: Settings) -> bool:
+    """The one invitation rule (SignupPolicy precedence step 6): deployment
+    `registration_mode == "invitation_only"` OR PCC `invite_only_mode`. Used by
+    signup policy and by Founding Beta joining, so neither can be looser."""
+    return settings.registration_mode == "invitation_only" or await invite_only_enabled(db)
+
+
 # ---------------------------------------------------------------- maintenance
 
 
@@ -127,9 +134,7 @@ async def evaluate_signup_policy(db: AsyncSession, settings: Settings) -> Signup
     mode = await _stored_signup_mode(db, settings.registration_mode)
     enabled = await registration_enabled(db)
     is_open = enabled and settings.registration_mode != "closed" and mode != SignupMode.closed
-    invitation_required = (
-        settings.registration_mode == "invitation_only" or await invite_only_enabled(db)
-    )
+    invitation_required = await registration_invitation_required(db, settings)
     raw_domains = await get_platform_setting(db, "allowed_registration_domains")
     domains = tuple(
         sorted(

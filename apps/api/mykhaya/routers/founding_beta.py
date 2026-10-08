@@ -2,8 +2,9 @@ import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
 
+import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.audit import audit
@@ -13,11 +14,13 @@ from mykhaya.dependencies import AuthContext, auth_context, require_adult_sessio
 from mykhaya.founding_beta import (
     FOUNDING_BETA_SLUG,
     FOUNDING_BETA_SOURCE,
+    beta_availability,
     capacity,
     current_programme,
     expire_invitations,
     invitation_token_hash,
     join_beta,
+    lock_programme,
     programme_for_admin,
     signup_mode,
 )
@@ -68,10 +71,12 @@ from mykhaya.models import (
 from mykhaya.notifications.engine import notify
 from mykhaya.notifications.templates import render_notification_email
 from mykhaya.platform_audit import platform_audit
-from mykhaya.platform_runtime import evaluate_signup_policy, registration_enabled
+from mykhaya.platform_runtime import evaluate_signup_policy, registration_invitation_required
 from mykhaya.platform_security import PlatformContext, require_recent_auth, require_roles
 from mykhaya.rate_limit import enforce_rate_limit
 from mykhaya.security import normalise_email, resolve_client_ip
+
+log = structlog.get_logger()
 
 public_router = APIRouter(prefix="/public", tags=["founding-beta-public"])
 router = APIRouter(prefix="/beta", tags=["founding-beta"])
@@ -92,20 +97,14 @@ async def resolve_signup_state(db: AsyncSession, settings: Settings) -> SignupSt
     await expire_invitations(db, programme)
     await db.commit()
     state = await capacity(db, programme)
-    beta_available = policy.beta_path and state["joinable"] > 0 and state["waiting"] == 0
+    availability = await beta_availability(db, settings, programme, policy, state)
     return SignupStateResponse(
         signup_mode=mode,
         registration_open=policy.open,
         invitation_required=policy.invitation_required,
         normal_signup_available=policy.normal_path,
-        beta_joining_available=beta_available,
-        waitlist_available=(
-            programme.waitlist_enabled
-            and (policy.beta_path or (policy.mode.value == "closed" and policy.open is False))
-            and settings.registration_mode != "closed"
-            and (await registration_enabled(db))
-            and (not beta_available)
-        ),
+        beta_joining_available=availability.places_open,
+        waitlist_available=availability.waitlist_open,
         joinable_count=state["joinable"] if programme.show_remaining_publicly else None,
         beta_terms_version=programme.terms_version if policy.beta_path else None,
         ios_app_url=programme.ios_app_url,
@@ -124,40 +123,59 @@ async def join_waitlist(
 ) -> BetaWaitlistResponse:
     await enforce_rate_limit(request, settings, "beta-waitlist", 10, 3600)
     programme = await current_programme(db)
+    # Serialises waitlist writes for the programme, so the daily cap and the
+    # one-entry-per-email rule hold under concurrent requests.
+    await lock_programme(db, programme)
     await expire_invitations(db, programme)
     policy = await evaluate_signup_policy(db, settings)
     state = await capacity(db, programme)
-    if (
-        not programme.waitlist_enabled
-        or not (policy.beta_path or (policy.mode.value == "closed" and policy.open is False))
-        or settings.registration_mode == "closed"
-        or not await registration_enabled(db)
-        or (state["joinable"] > 0 and state["waiting"] == 0)
-    ):
+    availability = await beta_availability(db, settings, programme, policy, state)
+    if not availability.waitlist_open:
         raise HTTPException(
             status.HTTP_409_CONFLICT, "The Founding Beta waitlist is not currently available."
         )
+    # The cap is checked before looking the email up, and the answer below is
+    # identical for a new and an already-listed email, so neither the cap nor
+    # the response reveals whether someone is on the waitlist.
+    day_start = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    added_today = await db.scalar(
+        select(func.count(BetaWaitlistEntry.id)).where(
+            BetaWaitlistEntry.programme_id == programme.id,
+            BetaWaitlistEntry.created_at >= day_start,
+        )
+    )
+    if (added_today or 0) >= settings.beta_waitlist_daily_cap:
+        await log.awarning(
+            "beta_waitlist_daily_cap_reached",
+            cap=settings.beta_waitlist_daily_cap,
+            added_today=added_today,
+        )
+        retry_after = int((day_start + timedelta(days=1) - datetime.now(UTC)).total_seconds()) + 1
+        raise HTTPException(
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            "The waitlist is very busy today. Please try again tomorrow.",
+            headers={"Retry-After": str(retry_after)},
+        )
     email = normalise_email(str(body.email))
     existing = await db.scalar(
-        select(BetaWaitlistEntry).where(
+        select(BetaWaitlistEntry.id).where(
             BetaWaitlistEntry.programme_id == programme.id,
             BetaWaitlistEntry.normalized_email == email,
         )
     )
-    if existing is not None:
-        return BetaWaitlistResponse(accepted=True, status=existing.status.value)
-    db.add(
-        BetaWaitlistEntry(
-            programme_id=programme.id,
-            name=body.name,
-            email=email,
-            normalized_email=email,
-            country=body.country.upper(),
-            household_size=body.household_size,
-            use_case=body.use_case,
-            marketing_consent=body.marketing_consent,
+    if existing is None:
+        db.add(
+            BetaWaitlistEntry(
+                programme_id=programme.id,
+                name=body.name,
+                email=email,
+                normalized_email=email,
+                country=body.country.upper(),
+                household_size=body.household_size,
+                use_case=body.use_case,
+                marketing_consent=body.marketing_consent,
+            )
         )
-    )
     await db.commit()
     return BetaWaitlistResponse(accepted=True, status=BetaWaitlistStatus.waiting.value)
 
@@ -325,6 +343,7 @@ async def join(
             else None
         ),
         programme=programme,
+        settings=settings,
     )
     if beta_document is not None and current_terms is not None:
         terms = await _beta_terms_status(db, auth.user.id)
@@ -448,7 +467,9 @@ async def overview(
         await db.commit()
     state = await capacity(db, programme)
     return BetaOverviewResponse(
-        signup_mode=await signup_mode(db, settings.registration_mode), **state
+        signup_mode=await signup_mode(db, settings.registration_mode),
+        invitation_required=await registration_invitation_required(db, settings),
+        **state,
     )
 
 

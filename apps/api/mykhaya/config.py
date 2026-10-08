@@ -193,6 +193,10 @@ class Settings(BaseSettings):
     # the server before storage.
     rate_limit_login: int = Field(default=10, ge=1, le=1000)
     rate_limit_register: int = Field(default=5, ge=1, le=1000)
+    # Overall ceiling on *new* Founding Beta waitlist entries per UTC day, on
+    # top of the per-IP limit, so a spread-out spam run can only add so much.
+    # MYKHAYA_BETA_WAITLIST_DAILY_CAP.
+    beta_waitlist_daily_cap: int = Field(default=100, ge=1, le=100_000)
     trusted_proxy_cidrs: list[str] = []
     default_timezone: str = "Europe/London"
     default_locale: str = "en-GB"

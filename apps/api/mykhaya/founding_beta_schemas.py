@@ -136,6 +136,7 @@ class BetaInviteResponse(StrictModel):
 
 class BetaOverviewResponse(StrictModel):
     signup_mode: SignupMode
+    invitation_required: bool
     max_homes: int
     joined: int
     reserved: int

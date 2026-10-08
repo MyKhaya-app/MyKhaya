@@ -190,7 +190,7 @@ applies on the next request on every API worker - no redeploy or restart.
 | --- | --- |
 | `maintenance_mode` | `main.maintenance_gate`, a router dependency on every consumer router (inside CORS, so the 503 is readable by browsers/native). Answers HTTP 503 `{code: "maintenance_mode"}` + `Retry-After`. Exempt: health, `/config/public`, `/status`, every `/platform/*` (PCC) router. Web/native show `MaintenanceScreen`. Background workers are **not** paused. |
 | `registration_enabled` | `platform_runtime.evaluate_signup_policy` -> `POST /auth/register`, Apple account creation, `join_beta`, waitlist, `GET /public/signup-state`. |
-| `invite_only_mode` | Same resolver. Ordinary signup needs a valid Home invitation; Founding Beta needs a valid Beta (waitlist) invitation, validated by the API; `join_beta` rejects uninvited joins. Apple sign-up is refused (it cannot carry an invitation). |
+| `invite_only_mode` | Same resolver. Ordinary signup needs a valid Home invitation; Founding Beta needs a valid Beta (waitlist) invitation, validated by the API; `join_beta` rejects uninvited joins (using the same rule, `platform_runtime.registration_invitation_required`, so deployment `invitation_only` is enforced there too). Apple sign-up is refused (it cannot carry an invitation). With places free, the waitlist stays open so people can ask for an invitation. |
 | `signup_mode` | Same resolver (Normal / Beta only / Mixed / Closed). Closed now also stops the ordinary password path (previously only the deployment value did). |
 | `allowed_registration_domains` | Same resolver; exact, case-insensitive domain match on every new-account path, invited or not. Empty = no restriction. |
 | `email_verification_required` | `platform_runtime.email_verification_required` in register + login. No stored value -> deployment default (`email_verification_enabled`). In production it can never be lowered (PUT is rejected and the resolver refuses to relax it). |
@@ -208,6 +208,16 @@ requirement (`invite_only_mode` OR deployment `invitation_only`) narrows that pa
 invitation -> registration -> email verification -> `join_beta`; with invite-only on, a
 Beta registration without a valid reserved invitation for that email is refused at
 `/auth/register`.
+
+**Waitlist availability** is decided once, by `founding_beta.beta_availability`, and both
+`GET /public/signup-state` (`waitlist_available`) and `POST /public/beta/waitlist` use it, so
+the waitlist is offered exactly when it accepts sign-ups. It is open when the programme's
+waitlist is enabled, registration is enabled (and not closed by the deployment), the Beta
+path is open or `signup_mode` is Closed, and places can't simply be taken: they are full,
+others are already waiting, an invitation is required, or registration is closed. The POST
+answers identically for a new and an already-listed email (no enumeration), is limited per
+client IP (10/hour) and, overall, to `MYKHAYA_BETA_WAITLIST_DAILY_CAP` new entries per UTC
+day (default 100; over the cap every request gets the same 429).
 
 **Deliberately not wired - `default_locale`, `default_timezone`.** Both duplicate
 deployment settings that already exist (`MYKHAYA_DEFAULT_LOCALE`, `MYKHAYA_DEFAULT_TIMEZONE`).
