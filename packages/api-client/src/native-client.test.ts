@@ -701,3 +701,133 @@ describe("NativeMyKhayaClient — passkeys", () => {
     expect(client.passkeysSupported()).toBe(false);
   });
 });
+
+// Signed-out native screens (sign-in, register, Founding Beta, invitation
+// links) read public endpoints. These must reach the live API without a
+// session, carry no credentials, and never be able to touch the session.
+describe("NativeMyKhayaClient — allowlisted public endpoints", () => {
+  const DEV_BASE_URL = "https://dev.mykhaya.app/api/v1";
+  const liveSignupState = { signup_mode: "beta_only", beta_joining_available: true };
+
+  async function wiredApi(signedInToken?: string) {
+    const { MyKhayaClient } = await import("./index");
+    const store = new InMemoryNativeSessionStore();
+    if (signedInToken) await store.set({ token: signedInToken });
+    const fetchSpy = vi.fn(async (url: string) =>
+      url.endsWith("/public/signup-state") ? jsonResponse(200, liveSignupState) : jsonResponse(200, { id: "user-1" }),
+    );
+    const native = new NativeMyKhayaClient(DEV_BASE_URL, store, { fetch: fetchSpy as unknown as typeof fetch });
+    // Exactly what apps/web/components/native-auth.ts does at app start.
+    const api = new MyKhayaClient();
+    api.setRequestTransport(native.request.bind(native));
+    return { api, store, fetchSpy };
+  }
+
+  it("signed out: publicSignupState() reaches the live API with no credentials and returns the live flag", async () => {
+    const { api, fetchSpy } = await wiredApi();
+
+    const state = await api.publicSignupState();
+
+    expect(state.beta_joining_available).toBe(true);
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchSpy.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("https://dev.mykhaya.app/api/v1/public/signup-state");
+    expect(new Headers(init.headers).has("Authorization")).toBe(false);
+    expect(init.credentials).toBe("omit");
+    expect(init.method).toBe("GET");
+  });
+
+  it("signed out: a protected call still makes zero network requests", async () => {
+    const { api, fetchSpy } = await wiredApi();
+
+    await expect(api.me()).rejects.toMatchObject({ status: 401, message: "Not signed in." });
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+
+  it("signed in: public calls still work and never carry the bearer token", async () => {
+    const { api, fetchSpy } = await wiredApi("secret-session-token");
+
+    await expect(api.publicSignupState()).resolves.toMatchObject({ beta_joining_available: true });
+    const [, init] = fetchSpy.mock.calls[0] as unknown as [string, RequestInit];
+    expect(new Headers(init.headers).has("Authorization")).toBe(false);
+    expect(JSON.stringify(fetchSpy.mock.calls)).not.toContain("secret-session-token");
+    expect(init.credentials).toBe("omit");
+  });
+
+  it("signed in: a 401 from a public endpoint does not clear the session", async () => {
+    const store = new InMemoryNativeSessionStore();
+    await store.set({ token: "secret-session-token" });
+    const fetchSpy = vi.fn(async () => jsonResponse(401, { detail: "nope" }));
+    const native = new NativeMyKhayaClient(DEV_BASE_URL, store, { fetch: fetchSpy as unknown as typeof fetch });
+
+    await expect(native.request("/public/signup-state")).rejects.toMatchObject({ status: 401 });
+    expect(await store.get()).toMatchObject({ token: "secret-session-token" });
+  });
+
+  it("a caller-supplied Authorization header is stripped from public requests", async () => {
+    const store = new InMemoryNativeSessionStore();
+    const fetchSpy = vi.fn(async () => jsonResponse(200, liveSignupState));
+    const native = new NativeMyKhayaClient(DEV_BASE_URL, store, { fetch: fetchSpy as unknown as typeof fetch });
+
+    await native.request("/public/signup-state", { headers: { Authorization: "Bearer injected" } });
+    const [, init] = fetchSpy.mock.calls[0] as unknown as [string, RequestInit];
+    expect(new Headers(init.headers).has("Authorization")).toBe(false);
+  });
+
+  it("signed out: path-traversal-style paths are treated as protected and never sent", async () => {
+    const store = new InMemoryNativeSessionStore();
+    const fetchSpy = vi.fn(async () => jsonResponse(200, {}));
+    const native = new NativeMyKhayaClient(DEV_BASE_URL, store, { fetch: fetchSpy as unknown as typeof fetch });
+
+    for (const path of [
+      "/public/../households",
+      "/public/signup-state/../../users/me",
+      "/public/%2e%2e/users/me",
+      "/legal/documents/..",
+      String.raw`/public\..\users/me`,
+      "//public/signup-state",
+      "/public/./signup-state",
+    ]) {
+      await expect(native.request(path)).rejects.toMatchObject({ status: 401, message: "Not signed in." });
+    }
+    expect(fetchSpy).not.toHaveBeenCalled();
+  });
+});
+
+describe("isPublicNativeEndpoint", () => {
+  it.each([
+    "/config/public",
+    "/public/signup-state",
+    "/public/beta/invitations/AbC_123-xyz",
+    "/invitations/preview?token=AbC_123-xyzAbC_123-xyzAbC_123-xyz",
+    "/calendar-shares/preview?token=AbC_123-xyzAbC_123-xyzAbC_123-xyz",
+    "/legal/documents",
+    "/legal/documents/privacy_policy",
+    "/auth/providers",
+  ])("allows %s", async (path) => {
+    const { isPublicNativeEndpoint } = await import("./native-client");
+    expect(isPublicNativeEndpoint(path)).toBe(true);
+  });
+
+  it.each([
+    ["/public/../households", "GET"],
+    ["/public/signup-state-extra", "GET"],
+    ["/public/signup-state/", "GET"],
+    ["/public/signup-state?x=1", "GET"],
+    ["/public/signup-state#x", "GET"],
+    ["/public/beta/invitations/a/b", "GET"],
+    ["/public/beta/invitations/", "GET"],
+    ["/public/beta/waitlist", "POST"],
+    ["/public/signup-state", "POST"],
+    ["/invitations/preview?token=abc&next=x", "GET"],
+    ["/invitations/preview", "GET"],
+    ["/invitations/accept", "GET"],
+    ["/legal/status", "GET"],
+    ["/users/me", "GET"],
+    ["public/signup-state", "GET"],
+    ["/PUBLIC/signup-state", "GET"],
+  ])("treats %s (%s) as protected", async (path, method) => {
+    const { isPublicNativeEndpoint } = await import("./native-client");
+    expect(isPublicNativeEndpoint(path, method)).toBe(false);
+  });
+});
