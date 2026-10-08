@@ -553,6 +553,18 @@ describe("Login — Founding Beta / New to MyKhaya card", () => {
     expect(screen.queryByRole("link", { name: /create an account/i })).not.toBeInTheDocument();
   });
 
+  it("native shell, signed out, flag ON: the sign-in screen shows the Founding Beta card", async () => {
+    nativeShell = true;
+    (api.publicSignupState as ReturnType<typeof vi.fn>).mockResolvedValue(signupState(true));
+    render(<Login />);
+
+    expect(screen.getByLabelText("Email")).toBeInTheDocument();
+    await screen.findByRole("region", { name: "Help shape a calmer home." });
+    expect(screen.getByRole("link", { name: /join the founding beta/i })).toHaveAttribute("href", "/founding-beta");
+    expect(screen.queryByTestId("signin-card-new")).not.toBeInTheDocument();
+    expect(push).not.toHaveBeenCalled();
+  });
+
   it("flag OFF: shows only the New to MyKhaya card", async () => {
     render(<Login />);
 

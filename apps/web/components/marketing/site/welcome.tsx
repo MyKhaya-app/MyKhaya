@@ -8,12 +8,10 @@ import { useAuth } from "@/components/auth-provider";
 import { MaintenanceScreen } from "@/components/maintenance";
 import { LegalGate } from "@/components/legal-gate";
 import { genericUnlockPromptCopy } from "@/components/native-biometric";
-import { api, type PublicSignupState } from "@mykhaya/api-client";
 
 function NativeRootGate({ fallback }: { fallback: React.ReactNode }) {
   const router = useRouter();
   const { status, initialSessionLoading, retryInitialSession, legalStatusError, retryLegalStatus } = useAuth();
-  const [signupState, setSignupState] = useState<PublicSignupState | null | undefined>(undefined);
 
   useEffect(() => {
     console.info("[BIOMETRIC DEBUG]", "root_route_state", { route: "/", status, initialSessionLoading });
@@ -23,44 +21,12 @@ function NativeRootGate({ fallback }: { fallback: React.ReactNode }) {
     if (status === "ready") router.replace("/home");
   }, [router, status]);
 
+  // Signed out, the native app always opens on sign-in. Its Founding Beta
+  // card (shown when the live flag is on) is the way into /founding-beta;
+  // the signup mode deliberately does not pick a different start screen.
   useEffect(() => {
-    if (status !== "signed_out") return;
-    let cancelled = false;
-    void api.publicSignupState().then((state) => {
-      if (!cancelled) setSignupState(state);
-    }).catch(() => {
-      if (!cancelled) setSignupState(null);
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [status]);
-
-  useEffect(() => {
-    if (status !== "signed_out" || signupState === undefined) return;
-    const destination = signupState && (
-      signupState.signup_mode === "beta_only" ||
-      signupState.beta_joining_available ||
-      signupState.waitlist_available
-    ) && (signupState.registration_open || signupState.waitlist_available)
-      ? "/founding-beta"
-      : signupState && !signupState.registration_open
-        ? "/register"
-        : "/login";
-    if (process.env.NODE_ENV !== "production") {
-      console.info("[NATIVE_ACQUISITION]", {
-        event: "signup_state_decision",
-        native: true,
-        auth_state: status,
-        signup_mode: signupState?.signup_mode ?? null,
-        beta_joining_available: signupState?.beta_joining_available ?? null,
-        waitlist_available: signupState?.waitlist_available ?? null,
-        registration_open: signupState?.registration_open ?? null,
-        destination,
-      });
-    }
-    router.replace(destination);
-  }, [router, signupState, status]);
+    if (status === "signed_out") router.replace("/login");
+  }, [router, status]);
 
   if (status === "maintenance") return <MaintenanceScreen onRecovered={retryInitialSession} />;
   if (status === "offline") {
@@ -103,8 +69,7 @@ function NativeRootGate({ fallback }: { fallback: React.ReactNode }) {
 
 /** The root route. In a browser it is the marketing homepage (`children`,
  *  server-rendered by app/page.tsx); inside the native shell it is an auth
- *  gate that forwards to /home, the server-selected acquisition path, or
- *  normal sign-in. */
+ *  gate that forwards to /home when signed in, or to sign-in when not. */
 export default function Welcome({ children }: { children: React.ReactNode }) {
   // isNativeShell() always reads false during SSR (no window/Capacitor
   // there) but can read true on the very first client render inside the
