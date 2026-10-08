@@ -30,6 +30,7 @@ vi.mock("@mykhaya/api-client", async (importOriginal) => {
       passkeyLoginVerify: vi.fn(),
       betaContinuation: vi.fn(),
       joinBeta: vi.fn(),
+      publicSignupState: vi.fn(),
     },
   };
 });
@@ -59,6 +60,18 @@ const passkeyClient = await import("@/components/passkey-client");
 
 const user = { id: "user-1", display_name: "Anthony", avatar_version: null } as const;
 
+function signupState(betaJoining: boolean) {
+  return {
+    signup_mode: betaJoining ? "mixed" : "normal",
+    registration_open: true,
+    invitation_required: false,
+    normal_signup_available: true,
+    beta_joining_available: betaJoining,
+    waitlist_available: false,
+    joinable_count: betaJoining ? 12 : null,
+  };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   searchParams = new URLSearchParams();
@@ -75,6 +88,7 @@ beforeEach(() => {
     home_name: null,
     reason: null,
   });
+  (api.publicSignupState as ReturnType<typeof vi.fn>).mockResolvedValue(signupState(false));
   // Re-asserted every test (clearAllMocks clears call history but not a
   // previous test's mockResolvedValue/mockRejectedValue implementation) —
   // these are the "everything is fine" defaults each test starts from.
@@ -513,5 +527,93 @@ describe("Login — Founding Beta continuation", () => {
     await signIn();
     await waitFor(() => expect(push).toHaveBeenCalledWith("/onboarding"));
     expect(push).not.toHaveBeenCalledWith(expect.stringContaining("beta=1"));
+  });
+});
+
+// The card under the form follows the existing Founding Beta flag
+// (publicSignupState().beta_joining_available). Exactly one card renders;
+// anything other than a resolved "on" shows the normal card.
+describe("Login — Founding Beta / New to MyKhaya card", () => {
+  function expectNormalCard() {
+    expect(screen.getByRole("region", { name: "Create your Home and get started." })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /create an account/i })).toHaveAttribute("href", "/register");
+    expect(screen.queryByText(/founding beta/i)).not.toBeInTheDocument();
+    expect(screen.queryByTestId("signin-card-beta")).not.toBeInTheDocument();
+  }
+
+  it("flag ON: shows only the Founding Beta card, linking to the existing Beta sign-up", async () => {
+    (api.publicSignupState as ReturnType<typeof vi.fn>).mockResolvedValue(signupState(true));
+    render(<Login />);
+
+    const card = await screen.findByRole("region", { name: "Help shape a calmer home." });
+    expect(card).toHaveTextContent("Founding Beta");
+    expect(screen.getByRole("link", { name: /join the founding beta/i })).toHaveAttribute("href", "/founding-beta");
+    expect(screen.queryByTestId("signin-card-new")).not.toBeInTheDocument();
+    expect(screen.queryByText(/new to mykhaya/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /create an account/i })).not.toBeInTheDocument();
+  });
+
+  it("flag OFF: shows only the New to MyKhaya card", async () => {
+    render(<Login />);
+
+    await waitFor(() => expect(api.publicSignupState).toHaveBeenCalled());
+    expectNormalCard();
+  });
+
+  it("flag missing from the response: shows only the New to MyKhaya card", async () => {
+    const withoutFlag: Partial<ReturnType<typeof signupState>> = signupState(true);
+    delete withoutFlag.beta_joining_available;
+    (api.publicSignupState as ReturnType<typeof vi.fn>).mockResolvedValue(withoutFlag);
+    render(<Login />);
+
+    await waitFor(() => expect(api.publicSignupState).toHaveBeenCalled());
+    expectNormalCard();
+  });
+
+  it("flag failed to load: shows only the New to MyKhaya card", async () => {
+    (api.publicSignupState as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("offline"));
+    render(<Login />);
+
+    await waitFor(() => expect(api.publicSignupState).toHaveBeenCalled());
+    expectNormalCard();
+  });
+
+  it("flag not resolved yet: renders the normal card straight away, not a placeholder", () => {
+    (api.publicSignupState as ReturnType<typeof vi.fn>).mockReturnValue(new Promise(() => {}));
+    render(<Login />);
+
+    expectNormalCard();
+  });
+
+  it("flag ON with a household invitation: keeps the invitation-carrying Create an account link", async () => {
+    searchParams = new URLSearchParams({ invitation: "invite-token" });
+    (api.previewInvitation as ReturnType<typeof vi.fn>).mockResolvedValue({
+      group_name: "The Smiths",
+      invited_by_display_name: "Sam",
+      email: "anthony@example.com",
+    });
+    (api.publicSignupState as ReturnType<typeof vi.fn>).mockResolvedValue(signupState(true));
+    render(<Login />);
+
+    await screen.findByText(/continue signing in to join the smiths/i);
+    await waitFor(() => expect(api.publicSignupState).toHaveBeenCalled());
+    expect(screen.getByRole("link", { name: /create an account/i })).toHaveAttribute(
+      "href",
+      "/register?invitation=invite-token",
+    );
+    expect(screen.queryByTestId("signin-card-beta")).not.toBeInTheDocument();
+  });
+
+  it("the password toggle shows and hides the password without submitting", async () => {
+    const typist = userEvent.setup();
+    render(<Login />);
+    const password = screen.getByLabelText("Password");
+
+    expect(password).toHaveAttribute("type", "password");
+    await typist.click(screen.getByRole("button", { name: "Show password" }));
+    expect(password).toHaveAttribute("type", "text");
+    await typist.click(screen.getByRole("button", { name: "Hide password" }));
+    expect(password).toHaveAttribute("type", "password");
+    expect(api.post).not.toHaveBeenCalled();
   });
 });

@@ -54,7 +54,7 @@ test.describe("calendar month view density", () => {
     // The install-PWA banner can overlap the sign-in button on this viewport.
     await page.getByRole("button", { name: "Not now" }).click({ timeout: 2000 }).catch(() => {});
     await page.getByLabel("Email").fill(email);
-    await page.getByLabel("Password").fill("Correct horse battery staple!");
+    await page.getByLabel("Password", { exact: true }).fill("Correct horse battery staple!");
     await page.getByRole("button", { name: "Sign in" }).click();
     await expect(page).toHaveURL(/\/(home|onboarding)$/);
     if (page.url().includes("/onboarding")) {
@@ -185,7 +185,7 @@ test.describe("calendar month view density", () => {
     await page.goto("/login");
     await page.getByRole("button", { name: "Not now" }).click({ timeout: 2000 }).catch(() => {});
     await page.getByLabel("Email").fill(email);
-    await page.getByLabel("Password").fill("Correct horse battery staple!");
+    await page.getByLabel("Password", { exact: true }).fill("Correct horse battery staple!");
     await page.getByRole("button", { name: "Sign in" }).click();
     await expect(page).toHaveURL(/\/(home|onboarding)$/);
     if (page.url().includes("/onboarding")) {
