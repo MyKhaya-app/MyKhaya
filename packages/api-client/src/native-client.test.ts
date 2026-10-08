@@ -809,6 +809,12 @@ describe("isPublicNativeEndpoint", () => {
     expect(isPublicNativeEndpoint(path)).toBe(true);
   });
 
+  it("allows POST /public/beta/waitlist (any method casing)", async () => {
+    const { isPublicNativeEndpoint } = await import("./native-client");
+    expect(isPublicNativeEndpoint("/public/beta/waitlist", "POST")).toBe(true);
+    expect(isPublicNativeEndpoint("/public/beta/waitlist", "post")).toBe(true);
+  });
+
   it.each([
     ["/public/../households", "GET"],
     ["/public/signup-state-extra", "GET"],
@@ -817,7 +823,15 @@ describe("isPublicNativeEndpoint", () => {
     ["/public/signup-state#x", "GET"],
     ["/public/beta/invitations/a/b", "GET"],
     ["/public/beta/invitations/", "GET"],
-    ["/public/beta/waitlist", "POST"],
+    ["/public/beta/waitlist", "GET"],
+    ["/public/beta/waitlist", "PUT"],
+    ["/public/beta/waitlist", "DELETE"],
+    ["/public/beta/waitlist/", "POST"],
+    ["/public/beta/waitlist?x=1", "POST"],
+    ["/public/beta/../beta/waitlist", "POST"],
+    ["/public/beta/waitlist-admin", "POST"],
+    ["/platform/beta/waitlist", "POST"],
+    ["/public/beta/invitations/AbC_123", "POST"],
     ["/public/signup-state", "POST"],
     ["/invitations/preview?token=abc&next=x", "GET"],
     ["/invitations/preview", "GET"],
@@ -829,5 +843,72 @@ describe("isPublicNativeEndpoint", () => {
   ])("treats %s (%s) as protected", async (path, method) => {
     const { isPublicNativeEndpoint } = await import("./native-client");
     expect(isPublicNativeEndpoint(path, method)).toBe(false);
+  });
+});
+
+describe("NativeMyKhayaClient — Founding Beta waitlist (public POST)", () => {
+  const DEV_BASE_URL = "https://dev.mykhaya.app/api/v1";
+  const entry = { name: "Sam", email: "sam@example.com", country: "GB", marketing_consent: false };
+
+  async function wiredApi(signedInToken?: string) {
+    const { MyKhayaClient } = await import("./index");
+    const store = new InMemoryNativeSessionStore();
+    if (signedInToken) await store.set({ token: signedInToken });
+    const fetchSpy = vi.fn(async () => jsonResponse(202, { accepted: true, status: "waiting" }));
+    const native = new NativeMyKhayaClient(DEV_BASE_URL, store, { fetch: fetchSpy as unknown as typeof fetch });
+    const api = new MyKhayaClient();
+    api.setRequestTransport(native.request.bind(native));
+    return { api, store, fetchSpy };
+  }
+
+  it("signed out: joinBetaWaitlist() reaches the API with no Authorization header or credentials", async () => {
+    const { api, fetchSpy } = await wiredApi();
+
+    await expect(api.joinBetaWaitlist(entry)).resolves.toEqual({ accepted: true, status: "waiting" });
+
+    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    const [url, init] = fetchSpy.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("https://dev.mykhaya.app/api/v1/public/beta/waitlist");
+    expect(init.method).toBe("POST");
+    expect(init.credentials).toBe("omit");
+    expect(JSON.parse(init.body as string)).toEqual(entry);
+    const headers = new Headers(init.headers);
+    expect(headers.has("Authorization")).toBe(false);
+    expect(headers.get("Content-Type")).toBe("application/json");
+  });
+
+  it("signed in: the bearer token is still not sent", async () => {
+    const { api, fetchSpy } = await wiredApi("secret-session-token");
+
+    await api.joinBetaWaitlist(entry);
+
+    const [, init] = fetchSpy.mock.calls[0] as unknown as [string, RequestInit];
+    expect(new Headers(init.headers).has("Authorization")).toBe(false);
+    expect(init.credentials).toBe("omit");
+    expect(JSON.stringify(fetchSpy.mock.calls)).not.toContain("secret-session-token");
+  });
+
+  it("signed in: a 401 or 429 from the waitlist does not clear the session", async () => {
+    for (const status of [401, 429]) {
+      const store = new InMemoryNativeSessionStore();
+      await store.set({ token: "secret-session-token" });
+      const fetchSpy = vi.fn(async () => jsonResponse(status, { detail: "Please wait a moment and try again." }));
+      const native = new NativeMyKhayaClient(DEV_BASE_URL, store, { fetch: fetchSpy as unknown as typeof fetch });
+
+      await expect(
+        native.request("/public/beta/waitlist", { method: "POST", body: JSON.stringify(entry) }),
+      ).rejects.toMatchObject({ status });
+      expect(await store.get()).toMatchObject({ token: "secret-session-token" });
+    }
+  });
+
+  it("signed out: other beta POSTs stay protected and are never sent", async () => {
+    const { api, fetchSpy } = await wiredApi();
+
+    await expect(api.joinBeta({} as Parameters<typeof api.joinBeta>[0])).rejects.toMatchObject({
+      status: 401,
+      message: "Not signed in.",
+    });
+    expect(fetchSpy).not.toHaveBeenCalled();
   });
 });

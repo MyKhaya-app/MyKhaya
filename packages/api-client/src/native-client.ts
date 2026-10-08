@@ -13,9 +13,9 @@ function isFormDataBody(body: BodyInit | null | undefined): boolean {
  * The endpoints the API serves without authentication, and the only ones the
  * native transport will call without a session. Each was checked against
  * apps/api (no user/session dependency; an anonymous request gets a normal
- * response, never a 401). GET only. Matching is exact: a literal path, or a
- * literal path with exactly one opaque `[A-Za-z0-9_-]` segment (URL-safe
- * tokens and legal document keys). Anything else is a protected path.
+ * response, never a 401). Matching is exact: a literal path, or a literal
+ * GET path with exactly one opaque `[A-Za-z0-9_-]` segment (URL-safe tokens
+ * and legal document keys). Anything else is a protected path.
  */
 const PUBLIC_GET_PATHS = new Set([
   "/config/public",
@@ -30,13 +30,17 @@ const PUBLIC_GET_PATH_SHAPES = [
 /** Public previews that take their token as the one and only query value. */
 const PUBLIC_GET_TOKEN_QUERY_PATHS = new Set(["/invitations/preview", "/calendar-shares/preview"]);
 const TOKEN_QUERY = /^token=[A-Za-z0-9_-]{1,500}$/;
+/** Public POSTs: exact paths, no query. The waitlist is rate-limited per
+ * client IP server-side (enforce_rate_limit "beta-waitlist", 10/hour). */
+const PUBLIC_POST_PATHS = new Set(["/public/beta/waitlist"]);
 
 /** Whether `path` (as passed to `request()`, relative to `/api/v1`) is an
  * allowlisted public endpoint. The path must already be canonical: dot
  * segments, empty segments, percent-encoding, backslashes or fragments make
  * it a protected path rather than being normalised into a public one. */
 export function isPublicNativeEndpoint(path: string, method: string = "GET"): boolean {
-  if (method.toUpperCase() !== "GET") return false;
+  const verb = method.toUpperCase();
+  if (verb !== "GET" && verb !== "POST") return false;
   const queryStart = path.indexOf("?");
   const pathname = queryStart === -1 ? path : path.slice(0, queryStart);
   const query = queryStart === -1 ? "" : path.slice(queryStart + 1);
@@ -45,6 +49,7 @@ export function isPublicNativeEndpoint(path: string, method: string = "GET"): bo
     return false;
   }
   if (new URL(pathname, "https://canonical.invalid").pathname !== pathname) return false;
+  if (verb === "POST") return queryStart === -1 && PUBLIC_POST_PATHS.has(pathname);
   if (PUBLIC_GET_TOKEN_QUERY_PATHS.has(pathname)) return TOKEN_QUERY.test(query);
   if (queryStart !== -1) return false;
   return PUBLIC_GET_PATHS.has(pathname) || PUBLIC_GET_PATH_SHAPES.some((shape) => shape.test(pathname));
@@ -192,7 +197,7 @@ export class NativeMyKhayaClient {
     return results;
   }
 
-  /** An allowlisted public GET (see isPublicNativeEndpoint). Works the same
+  /** An allowlisted public request (see isPublicNativeEndpoint). Works the same
    * signed in or out: it never reads the session store, never sends a bearer
    * token or cookies, and a failure (401 included) never clears the session. */
   private async publicRequest<T>(path: string, init: RequestInit): Promise<T> {
@@ -201,12 +206,15 @@ export class NativeMyKhayaClient {
       new Headers(init.headers).forEach((value, key) => headers.set(key, value));
     }
     headers.delete("Authorization");
+    const method = (init.method ?? "GET").toUpperCase();
+    if (method === "POST") headers.set("Content-Type", "application/json");
     let response: Response;
     try {
       response = await this.fetchImpl(`${this.baseUrl}${path}`, {
         signal: init.signal,
-        method: "GET",
+        method,
         headers,
+        ...(method === "POST" ? { body: init.body } : {}),
         credentials: "omit",
         cache: "no-store",
       });
@@ -217,7 +225,7 @@ export class NativeMyKhayaClient {
       });
       throw error;
     }
-    if (!response.ok) this.diagnostic(path, { method: "GET", status: response.status });
+    if (!response.ok) this.diagnostic(path, { method, status: response.status });
     return parseApiResponse<T>(response);
   }
 
