@@ -7,7 +7,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>en</string>
 	<key>CFBundleDisplayName</key>
-	<string>MyKhaya</string>
+	<string>$(MYKHAYA_DISPLAY_NAME)</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -24,10 +24,10 @@
 	<array>
 		<dict>
 			<key>CFBundleURLName</key>
-			<string>app.mykhaya.mobile.prod.widgets</string>
+			<string>$(PRODUCT_BUNDLE_IDENTIFIER).widgets</string>
 			<key>CFBundleURLSchemes</key>
 			<array>
-				<string>mykhaya-prod</string>
+				<string>$(MYKHAYA_URL_SCHEME)</string>
 			</array>
 		</dict>
 	</array>
@@ -37,6 +37,14 @@
 	<true/>
 	<key>MyKhayaAPNsEnvironment</key>
 	<string>$(MYKHAYA_APNS_BUILD_ENVIRONMENT)</string>
+	<key>MyKhayaAppGroup</key>
+	<string>$(MYKHAYA_APP_GROUP)</string>
+	<key>MyKhayaEnvironment</key>
+	<string>$(MYKHAYA_ENVIRONMENT)</string>
+	<key>MyKhayaServerHost</key>
+	<string>$(MYKHAYA_SERVER_HOST)</string>
+	<key>MyKhayaURLScheme</key>
+	<string>$(MYKHAYA_URL_SCHEME)</string>
 	<key>NSCameraUsageDescription</key>
 	<string>MyKhaya uses the camera when you choose to take a profile photo.</string>
 	<key>NSFaceIDUsageDescription</key>

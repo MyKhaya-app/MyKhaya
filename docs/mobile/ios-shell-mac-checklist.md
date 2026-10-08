@@ -144,8 +144,9 @@ after Anthony has confirmed the identifier choice.
   as the run target).
 - Press the Run (▶) button, or Cmd+R.
 - The app should launch and load the live MyKhaya frontend
-  (`https://dev.mykhaya.app` by default — see `MYKHAYA_IOS_ENV` in
-  ADR 0012 for switching to production).
+  (`https://dev.mykhaya.app` with the **MyKhaya-Dev** scheme,
+  `https://mykhaya.app` with **MyKhaya-Prod** — see
+  docs/mobile/ios-environments.md).
 
 ## Step 5 — Verify the security posture, not just that it loads
 
@@ -191,9 +192,9 @@ calls this native code.
    records that decision and does not prompt again; enable it later under
    **Settings → Security**.
 3. Force-terminate the app:
-   `xcrun simctl terminate "$SIM_NAME" app.mykhaya.mobile`
+   `xcrun simctl terminate "$SIM_NAME" app.mykhaya.mobile` (PROD: `app.mykhaya.mobile.prod`)
 4. Relaunch it:
-   `xcrun simctl launch "$SIM_NAME" app.mykhaya.mobile`
+   `xcrun simctl launch "$SIM_NAME" app.mykhaya.mobile` (PROD: `app.mykhaya.mobile.prod`)
 5. Confirm only the neutral **Unlock MyKhaya** state is shown while the
    biometric prompt is active. Use **Features → Face ID → Matching Face**;
    Home should appear only after the successful unlock.

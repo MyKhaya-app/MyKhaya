@@ -1,0 +1,18 @@
+// MyKhaya DEV app: every DEV-specific iOS value lives here and only here.
+// Included by Debug-Dev.xcconfig and Release-Dev.xcconfig. Validated by
+// apps/ios-shell/src/ios-environments.test.ts (any OS) and
+// apps/ios-shell/scripts/validate-ios-environments.sh (Mac, expanded values).
+// Changing a value here changes the installed app's identity: check
+// docs/mobile/ios-environments.md first.
+
+MYKHAYA_ENVIRONMENT = development
+MYKHAYA_DISPLAY_NAME = MyKhaya-Dev
+// The widget extension is $(MYKHAYA_APP_BUNDLE_ID).widgets.
+MYKHAYA_APP_BUNDLE_ID = app.mykhaya.mobile
+MYKHAYA_APP_GROUP = group.app.mykhaya.mobile
+MYKHAYA_URL_SCHEME = mykhaya
+// Host only (an xcconfig treats "//" as a comment): the app loads https://$(MYKHAYA_SERVER_HOST).
+MYKHAYA_SERVER_HOST = dev.mykhaya.app
+
+DEVELOPMENT_TEAM = M86392YDLQ
+CODE_SIGN_STYLE = Automatic

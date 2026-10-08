@@ -1,6 +1,7 @@
 import type { CapacitorConfig } from "@capacitor/cli";
 import {
   allowedNavigationHosts,
+  IOS_APP_ENVIRONMENTS,
   iosShellConfiguration,
   liveFrontendOrigin,
   resolveIosShellEnvironment,
@@ -13,18 +14,19 @@ console.log(`MyKhaya environment: ${shellConfiguration.environment}`);
 console.log(`Frontend: ${shellConfiguration.frontend}`);
 console.log(`API: ${shellConfiguration.api}`);
 
-// Reused from the retired apps/mobile Expo scaffold (ADR 0011) rather than
-// invented fresh — see docs/architecture/adr/0012-capacitor-ios-shell.md
-// for why. Reverse-DNS under the mykhaya.app domain. Confirm with Anthony
-// before this is ever registered against a real Apple Developer account.
-const appId =
-  environment === "production"
-    ? "app.mykhaya.mobile.prod"
-    : "app.mykhaya.mobile";
+// DEV and PROD are two apps built from one Xcode project. Their real
+// identities (bundle IDs, App Group, URL scheme, live frontend) live in the
+// Xcode build configurations (ios/App/Config/Environment-*.xcconfig), which
+// `cap sync` never touches, and MainViewController loads the live frontend
+// from the build configuration rather than from the capacitor.config.json
+// this file generates. MYKHAYA_IOS_ENV here only selects the values Capacitor
+// CLI itself uses (appId/appName for `cap add`, and the scheme `cap run ios`
+// builds); see docs/mobile/ios-environments.md.
+const app = IOS_APP_ENVIRONMENTS[environment];
 
 const config: CapacitorConfig = {
-  appId,
-  appName: environment === "production" ? "MyKhaya" : "MyKhaya-Dev",
+  appId: app.bundleId,
+  appName: app.displayName,
   // Required by Capacitor even in "live remote frontend" mode — never
   // actually shown except as a brief loading flash before the WebView
   // navigates to server.url below, or as an offline fallback if the
@@ -42,6 +44,8 @@ const config: CapacitorConfig = {
     allowNavigation: allowedNavigationHosts(environment),
   },
   ios: {
+    // `npx cap run ios` builds this scheme (MyKhaya-Dev / MyKhaya-Prod).
+    scheme: app.scheme,
     // "automatic" lets UIKit's own scroll-view content-inset adjustment
     // handle the status bar/notch/Dynamic Island natively — but that
     // silently prevents `env(safe-area-inset-*)` from ever resolving to a

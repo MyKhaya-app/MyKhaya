@@ -44,7 +44,7 @@ apps/ios-shell/native/plugin/WidgetBridgePlugin.swift (main app target)
         |
         | WidgetSnapshotStore.save() — atomic file write
         v
-App Group container (group.app.mykhaya.mobile)
+App Group container (group.<app bundle ID>, see App Group below)
         |
         | WidgetSnapshotStore.load() — read-only
         v
@@ -210,10 +210,22 @@ shape.
 
 ## App Group
 
-Identifier: **`group.app.mykhaya.mobile`** — derived from the existing
-`app.mykhaya.mobile` bundle ID (ADR 0012), not invented independently.
-Configured on both the `App` target and the `MyKhayaWidgets` extension
-target by `scripts/setup-widget-extension.rb`.
+Identifier: **`group.` + the main app's bundle ID**, one per app:
+
+| App | App bundle ID | Widget bundle ID | App Group |
+| --- | --- | --- | --- |
+| DEV | `app.mykhaya.mobile` | `app.mykhaya.mobile.widgets` | `group.app.mykhaya.mobile` |
+| PROD | `app.mykhaya.mobile.prod` | `app.mykhaya.mobile.prod.widgets` | `group.app.mykhaya.mobile.prod` |
+
+DEV and PROD are separate apps built from the same sources, so the
+identifier is never hardcoded. It is the `MYKHAYA_APP_GROUP` build setting
+(ios/App/Config/Environment-*.xcconfig), used by both targets' entitlements
+and exposed to code as `MyKhayaAppGroup` in each target's Info.plist, which
+`WidgetSnapshotStore.appGroupIdentifier` reads (falling back to `group.` + the
+app's bundle ID). The app and its widget therefore always agree. If the group
+is missing, iOS logs "client is not entitled", widget storage is skipped with
+a log line, and neither the app nor the widget crashes (the widget shows its
+signed-out placeholder). See docs/mobile/ios-environments.md.
 
 ## Authentication and data fetching — no parallel auth
 
@@ -467,9 +479,10 @@ already exists:
    — confirm `MyKhayaWidgets` appears as a target/scheme.
 2. Open in Xcode (`npx cap open ios`). Confirm both `App` and
    `MyKhayaWidgets` targets show the **App Groups** capability
-   (`group.app.mykhaya.mobile`) under Signing & Capabilities, and `App`
+   (DEV `group.app.mykhaya.mobile`, PROD `group.app.mykhaya.mobile.prod`)
+   under Signing & Capabilities, and `App`
    still shows **Push Notifications**.
-3. Build the `App` scheme for the simulator — this also builds and embeds
+3. Build the `MyKhaya-Dev` (or `MyKhaya-Prod`) scheme for the simulator — this also builds and embeds
    `MyKhayaWidgets`. Fix any Swift compile errors surfaced here (this is
    the first real compile these files will ever undergo).
 4. Run on a simulator, sign in, select a Home.
@@ -491,15 +504,17 @@ already exists:
 13. Log back in; confirm widgets recover.
 14. Test light mode, dark mode, a long event/reminder title (no overlap/
     clipping), and an empty Home (no events, no to-dos).
-15. `xcodebuild archive` for a Release configuration; confirm the archive
+15. `xcodebuild archive` for `Release-Dev` and `Release-Prod` (see
+    docs/mobile/ios-environments.md); confirm each archive
     contains `MyKhayaWidgets.appex` and that `codesign -d --entitlements
     :- <path>` on both the app and the appex show the expected
     entitlements (App Groups on both; `aps-environment` on `App` only).
 
 ## Apple Developer portal / TestFlight
 
-- The `group.app.mykhaya.mobile` App Group and the
-  `app.mykhaya.mobile.widgets` App ID need registering in the Apple
+- Each app's App Group and widget App ID (DEV `group.app.mykhaya.mobile` /
+  `app.mykhaya.mobile.widgets`, PROD `group.app.mykhaya.mobile.prod` /
+  `app.mykhaya.mobile.prod.widgets`) need registering in the Apple
   Developer portal before a **device/TestFlight** build (simulator builds
   need no signing at all, same as the existing checklist's Step 4).
   Xcode's own "Register this identifier"/"Fix Issue" prompts handle this

@@ -42,11 +42,12 @@ public class WidgetBridgePlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     @objc private func handleOpenURL(_ notification: Notification) {
+        // Only this environment's own widget scheme (DEV `mykhaya`, PROD
+        // `mykhaya-prod`, from the build configuration via Info.plist) is
+        // accepted, so a link meant for the other app is ignored here.
         guard let url = notification.userInfo?["url"] as? URL,
-              url.scheme?.lowercased() == "mykhaya",
-              let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
-              let path = components.queryItems?.first(where: { $0.name == "path" })?.value,
-              path.hasPrefix("/") else {
+              let scheme = MyKhayaEnvironment.current?.urlScheme,
+              let path = WidgetDeepLinkRoute.path(from: url, expectedScheme: scheme) else {
             return
         }
         // The WKWebView is already on the live frontend origin (ADR 0012) —

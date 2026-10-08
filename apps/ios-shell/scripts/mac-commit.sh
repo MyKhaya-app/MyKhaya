@@ -90,7 +90,8 @@ if echo "$STAGED_FILES" | grep -q '^apps/ios-shell/ios/'; then
   check_present 'App\.xcodeproj/project\.pbxproj$' "project.pbxproj"
   check_present 'App/AppDelegate\.swift$' "AppDelegate.swift"
   check_present '\.entitlements$' "an entitlements file"
-  check_present 'xcschemes/MyKhayaWidgets\.xcscheme$' "MyKhayaWidgets shared scheme (widget target)"
+  check_present 'xcschemes/MyKhaya-(Dev|Prod)\.xcscheme$' "MyKhaya-Dev/MyKhaya-Prod shared schemes (app)"
+  check_present 'xcschemes/MyKhayaWidgets-(Dev|Prod)\.xcscheme$' "MyKhayaWidgets-Dev/-Prod shared schemes (widget target)"
 fi
 
 echo ""

@@ -1,4 +1,6 @@
 import Foundation
+import MyKhayaWidgetCore
+import SwiftUI
 
 /// Turns an app-relative path (e.g. "/calendar?event=abc-123", already
 /// produced by widget-snapshot.ts using the exact same logic as
@@ -12,23 +14,20 @@ import Foundation
 /// claims it", and nothing claims it today because Associated
 /// Domains/Universal Links are explicitly not configured yet (ADR 0012,
 /// "Consequences"). A Home Screen widget tapping an https:// URL would
-/// therefore open Safari, not MyKhaya — wrong. `mykhaya-prod://` is a small,
-/// additive URL Scheme (CFBundleURLTypes in Info.plist — not an Associated
-/// Domain, no Apple Developer portal step) registered only so a widget tap
-/// can hand its already-canonical path back to the running app, which then
-/// loads that exact path in its existing WKWebView. It carries no new
-/// routing logic of its own — MainViewController's application(_:open:)
-/// handler (installed by scripts/install-widget-sources.sh) does nothing
-/// but extract `path` and navigate the WebView there.
+/// therefore open Safari, not MyKhaya — wrong. A small, additive URL Scheme
+/// (CFBundleURLTypes in Info.plist — not an Associated Domain, no Apple
+/// Developer portal step) is registered only so a widget tap can hand its
+/// already-canonical path back to the running app, which then loads that
+/// exact path in its existing WKWebView (WidgetBridgePlugin).
+///
+/// The scheme is this environment's own (DEV `mykhaya`, PROD
+/// `mykhaya-prod`), read from the widget's Info.plist (`MyKhayaURLScheme`,
+/// set from the build configuration), so a DEV widget only ever opens the
+/// DEV app and a PROD widget only the PROD app. Never hardcode it here.
 enum WidgetDeepLink {
-    private static let scheme = "mykhaya-prod"
-
     static func url(forPath path: String) -> URL? {
-        var components = URLComponents()
-        components.scheme = scheme
-        components.host = "open"
-        components.queryItems = [URLQueryItem(name: "path", value: path)]
-        return components.url
+        guard let scheme = MyKhayaEnvironment.current?.urlScheme else { return nil }
+        return WidgetDeepLinkRoute.url(forPath: path, scheme: scheme)
     }
 
     /// Generic "open the Calendar" / "open Routines & Reminders" links used
@@ -37,4 +36,20 @@ enum WidgetDeepLink {
     static let calendarHome = url(forPath: "/calendar")
     static let todoHome = url(forPath: "/settings/routines-reminders")
     static let signInHome = url(forPath: "/login")
+}
+
+/// A `Link` when there is a URL, otherwise the plain content: a widget
+/// without a configured scheme stays usable (just not tappable) instead of
+/// crashing on a force-unwrapped fallback URL.
+struct WidgetLink<Content: View>: View {
+    let url: URL?
+    @ViewBuilder let content: () -> Content
+
+    var body: some View {
+        if let url {
+            Link(destination: url, label: content)
+        } else {
+            content()
+        }
+    }
 }

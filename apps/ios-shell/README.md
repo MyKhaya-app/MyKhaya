@@ -77,13 +77,17 @@ npx cap add ios         # RECOVERY-ONLY — no-ops if ios/ already exists;
 
 ## Environment selection
 
-`MYKHAYA_IOS_ENV` (`development` | `production`, default `development`)
-selects which live frontend origin a build points at — see `src/config.ts`.
-Production archives must set `MYKHAYA_IOS_ENV=production` explicitly. The
-native API uses the same frontend origin's `/api/v1` route in both environments.
-There is no separate `.env` file for this package; it is a single named
-variable, set when running `cap sync`/opening the relevant Xcode scheme, the
-same MYKHAYA_-prefixed convention used throughout the backend.
+DEV and PROD are two separate apps built from this one Xcode project, chosen
+by Xcode scheme: **MyKhaya-Dev** (`app.mykhaya.mobile`, dev.mykhaya.app) or
+**MyKhaya-Prod** (`app.mykhaya.mobile.prod`, mykhaya.app). Every environment
+value comes from the build configuration (`ios/App/Config/*.xcconfig`), so
+`cap sync` and the bootstrap scripts cannot switch an app's environment. The
+full matrix, Xcode instructions and checks are in
+[docs/mobile/ios-environments.md](../../docs/mobile/ios-environments.md).
+
+`MYKHAYA_IOS_ENV` (`development` | `production`, default `development`) now
+only selects what Capacitor CLI itself uses (`cap run ios`'s scheme, `cap add`
+metadata) and which app `mac-bootstrap.sh` launches in the simulator.
 
 ## Home Screen widgets (Next Event, Calendar, To-do)
 

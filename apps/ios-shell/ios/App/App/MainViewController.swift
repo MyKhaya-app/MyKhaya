@@ -1,4 +1,5 @@
 import Capacitor
+import MyKhayaWidgetCore
 import WebKit
 
 /// Registers WidgetBridgePlugin and SystemSettingsPlugin — repo-local
@@ -15,6 +16,30 @@ import WebKit
 /// ensure-storyboard-scene-delegate.sh already protects) is untouched,
 /// since this subclass adds no other behaviour.
 public class MainViewController: CAPBridgeViewController {
+    /// Which live frontend this app loads comes from its build
+    /// configuration (Info.plist `MyKhayaServerHost`, set from
+    /// MYKHAYA_SERVER_HOST in ios/App/Config/Environment-*.xcconfig), not
+    /// from capacitor.config.json: `cap sync` regenerates that one file for a
+    /// single environment at a time, and both apps are built from it. Taking
+    /// the server from the build configuration means a sync for one
+    /// environment can never point the other app at the wrong backend: DEV
+    /// only ever loads dev.mykhaya.app and PROD only mykhaya.app.
+    public override func instanceDescriptor() -> InstanceDescriptor {
+        let descriptor = super.instanceDescriptor()
+        guard let environment = MyKhayaEnvironment.current,
+              let host = environment.serverHost,
+              let serverURL = environment.serverURL else {
+            // Refuse to guess. Falling back to capacitor.config.json could
+            // connect DEV to PROD or the reverse. A correctly configured
+            // build cannot reach this (src/ios-environments.test.ts and
+            // scripts/validate-ios-environments.sh check the configuration).
+            fatalError("MyKhaya: this build configuration has no valid MyKhayaEnvironment/MyKhayaServerHost/MyKhayaURLScheme/MyKhayaAppGroup in Info.plist.")
+        }
+        descriptor.serverURL = serverURL.absoluteString
+        descriptor.allowedNavigationHostnames = [host]
+        return descriptor
+    }
+
     public override func capacitorDidLoad() {
         bridge?.registerPluginInstance(WidgetBridgePlugin())
         bridge?.registerPluginInstance(SystemSettingsPlugin())

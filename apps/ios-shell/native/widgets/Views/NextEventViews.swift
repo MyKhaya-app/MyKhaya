@@ -103,7 +103,7 @@ struct NextEventMediumView: View {
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
                 ForEach(Array(snapshot.upcomingEvents.prefix(3).enumerated()), id: \.element.id) { index, event in
-                    Link(destination: WidgetDeepLink.url(forPath: event.deepLink) ?? WidgetDeepLink.calendarHome!) {
+                    WidgetLink(url: WidgetDeepLink.url(forPath: event.deepLink) ?? WidgetDeepLink.calendarHome) {
                         EventRow(event: event, showsDate: false)
                     }
                     if index < min(snapshot.upcomingEvents.count, 3) - 1 {
