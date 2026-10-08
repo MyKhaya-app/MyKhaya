@@ -180,6 +180,38 @@ describe("Founding Beta page — invitation-only", () => {
   });
 });
 
+describe("Founding Beta page — registration closed with the waitlist open", () => {
+  it("ends at the waitlist form, not an unavailable notice", async () => {
+    signupState.mockResolvedValue(
+      state({ signup_mode: "closed", registration_open: false, beta_joining_available: false, waitlist_available: true }),
+    );
+    render(<PublicFoundingBeta />);
+
+    const main = within(screen.getByRole("main"));
+    expect(await main.findByRole("link", { name: /Join the waitlist/ })).toHaveAttribute("href", "/waitlist");
+    expect(screen.queryByText(/currently unavailable/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Join the Beta/ })).not.toBeInTheDocument();
+  });
+
+  it("closed and invitation-only with the waitlist open: the invitation heading and the waitlist", async () => {
+    signupState.mockResolvedValue(
+      state({
+        signup_mode: "closed",
+        registration_open: false,
+        invitation_required: true,
+        beta_joining_available: false,
+        waitlist_available: true,
+      }),
+    );
+    render(<PublicFoundingBeta />);
+
+    expect(
+      await screen.findByRole("heading", { name: "Founding Beta places are by invitation right now." }),
+    ).toBeInTheDocument();
+    expect(within(screen.getByRole("main")).getByRole("link", { name: /Join the waitlist/ })).toHaveAttribute("href", "/waitlist");
+  });
+});
+
 describe("Founding Beta page — Get the beta app (PCC app links)", () => {
   const TESTFLIGHT = "https://testflight.apple.com/join/AbCdEf12";
   const APP_STORE = "https://apps.apple.com/gb/app/mykhaya/id1234567890";

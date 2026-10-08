@@ -1,5 +1,6 @@
 import Link from "next/link";
 import { ArrowRight } from "lucide-react";
+import type { SignupStateValue } from "@/components/public-signup";
 
 // The card under the sign-in form. Founding Beta and "New to MyKhaya?" share
 // one structure; only colour (via the modifier class) and copy differ.
@@ -66,4 +67,26 @@ export function SignInCard({ variant, href }: { variant: keyof typeof variants; 
       </Link>
     </section>
   );
+}
+
+/** Which card sits under the sign-in form, from the live signup state
+ *  (undefined while loading, null if it failed: both give the normal card).
+ *  - Registration closed/paused, or invitation-only without a valid
+ *    household invitation: the Founding Beta card if the waitlist is open
+ *    (/founding-beta leads to it), otherwise no card.
+ *  - Beta places open, or the waitlist is the only way in: Founding Beta.
+ *  - Otherwise "New to MyKhaya?", carrying any household or calendar-share
+ *    invitation into registration. */
+export function signInCard(
+  state: SignupStateValue,
+  context: { invitation: string | null; calendarShare: string | null; invitationValid: boolean },
+): "beta" | "new" | null {
+  if (!state) return "new";
+  const waitlistOpen = state.waitlist_available === true;
+  const closed = state.registration_open === false;
+  const inviteOnlyWithoutInvitation = state.invitation_required === true && !context.invitationValid;
+  if (closed || inviteOnlyWithoutInvitation) return waitlistOpen ? "beta" : null;
+  const betaIsTheWayIn =
+    state.beta_joining_available === true || (waitlistOpen && state.normal_signup_available === false);
+  return betaIsTheWayIn && !context.invitation && !context.calendarShare ? "beta" : "new";
 }

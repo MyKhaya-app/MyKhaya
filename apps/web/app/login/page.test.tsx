@@ -652,31 +652,36 @@ describe("Login — card by signup mode", () => {
     closedWithWaitlist: { ...base, signup_mode: "closed", registration_open: false, waitlist_available: true },
     paused: { ...base, signup_mode: "normal", registration_open: false },
     production: { ...base, signup_mode: "beta_only", invitation_required: true, beta_joining_available: true },
+    inviteOnlyWithWaitlist: { ...base, signup_mode: "beta_only", invitation_required: true, waitlist_available: true },
+    inviteOnlyNormal: { ...base, signup_mode: "normal", invitation_required: true, normal_signup_available: true },
   };
+  type Mode = keyof typeof modes;
 
-  async function renderIn(mode: keyof typeof modes) {
+  async function renderIn(mode: Mode) {
     (api.publicSignupState as ReturnType<typeof vi.fn>).mockResolvedValue(modes[mode]);
     render(<Login />);
     await waitFor(() => expect(api.publicSignupState).toHaveBeenCalled());
   }
 
-  it.each([
-    ["betaOpen", "Beta open"],
-    ["waitlist", "waitlist (Beta only, places full)"],
-    ["mixedBetaOpen", "mixed with Beta places open"],
-    ["production", "production: invitation required with Beta places open"],
-  ] as const)("%s (%s): Founding Beta card linking to /founding-beta", async (mode) => {
+  function expectNoCard() {
+    expect(screen.queryByTestId("signin-card-new")).not.toBeInTheDocument();
+    expect(screen.queryByTestId("signin-card-beta")).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /create an account|join the founding beta/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^sign in$/i })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Forgot password?" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Child sign in" })).toHaveAttribute("href", "/login/child");
+  }
+
+  const betaCardModes: Mode[] = ["betaOpen", "waitlist", "mixedBetaOpen", "closedWithWaitlist", "inviteOnlyWithWaitlist"];
+  it.each(betaCardModes)("%s: Founding Beta card linking to /founding-beta", async (mode) => {
     await renderIn(mode);
     const link = await screen.findByRole("link", { name: /join the founding beta/i });
     expect(link).toHaveAttribute("href", "/founding-beta");
     expect(screen.queryByTestId("signin-card-new")).not.toBeInTheDocument();
   });
 
-  it.each([
-    ["normal", "normal"],
-    ["mixedBetaFull", "mixed with Beta full (normal signup still open)"],
-    ["betaFullNoWaitlist", "Beta only, full, waitlist off"],
-  ] as const)("%s (%s): New to MyKhaya card linking to /register", async (mode) => {
+  const newCardModes: Mode[] = ["normal", "mixedBetaFull", "betaFullNoWaitlist"];
+  it.each(newCardModes)("%s: New to MyKhaya card linking to /register", async (mode) => {
     await renderIn(mode);
     await waitFor(() =>
       expect(screen.getByRole("link", { name: /create an account/i })).toHaveAttribute("href", "/register"),
@@ -684,17 +689,49 @@ describe("Login — card by signup mode", () => {
     expect(screen.queryByTestId("signin-card-beta")).not.toBeInTheDocument();
   });
 
-  it.each([
-    ["closed", "closed"],
-    ["closedWithWaitlist", "closed with a waitlist"],
-    ["paused", "registration paused"],
-  ] as const)("%s (%s): no card, only sign in and child sign-in", async (mode) => {
+  const noCardModes: Mode[] = ["closed", "paused", "production", "inviteOnlyNormal"];
+  it.each(noCardModes)("%s: no card, only sign in and child sign-in", async (mode) => {
     await renderIn(mode);
     await waitFor(() => expect(screen.queryByTestId("signin-card-new")).not.toBeInTheDocument());
-    expect(screen.queryByTestId("signin-card-beta")).not.toBeInTheDocument();
-    expect(screen.queryByRole("link", { name: /create an account|join the founding beta/i })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /^sign in$/i })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "Child sign in" })).toHaveAttribute("href", "/login/child");
-    expect(screen.getByRole("link", { name: "Forgot password?" })).toBeInTheDocument();
+    expectNoCard();
+  });
+
+  it("invitation-only with a valid household invitation: New card carrying the invitation", async () => {
+    searchParams = new URLSearchParams({ invitation: "invite-token" });
+    (api.previewInvitation as ReturnType<typeof vi.fn>).mockResolvedValue({
+      group_name: "The Smiths",
+      invited_by_display_name: "Sam",
+      email: "anthony@example.com",
+    });
+    await renderIn("inviteOnlyNormal");
+
+    await screen.findByText(/continue signing in to join the smiths/i);
+    expect(screen.getByRole("link", { name: /create an account/i })).toHaveAttribute(
+      "href",
+      "/register?invitation=invite-token",
+    );
+  });
+
+  it("invitation-only with an invalid household invitation: no card", async () => {
+    searchParams = new URLSearchParams({ invitation: "bad-token" });
+    (api.previewInvitation as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new ApiError(400, "This invitation is invalid or has expired."),
+    );
+    await renderIn("inviteOnlyNormal");
+
+    await screen.findByText(/this invitation is invalid or has expired/i);
+    expectNoCard();
+  });
+
+  it("invitation-only with only a calendar share (not a registration invitation): no card", async () => {
+    searchParams = new URLSearchParams({ calendar_share: "share-token" });
+    (api.previewCalendarShare as ReturnType<typeof vi.fn>).mockResolvedValue({
+      calendar_name: "School",
+      source_group_name: "The Smiths",
+    });
+    await renderIn("production");
+
+    await screen.findByText(/continue signing in to view/i);
+    expectNoCard();
   });
 });
