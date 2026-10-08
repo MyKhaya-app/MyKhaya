@@ -186,6 +186,25 @@ describe("Founding Beta registration availability", () => {
   });
 });
 
+describe("Founding Beta registration availability — Beta only via the normal card", () => {
+  it("Beta full, waitlist off: no usable form, an honest notice and the way on to the Founding Beta page", async () => {
+    publicSignupState.mockResolvedValue({
+      signup_mode: "beta_only",
+      registration_open: true,
+      invitation_required: false,
+      normal_signup_available: false,
+      beta_joining_available: false,
+      waitlist_available: false,
+      joinable_count: null,
+    });
+    render(<Register />);
+
+    expect(await screen.findByText(/New accounts can.t be created from this page right now/)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Continue to Founding Beta" })).toHaveAttribute("href", "/founding-beta");
+    expect(screen.getByRole("button", { name: "Create account" })).toBeDisabled();
+  });
+});
+
 describe("registration legal acceptance", () => {
   it("Beta registration creates the account only: no Home name and no Founding Beta Terms", async () => {
     searchParams.value = "beta=1";

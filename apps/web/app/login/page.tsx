@@ -347,11 +347,17 @@ export default function Login() {
     : calendarShare
       ? `/register?calendar_share=${encodeURIComponent(calendarShare)}`
       : "/register";
-  // The Founding Beta card replaces "New to MyKhaya?" only once the signup
-  // state says Beta joining is open. Someone arriving with a household or
-  // calendar-share invitation keeps the invitation-carrying register link.
-  const showBetaCard =
-    signupState?.beta_joining_available === true && !invitation && !calendarShare;
+  // The card under the form follows the live signup state (unknown or failed
+  // = the normal card). Founding Beta card while Beta places are open, or
+  // while the waitlist is the only way in (/founding-beta handles it). No
+  // card at all while registration is closed or paused. Someone arriving
+  // with a household or calendar-share invitation keeps the
+  // invitation-carrying register link.
+  const registrationClosed = signupState?.registration_open === false;
+  const betaIsTheWayIn =
+    signupState?.beta_joining_available === true ||
+    (signupState?.waitlist_available === true && signupState.normal_signup_available === false);
+  const showBetaCard = betaIsTheWayIn && !invitation && !calendarShare;
 
   return (
     <main className="signin-page">
@@ -441,7 +447,7 @@ export default function Login() {
           <Link href="/forgot-password" className="signin-link signin-forgot">
             Forgot password?
           </Link>
-          {showBetaCard ? (
+          {registrationClosed ? null : showBetaCard ? (
             <SignInCard variant="beta" href="/founding-beta" />
           ) : (
             <SignInCard variant="new" href={registerHref} />

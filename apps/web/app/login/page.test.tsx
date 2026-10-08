@@ -629,3 +629,72 @@ describe("Login — Founding Beta / New to MyKhaya card", () => {
     expect(api.post).not.toHaveBeenCalled();
   });
 });
+
+// One case per signup mode, using the field combinations the API actually
+// produces (resolve_signup_state in apps/api/mykhaya/routers/founding_beta.py).
+describe("Login — card by signup mode", () => {
+  const base = {
+    registration_open: true,
+    invitation_required: false,
+    normal_signup_available: false,
+    beta_joining_available: false,
+    waitlist_available: false,
+    joinable_count: null,
+  };
+  const modes = {
+    betaOpen: { ...base, signup_mode: "beta_only", beta_joining_available: true },
+    waitlist: { ...base, signup_mode: "beta_only", waitlist_available: true },
+    betaFullNoWaitlist: { ...base, signup_mode: "beta_only" },
+    normal: { ...base, signup_mode: "normal", normal_signup_available: true },
+    mixedBetaOpen: { ...base, signup_mode: "mixed", normal_signup_available: true, beta_joining_available: true },
+    mixedBetaFull: { ...base, signup_mode: "mixed", normal_signup_available: true, waitlist_available: true },
+    closed: { ...base, signup_mode: "closed", registration_open: false },
+    closedWithWaitlist: { ...base, signup_mode: "closed", registration_open: false, waitlist_available: true },
+    paused: { ...base, signup_mode: "normal", registration_open: false },
+    production: { ...base, signup_mode: "beta_only", invitation_required: true, beta_joining_available: true },
+  };
+
+  async function renderIn(mode: keyof typeof modes) {
+    (api.publicSignupState as ReturnType<typeof vi.fn>).mockResolvedValue(modes[mode]);
+    render(<Login />);
+    await waitFor(() => expect(api.publicSignupState).toHaveBeenCalled());
+  }
+
+  it.each([
+    ["betaOpen", "Beta open"],
+    ["waitlist", "waitlist (Beta only, places full)"],
+    ["mixedBetaOpen", "mixed with Beta places open"],
+    ["production", "production: invitation required with Beta places open"],
+  ] as const)("%s (%s): Founding Beta card linking to /founding-beta", async (mode) => {
+    await renderIn(mode);
+    const link = await screen.findByRole("link", { name: /join the founding beta/i });
+    expect(link).toHaveAttribute("href", "/founding-beta");
+    expect(screen.queryByTestId("signin-card-new")).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["normal", "normal"],
+    ["mixedBetaFull", "mixed with Beta full (normal signup still open)"],
+    ["betaFullNoWaitlist", "Beta only, full, waitlist off"],
+  ] as const)("%s (%s): New to MyKhaya card linking to /register", async (mode) => {
+    await renderIn(mode);
+    await waitFor(() =>
+      expect(screen.getByRole("link", { name: /create an account/i })).toHaveAttribute("href", "/register"),
+    );
+    expect(screen.queryByTestId("signin-card-beta")).not.toBeInTheDocument();
+  });
+
+  it.each([
+    ["closed", "closed"],
+    ["closedWithWaitlist", "closed with a waitlist"],
+    ["paused", "registration paused"],
+  ] as const)("%s (%s): no card, only sign in and child sign-in", async (mode) => {
+    await renderIn(mode);
+    await waitFor(() => expect(screen.queryByTestId("signin-card-new")).not.toBeInTheDocument());
+    expect(screen.queryByTestId("signin-card-beta")).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /create an account|join the founding beta/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^sign in$/i })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Child sign in" })).toHaveAttribute("href", "/login/child");
+    expect(screen.getByRole("link", { name: "Forgot password?" })).toBeInTheDocument();
+  });
+});

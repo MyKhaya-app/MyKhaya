@@ -58,7 +58,12 @@ export function PublicFoundingBeta() {
     }
   }
 
-  const canJoin = Boolean(state?.beta_joining_available || invitationValid === true);
+  // Invitation-only: open places are not enough without a valid Beta
+  // invitation (registration would refuse it), so "Join the Beta" is not
+  // offered. While an invitation link is still being checked, show nothing.
+  const invitationPending = Boolean(invitation) && invitationValid === null;
+  const inviteOnly = state?.invitation_required === true && invitationValid !== true;
+  const canJoin = invitationValid === true || (Boolean(state?.beta_joining_available) && !inviteOnly);
   const waitlist = state?.waitlist_available === true && !canJoin;
 
   return (
@@ -98,6 +103,14 @@ export function PublicFoundingBeta() {
               <button className="button mk-beta-cta" type="button" onClick={() => void joinBeta()} disabled={checkingSession}>
                 {checkingSession ? "Checking your sign-in…" : <>Join the Beta <ArrowRight size={22} strokeWidth={2} aria-hidden="true" /></>}
               </button>
+            ) : inviteOnly && invitationPending ? null : inviteOnly && waitlist ? (
+              <>
+                <section className="notice mk-beta-invite-only" aria-labelledby="beta-invite-only-heading">
+                  <h2 id="beta-invite-only-heading">Founding Beta places are by invitation right now.</h2>
+                  <p>Join the waitlist and we’ll let you know when a place opens.</p>
+                </section>
+                <Link className="button mk-beta-cta" href="/waitlist">Join the waitlist <ArrowRight size={22} strokeWidth={2} aria-hidden="true" /></Link>
+              </>
             ) : waitlist ? (
               <>
                 <p className="notice">The next places are being offered from the waitlist first.</p>
