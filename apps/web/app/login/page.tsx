@@ -143,11 +143,30 @@ export default function Login() {
   }, []);
 
   useEffect(() => {
+    const context = {
+      transport: isNativeShell() ? "native" : "browser",
+      path: "/public/signup-state",
+      invitationOverride: Boolean(invitation || calendarShare),
+    };
     api
       .publicSignupState()
-      .then(setSignupState)
-      .catch(() => setSignupState(null));
-  }, []);
+      .then((state) => {
+        console.info("[signin] signup state loaded", {
+          ...context,
+          beta_joining_available: state.beta_joining_available,
+        });
+        setSignupState(state);
+      })
+      .catch((reason: unknown) => {
+        // The normal card is the safe fallback, but never a silent one.
+        console.warn("[signin] signup state request failed; showing the normal card", {
+          ...context,
+          status: reason instanceof ApiError ? reason.status : null,
+          message: reason instanceof Error ? reason.message : String(reason),
+        });
+        setSignupState(null);
+      });
+  }, [invitation, calendarShare]);
 
   function startAppleSignIn() {
     const query = next ? `?next_path=${encodeURIComponent(next)}` : "";
