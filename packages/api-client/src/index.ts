@@ -3,9 +3,20 @@ import { ApiError } from "./errors";
 export { ApiError } from "./errors";
 
 export class MyKhayaClient {
+  private requestTransport: (<T>(path: string, init?: RequestInit) => Promise<T>) | null = null;
+
   constructor(private readonly baseUrl = "/api/v1") {}
 
+  /** Install the native bearer transport for the live iOS shell. Browser
+   * callers leave this unset and retain cookie/CSRF behaviour. */
+  setRequestTransport(
+    transport: (<T>(path: string, init?: RequestInit) => Promise<T>) | null,
+  ): void {
+    this.requestTransport = transport;
+  }
+
   private async request<T>(path: string, init: RequestInit = {}): Promise<T> {
+    if (this.requestTransport) return this.requestTransport<T>(path, init);
     const csrf =
       typeof document === "undefined"
         ? undefined
@@ -352,8 +363,30 @@ export class MyKhayaClient {
   put = <T>(path: string, body: unknown) =>
     this.request<T>(path, { method: "PUT", body: JSON.stringify(body) });
   delete = (path: string) => this.request<void>(path, { method: "DELETE" });
+
+  registerNativePushDevice = (body: {
+    platform: "ios" | "android";
+    token: string;
+    installation_id: string;
+    device_label?: string;
+    apns_environment?: "development" | "production";
+  }) => this.request<{ id: string }>("/notifications/native-devices", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+
+  deleteNativePushDevice = (deviceId: string) =>
+    this.request<void>(`/notifications/native-devices/${encodeURIComponent(deviceId)}`, {
+      method: "DELETE",
+    });
 }
 
 export const api = new MyKhayaClient();
 
 export { platformApi, PlatformClient } from "./platform";
+
+export { NativeMyKhayaClient } from "./native-client";
+export type { NativeSession, NativeSessionStore } from "./native-session-store";
+export { InMemoryNativeSessionStore } from "./native-session-store";
+export { NATIVE_API_ORIGINS, nativeApiBaseUrl, nativeApiBaseUrlForWebHost } from "./native-config";
+export type { NativeApiEnvironment } from "./native-config";

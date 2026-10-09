@@ -8,6 +8,8 @@ import { api } from "@mykhaya/api-client";
 import { Logo } from "./logo";
 import { Avatar } from "./avatar";
 import { BottomSheet } from "./bottom-sheet";
+import { isNativeShell } from "./native-runtime";
+import { nativeLogout } from "./native-auth";
 
 export function AppHeader({
   user,
@@ -28,7 +30,8 @@ export function AppHeader({
 
   async function logout() {
     setMenuOpen(false);
-    await api.post("/auth/logout", {});
+    if (isNativeShell()) await nativeLogout();
+    else await api.post("/auth/logout", {});
     router.push("/login");
   }
 

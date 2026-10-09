@@ -1,0 +1,7 @@
+// Debug build of the MyKhaya Dev app (Xcode Run). Base configuration of the
+// project-level "Debug-Dev" build configuration; both targets inherit it.
+#include "../../debug.xcconfig"
+#include "Environment-Dev.xcconfig"
+
+// Debug builds are signed for development, so they register with APNs sandbox.
+MYKHAYA_APNS_BUILD_ENVIRONMENT = development

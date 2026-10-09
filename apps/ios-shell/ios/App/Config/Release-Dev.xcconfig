@@ -1,0 +1,7 @@
+// Release build of the MyKhaya Dev app (Archive, TestFlight/App Store).
+// Base configuration of the project-level "Release-Dev" build configuration;
+// both targets inherit it.
+#include "Environment-Dev.xcconfig"
+
+// Distribution builds register with production APNs.
+MYKHAYA_APNS_BUILD_ENVIRONMENT = production

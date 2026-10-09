@@ -8,6 +8,10 @@ import { AppHeader } from "./app-header";
 import { BottomNav } from "./bottom-nav";
 import { useActiveHome } from "./use-active-home";
 import { useUserUpdatedListener } from "./user-events";
+import { isNativeShell } from "./native-runtime";
+import { bootstrapNativeSession } from "./native-auth";
+import { NativeBiometricOffer } from "./native-biometric-offer";
+import { initializeNativePush, reconcileNativePush } from "./native-push";
 
 export function AppShell({
   children,
@@ -26,8 +30,7 @@ export function AppShell({
   const { homes, activeHome, setActiveHomeId, loading } = useActiveHome();
 
   useEffect(() => {
-    api
-      .me()
+    (isNativeShell() ? bootstrapNativeSession() : api.me())
       .then(setUser)
       .catch(() => router.replace("/login"));
   }, [router]);
@@ -36,6 +39,11 @@ export function AppShell({
     if (!loading && !homes.length && path !== "/onboarding")
       router.replace("/onboarding");
   }, [homes, loading, path, router]);
+
+  useEffect(() => {
+    if (!isNativeShell() || !user) return;
+    void initializeNativePush((target) => router.push(target)).then(() => reconcileNativePush());
+  }, [router, user]);
 
   useUserUpdatedListener(setUser);
 
@@ -49,6 +57,7 @@ export function AppShell({
         flush={Boolean(hero)}
       />
       {hero}
+      <NativeBiometricOffer />
       <main className="app-main">{children}</main>
       <BottomNav principalType={user?.principal_type} />
     </div>

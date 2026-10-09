@@ -6,6 +6,8 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { api, ApiError } from "@mykhaya/api-client";
 import { AuthCard } from "@/components/auth-card";
 import { FormStatus } from "@/components/form-status";
+import { isNativeShell } from "@/components/native-runtime";
+import { nativeLogin } from "@/components/native-auth";
 export default function Login() {
   const router = useRouter(),
     params = useSearchParams();
@@ -31,10 +33,10 @@ export default function Login() {
     setError("");
     const d = new FormData(e.currentTarget);
     try {
-      await api.post("/auth/login", {
-        email: d.get("email"),
-        password: d.get("password"),
-      });
+      const email = String(d.get("email") ?? "");
+      const password = String(d.get("password") ?? "");
+      if (isNativeShell()) await nativeLogin(email, password);
+      else await api.post("/auth/login", { email, password });
       if (invitation)
         await api.post("/invitations/accept", { token: invitation });
       router.push((await api.homes()).length ? "/home" : "/onboarding");
