@@ -353,11 +353,25 @@ describe("scripts/validate-ios-environments.sh", () => {
 
   it("mac-bootstrap.sh builds and launches the right app for each environment", () => {
     const bootstrap = read("scripts/mac-bootstrap.sh");
+    const caseBlock = bootstrap.match(/case "\$MYKHAYA_IOS_ENV" in([\s\S]*?)esac/)?.[1];
+    expect(caseBlock).toBeTruthy();
     for (const app of ENVIRONMENTS) {
-      expect(bootstrap).toContain(
-        `${app.environment}) SCHEME="${app.scheme}"; CONFIGURATION="Debug-${app.configurationSuffix}"; BUNDLE_ID="${app.bundleId}" ;;`,
+      const environmentLine = caseBlock!.split("\n").find((line) => line.includes(`${app.environment})`));
+      expect(environmentLine).toBeTruthy();
+      expect(environmentLine).toContain(`${app.environment})`);
+      expect(environmentLine).toContain(`SCHEME="${app.scheme}"`);
+      expect(environmentLine).toContain(`CONFIGURATION="Debug-${app.configurationSuffix}"`);
+      expect(environmentLine).toContain(`BUNDLE_ID="${app.bundleId}"`);
+      expect(environmentLine).toContain(
+        `DEFAULT_REF="${app.environment === "development" ? "dev" : ""}"`,
       );
     }
+    expect(bootstrap).toContain('MYKHAYA_IOS_REF="${MYKHAYA_IOS_REF:-$DEFAULT_REF}"');
+    expect(bootstrap).toContain('if [ -z "$MYKHAYA_IOS_REF" ]; then');
+    expect(bootstrap).toContain("Refusing production bootstrap without MYKHAYA_IOS_REF");
+    expect(bootstrap).toMatch(/CURRENT_SHA=.*git rev-parse HEAD/);
+    expect(bootstrap).toContain("Refusing to switch or pull");
+    expect(bootstrap).not.toMatch(/git\s+(fetch|pull|checkout|switch)\b/);
     expect(bootstrap).toContain("sh scripts/validate-ios-environments.sh");
     expect(bootstrap).not.toMatch(/-scheme App\b/);
   });
