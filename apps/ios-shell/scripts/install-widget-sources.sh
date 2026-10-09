@@ -75,18 +75,17 @@ else
   echo "WARNING: $STORYBOARD not found — inspect manually (see ensure-storyboard-scene-delegate.sh)." >&2
 fi
 
-echo "== 5. Register the mykhaya-prod:// URL scheme (widget deep links only — see native/widgets/Shared/DeepLink.swift) =="
+echo "== 5. Check the widget deep-link URL scheme is per-environment (see native/widgets/Shared/DeepLink.swift) =="
+# The tracked Info.plist registers $(MYKHAYA_URL_SCHEME), which each build
+# configuration sets (DEV mykhaya, PROD mykhaya-prod). Never write a literal
+# scheme here: one literal would register the same scheme in both apps.
 INFO_PLIST="ios/App/App/Info.plist"
-if [ -f "$INFO_PLIST" ] && ! grep -q '<string>mykhaya-prod</string>' "$INFO_PLIST"; then
-  /usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes array" "$INFO_PLIST" 2>/dev/null || true
-  /usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:0 dict" "$INFO_PLIST"
-  /usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:0:CFBundleURLName string app.mykhaya.mobile.prod.widgets" "$INFO_PLIST"
-  /usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:0:CFBundleURLSchemes array" "$INFO_PLIST"
-  /usr/libexec/PlistBuddy -c "Add :CFBundleURLTypes:0:CFBundleURLSchemes:0 string mykhaya-prod" "$INFO_PLIST"
-  echo "Added mykhaya-prod:// URL scheme to $INFO_PLIST"
-else
-  echo "mykhaya-prod:// URL scheme already present or Info.plist missing"
+SCHEME_VALUE=$(/usr/libexec/PlistBuddy -c "Print :CFBundleURLTypes:0:CFBundleURLSchemes:0" "$INFO_PLIST" 2>/dev/null || true)
+if [ "$SCHEME_VALUE" != '$(MYKHAYA_URL_SCHEME)' ]; then
+  echo "ERROR: $INFO_PLIST URL scheme is '$SCHEME_VALUE', expected \$(MYKHAYA_URL_SCHEME). Restore it from git." >&2
+  exit 1
 fi
+echo "URL scheme comes from the build configuration: OK"
 
 echo "== 6. Create/update the MyKhayaWidgets Xcode target, App Group, entitlements, embed phase =="
 ruby scripts/setup-widget-extension.rb
@@ -94,7 +93,7 @@ ruby scripts/setup-widget-extension.rb
 echo "== 6b. Link the MyKhayaWidgetCore local Swift Package into App and MyKhayaWidgets =="
 ruby scripts/link-widget-core-package.rb
 
-echo "== 6c. Ensure committed shared schemes exist for App and MyKhayaWidgets =="
+echo "== 6c. Check the committed DEV/PROD shared schemes =="
 ruby scripts/ensure-widget-schemes.rb
 
 echo "== 7. Post-install entitlement audit (APNs must survive) =="
@@ -111,5 +110,5 @@ for ENTITLEMENTS_FILE in ios/App/App/AppDebug.entitlements ios/App/App/AppReleas
 done
 
 echo ""
-echo "== Done. Widget sources installed. Next: open Xcode, build the App scheme, =="
+echo "== Done. Widget sources installed. Next: open Xcode, build the MyKhaya-Dev or MyKhaya-Prod scheme, =="
 echo "   then work through docs/mobile/ios-widgets.md's manual verification checklist."

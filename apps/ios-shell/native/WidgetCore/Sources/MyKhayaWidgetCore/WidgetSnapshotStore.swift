@@ -26,17 +26,42 @@ import WidgetKit
 /// needs a WidgetKit-linked build (it calls this type to trigger timeline
 /// reloads), so no target gains or loses a framework dependency by this move.
 public enum WidgetSnapshotStore {
-    /// Must match the App Group configured on both the main app target and
-    /// the widget extension target's entitlements (see
-    /// scripts/setup-widget-extension.rb and docs/mobile/ios-widgets.md).
-    /// Reused, not invented fresh: matches the `app.mykhaya.mobile` bundle
-    /// ID convention used throughout apps/ios-shell.
-    public static let appGroupIdentifier = "group.app.mykhaya.mobile.prod"
+    /// The App Group shared by the main app and its widget extension, never
+    /// hardcoded, because DEV and PROD are separate apps built from this same
+    /// source:
+    ///   DEV   app.mykhaya.mobile       (+ .widgets) -> group.app.mykhaya.mobile
+    ///   PROD  app.mykhaya.mobile.prod  (+ .widgets) -> group.app.mykhaya.mobile.prod
+    /// Read from the target's Info.plist (`MyKhayaAppGroup`, set from the
+    /// same build setting as the entitlements, `MYKHAYA_APP_GROUP`); a build
+    /// without that key falls back to `group.` + the app's bundle identifier.
+    /// Both targets therefore always agree. nil when neither is available.
+    public static let appGroupIdentifier: String? =
+        MyKhayaEnvironment.current?.appGroup
+            ?? groupIdentifier(forBundleIdentifier: Bundle.main.bundleIdentifier)
+
+    private static let widgetExtensionSuffix = ".widgets"
+
+    /// Pure mapping from a bundle identifier (the app's, or its widget
+    /// extension's) to the shared App Group. Internal for unit tests.
+    static func groupIdentifier(forBundleIdentifier bundleIdentifier: String?) -> String? {
+        guard var appBundleIdentifier = bundleIdentifier, !appBundleIdentifier.isEmpty else {
+            return nil
+        }
+        if appBundleIdentifier.hasSuffix(widgetExtensionSuffix) {
+            appBundleIdentifier.removeLast(widgetExtensionSuffix.count)
+        }
+        guard !appBundleIdentifier.isEmpty else { return nil }
+        return "group.\(appBundleIdentifier)"
+    }
 
     private static let fileName = "widget-snapshot.json"
 
+    /// nil when the App Group isn't available to this process (iOS logs
+    /// "client is not entitled"). Every caller treats that as "no widget
+    /// storage", never as a crash: widgets are an extra, not app startup.
     private static var containerURL: URL? {
-        FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: appGroupIdentifier)
+        guard let group = appGroupIdentifier else { return nil }
+        return FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: group)
     }
 
     private static var snapshotURL: URL? {
@@ -48,7 +73,13 @@ public enum WidgetSnapshotStore {
     /// target (WidgetBridgePlugin); the widget extension is read-only.
     public static func save(_ snapshot: WidgetSnapshot) {
         guard let url = snapshotURL else {
-            assertionFailure("MyKhaya widget App Group container unavailable — is the '\(appGroupIdentifier)' capability configured on this target?")
+            // Log, never trap: an assertion here crashed Debug builds at
+            // startup (the web app syncs the snapshot right after restoring
+            // a session) whenever the group was missing from the entitlements.
+            NSLog(
+                "[MyKhayaWidgets] App Group container unavailable for '%@' — is that App Group in this target's entitlements? Widget snapshot not saved.",
+                appGroupIdentifier ?? "(no bundle identifier)"
+            )
             return
         }
         do {

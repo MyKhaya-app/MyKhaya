@@ -256,8 +256,10 @@ export type BetaWaitlistResponse = {
 };
 
 export type BetaJoinRequest = {
-  home_name: string;
-  terms_version: string;
+  /** Required for a new Beta Home; ignored when an existing Free Home is enrolled. */
+  home_name?: string;
+  /** Optional: Beta Terms are normally accepted in the continuation's Terms step. */
+  terms_version?: string;
   invitation_token?: string;
 };
 
@@ -277,6 +279,27 @@ export type BetaPendingState = {
   pending: boolean;
   home_name: string | null;
   terms_version: string | null;
+};
+
+export type BetaTermsStatus = {
+  document_key: string;
+  display_name: string;
+  version_id: string;
+  version: string;
+  satisfied: boolean;
+};
+
+/** GET /beta/continuation: the authenticated Founding Beta continuation's state. */
+export type BetaContinuationState = {
+  /** Account created through the Founding Beta and not yet enrolled. */
+  pending: boolean;
+  enrolled: boolean;
+  enrolled_home_id: string | null;
+  terms: BetaTermsStatus | null;
+  eligible: boolean;
+  home_id: string | null;
+  home_name: string | null;
+  reason: string | null;
 };
 
 export type BudgetProfile = {
@@ -495,6 +518,7 @@ export class MyKhayaClient {
     });
   betaEligibility = () => this.request<BetaEligibilityState>("/beta/eligibility");
   betaPending = () => this.request<BetaPendingState>("/beta/pending");
+  betaContinuation = () => this.request<BetaContinuationState>("/beta/continuation");
   createSupportTicket = (body: SupportTicketCreateRequest) =>
     this.request<SupportTicketResponse>("/support/tickets", {
       method: "POST",

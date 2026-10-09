@@ -57,12 +57,22 @@ class RegisterRequest(StrictModel):
     # mykhaya.legal.validate_signup_acceptances.
     legal_acceptances: list[SignupLegalAcceptanceItem] = Field(default_factory=list)
     platform: LegalPlatform = LegalPlatform.web
-    # Beta onboarding is staged on the unverified account and consumed only
-    # after email verification. These fields are additive and ignored for the
-    # normal signup mode.
+    # True when the account is created through the Founding Beta. Only the
+    # intent is recorded here (a BetaPendingRegistration); Beta Terms, Home
+    # name and enrolment happen after email verification, in the
+    # authenticated Beta continuation (GET /beta/continuation, POST /beta/join).
+    beta: bool = False
+    # Accepted for older clients and ignored apart from implying `beta`: the
+    # Home name and Beta Terms are no longer collected at registration.
     beta_home_name: str | None = Field(default=None, min_length=1, max_length=100)
     beta_terms_version: str | None = Field(default=None, min_length=1, max_length=80)
     beta_invitation_token: str | None = Field(default=None, min_length=32, max_length=500)
+
+    @property
+    def beta_requested(self) -> bool:
+        return (
+            self.beta or self.beta_home_name is not None or self.beta_invitation_token is not None
+        )
 
     @field_validator("display_name")
     @classmethod

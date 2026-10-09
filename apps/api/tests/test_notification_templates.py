@@ -149,6 +149,7 @@ def test_registry_matches_migration_version() -> None:
     assert set(TEMPLATES) == {
         "mfa_email_code",
         "email_verification",
+        "founding_beta_welcome",
         "password_reset",
         "household_invitation",
         "calendar_share_invitation",
@@ -219,7 +220,12 @@ def test_mandatory_email_types_are_registered_as_non_disableable() -> None:
     for template_type in MANDATORY_EMAIL_TYPES:
         assert template_type in TEMPLATES
         assert TEMPLATES[template_type].disableable is False
-        if not template_type.startswith("support.ticket."):
+        # Transactional confirmations (support tickets, the Founding Beta
+        # welcome) are always delivered but are not account-security mail.
+        if (
+            not template_type.startswith("support.ticket.")
+            and template_type != "founding_beta_welcome"
+        ):
             assert TEMPLATES[template_type].security_critical is True
 
 

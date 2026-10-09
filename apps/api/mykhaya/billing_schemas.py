@@ -100,6 +100,10 @@ class BillingStatusResponse(BaseModel):
     retention_state: str | None
     retention_deadline: str | None
     complimentary_expires_at: str | None
+    # Where complimentary access comes from when it is a programme benefit
+    # rather than a one-off grant (e.g. "founding_beta_lifetime"); None otherwise.
+    # A stable public code only — never the operator's complimentary_note.
+    complimentary_source: str | None = None
     can_manage_billing: bool
     has_stripe_customer: bool
     stripe_billing_available: bool

@@ -1263,6 +1263,12 @@ async def authenticate_credentials(
     return user
 
 
+# How long a Founding Beta registration intent waits for its owner to verify
+# and enrol. Longer than the 24h verification link on purpose: a user who
+# requests a fresh link later must still land in the Beta continuation.
+BETA_INTENT_TTL_DAYS = 30
+
+
 @router.post("/register", response_model=RegistrationResponse, status_code=status.HTTP_202_ACCEPTED)
 async def register(
     body: RegisterRequest,
@@ -1279,14 +1285,16 @@ async def register(
     policy = await evaluate_signup_policy(db, settings)
     if not policy.open:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Registration is currently closed.")
-    if body.beta_home_name:
+    beta = body.beta_requested
+    if beta:
         if not policy.beta_path:
             raise HTTPException(
                 status.HTTP_403_FORBIDDEN, "Founding Beta joining is not currently open."
             )
     elif not policy.normal_path:
         raise HTTPException(
-            status.HTTP_403_FORBIDDEN, "Use the Founding Beta onboarding flow to register."
+            status.HTTP_403_FORBIDDEN,
+            "New accounts can currently only be created by joining the Founding Beta.",
         )
     if not policy.domain_allowed(email):
         raise HTTPException(
@@ -1296,7 +1304,7 @@ async def register(
     verification_required = await email_verification_required(db, settings)
 
     invitation_row: Invitation | None = None
-    if policy.invitation_required and body.beta_home_name:
+    if policy.invitation_required and beta:
         if not body.beta_invitation_token or not await beta_invitation_valid(
             db, body.beta_invitation_token, email
         ):
@@ -1336,10 +1344,12 @@ async def register(
     # re-used email and a genuinely new one are rejected identically by
     # this check — it must never become a second account-discovery signal
     # alongside the dummy-hash password-timing equalisation below.
+    # Account creation requires the global documents only. The Founding Beta
+    # Terms are a separate legal stage, accepted after verification in the
+    # authenticated Beta continuation — never at registration.
     resolved_legal_acceptances = await validate_signup_acceptances(
         db,
         [(item.document_key, item.document_version_id) for item in body.legal_acceptances],
-        beta=bool(body.beta_home_name),
     )
 
     existing = await db.scalar(select(User).where(User.email == email))
@@ -1352,42 +1362,25 @@ async def register(
         db.add(user)
         await db.flush()
         db.add(AuthIdentity(user_id=user.id, password_hash=password_hash.hash(body.password)))
-        if body.beta_home_name:
+        if beta:
+            # The durable Beta intent: survives verification and first sign-in
+            # without relying on any query string, and is consumed when the
+            # verified user enrols (POST /beta/join).
             programme = await current_programme(db)
-            beta_resolved = [
-                item
-                for item in resolved_legal_acceptances
-                if item.document.scope.value == "founding_beta"
-            ]
-            if body.beta_terms_version is None and not beta_resolved:
-                raise HTTPException(
-                    status.HTTP_422_UNPROCESSABLE_ENTITY, "Founding Beta terms are required."
-                )
-            if beta_resolved and body.beta_terms_version != beta_resolved[0].version.version:
-                raise HTTPException(
-                    status.HTTP_409_CONFLICT,
-                    "The Founding Beta terms have changed. Please review them again.",
-                )
             db.add(
                 BetaPendingRegistration(
                     user_id=user.id,
                     programme_id=programme.id,
-                    home_name=body.beta_home_name,
-                    terms_version=body.beta_terms_version,
                     token_hash=hash_secret(
                         secrets.token_urlsafe(32), settings.secret_key.get_secret_value()
                     ),
                     invitation_token_hash=invitation_token_hash(body.beta_invitation_token)
                     if body.beta_invitation_token
                     else None,
-                    expires_at=datetime.now(UTC) + timedelta(hours=24),
+                    expires_at=datetime.now(UTC) + timedelta(days=BETA_INTENT_TTL_DAYS),
                 )
             )
         for resolved in resolved_legal_acceptances:
-            # The Beta Terms are presented before verification, but their
-            # authoritative acceptance belongs to the verified final join.
-            if resolved.document.scope.value == "founding_beta":
-                continue
             record_type = (
                 LegalRecordType.user_acceptance
                 if resolved.document.action_verb == LegalActionVerb.accept
@@ -1400,7 +1393,7 @@ async def register(
                     user_id=user.id,
                     context=(
                         LegalAcceptanceContext.beta_registration
-                        if body.beta_home_name
+                        if beta
                         else LegalAcceptanceContext.signup
                     ),
                     platform=body.platform,
@@ -1456,9 +1449,9 @@ async def verify_email(
     if user is None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "This link is invalid or has expired.")
     user.email_verified_at = user.email_verified_at or datetime.now(UTC)
-    # Beta registration remains staged here. Home creation, capacity allocation
-    # and the entitlement grant happen only through the authenticated
-    # /beta/join contract after the user signs in.
+    # Beta registration remains staged here (BetaPendingRegistration). Beta
+    # Terms, Home creation, capacity allocation and the entitlement grant
+    # happen only in the authenticated Beta continuation after sign-in.
     audit(db, request, "user.email_verified", user.id, target_type="user", target_id=user.id)
     await db.commit()
     return MessageResponse(message="Your email is verified. You can sign in now.")

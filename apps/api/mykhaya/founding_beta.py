@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import inspect
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
@@ -13,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.calendar_provisioning import ensure_personal_calendar
 from mykhaya.colour_palette import PALETTE_HEX, ColourToken
+from mykhaya.config import Settings, get_settings
 from mykhaya.entitlements import ensure_home_subscription, record_subscription_event
 from mykhaya.member_colours import assign_member_colour
 from mykhaya.models import (
@@ -36,8 +38,9 @@ from mykhaya.models import (
     SubscriptionStatus,
 )
 from mykhaya.platform_runtime import (
-    invite_only_enabled,
+    SignupPolicy,
     registration_enabled,
+    registration_invitation_required,
     require_home_capacity_for_user,
 )
 from mykhaya.security import generate_home_code, normalise_email
@@ -156,6 +159,45 @@ async def capacity(db: AsyncSession, programme: BetaProgramme) -> dict[str, int]
     }
 
 
+@dataclass(frozen=True)
+class BetaAvailability:
+    """Who can get into the Founding Beta right now, decided in one place so
+    the public signup state and the waitlist endpoint can never disagree."""
+
+    # Beta places are open to join: the Beta path is open, places are free and
+    # nobody is waiting. Published as `beta_joining_available`; an invitation
+    # may still be required (see `public_joining`).
+    places_open: bool
+    # Anyone may join without an invitation (places open, no invitation rule).
+    public_joining: bool
+    # The waitlist accepts new entries.
+    waitlist_open: bool
+
+
+async def beta_availability(
+    db: AsyncSession,
+    settings: Settings,
+    programme: BetaProgramme,
+    policy: SignupPolicy,
+    state: dict[str, int],
+) -> BetaAvailability:
+    places_open = policy.beta_path and state["joinable"] > 0 and state["waiting"] == 0
+    public_joining = places_open and not policy.invitation_required
+    waitlist_open = (
+        programme.waitlist_enabled
+        and (policy.beta_path or (policy.mode == SignupMode.closed and not policy.open))
+        and settings.registration_mode != "closed"
+        and await registration_enabled(db)
+        # The waitlist is for when places can't simply be taken: they are
+        # full, others are already waiting, an invitation is required, or
+        # registration is closed.
+        and not public_joining
+    )
+    return BetaAvailability(
+        places_open=places_open, public_joining=public_joining, waitlist_open=waitlist_open
+    )
+
+
 async def expire_invitations(db: AsyncSession, programme: BetaProgramme | None = None) -> int:
     """Materialise elapsed reservations without ever counting them as active."""
     now = datetime.now(UTC)
@@ -230,12 +272,13 @@ async def join_beta(
     db: AsyncSession,
     *,
     user: Any,
-    home_name: str,
+    home_name: str | None,
     terms_version: str,
     invitation_token: str | None = None,
     invitation_token_hash_value: str | None = None,
     programme: BetaProgramme | None = None,
     failure_injector: Any | None = None,
+    settings: Settings | None = None,
 ) -> Group:
     if user.email_verified_at is None:
         raise HTTPException(
@@ -284,7 +327,9 @@ async def join_beta(
                 status.HTTP_400_BAD_REQUEST, "This Beta invitation is invalid or expired."
             )
 
-    if invitation is None and await invite_only_enabled(db):
+    if invitation is None and await registration_invitation_required(
+        db, settings or get_settings()
+    ):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Founding Beta joining is invitation-only.")
 
     owned = list(
@@ -327,9 +372,16 @@ async def join_beta(
     if invitation is None and state["joinable"] <= 0:
         raise HTTPException(status.HTTP_409_CONFLICT, "The Founding Beta is currently full.")
 
-    if not owned:
+    if owned:
+        home = owned[0]
+    else:
+        new_home_name = (home_name or "").strip()
+        if not new_home_name:
+            raise HTTPException(
+                status.HTTP_422_UNPROCESSABLE_ENTITY, "Please give your Home a name."
+            )
         await require_home_capacity_for_user(db, user.id)
-    home = owned[0] if owned else await create_beta_home(db, user.id, home_name)
+        home = await create_beta_home(db, user.id, new_home_name)
     if failure_injector:
         result = failure_injector("home_creation")
         if inspect.isawaitable(result):

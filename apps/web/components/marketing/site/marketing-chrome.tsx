@@ -1,5 +1,6 @@
 "use client";
 
+import "@/app/brand-fonts.css";
 import "@/app/marketing-site.css";
 import type { SignupStateValue } from "@/components/public-signup";
 import { SiteFooter } from "./site-footer";

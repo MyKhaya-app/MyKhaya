@@ -26,9 +26,18 @@ require 'fileutils'
 PROJECT_PATH = 'ios/App/App.xcodeproj'
 APP_TARGET_NAME = 'App'
 WIDGET_TARGET_NAME = 'MyKhayaWidgets'
-APP_BUNDLE_ID = 'app.mykhaya.mobile.prod'
-WIDGET_BUNDLE_ID = "#{APP_BUNDLE_ID}.widgets"
-APP_GROUP_ID = 'group.app.mykhaya.mobile.prod'
+# Environment values are NOT set here. DEV and PROD are separate apps built
+# from this one project: their bundle IDs, App Groups, URL schemes and hosts
+# live only in ios/App/Config/Environment-{Dev,Prod}.xcconfig, which the
+# Debug-/Release-{Dev,Prod} build configurations include. This script only
+# ever writes references to those settings, so re-running it (mac-bootstrap.sh
+# does, after every pull) can never turn one environment into the other.
+WIDGET_BUNDLE_ID_SETTING = '$(MYKHAYA_APP_BUNDLE_ID).widgets'
+APP_GROUP_SETTING = '$(MYKHAYA_APP_GROUP)'
+# Literal App Groups an older version of this script (or Xcode's
+# Capabilities UI) may have written; replaced by APP_GROUP_SETTING.
+LITERAL_APP_GROUP = /\Agroup\.app\.mykhaya\.mobile(\.prod)?\z/
+
 # Conservative floor — see native/widgets/Timeline/NextEventProvider.swift's
 # deployment-target comment. Raise this only after confirming the actual
 # generated project's own main-target minimum on the Mac (Step 0 below).
@@ -42,6 +51,13 @@ project = Xcodeproj::Project.open(PROJECT_PATH)
 
 app_target = project.targets.find { |t| t.name == APP_TARGET_NAME }
 abort "ERROR: main app target '#{APP_TARGET_NAME}' not found in #{PROJECT_PATH}" unless app_target
+
+app_configuration_names = app_target.build_configurations.map(&:name).sort
+expected_configuration_names = %w[Debug-Dev Debug-Prod Release-Dev Release-Prod]
+unless app_configuration_names == expected_configuration_names
+  abort "ERROR: the '#{APP_TARGET_NAME}' target has build configurations #{app_configuration_names.inspect}; " \
+        "expected #{expected_configuration_names.inspect} (see docs/mobile/ios-environments.md)."
+end
 
 main_deployment_target = app_target.build_configurations.first&.build_settings&.dig('IPHONEOS_DEPLOYMENT_TARGET')
 puts "== Main app target IPHONEOS_DEPLOYMENT_TARGET: #{main_deployment_target.inspect} =="
@@ -109,73 +125,26 @@ add_swift_files(project, widgets_group, widget_target, source_root, seen)
 prune_missing_swift_files(widgets_group, widget_target)
 puts "== Widget source files in target: #{seen.size} =="
 
-# --- Info.plist for the extension ----------------------------------------
+# --- Info.plist and entitlements for the extension -----------------------
+# Both are tracked in native/widgets/ (version-controlled, environment-
+# neutral: every environment value is a $(MYKHAYA_*) build setting) and are
+# copied here by install-widget-sources.sh's rsync. Verify, never generate.
 
 widget_info_plist_path = File.join(source_root, 'Info.plist')
-unless File.exist?(widget_info_plist_path)
-  File.write(widget_info_plist_path, <<~PLIST)
-    <?xml version="1.0" encoding="UTF-8"?>
-    <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-    <plist version="1.0">
-    <dict>
-    	<key>CFBundleDisplayName</key>
-    	<string>MyKhaya Widgets</string>
-    	<key>CFBundleExecutable</key>
-    	<string>$(EXECUTABLE_NAME)</string>
-    	<key>CFBundleIdentifier</key>
-    	<string>$(PRODUCT_BUNDLE_IDENTIFIER)</string>
-    	<key>CFBundleName</key>
-    	<string>$(PRODUCT_NAME)</string>
-    	<key>CFBundleShortVersionString</key>
-    	<string>$(MARKETING_VERSION)</string>
-    	<key>CFBundleVersion</key>
-    	<string>$(CURRENT_PROJECT_VERSION)</string>
-    	<key>NSExtension</key>
-    	<dict>
-    		<key>NSExtensionPointIdentifier</key>
-    		<string>com.apple.widgetkit-extension</string>
-    	</dict>
-    </dict>
-    </plist>
-  PLIST
-  puts "== Wrote #{widget_info_plist_path} =="
-end
-
-# Self-heal a widget Info.plist written by an older version of this script
-# that omitted CFBundleExecutable/CFBundleName — `xcodebuild build` succeeds
-# either way (nothing about compiling/linking needs them), but a real
-# install (simctl, and presumably App Store) rejects the resulting .appex:
-# "missing or invalid CFBundleExecutable" / "does not have a CFBundleName
-# key with a non-zero length string value". Verified by actually attempting
-# `simctl install`, not assumed from a successful build.
-info_plist = Xcodeproj::Plist.read_from_path(widget_info_plist_path)
-changed = false
-{ 'CFBundleExecutable' => '$(EXECUTABLE_NAME)', 'CFBundleName' => '$(PRODUCT_NAME)' }.each do |key, value|
-  next if info_plist[key]
-
-  info_plist[key] = value
-  changed = true
-  puts "== Added missing #{key} to #{widget_info_plist_path} =="
-end
-Xcodeproj::Plist.write_to_path(info_plist, widget_info_plist_path) if changed
-
-# --- Entitlements for the extension (App Group only — no APNs here) ------
-
 widget_entitlements_path = File.join(source_root, 'MyKhayaWidgets.entitlements')
-unless File.exist?(widget_entitlements_path)
-  File.write(widget_entitlements_path, <<~PLIST)
-    <?xml version="1.0" encoding="UTF-8"?>
-    <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-    <plist version="1.0">
-    <dict>
-    	<key>com.apple.security.application-groups</key>
-    	<array>
-    		<string>#{APP_GROUP_ID}</string>
-    	</array>
-    </dict>
-    </plist>
-  PLIST
-  puts "== Wrote #{widget_entitlements_path} =="
+[widget_info_plist_path, widget_entitlements_path].each do |required|
+  abort "ERROR: #{required} missing. It is tracked in native/widgets/; run scripts/install-widget-sources.sh." unless File.exist?(required)
+end
+widget_info = Xcodeproj::Plist.read_from_path(widget_info_plist_path)
+{ 'MyKhayaURLScheme' => '$(MYKHAYA_URL_SCHEME)', 'MyKhayaAppGroup' => APP_GROUP_SETTING,
+  'MyKhayaEnvironment' => '$(MYKHAYA_ENVIRONMENT)' }.each do |key, value|
+  next if widget_info[key] == value
+
+  abort "ERROR: #{widget_info_plist_path} #{key} is #{widget_info[key].inspect}, expected #{value}."
+end
+widget_groups = Xcodeproj::Plist.read_from_path(widget_entitlements_path)['com.apple.security.application-groups']
+unless widget_groups == [APP_GROUP_SETTING]
+  abort "ERROR: #{widget_entitlements_path} App Groups are #{widget_groups.inspect}, expected [#{APP_GROUP_SETTING}]."
 end
 
 # --- Build settings --------------------------------------------------------
@@ -192,6 +161,14 @@ srcroot = File.dirname(File.expand_path(PROJECT_PATH))
 entitlements_relative = Pathname.new(widget_entitlements_path).relative_path_from(Pathname.new(srcroot)).to_s
 info_plist_relative = Pathname.new(widget_info_plist_path).relative_path_from(Pathname.new(srcroot)).to_s
 
+# The extension must have exactly the app's build configurations, so
+# Debug-Dev builds a DEV widget, Release-Prod a PROD one, and so on.
+expected_configuration_names.each do |name|
+  next if widget_target.build_configurations.any? { |config| config.name == name }
+
+  widget_target.add_build_configuration(name, name.start_with?('Debug') ? :debug : :release)
+  puts "== Added #{name} build configuration to #{WIDGET_TARGET_NAME} =="
+end
 widget_target.build_configurations.each do |config|
   # Without this, PRODUCT_NAME is unset and the built extension's filename
   # collapses to a bare ".appex" — indistinguishable from the main app
@@ -199,16 +176,17 @@ widget_target.build_configurations.each do |config|
   # produce '.../.appex'". $(TARGET_NAME) matches every other target's
   # convention in this project (see the App target's own PRODUCT_NAME).
   config.build_settings['PRODUCT_NAME'] = '$(TARGET_NAME)'
-  config.build_settings['PRODUCT_BUNDLE_IDENTIFIER'] = WIDGET_BUNDLE_ID
+  config.build_settings['PRODUCT_BUNDLE_IDENTIFIER'] = WIDGET_BUNDLE_ID_SETTING
   config.build_settings['IPHONEOS_DEPLOYMENT_TARGET'] = WIDGET_DEPLOYMENT_TARGET
   config.build_settings['CODE_SIGN_ENTITLEMENTS'] = entitlements_relative
   config.build_settings['INFOPLIST_FILE'] = info_plist_relative
   config.build_settings['SWIFT_VERSION'] = '5.0'
   config.build_settings['TARGETED_DEVICE_FAMILY'] = '1'
   config.build_settings['SKIP_INSTALL'] = 'YES'
-  # Matches the main app target's own automatic-signing convention (see
-  # docs/mobile/ios-shell-mac-checklist.md Step 4) — do not hardcode a Team.
-  config.build_settings['CODE_SIGN_STYLE'] = 'Automatic'
+  # Signing (team, automatic style) comes from the environment xcconfig, the
+  # same as the App target; never set it here.
+  config.build_settings.delete('CODE_SIGN_STYLE')
+  config.build_settings.delete('DEVELOPMENT_TEAM')
 end
 
 # --- App Group entitlement on the MAIN app target too ---------------------
@@ -225,11 +203,12 @@ end
   if File.exist?(app_entitlements_path)
     plist = Xcodeproj::Plist.read_from_path(app_entitlements_path)
     groups = plist['com.apple.security.application-groups'] || []
-    unless groups.include?(APP_GROUP_ID)
-      groups << APP_GROUP_ID
-      plist['com.apple.security.application-groups'] = groups
+    healed = groups.reject { |group| group.match?(LITERAL_APP_GROUP) }
+    healed << APP_GROUP_SETTING unless healed.include?(APP_GROUP_SETTING)
+    if healed != groups
+      plist['com.apple.security.application-groups'] = healed
       Xcodeproj::Plist.write_to_path(plist, app_entitlements_path)
-      puts "== Added App Group entitlement to #{app_entitlements_path} =="
+      puts "== App Group entitlement in #{app_entitlements_path} set to #{APP_GROUP_SETTING} (was #{groups.inspect}) =="
     end
     aps_present = plist.key?('aps-environment')
     puts "== aps-environment present in #{app_entitlements_path} after edit: #{aps_present} =="
@@ -237,7 +216,7 @@ end
       puts "WARNING: aps-environment missing from #{app_entitlements_path} — APNs entitlement may have been lost or was never present. Investigate before archiving."
     end
   else
-    puts "WARNING: #{app_entitlements_path} not found — cannot add the App Group entitlement to the main app target. Add it manually in Xcode: App target -> Signing & Capabilities -> + Capability -> App Groups -> #{APP_GROUP_ID}."
+    puts "WARNING: #{app_entitlements_path} not found — the main app target needs the #{APP_GROUP_SETTING} App Group entitlement (see docs/mobile/ios-environments.md)."
   end
 end
 

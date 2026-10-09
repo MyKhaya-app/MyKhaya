@@ -21,18 +21,11 @@ function NativeRootGate({ fallback }: { fallback: React.ReactNode }) {
     if (status === "ready") router.replace("/home");
   }, [router, status]);
 
+  // Signed out, the native app always opens on sign-in. Its Founding Beta
+  // card (shown when the live flag is on) is the way into /founding-beta;
+  // the signup mode deliberately does not pick a different start screen.
   useEffect(() => {
-    if (status !== "signed_out") return;
-    if (process.env.NODE_ENV !== "production") {
-      console.info("[AUTH_NAV]", {
-        event: "auth_redirect_to_login",
-        reason: "no_session_after_restore",
-        pathname: "/",
-        native: true,
-        userPresent: false,
-      });
-    }
-    router.replace("/login");
+    if (status === "signed_out") router.replace("/login");
   }, [router, status]);
 
   if (status === "maintenance") return <MaintenanceScreen onRecovered={retryInitialSession} />;
@@ -76,7 +69,7 @@ function NativeRootGate({ fallback }: { fallback: React.ReactNode }) {
 
 /** The root route. In a browser it is the marketing homepage (`children`,
  *  server-rendered by app/page.tsx); inside the native shell it is an auth
- *  gate that forwards to /home or /login. */
+ *  gate that forwards to /home when signed in, or to sign-in when not. */
 export default function Welcome({ children }: { children: React.ReactNode }) {
   // isNativeShell() always reads false during SSR (no window/Capacitor
   // there) but can read true on the very first client render inside the

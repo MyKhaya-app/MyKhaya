@@ -150,6 +150,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       console.info("[AUTH_NAV]", {
         event: "auth_redirect_to_login",
         reason,
+        source: "auth_provider",
+        destination: "/login",
         pathname: typeof window === "undefined" ? path : window.location.pathname,
         native: isNativeShell(),
         userPresent: Boolean(user),
@@ -170,7 +172,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           setUser(null);
           setStatus("signed_out");
           recordAuthDiagnostic("NATIVE_BOOTSTRAP_RESULT_SIGNED_OUT");
-          redirectToLogin("no_session_after_restore");
+          if (path !== "/") redirectToLogin("no_session_after_restore");
           return false;
         }
         setUser(restored);

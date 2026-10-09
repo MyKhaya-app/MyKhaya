@@ -85,6 +85,22 @@ describe("Founding Beta PCC", () => {
     expect(screen.getByRole("button", { name: "Invite" })).toBeDisabled();
   });
 
+  it("in invitation-only mode, does not call public joining paused", async () => {
+    window.history.replaceState({}, "", "/control-centre/founding-beta?view=waitlist");
+    get.mockImplementation((path: string) => {
+      if (path === "/beta/overview") return Promise.resolve({ ...overview, invitation_required: true, waiting: 3 });
+      if (path === "/beta/programme") return Promise.resolve(programme);
+      if (path.startsWith("/beta/waitlist")) return Promise.resolve({ items: [], total: 0 });
+      if (path === "/beta/invitations") return Promise.resolve({ items: [], total: 0 });
+      throw new Error(`Unexpected GET ${path}`);
+    });
+    render(<FoundingBetaPcc />);
+    expect(
+      await screen.findByText("Founding Beta joining is invitation-only. People on the waitlist can join once you invite them."),
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/paused/i)).not.toBeInTheDocument();
+  });
+
   it("offers site-wide iPhone and Android app link fields with their hints", async () => {
     render(<FoundingBetaPcc />);
     const ios = await screen.findByLabelText("iPhone app link");

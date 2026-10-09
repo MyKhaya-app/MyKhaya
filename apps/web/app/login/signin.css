@@ -1,0 +1,331 @@
+/* ===========================================================================
+   Sign-in screen (/login, password form state).
+
+   Matches design references signin-founding-beta-{on,off}.html at 390px.
+   Every rule is scoped under .signin-page so nothing reaches the other auth
+   screens (they still use AuthCard / .auth-card) or the signed-in app.
+   Selectors that compete with the global button/input/label/form rules in
+   app/styles.css win on specificity, not order.
+
+   Mobile/native (base): full-bleed paper page, safe-area aware, the child
+   sign-in line pinned to the bottom. Wide screens (min-width: 801px) add the
+   shared .auth-brand panel beside the same column. Light only: the screen
+   has no dark mode yet.
+   =========================================================================== */
+
+.signin-page {
+  --si-paper: #f6f4ee;
+  --si-surface: #fffefb;
+  --si-line: #e3e0d6;
+  --si-ink: #1e2a23;
+  --si-muted: #5d6960;
+  --si-placeholder: #8a948c;
+  --si-forest: #3e5343;
+  --si-forest-deep: #2e3f33;
+  --si-on-forest: #f3f1ea;
+  --si-display: "Bricolage Grotesque", "Avenir Next", system-ui, sans-serif;
+  --si-body: Figtree, "Helvetica Neue", system-ui, sans-serif;
+
+  background: var(--si-paper);
+  color: var(--si-ink);
+  font-family: var(--si-body);
+  line-height: normal;
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+.signin {
+  box-sizing: border-box;
+  display: flex;
+  min-height: 100vh;
+  min-height: 100dvh;
+  padding: max(48px, calc(var(--safe-top) + 24px)) max(24px, var(--safe-right))
+    max(28px, calc(var(--safe-bottom) + 12px)) max(24px, var(--safe-left));
+}
+
+/* At 390px the column is the full 342px content width; max-width only binds
+   on wider phones in landscape and tablets. */
+.signin-column {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  margin-inline: auto;
+  max-width: 440px;
+  min-width: 0;
+}
+
+/* Brand row: visually 40px tall; the link itself keeps a 44px target. */
+.signin-page .signin-brand {
+  align-items: center;
+  align-self: flex-start;
+  color: var(--si-ink);
+  display: inline-flex;
+  font-family: var(--si-display);
+  font-size: 22px;
+  font-weight: 800;
+  gap: 10px;
+  letter-spacing: -0.02em;
+  margin: -2px 0;
+  min-height: 44px;
+}
+.signin-brand img {
+  border-radius: 11px;
+  box-shadow: 0 2px 8px -3px rgba(0, 0, 0, 0.25);
+  display: block;
+  height: 40px;
+  width: 40px;
+}
+
+.signin-page h1 {
+  color: var(--si-ink);
+  font-family: var(--si-display);
+  font-size: 36px;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  line-height: 1.05;
+  margin: 28px 0 6px;
+}
+.signin-intro {
+  color: var(--si-muted);
+  font-size: 16px;
+  line-height: 1.45;
+  margin: 0;
+}
+.signin-column > .notice {
+  margin: 16px 0 0;
+}
+
+/* --- Form --------------------------------------------------------------- */
+.signin-page .signin-form {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-top: 24px;
+  position: relative;
+}
+/* FormStatus always renders its live region; while empty it is taken out of
+   the flex flow (so it adds no gap) but stays in the accessibility tree. */
+.signin-form > [aria-live]:empty {
+  position: absolute;
+}
+.signin-form .notice {
+  margin: 0;
+}
+.signin-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.signin-page .signin-field label {
+  color: var(--si-ink);
+  display: block;
+  font-size: 14px;
+  font-weight: 600;
+  line-height: normal;
+}
+.signin-page .signin-field input {
+  background: var(--si-surface);
+  border: 1px solid var(--si-line);
+  border-radius: 14px;
+  box-sizing: border-box;
+  color: var(--si-ink);
+  font-family: inherit;
+  font-size: 16px;
+  height: 50px;
+  min-height: 50px;
+  padding: 0 16px;
+  width: 100%;
+}
+.signin-field input::placeholder {
+  color: var(--si-placeholder);
+  opacity: 1;
+}
+.signin-password {
+  position: relative;
+}
+.signin-page .signin-password input {
+  padding-right: 52px;
+}
+.signin-page .signin-password-toggle {
+  background: transparent;
+  border-radius: 12px;
+  box-shadow: none;
+  color: var(--si-muted);
+  height: 44px;
+  min-height: 44px;
+  padding: 0;
+  position: absolute;
+  right: 3px;
+  top: 3px;
+  transform: none;
+  width: 44px;
+}
+.signin-page .signin-password-toggle:hover {
+  box-shadow: none;
+  transform: none;
+}
+
+.signin-page .signin-submit {
+  background: var(--si-forest);
+  border-radius: 999px;
+  box-shadow: 0 12px 26px -16px var(--si-forest-deep);
+  color: var(--si-on-forest);
+  font-family: inherit;
+  font-size: 17px;
+  font-weight: 700;
+  height: 52px;
+  margin-top: 6px;
+  width: 100%;
+}
+.signin-page .signin-submit:hover {
+  box-shadow: 0 12px 26px -16px var(--si-forest-deep);
+  transform: none;
+}
+.signin-page .apple-sign-in {
+  border-radius: 999px;
+  font-family: inherit;
+  font-weight: 700;
+  height: 52px;
+  margin-top: 14px;
+}
+
+/* --- Text links --------------------------------------------------------- */
+.signin-page .signin-link {
+  color: var(--si-forest);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.signin-page .signin-link:hover {
+  color: var(--si-forest-deep);
+}
+/* Text links keep a 44px touch target: 14px of padding above and below,
+   cancelled by negative margins so the visual spacing matches the design. */
+.signin-page .signin-forgot {
+  align-self: flex-start;
+  font-size: 14.5px;
+  font-weight: 600;
+  margin: 2px 0 -14px;
+  padding: 14px 0;
+}
+
+/* --- Bottom card -------------------------------------------------------- */
+.signin-card--new {
+  --card-bg: #eceee6;
+  --card-line: #dce0d3;
+  --card-tile: var(--si-forest);
+  --card-tile-ink: var(--si-on-forest);
+  --card-eyebrow: #536855;
+  --card-body: #4a5650;
+  --card-action: var(--si-forest);
+}
+.signin-card--beta {
+  --card-bg: #f8e2d8;
+  --card-line: #efcdbd;
+  --card-tile: #c9603d;
+  --card-tile-ink: #ffffff;
+  --card-eyebrow: #9e4426;
+  --card-body: #4f4038;
+  --card-action: #9e4426;
+}
+.signin-card {
+  background: var(--card-bg);
+  border: 1px solid var(--card-line);
+  border-radius: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  margin-top: 22px;
+  padding: 18px;
+}
+.signin-card-row {
+  align-items: flex-start;
+  display: flex;
+  gap: 14px;
+}
+.signin-card-tile {
+  align-items: center;
+  background: var(--card-tile);
+  border-radius: 13px;
+  color: var(--card-tile-ink);
+  display: flex;
+  flex: none;
+  height: 44px;
+  justify-content: center;
+  width: 44px;
+}
+.signin-card-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+.signin-card-eyebrow {
+  color: var(--card-eyebrow);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+.signin-page .signin-card h2 {
+  color: var(--si-ink);
+  font-family: var(--si-display);
+  font-size: 20px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  line-height: 1.15;
+  margin: 0;
+}
+.signin-card-text p {
+  color: var(--card-body);
+  font-size: 14.5px;
+  line-height: 1.45;
+  margin: 2px 0 0;
+}
+.signin-page .signin-card-action {
+  align-items: center;
+  background: var(--si-surface);
+  border: 1.5px solid var(--card-action);
+  border-radius: 999px;
+  /* 48px plus the border, as in the design reference. */
+  box-sizing: content-box;
+  color: var(--card-action);
+  display: flex;
+  font-size: 16px;
+  font-weight: 700;
+  gap: 8px;
+  height: 48px;
+  justify-content: center;
+  text-decoration: none;
+}
+
+.signin-child {
+  color: var(--si-muted);
+  font-size: 14.5px;
+  margin: auto 0 0;
+  padding-top: 28px;
+  text-align: center;
+}
+.signin-page .signin-child .signin-link {
+  display: inline-block;
+  font-weight: 700;
+  margin: -14px 0;
+  padding: 14px 0;
+}
+
+/* --- Wide screens ------------------------------------------------------- */
+@media (min-width: 801px) {
+  .signin-page {
+    display: grid;
+    grid-template-columns: minmax(300px, 1fr) minmax(420px, 1fr);
+  }
+  .signin {
+    padding: 48px;
+  }
+  .signin-column {
+    justify-content: center;
+    max-width: 400px;
+  }
+  .signin-child {
+    margin-top: 0;
+  }
+}

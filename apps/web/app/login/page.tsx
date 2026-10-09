@@ -3,10 +3,11 @@ export const dynamic = "force-dynamic";
 import { FormEvent, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
+import { Eye, EyeOff } from "lucide-react";
 import { api, ApiError } from "@mykhaya/api-client";
 import type { User } from "@mykhaya/shared-types";
 import { Avatar } from "@/components/avatar";
-import { AuthCard } from "@/components/auth-card";
+import { AuthBrandPanel, AuthCard } from "@/components/auth-card";
 import { FormStatus } from "@/components/form-status";
 import {
   authenticateWithPasskey,
@@ -22,6 +23,10 @@ import { isNativeShell } from "@/components/native-runtime";
 import { getLastNativeLoginDiagnostic, nativeLogin, runNativeNetworkDiagnostics } from "@/components/native-auth";
 import { recordLoginFailureDiagnostic } from "@/components/auth-diagnostics";
 import { useAuth } from "@/components/auth-provider";
+import type { SignupStateValue } from "@/components/public-signup";
+import { SignInCard, signInCard } from "./signin-card";
+import "@/app/brand-fonts.css";
+import "./signin.css";
 
 type BrowserAuthResult =
   | User
@@ -75,7 +80,10 @@ export default function Login() {
       calendar_name: string;
       source_group_name: string;
     } | null>(null),
-    [appleEnabled, setAppleEnabled] = useState(false);
+    [appleEnabled, setAppleEnabled] = useState(false),
+    [passwordVisible, setPasswordVisible] = useState(false),
+    // undefined while loading, null if it failed: both show the normal card.
+    [signupState, setSignupState] = useState<SignupStateValue>(undefined);
 
   const hint = getBiometricHint();
 
@@ -134,6 +142,32 @@ export default function Login() {
       .catch(() => setAppleEnabled(false));
   }, []);
 
+  useEffect(() => {
+    const context = {
+      transport: isNativeShell() ? "native" : "browser",
+      path: "/public/signup-state",
+      invitationOverride: Boolean(invitation || calendarShare),
+    };
+    api
+      .publicSignupState()
+      .then((state) => {
+        console.info("[signin] signup state loaded", {
+          ...context,
+          beta_joining_available: state.beta_joining_available,
+        });
+        setSignupState(state);
+      })
+      .catch((reason: unknown) => {
+        // The normal card is the safe fallback, but never a silent one.
+        console.warn("[signin] signup state request failed; showing the normal card", {
+          ...context,
+          status: reason instanceof ApiError ? reason.status : null,
+          message: reason instanceof Error ? reason.message : String(reason),
+        });
+        setSignupState(null);
+      });
+  }, [invitation, calendarShare]);
+
   function startAppleSignIn() {
     const query = next ? `?next_path=${encodeURIComponent(next)}` : "";
     window.location.assign(`/api/v1/auth/apple/start${query}`);
@@ -155,17 +189,25 @@ export default function Login() {
     // wiring invitations/calendar-shares/onboarding into the native
     // transport is out of scope for this task.
     if (isNativeShell()) {
+      const continuation = await api.betaContinuation().catch(() => null);
+      if (continuation?.pending && !continuation.enrolled) {
+        router.push("/onboarding?beta=1");
+        return;
+      }
       router.push("/home");
       return;
     }
-    if (beta) {
-      const pending = await api.betaPending();
-      if (pending.pending && pending.home_name && pending.terms_version) {
-        await api.joinBeta({
-          home_name: pending.home_name,
-          terms_version: pending.terms_version,
-          invitation_token: betaInvitation ?? undefined,
-        });
+    // An account created through the Founding Beta resumes the Beta
+    // continuation on its first sign-in — decided by the server-side Beta
+    // intent, not by this page's URL (the emailed verification link carries
+    // no Beta marker). Never the commercial plan/payment onboarding.
+    const continuation = await api.betaContinuation().catch(() => null);
+    if (beta || (continuation?.pending && !continuation.enrolled)) {
+      if (continuation && !continuation.enrolled) {
+        router.push(
+          `/onboarding?beta=1${betaInvitation ? `&invitation=${encodeURIComponent(betaInvitation)}` : ""}`,
+        );
+        return;
       }
     }
     if (invitation) await api.post("/invitations/accept", { token: invitation });
@@ -300,89 +342,113 @@ export default function Login() {
     );
   }
 
+  const registerHref = invitation
+    ? `/register?invitation=${encodeURIComponent(invitation)}`
+    : calendarShare
+      ? `/register?calendar_share=${encodeURIComponent(calendarShare)}`
+      : "/register";
+  const card = signInCard(signupState, {
+    invitation,
+    calendarShare,
+    invitationValid: inviteContext !== null,
+  });
+
   return (
-    <AuthCard
-      title="Welcome back"
-      intro="Sign in to see what’s happening at Home."
-      footer={
-        <>
-          <Link href="/forgot-password">Forgot password?</Link>
-          <span>
-            New here?{" "}
-            <Link
-              href={
-                invitation
-                  ? `/register?invitation=${encodeURIComponent(invitation)}`
-                  : calendarShare
-                    ? `/register?calendar_share=${encodeURIComponent(calendarShare)}`
-                    : "/register"
-              }
-            >
-              Create an account
-            </Link>
-          </span>
-          <span>
-            Signing in as a child? <Link href="/login/child">Child sign in</Link>
-          </span>
-        </>
-      }
-    >
-      {inviteContext && (
-        <p className="notice success">
-          Continue signing in to join {inviteContext.group_name}.
-        </p>
-      )}
-      {shareContext && (
-        <p className="notice success">
-          Continue signing in to view &ldquo;{shareContext.calendar_name}&rdquo;, shared by{" "}
-          {shareContext.source_group_name}.
-        </p>
-      )}
-      {appleResult === "link_required" && (
-        <p className="notice">
-          Sign in with your existing account first. Apple can then be linked from your security settings.
-        </p>
-      )}
-      {appleResult === "registration_unavailable" && (
-        <p className="notice">
-          New accounts can’t be created with Apple right now. If you already have a MyKhaya account, sign in with your password.
-        </p>
-      )}
-      {appleResult === "error" && (
-        <p className="notice">Apple sign-in could not be completed. Please try again or use your password.</p>
-      )}
-      <form onSubmit={submit}>
-        <label>
-          Email
-          <input
-            name="email"
-            type="email"
-            autoComplete="email"
-            required
-            maxLength={320}
-          />
-        </label>
-        <label>
-          Password
-          <input
-            name="password"
-            type="password"
-            autoComplete="current-password"
-            required
-            maxLength={128}
-          />
-        </label>
-        <FormStatus error={error} />
-        {nativeDiagnostic && (
-          <p className="notice" role="status">Auth diagnostic: {nativeDiagnostic}</p>
-        )}
-        <button disabled={busy}>{busy ? "Signing in…" : "Sign in"}</button>
-      </form>
-      {appleEnabled && (
-        <button type="button" className="apple-sign-in" onClick={startAppleSignIn} disabled={busy}>
-          Continue with Apple
-        </button>
-      )}
-    </AuthCard>
+    <main className="signin-page">
+      <AuthBrandPanel />
+      <div className="signin">
+        <div className="signin-column">
+          <Link href="/" className="signin-brand">
+            <img src="/images/mykhaya-logo.png" alt="" aria-hidden="true" />
+            <span>MyKhaya</span>
+          </Link>
+          <h1>Welcome back</h1>
+          <p className="signin-intro">Sign in to see what’s happening at Home.</p>
+          {inviteContext && (
+            <p className="notice success">
+              Continue signing in to join {inviteContext.group_name}.
+            </p>
+          )}
+          {shareContext && (
+            <p className="notice success">
+              Continue signing in to view &ldquo;{shareContext.calendar_name}&rdquo;, shared by{" "}
+              {shareContext.source_group_name}.
+            </p>
+          )}
+          {appleResult === "link_required" && (
+            <p className="notice">
+              Sign in with your existing account first. Apple can then be linked from your security settings.
+            </p>
+          )}
+          {appleResult === "registration_unavailable" && (
+            <p className="notice">
+              New accounts can’t be created with Apple right now. If you already have a MyKhaya account, sign in with your password.
+            </p>
+          )}
+          {appleResult === "error" && (
+            <p className="notice">Apple sign-in could not be completed. Please try again or use your password.</p>
+          )}
+          <form className="signin-form" onSubmit={submit}>
+            <div className="signin-field">
+              <label htmlFor="signin-email">Email</label>
+              <input
+                id="signin-email"
+                name="email"
+                type="email"
+                autoComplete="email"
+                placeholder="your@email.com"
+                required
+                maxLength={320}
+              />
+            </div>
+            <div className="signin-field">
+              <label htmlFor="signin-password">Password</label>
+              <div className="signin-password">
+                <input
+                  id="signin-password"
+                  name="password"
+                  type={passwordVisible ? "text" : "password"}
+                  autoComplete="current-password"
+                  placeholder="Enter your password"
+                  required
+                  maxLength={128}
+                />
+                <button
+                  type="button"
+                  className="signin-password-toggle"
+                  aria-label={passwordVisible ? "Hide password" : "Show password"}
+                  onClick={() => setPasswordVisible((visible) => !visible)}
+                >
+                  {passwordVisible ? (
+                    <EyeOff size={20} strokeWidth={1.8} aria-hidden="true" />
+                  ) : (
+                    <Eye size={20} strokeWidth={1.8} aria-hidden="true" />
+                  )}
+                </button>
+              </div>
+            </div>
+            <FormStatus error={error} />
+            {nativeDiagnostic && (
+              <p className="notice" role="status">Auth diagnostic: {nativeDiagnostic}</p>
+            )}
+            <button className="signin-submit" disabled={busy}>{busy ? "Signing in…" : "Sign in"}</button>
+          </form>
+          {appleEnabled && (
+            <button type="button" className="apple-sign-in" onClick={startAppleSignIn} disabled={busy}>
+              Continue with Apple
+            </button>
+          )}
+          <Link href="/forgot-password" className="signin-link signin-forgot">
+            Forgot password?
+          </Link>
+          {card === "beta" && <SignInCard variant="beta" href="/founding-beta" />}
+          {card === "new" && <SignInCard variant="new" href={registerHref} />}
+          <p className="signin-child">
+            Signing in as a child?{" "}
+            <Link href="/login/child" className="signin-link">Child sign in</Link>
+          </p>
+        </div>
+      </div>
+    </main>
   );
 }

@@ -1,5 +1,20 @@
 import Link from "next/link";
 import { Logo } from "./logo";
+
+/** The wide-screen brand panel beside the auth form. Hidden at 800px and
+ *  below (see .auth-brand in app/styles.css). */
+export function AuthBrandPanel() {
+  return (
+    <section className="auth-brand">
+      <Logo />
+      <p>Your family’s digital home</p>
+      <blockquote>
+        Life feels lighter when everyone knows the plan.
+      </blockquote>
+    </section>
+  );
+}
+
 export function AuthCard({
   title,
   intro,
@@ -13,13 +28,7 @@ export function AuthCard({
 }) {
   return (
     <main className="auth-page">
-      <section className="auth-brand">
-        <Logo />
-        <p>Your family’s digital home</p>
-        <blockquote>
-          Life feels lighter when everyone knows the plan.
-        </blockquote>
-      </section>
+      <AuthBrandPanel />
       <section className="auth-card">
         <Link href="/" className="auth-logo">
           <Logo />

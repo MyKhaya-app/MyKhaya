@@ -72,3 +72,53 @@ export function allowedNavigationHosts(environment: IosShellEnvironment): string
 export function liveFrontendOrigin(environment: IosShellEnvironment): string {
   return LIVE_FRONTEND_ORIGINS[environment];
 }
+
+/**
+ * The agreed DEV/PROD iOS app matrix (docs/mobile/ios-environments.md).
+ *
+ * The native apps do not read this: their values come from
+ * ios/App/Config/Environment-{Dev,Prod}.xcconfig through each build
+ * configuration. This is the expected matrix that capacitor.config.ts uses
+ * for its own fields and that src/ios-environments.test.ts checks every
+ * committed native file against, so the two can never drift apart unnoticed.
+ */
+export type IosAppEnvironment = {
+  environment: IosShellEnvironment;
+  /** Xcode build configuration suffix: Debug-<suffix> / Release-<suffix>. */
+  configurationSuffix: "Dev" | "Prod";
+  scheme: string;
+  widgetScheme: string;
+  displayName: string;
+  bundleId: string;
+  widgetBundleId: string;
+  appGroup: string;
+  urlScheme: string;
+  serverHost: string;
+};
+
+export const IOS_APP_ENVIRONMENTS: Record<IosShellEnvironment, IosAppEnvironment> = {
+  development: {
+    environment: "development",
+    configurationSuffix: "Dev",
+    scheme: "MyKhaya-Dev",
+    widgetScheme: "MyKhayaWidgets-Dev",
+    displayName: "MyKhaya-Dev",
+    bundleId: "app.mykhaya.mobile",
+    widgetBundleId: "app.mykhaya.mobile.widgets",
+    appGroup: "group.app.mykhaya.mobile",
+    urlScheme: "mykhaya",
+    serverHost: "dev.mykhaya.app",
+  },
+  production: {
+    environment: "production",
+    configurationSuffix: "Prod",
+    scheme: "MyKhaya-Prod",
+    widgetScheme: "MyKhayaWidgets-Prod",
+    displayName: "MyKhaya",
+    bundleId: "app.mykhaya.mobile.prod",
+    widgetBundleId: "app.mykhaya.mobile.prod.widgets",
+    appGroup: "group.app.mykhaya.mobile.prod",
+    urlScheme: "mykhaya-prod",
+    serverHost: "mykhaya.app",
+  },
+};

@@ -121,6 +121,97 @@ describe("Founding Beta page", () => {
   });
 });
 
+describe("Founding Beta page — invitation-only", () => {
+  it("production state (invitation required, places open, no invitation): no Join the Beta, honest unavailable notice", async () => {
+    // The API reports no waitlist while places are open, so this is the
+    // waitlist-off branch.
+    signupState.mockResolvedValue(state({ invitation_required: true, beta_joining_available: true, waitlist_available: false }));
+    render(<PublicFoundingBeta />);
+
+    expect(await screen.findByText(/Founding Beta joining is currently unavailable/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Join the Beta/ })).not.toBeInTheDocument();
+    expect(screen.queryByText("Founding Beta places are by invitation right now.")).not.toBeInTheDocument();
+  });
+
+  it("invitation required with the waitlist open: invitation heading, waitlist copy and a /waitlist button", async () => {
+    signupState.mockResolvedValue(state({ invitation_required: true, beta_joining_available: false, waitlist_available: true }));
+    render(<PublicFoundingBeta />);
+
+    expect(
+      await screen.findByRole("heading", { name: "Founding Beta places are by invitation right now." }),
+    ).toBeInTheDocument();
+    expect(screen.getByText("Join the waitlist and we’ll let you know when a place opens.")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Join the waitlist/ })).toHaveAttribute("href", "/waitlist");
+    expect(screen.queryByText(/offered from the waitlist first/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Join the Beta/ })).not.toBeInTheDocument();
+  });
+
+  it("invitation required with a valid Beta invitation: Join the Beta is offered", async () => {
+    search = "invitation=tok-1";
+    invitationLookup.mockResolvedValue({ valid: true, expires_at: "2026-10-10T12:00:00Z" });
+    signupState.mockResolvedValue(state({ invitation_required: true, beta_joining_available: true }));
+    render(<PublicFoundingBeta />);
+
+    expect(await screen.findByRole("button", { name: /Join the Beta/ })).toBeInTheDocument();
+    expect(screen.queryByText(/currently unavailable/)).not.toBeInTheDocument();
+  });
+
+  it("invitation required while an invitation link is still being checked: no premature notice", async () => {
+    search = "invitation=tok-1";
+    invitationLookup.mockReturnValue(new Promise(() => {}));
+    signupState.mockResolvedValue(state({ invitation_required: true, beta_joining_available: true }));
+    render(<PublicFoundingBeta />);
+
+    await waitFor(() => expect(signupState).toHaveBeenCalled());
+    expect(screen.queryByRole("button", { name: /Join the Beta/ })).not.toBeInTheDocument();
+    expect(screen.queryByText(/currently unavailable/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /Join the waitlist/ })).not.toBeInTheDocument();
+  });
+
+  it("invitation required with an invalid invitation and the waitlist open: the invitation-only waitlist path", async () => {
+    search = "invitation=bad";
+    invitationLookup.mockResolvedValue({ valid: false, expires_at: null });
+    signupState.mockResolvedValue(state({ invitation_required: true, beta_joining_available: false, waitlist_available: true }));
+    render(<PublicFoundingBeta />);
+
+    expect(await screen.findByText(/This Beta invitation is invalid/)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Founding Beta places are by invitation right now." })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Join the Beta/ })).not.toBeInTheDocument();
+  });
+});
+
+describe("Founding Beta page — registration closed with the waitlist open", () => {
+  it("ends at the waitlist form, not an unavailable notice", async () => {
+    signupState.mockResolvedValue(
+      state({ signup_mode: "closed", registration_open: false, beta_joining_available: false, waitlist_available: true }),
+    );
+    render(<PublicFoundingBeta />);
+
+    const main = within(screen.getByRole("main"));
+    expect(await main.findByRole("link", { name: /Join the waitlist/ })).toHaveAttribute("href", "/waitlist");
+    expect(screen.queryByText(/currently unavailable/)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Join the Beta/ })).not.toBeInTheDocument();
+  });
+
+  it("closed and invitation-only with the waitlist open: the invitation heading and the waitlist", async () => {
+    signupState.mockResolvedValue(
+      state({
+        signup_mode: "closed",
+        registration_open: false,
+        invitation_required: true,
+        beta_joining_available: false,
+        waitlist_available: true,
+      }),
+    );
+    render(<PublicFoundingBeta />);
+
+    expect(
+      await screen.findByRole("heading", { name: "Founding Beta places are by invitation right now." }),
+    ).toBeInTheDocument();
+    expect(within(screen.getByRole("main")).getByRole("link", { name: /Join the waitlist/ })).toHaveAttribute("href", "/waitlist");
+  });
+});
+
 describe("Founding Beta page — Get the beta app (PCC app links)", () => {
   const TESTFLIGHT = "https://testflight.apple.com/join/AbCdEf12";
   const APP_STORE = "https://apps.apple.com/gb/app/mykhaya/id1234567890";

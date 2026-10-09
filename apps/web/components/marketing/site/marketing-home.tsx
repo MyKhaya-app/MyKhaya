@@ -1,5 +1,6 @@
 "use client";
 
+import "@/app/brand-fonts.css";
 import "@/app/marketing-site.css";
 import { BackToTop } from "./back-to-top";
 import { HomeCta } from "./home-cta";

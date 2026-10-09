@@ -230,6 +230,16 @@ describe("AuthProvider", () => {
     expect(router.replace).not.toHaveBeenCalled();
   });
 
+  it("does not rewrite an explicit native /login navigation", async () => {
+    nativeShellState.value = true;
+    pathname = "/login";
+
+    render(<AuthProvider><Probe /></AuthProvider>);
+
+    await waitFor(() => expect(screen.getByText("signed_out")).toBeInTheDocument());
+    expect(router.replace).not.toHaveBeenCalled();
+  });
+
   it("keeps the page available during background refresh", async () => {
     render(<AuthProvider><Probe /></AuthProvider>);
     await waitFor(() => expect(screen.getByText("ready")).toBeInTheDocument());

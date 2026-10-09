@@ -19,7 +19,7 @@ from dataclasses import dataclass
 
 from mykhaya.models import NotificationChannel
 
-DEFAULT_TEMPLATE_VERSION = 5
+DEFAULT_TEMPLATE_VERSION = 6
 
 
 @dataclass(frozen=True)
@@ -89,6 +89,37 @@ TEMPLATES: dict[str, TemplateDefault] = {
         module="account_security",
         disableable=False,
         security_critical=True,
+    ),
+    # Sent once, after a Founding Beta enrolment commits (routers.founding_beta
+    # .join). Deliberately its own template: the future standard
+    # `welcome_to_mykhaya` email must not inherit Beta wording.
+    "founding_beta_welcome": TemplateDefault(
+        subject="Welcome to the MyKhaya Founding Beta",
+        body=(
+            "Hi {{first_name}},\n\n"
+            "You\u2019re in.\n\n"
+            "{{home_name}} is now part of the MyKhaya Founding Beta, with complimentary access "
+            "to MyKhaya Ultimate for the lifetime of your Home.\n\n"
+            "The Beta is about building MyKhaya with real households. As you use it, we\u2019ll "
+            "be improving existing features, introducing new ones and learning what actually "
+            "helps make home life easier to organise.\n\n"
+            "You may occasionally see new features to try or be asked for feedback. "
+            "There\u2019s no pressure to test everything. Simply using MyKhaya normally and "
+            "letting us know when something is useful, confusing or not quite right is "
+            "incredibly valuable.\n\n"
+            "As a Founding Beta Home, you have:\n\n"
+            "\u2022 Complimentary MyKhaya Ultimate\n"
+            "\u2022 Access to current and future Beta features\n"
+            "\u2022 No subscription or payment details required\n\n"
+            "Thank you for helping shape MyKhaya from the beginning.\n\n"
+            "Welcome Home.\n\n"
+            "Anthony\nMyKhaya"
+        ),
+        allowed_variables=frozenset({"first_name", "home_name", "link"}),
+        required_variables=frozenset({"home_name"}),
+        description="Sent once when a Home completes Founding Beta enrolment.",
+        module="founding_beta",
+        disableable=False,
     ),
     "password_reset": TemplateDefault(
         subject="Reset your MyKhaya password",
@@ -599,6 +630,11 @@ SAMPLE_VARIABLES: dict[str, dict[str, str]] = {
         "deep_link": "/settings/routines-reminders",
     },
     "email_verification": {"link": "https://example.com/verify-email?token=SAMPLE-TOKEN"},
+    "founding_beta_welcome": {
+        "first_name": "Jamie",
+        "home_name": "The Example Family",
+        "link": "https://example.com/home",
+    },
     "password_reset": {"link": "https://example.com/reset-password?token=SAMPLE-TOKEN"},
     "household_invitation": {
         "inviter_display_name": "Jamie Example",

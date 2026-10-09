@@ -42,18 +42,26 @@ public class WidgetBridgePlugin: CAPPlugin, CAPBridgedPlugin {
     }
 
     @objc private func handleOpenURL(_ notification: Notification) {
+        // Only this environment's own widget scheme (DEV `mykhaya`, PROD
+        // `mykhaya-prod`, from the build configuration via Info.plist) is
+        // accepted, so a link meant for the other app is ignored here.
         guard let url = notification.userInfo?["url"] as? URL,
-              url.scheme?.lowercased() == "mykhaya",
-              let components = URLComponents(url: url, resolvingAgainstBaseURL: false),
-              let path = components.queryItems?.first(where: { $0.name == "path" })?.value,
-              path.hasPrefix("/") else {
+              let scheme = MyKhayaEnvironment.current?.urlScheme,
+              let path = WidgetDeepLinkRoute.path(from: url, expectedScheme: scheme) else {
             return
         }
         // The WKWebView is already on the live frontend origin (ADR 0012) —
         // a same-origin relative navigation needs no knowledge of which
         // environment (dev.mykhaya.app / mykhaya.app) is currently loaded.
         let escaped = path.replacingOccurrences(of: "'", with: "%27")
-        bridge?.webView?.evaluateJavaScript("window.location.assign('\(escaped)')", completionHandler: nil)
+        // Mark the next document as an intentional deep link before loading
+        // it. The native cold-start bootstrap preserves this route instead
+        // of treating a widget's plain /login target as a restored startup
+        // route.
+        bridge?.webView?.evaluateJavaScript(
+            "sessionStorage.setItem('mykhaya.native.deep-link-start', '1'); window.location.assign('\(escaped)')",
+            completionHandler: nil
+        )
     }
 
     @objc func setSnapshot(_ call: CAPPluginCall) {

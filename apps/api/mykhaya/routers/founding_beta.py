@@ -2,8 +2,9 @@ import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
 
+import structlog
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from sqlalchemy import or_, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.audit import audit
@@ -11,17 +12,21 @@ from mykhaya.config import Settings, get_settings
 from mykhaya.db import get_db
 from mykhaya.dependencies import AuthContext, auth_context, require_adult_session
 from mykhaya.founding_beta import (
+    FOUNDING_BETA_SLUG,
     FOUNDING_BETA_SOURCE,
+    beta_availability,
     capacity,
     current_programme,
     expire_invitations,
     invitation_token_hash,
     join_beta,
+    lock_programme,
     programme_for_admin,
     signup_mode,
 )
 from mykhaya.founding_beta_schemas import (
     BetaCapacityExemptionUpdate,
+    BetaContinuationResponse,
     BetaEligibilityResponse,
     BetaInvitationItem,
     BetaInvitationResponse,
@@ -34,17 +39,19 @@ from mykhaya.founding_beta_schemas import (
     BetaPendingResponse,
     BetaProgrammeResponse,
     BetaProgrammeUpdate,
+    BetaTermsStatus,
     BetaWaitlistCreate,
     BetaWaitlistItem,
     BetaWaitlistResponse,
     BetaWaitlistResponsePage,
     SignupStateResponse,
 )
-from mykhaya.legal import current_published_version
+from mykhaya.legal import current_published_version, user_document_status
 from mykhaya.models import (
     BetaEnrollment,
     BetaInvitation,
     BetaInvitationStatus,
+    BetaPendingRegistration,
     BetaProgramme,
     BetaWaitlistEntry,
     BetaWaitlistStatus,
@@ -59,12 +66,17 @@ from mykhaya.models import (
     LegalRecordType,
     PlatformRole,
     SubscriptionPlan,
+    User,
 )
+from mykhaya.notifications.engine import notify
+from mykhaya.notifications.templates import render_notification_email
 from mykhaya.platform_audit import platform_audit
-from mykhaya.platform_runtime import evaluate_signup_policy, registration_enabled
+from mykhaya.platform_runtime import evaluate_signup_policy, registration_invitation_required
 from mykhaya.platform_security import PlatformContext, require_recent_auth, require_roles
 from mykhaya.rate_limit import enforce_rate_limit
 from mykhaya.security import normalise_email, resolve_client_ip
+
+log = structlog.get_logger()
 
 public_router = APIRouter(prefix="/public", tags=["founding-beta-public"])
 router = APIRouter(prefix="/beta", tags=["founding-beta"])
@@ -85,20 +97,14 @@ async def resolve_signup_state(db: AsyncSession, settings: Settings) -> SignupSt
     await expire_invitations(db, programme)
     await db.commit()
     state = await capacity(db, programme)
-    beta_available = policy.beta_path and state["joinable"] > 0 and state["waiting"] == 0
+    availability = await beta_availability(db, settings, programme, policy, state)
     return SignupStateResponse(
         signup_mode=mode,
         registration_open=policy.open,
         invitation_required=policy.invitation_required,
         normal_signup_available=policy.normal_path,
-        beta_joining_available=beta_available,
-        waitlist_available=(
-            programme.waitlist_enabled
-            and (policy.beta_path or (policy.mode.value == "closed" and policy.open is False))
-            and settings.registration_mode != "closed"
-            and (await registration_enabled(db))
-            and (not beta_available)
-        ),
+        beta_joining_available=availability.places_open,
+        waitlist_available=availability.waitlist_open,
         joinable_count=state["joinable"] if programme.show_remaining_publicly else None,
         beta_terms_version=programme.terms_version if policy.beta_path else None,
         ios_app_url=programme.ios_app_url,
@@ -117,40 +123,59 @@ async def join_waitlist(
 ) -> BetaWaitlistResponse:
     await enforce_rate_limit(request, settings, "beta-waitlist", 10, 3600)
     programme = await current_programme(db)
+    # Serialises waitlist writes for the programme, so the daily cap and the
+    # one-entry-per-email rule hold under concurrent requests.
+    await lock_programme(db, programme)
     await expire_invitations(db, programme)
     policy = await evaluate_signup_policy(db, settings)
     state = await capacity(db, programme)
-    if (
-        not programme.waitlist_enabled
-        or not (policy.beta_path or (policy.mode.value == "closed" and policy.open is False))
-        or settings.registration_mode == "closed"
-        or not await registration_enabled(db)
-        or (state["joinable"] > 0 and state["waiting"] == 0)
-    ):
+    availability = await beta_availability(db, settings, programme, policy, state)
+    if not availability.waitlist_open:
         raise HTTPException(
             status.HTTP_409_CONFLICT, "The Founding Beta waitlist is not currently available."
         )
+    # The cap is checked before looking the email up, and the answer below is
+    # identical for a new and an already-listed email, so neither the cap nor
+    # the response reveals whether someone is on the waitlist.
+    day_start = datetime.now(UTC).replace(hour=0, minute=0, second=0, microsecond=0)
+    added_today = await db.scalar(
+        select(func.count(BetaWaitlistEntry.id)).where(
+            BetaWaitlistEntry.programme_id == programme.id,
+            BetaWaitlistEntry.created_at >= day_start,
+        )
+    )
+    if (added_today or 0) >= settings.beta_waitlist_daily_cap:
+        await log.awarning(
+            "beta_waitlist_daily_cap_reached",
+            cap=settings.beta_waitlist_daily_cap,
+            added_today=added_today,
+        )
+        retry_after = int((day_start + timedelta(days=1) - datetime.now(UTC)).total_seconds()) + 1
+        raise HTTPException(
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            "The waitlist is very busy today. Please try again tomorrow.",
+            headers={"Retry-After": str(retry_after)},
+        )
     email = normalise_email(str(body.email))
     existing = await db.scalar(
-        select(BetaWaitlistEntry).where(
+        select(BetaWaitlistEntry.id).where(
             BetaWaitlistEntry.programme_id == programme.id,
             BetaWaitlistEntry.normalized_email == email,
         )
     )
-    if existing is not None:
-        return BetaWaitlistResponse(accepted=True, status=existing.status.value)
-    db.add(
-        BetaWaitlistEntry(
-            programme_id=programme.id,
-            name=body.name,
-            email=email,
-            normalized_email=email,
-            country=body.country.upper(),
-            household_size=body.household_size,
-            use_case=body.use_case,
-            marketing_consent=body.marketing_consent,
+    if existing is None:
+        db.add(
+            BetaWaitlistEntry(
+                programme_id=programme.id,
+                name=body.name,
+                email=email,
+                normalized_email=email,
+                country=body.country.upper(),
+                household_size=body.household_size,
+                use_case=body.use_case,
+                marketing_consent=body.marketing_consent,
+            )
         )
-    )
     await db.commit()
     return BetaWaitlistResponse(accepted=True, status=BetaWaitlistStatus.waiting.value)
 
@@ -176,97 +201,58 @@ async def inspect_invitation(
     )
 
 
-@router.post("/join", response_model=BetaJoinResponse)
-async def join(
-    body: BetaJoinRequest,
-    request: Request,
-    auth: AuthContext = Depends(auth_context),
-    db: AsyncSession = Depends(get_db),
-) -> BetaJoinResponse:
-    require_adult_session(auth)
-    home = await join_beta(
-        db,
-        user=auth.user,
-        home_name=body.home_name,
-        terms_version=body.terms_version,
-        invitation_token=body.invitation_token,
-    )
-    beta_document = await db.scalar(
+BETA_TERMS_KEY = "founding_beta_terms"
+
+
+async def _beta_terms_document(db: AsyncSession) -> LegalDocument | None:
+    return await db.scalar(
         select(LegalDocument).where(
-            LegalDocument.key == "founding_beta_terms",
+            LegalDocument.key == BETA_TERMS_KEY,
             LegalDocument.scope == LegalDocumentScope.founding_beta,
             LegalDocument.archived_at.is_(None),
         )
     )
-    if beta_document is not None:
-        version = await current_published_version(db, beta_document)
-        if version is None or version.version != body.terms_version:
-            raise HTTPException(
-                status.HTTP_409_CONFLICT,
-                "The Founding Beta terms have changed. Please review them again.",
-            )
-        db.add(
-            LegalAcceptance(
-                record_type=(
-                    LegalRecordType.user_acceptance
-                    if beta_document.action_verb == LegalActionVerb.accept
-                    else LegalRecordType.user_acknowledgement
-                ),
-                document_version_id=version.id,
-                user_id=auth.user.id,
-                context=LegalAcceptanceContext.beta_enrolment,
-                platform=LegalPlatform.web,
-                ip_address=resolve_client_ip(request, get_settings()),
-                user_agent=request.headers.get("user-agent", "")[:300] or None,
-            )
-        )
-    audit(
-        db,
-        request,
-        "beta.joined",
-        auth.user.id,
-        home.id,
-        "beta_enrollment",
-        home.id,
-        {"source": FOUNDING_BETA_SOURCE},
+
+
+async def _beta_terms_status(db: AsyncSession, user_id: uuid.UUID) -> BetaTermsStatus | None:
+    """Same document + scope + current published version + a valid acceptance
+    = satisfied. Context (where it was accepted) is provenance only, and
+    global Terms never count. A newer published version is unsatisfied until
+    it is accepted."""
+    document = await _beta_terms_document(db)
+    if document is None:
+        return None
+    current = await current_published_version(db, document)
+    if current is None:
+        return None
+    status_row = await user_document_status(db, user_id, document)
+    return BetaTermsStatus(
+        document_key=document.key,
+        display_name=document.display_name,
+        version_id=current.id,
+        version=current.version,
+        satisfied=status_row.satisfied,
     )
-    await db.commit()
-    return BetaJoinResponse(home_id=home.id, entitlement_source=FOUNDING_BETA_SOURCE)
 
 
-@router.get("/pending", response_model=BetaPendingResponse)
-async def pending(
-    auth: AuthContext = Depends(auth_context),
-    db: AsyncSession = Depends(get_db),
-) -> BetaPendingResponse:
-    require_adult_session(auth)
-    from mykhaya.models import BetaPendingRegistration
-
-    row = await db.scalar(
+async def _pending_registration(
+    db: AsyncSession, user_id: uuid.UUID
+) -> BetaPendingRegistration | None:
+    return await db.scalar(
         select(BetaPendingRegistration)
         .where(
-            BetaPendingRegistration.user_id == auth.user.id,
+            BetaPendingRegistration.user_id == user_id,
             BetaPendingRegistration.consumed_at.is_(None),
             BetaPendingRegistration.expires_at > datetime.now(UTC),
         )
         .order_by(BetaPendingRegistration.created_at.desc())
     )
-    return BetaPendingResponse(
-        pending=row is not None,
-        home_name=row.home_name if row else None,
-        terms_version=row.terms_version if row else None,
-    )
 
 
-@router.get("/eligibility", response_model=BetaEligibilityResponse)
-async def eligibility(
-    auth: AuthContext = Depends(auth_context),
-    db: AsyncSession = Depends(get_db),
-) -> BetaEligibilityResponse:
-    require_adult_session(auth)
+async def _eligibility(db: AsyncSession, user_id: uuid.UUID) -> BetaEligibilityResponse:
     owned = list(
         await db.scalars(
-            select(Group).where(Group.created_by == auth.user.id, Group.is_active.is_(True))
+            select(Group).where(Group.created_by == user_id, Group.is_active.is_(True))
         )
     )
     if len(owned) > 1:
@@ -289,6 +275,184 @@ async def eligibility(
     return BetaEligibilityResponse(eligible=True)
 
 
+async def _queue_welcome_email(
+    db: AsyncSession, settings: Settings, user: User, home: Group, enrollment_id: uuid.UUID
+) -> None:
+    """The Founding Beta welcome email. Called inside the enrolment
+    transaction, after the Home, entitlement and enrolment rows exist: it is
+    queued through the notification outbox, so it is only ever sent if the
+    enrolment commits. Keyed on the enrolment (one per person/programme), so a
+    retried join can never send it twice."""
+    first_name = (user.display_name or "").split()[0] if user.display_name else "there"
+    variables = {
+        "first_name": first_name,
+        "home_name": home.name,
+        "link": f"{settings.public_web_url.rstrip('/')}/home",
+    }
+    subject, body, html = await render_notification_email(
+        db,
+        settings,
+        "founding_beta_welcome",
+        variables,
+        footer_note=(
+            f"You\u2019re receiving this email because {home.name} has joined the "
+            "MyKhaya Founding Beta."
+        ),
+    )
+    await notify(
+        db,
+        settings=settings,
+        recipient_user_id=user.id,
+        notification_type="founding_beta_welcome",
+        title=subject,
+        body=body,
+        idempotency_key=f"founding_beta_welcome:{enrollment_id}",
+        html_body=html,
+        group_id=home.id,
+    )
+
+
+@router.post("/join", response_model=BetaJoinResponse)
+async def join(
+    body: BetaJoinRequest,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> BetaJoinResponse:
+    require_adult_session(auth)
+    pending = await _pending_registration(db, auth.user.id)
+    programme = await current_programme(db, for_update=True)
+    beta_document = await _beta_terms_document(db)
+    current_terms = await current_published_version(db, beta_document) if beta_document else None
+    home = await join_beta(
+        db,
+        user=auth.user,
+        home_name=body.home_name,
+        # The published Founding Beta Terms document is the legal authority
+        # (checked below); the programme's own reference is what the enrolment
+        # records. Without a published document, the legacy programme
+        # reference must be sent and match.
+        terms_version=(
+            programme.terms_version if current_terms is not None else body.terms_version or ""
+        ),
+        invitation_token=body.invitation_token,
+        invitation_token_hash_value=(
+            pending.invitation_token_hash
+            if pending is not None and not body.invitation_token
+            else None
+        ),
+        programme=programme,
+        settings=settings,
+    )
+    if beta_document is not None and current_terms is not None:
+        terms = await _beta_terms_status(db, auth.user.id)
+        if terms is None or not terms.satisfied:
+            if body.terms_version != current_terms.version:
+                # Nothing above is committed: the Home, entitlement and
+                # enrolment roll back with this response.
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT,
+                    detail={
+                        "code": "beta_terms_required",
+                        "message": "Please accept the current Founding Beta Terms to continue.",
+                    },
+                )
+            db.add(
+                LegalAcceptance(
+                    record_type=(
+                        LegalRecordType.user_acceptance
+                        if beta_document.action_verb == LegalActionVerb.accept
+                        else LegalRecordType.user_acknowledgement
+                    ),
+                    document_version_id=current_terms.id,
+                    user_id=auth.user.id,
+                    context=LegalAcceptanceContext.beta_enrolment,
+                    platform=LegalPlatform.web,
+                    ip_address=resolve_client_ip(request, settings),
+                    user_agent=request.headers.get("user-agent", "")[:300] or None,
+                )
+            )
+    enrollment = await db.scalar(
+        select(BetaEnrollment).where(
+            BetaEnrollment.programme_id == programme.id, BetaEnrollment.home_id == home.id
+        )
+    )
+    assert enrollment is not None
+    now = datetime.now(UTC)
+    for row in await db.scalars(
+        select(BetaPendingRegistration).where(
+            BetaPendingRegistration.user_id == auth.user.id,
+            BetaPendingRegistration.consumed_at.is_(None),
+        )
+    ):
+        row.consumed_at = now
+    await _queue_welcome_email(db, settings, auth.user, home, enrollment.id)
+    audit(
+        db,
+        request,
+        "beta.joined",
+        auth.user.id,
+        home.id,
+        "beta_enrollment",
+        home.id,
+        {"source": FOUNDING_BETA_SOURCE},
+    )
+    await db.commit()
+    return BetaJoinResponse(home_id=home.id, entitlement_source=FOUNDING_BETA_SOURCE)
+
+
+@router.get("/pending", response_model=BetaPendingResponse)
+async def pending(
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> BetaPendingResponse:
+    require_adult_session(auth)
+    row = await _pending_registration(db, auth.user.id)
+    return BetaPendingResponse(
+        pending=row is not None,
+        home_name=row.home_name if row else None,
+        terms_version=row.terms_version if row else None,
+    )
+
+
+@router.get("/continuation", response_model=BetaContinuationResponse)
+async def continuation(
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> BetaContinuationResponse:
+    """The authenticated Founding Beta continuation's state. `pending` is the
+    durable Beta intent recorded at registration, which is what routes a
+    newly verified user here instead of normal (commercial) onboarding."""
+    require_adult_session(auth)
+    enrollment = await db.scalar(
+        select(BetaEnrollment)
+        .join(BetaProgramme, BetaProgramme.id == BetaEnrollment.programme_id)
+        .where(
+            BetaEnrollment.joined_user_id == auth.user.id,
+            BetaProgramme.slug == FOUNDING_BETA_SLUG,
+        )
+    )
+    pending_row = None if enrollment is not None else await _pending_registration(db, auth.user.id)
+    eligibility_state = await _eligibility(db, auth.user.id)
+    return BetaContinuationResponse(
+        pending=pending_row is not None,
+        enrolled=enrollment is not None,
+        enrolled_home_id=enrollment.home_id if enrollment is not None else None,
+        terms=await _beta_terms_status(db, auth.user.id),
+        **eligibility_state.model_dump(),
+    )
+
+
+@router.get("/eligibility", response_model=BetaEligibilityResponse)
+async def eligibility(
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> BetaEligibilityResponse:
+    require_adult_session(auth)
+    return await _eligibility(db, auth.user.id)
+
+
 @platform_router.get("/overview", response_model=BetaOverviewResponse)
 async def overview(
     context: PlatformContext = Depends(
@@ -303,7 +467,9 @@ async def overview(
         await db.commit()
     state = await capacity(db, programme)
     return BetaOverviewResponse(
-        signup_mode=await signup_mode(db, settings.registration_mode), **state
+        signup_mode=await signup_mode(db, settings.registration_mode),
+        invitation_required=await registration_invitation_required(db, settings),
+        **state,
     )
 
 

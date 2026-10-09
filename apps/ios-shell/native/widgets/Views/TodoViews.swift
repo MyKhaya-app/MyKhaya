@@ -104,7 +104,7 @@ struct TodoMediumView: View {
             let items = Array(snapshot.todoItems.prefix(4))
             VStack(alignment: .leading, spacing: 6) {
                 ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                    Link(destination: WidgetDeepLink.url(forPath: item.deepLink) ?? WidgetDeepLink.todoHome!) {
+                    WidgetLink(url: WidgetDeepLink.url(forPath: item.deepLink) ?? WidgetDeepLink.todoHome) {
                         TodoRow(item: item)
                     }
                     if index < items.count - 1 {
@@ -133,7 +133,7 @@ struct TodoLargeView: View {
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.secondary)
                 ForEach(Array(items.enumerated()), id: \.element.id) { index, item in
-                    Link(destination: WidgetDeepLink.url(forPath: item.deepLink) ?? WidgetDeepLink.todoHome!) {
+                    WidgetLink(url: WidgetDeepLink.url(forPath: item.deepLink) ?? WidgetDeepLink.todoHome) {
                         TodoRow(item: item)
                     }
                     if index < items.count - 1 {
