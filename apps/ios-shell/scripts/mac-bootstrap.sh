@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Phase 4 Mac bootstrap for the MyKhaya Capacitor iOS shell.
 # Paste this whole file into a Terminal on the Mac (or `bash mac-bootstrap.sh`
-# from apps/ios-shell/scripts/ after `git pull`). It is CLI-only end to end —
+# from apps/ios-shell/scripts/ after explicitly checking out the approved ref).
+# It is CLI-only end to end —
 # no Xcode GUI interaction is required to reach a running simulator build.
 # The only steps that genuinely need Xcode's GUI (real Apple Developer Team
 # signing, for a physical device rather than the simulator) are called out
@@ -15,15 +16,22 @@ set -euo pipefail
 # host) comes from the build configuration, so nothing this script does
 # (cap sync, widget install) can turn one app into the other.
 # MYKHAYA_IOS_ENV only picks which app this script builds and launches in the
-# simulator at the end. It defaults to DEV:
-#   MYKHAYA_IOS_ENV=production bash mac-bootstrap.sh
+# simulator at the end. The checkout/ref is selected separately:
+#   MYKHAYA_IOS_ENV=production MYKHAYA_IOS_REF=main bash mac-bootstrap.sh
+#   MYKHAYA_IOS_ENV=production MYKHAYA_IOS_REF=<40-char-commit-sha> bash mac-bootstrap.sh
 export MYKHAYA_IOS_ENV="${MYKHAYA_IOS_ENV:-development}"
 case "$MYKHAYA_IOS_ENV" in
-  development) SCHEME="MyKhaya-Dev"; CONFIGURATION="Debug-Dev"; BUNDLE_ID="app.mykhaya.mobile" ;;
-  production) SCHEME="MyKhaya-Prod"; CONFIGURATION="Debug-Prod"; BUNDLE_ID="app.mykhaya.mobile.prod" ;;
+  development) SCHEME="MyKhaya-Dev"; CONFIGURATION="Debug-Dev"; BUNDLE_ID="app.mykhaya.mobile"; DEFAULT_REF="dev" ;;
+  production) SCHEME="MyKhaya-Prod"; CONFIGURATION="Debug-Prod"; BUNDLE_ID="app.mykhaya.mobile.prod"; DEFAULT_REF="" ;;
   *) echo "MYKHAYA_IOS_ENV must be development or production (got '$MYKHAYA_IOS_ENV')" >&2; exit 1 ;;
 esac
+MYKHAYA_IOS_REF="${MYKHAYA_IOS_REF:-$DEFAULT_REF}"
+if [ -z "$MYKHAYA_IOS_REF" ]; then
+  echo "Refusing production bootstrap without MYKHAYA_IOS_REF (local branch or full 40-character commit SHA)." >&2
+  exit 1
+fi
 echo "== MYKHAYA_IOS_ENV=$MYKHAYA_IOS_ENV: will build $SCHEME ($CONFIGURATION, $BUNDLE_ID) =="
+echo "== Selected immutable checkout ref: $MYKHAYA_IOS_REF =="
 
 echo "== 0. Tool versions (record these in the completion report) =="
 sw_vers
@@ -34,11 +42,30 @@ git --version
 
 echo "== 1. Repo state =="
 cd "$(git rev-parse --show-toplevel)"
-git status --porcelain
-git branch --show-current
-git fetch origin dev
-git pull --ff-only
-echo "HEAD is now: $(git rev-parse HEAD)"
+CURRENT_BRANCH=$(git branch --show-current)
+if [ -n "$(git status --porcelain)" ]; then
+  echo "Refusing to update a working copy with local changes. Review or stash them manually; this script never discards stashes or files." >&2
+  exit 1
+fi
+if git show-ref --verify --quiet "refs/heads/$MYKHAYA_IOS_REF"; then
+  if [ "$CURRENT_BRANCH" != "$MYKHAYA_IOS_REF" ]; then
+    echo "Refusing to switch branches: current branch is '$CURRENT_BRANCH', selected branch is '$MYKHAYA_IOS_REF'. Check it out explicitly and rerun." >&2
+    exit 1
+  fi
+  SELECTED_SHA=$(git rev-parse "refs/heads/$MYKHAYA_IOS_REF^{commit}")
+else
+  if ! printf '%s\n' "$MYKHAYA_IOS_REF" | grep -Eq '^[0-9a-fA-F]{40}$'; then
+    echo "Refusing invalid checkout ref '$MYKHAYA_IOS_REF'; use a local branch name or full 40-character commit SHA." >&2
+    exit 1
+  fi
+  SELECTED_SHA=$(git rev-parse "$MYKHAYA_IOS_REF^{commit}")
+fi
+CURRENT_SHA=$(git rev-parse HEAD)
+if [ "$CURRENT_SHA" != "$SELECTED_SHA" ]; then
+  echo "Refusing to switch or pull: HEAD $CURRENT_SHA does not match selected ref $MYKHAYA_IOS_REF ($SELECTED_SHA). Check out the ref explicitly and rerun." >&2
+  exit 1
+fi
+echo "Validated checkout: branch='${CURRENT_BRANCH:-detached}' HEAD=$CURRENT_SHA"
 
 echo "== 2. Install workspace deps =="
 pnpm install
