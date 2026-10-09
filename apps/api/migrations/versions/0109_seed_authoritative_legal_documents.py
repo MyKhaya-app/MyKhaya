@@ -137,6 +137,11 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    bind = op.get_bind()
-    bind.execute(sa.delete(_VERSIONS).where(_VERSIONS.c.id == _BETA_VERSION_ID))
-    bind.execute(sa.delete(_DOCUMENTS).where(_DOCUMENTS.c.id == _BETA_DOCUMENT_ID))
+    # Legal document versions are historical records and may already be
+    # referenced by legal_acceptances. Deleting the seeded Beta version during
+    # a rollback violates that foreign key and would erase the document needed
+    # to interpret existing consent. Keep the seeded records in place; a
+    # rollback must preserve legal history. Re-applying this migration is
+    # idempotent because upgrade() already returns when the founding_beta_terms
+    # document exists.
+    return
