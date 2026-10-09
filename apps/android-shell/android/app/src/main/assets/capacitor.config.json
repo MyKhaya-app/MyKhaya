@@ -1,0 +1,12 @@
+{
+	"appId": "app.mykhaya.mobile",
+	"appName": "MyKhaya",
+	"webDir": "www",
+	"server": {
+		"url": "https://dev.mykhaya.app",
+		"cleartext": false,
+		"allowNavigation": [
+			"dev.mykhaya.app"
+		]
+	}
+}
