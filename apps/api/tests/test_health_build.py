@@ -52,7 +52,9 @@ async def test_authenticated_session_can_read_detailed_build_metadata(
 ) -> None:
     app.dependency_overrides[get_settings] = metadata_settings
     app.dependency_overrides[auth_context] = lambda: AuthContext(
-        user=SimpleNamespace(), session=SimpleNamespace(), transport="cookie"  # type: ignore[arg-type]
+        user=SimpleNamespace(),
+        session=SimpleNamespace(),
+        transport="cookie",  # type: ignore[arg-type]
     )
     try:
         response = await client.get("/api/v1/health/build")
@@ -73,7 +75,9 @@ async def test_native_bearer_transport_can_read_detailed_build_metadata(
 ) -> None:
     app.dependency_overrides[get_settings] = metadata_settings
     app.dependency_overrides[auth_context] = lambda: AuthContext(
-        user=SimpleNamespace(), session=SimpleNamespace(), transport="bearer"  # type: ignore[arg-type]
+        user=SimpleNamespace(),
+        session=SimpleNamespace(),
+        transport="bearer",  # type: ignore[arg-type]
     )
     try:
         response = await client.get(
