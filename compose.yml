@@ -32,7 +32,7 @@ services:
         dockerfile: apps/web/Dockerfile,
         args:
           {
-            MYKHAYA_VERSION: "${MYKHAYA_VERSION:-unknown}",
+            MYKHAYA_VERSION: "${MYKHAYA_VERSION:-dev}",
             MYKHAYA_COMMIT_SHA: "${MYKHAYA_COMMIT_SHA:-unknown}",
             MYKHAYA_BUILD_TIME: "${MYKHAYA_BUILD_TIME:-unknown}",
             MYKHAYA_BUILD_CHANNEL: "${MYKHAYA_BUILD_CHANNEL:-development}",
@@ -42,7 +42,7 @@ services:
       {
         API_INTERNAL_URL: "http://api:8000",
         NODE_ENV: production,
-        MYKHAYA_VERSION: "${MYKHAYA_VERSION:-unknown}",
+        MYKHAYA_VERSION: "${MYKHAYA_VERSION:-dev}",
         MYKHAYA_COMMIT_SHA: "${MYKHAYA_COMMIT_SHA:-unknown}",
         MYKHAYA_BUILD_TIME: "${MYKHAYA_BUILD_TIME:-unknown}",
         MYKHAYA_BUILD_CHANNEL: "${MYKHAYA_BUILD_CHANNEL:-development}",
@@ -63,7 +63,7 @@ services:
         dockerfile: apps/api/Dockerfile,
         args:
           {
-            MYKHAYA_VERSION: "${MYKHAYA_VERSION:-unknown}",
+            MYKHAYA_VERSION: "${MYKHAYA_VERSION:-dev}",
             MYKHAYA_COMMIT_SHA: "${MYKHAYA_COMMIT_SHA:-unknown}",
             MYKHAYA_BUILD_TIME: "${MYKHAYA_BUILD_TIME:-unknown}",
             MYKHAYA_BUILD_CHANNEL: "${MYKHAYA_BUILD_CHANNEL:-development}",
@@ -73,7 +73,7 @@ services:
     environment:
       {
         MYKHAYA_DATABASE_URL: "postgresql+asyncpg://mykhaya_app:${MYKHAYA_DB_PASSWORD}@postgres:5432/mykhaya",
-        MYKHAYA_VERSION: "${MYKHAYA_VERSION:-unknown}",
+        MYKHAYA_VERSION: "${MYKHAYA_VERSION:-dev}",
         MYKHAYA_COMMIT_SHA: "${MYKHAYA_COMMIT_SHA:-unknown}",
         MYKHAYA_BUILD_TIME: "${MYKHAYA_BUILD_TIME:-unknown}",
         MYKHAYA_BUILD_CHANNEL: "${MYKHAYA_BUILD_CHANNEL:-development}",
@@ -140,7 +140,7 @@ services:
         dockerfile: apps/api/Dockerfile,
         args:
           {
-            MYKHAYA_VERSION: "${MYKHAYA_VERSION:-unknown}",
+            MYKHAYA_VERSION: "${MYKHAYA_VERSION:-dev}",
             MYKHAYA_COMMIT_SHA: "${MYKHAYA_COMMIT_SHA:-unknown}",
             MYKHAYA_BUILD_TIME: "${MYKHAYA_BUILD_TIME:-unknown}",
             MYKHAYA_BUILD_CHANNEL: "${MYKHAYA_BUILD_CHANNEL:-development}",
@@ -150,7 +150,7 @@ services:
     environment:
       {
         MYKHAYA_DATABASE_URL: "postgresql+asyncpg://mykhaya_migrator:${MYKHAYA_MIGRATION_DB_PASSWORD}@postgres:5432/mykhaya",
-        MYKHAYA_VERSION: "${MYKHAYA_VERSION:-unknown}",
+        MYKHAYA_VERSION: "${MYKHAYA_VERSION:-dev}",
         MYKHAYA_COMMIT_SHA: "${MYKHAYA_COMMIT_SHA:-unknown}",
         MYKHAYA_BUILD_TIME: "${MYKHAYA_BUILD_TIME:-unknown}",
         MYKHAYA_BUILD_CHANNEL: "${MYKHAYA_BUILD_CHANNEL:-development}",

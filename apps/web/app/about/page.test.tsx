@@ -91,13 +91,14 @@ describe("About — browser", () => {
     expect(getInfo).not.toHaveBeenCalled();
   });
 
-  it("does not show an Environment row in production", async () => {
+  it("shows the Production environment row", async () => {
     mockBuild({ version: "0.1.0", commit: "abc", build_time: "now", environment: "production", channel: "stable" });
 
     render(<About />);
 
     await screen.findByText("0.1.0 (Web)");
-    expect(screen.queryByText("Environment")).not.toBeInTheDocument();
+    expect(screen.getByText("Environment")).toBeInTheDocument();
+    expect(screen.getByText("Production")).toBeInTheDocument();
   });
 
   it("shows a Development environment row only on a development build", async () => {

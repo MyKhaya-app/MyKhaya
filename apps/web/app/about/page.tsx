@@ -187,7 +187,7 @@ function useLegalCompliance() {
  * file, or override can be found — genuinely rare, but the raw word must
  * never be shown to a user as if it were a real version string. */
 function versionText(value: string): string {
-  return value === "unknown" ? "Version unavailable" : value;
+  return value === "unknown" || value === "Version unavailable" ? "Version unavailable" : value;
 }
 
 export default function About() {
@@ -226,10 +226,16 @@ export default function About() {
                   : "Loading…"}
               </dd>
             </div>
-            {build?.channel === "development" && (
+            {build && (
               <div>
                 <dt>Environment</dt>
-                <dd>Development</dd>
+                <dd>
+                  {build.environment === "development"
+                    ? "Development"
+                    : build.environment === "production"
+                      ? "Production"
+                      : build.environment}
+                </dd>
               </div>
             )}
           </dl>

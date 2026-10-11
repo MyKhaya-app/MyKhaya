@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { api } from "@mykhaya/api-client";
 
 export type BuildInfo = {
   version: string;
@@ -17,8 +18,7 @@ export function useBuildInfo(): BuildInfo | null {
   const [build, setBuild] = useState<BuildInfo | null>(null);
 
   useEffect(() => {
-    fetch("/api/v1/health/build", { cache: "no-store" })
-      .then((response) => (response.ok ? (response.json() as Promise<BuildInfo>) : null))
+    api.buildInfo()
       .then((payload) => setBuild(payload))
       .catch(() => setBuild(null));
   }, []);

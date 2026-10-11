@@ -500,6 +500,14 @@ export class MyKhayaClient {
   }
 
   me = () => this.request<User>("/users/me");
+  buildInfo = () =>
+    this.request<{
+      version: string;
+      commit: string;
+      build_time: string;
+      environment: string;
+      channel: string;
+    }>("/health/build");
   publicConfig = () => this.request<PublicConfig>("/config/public");
   publicSignupState = () => this.request<PublicSignupState>("/public/signup-state");
   publicBetaInvitation = (token: string) =>
