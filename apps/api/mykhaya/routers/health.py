@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.config import Settings, get_settings
 from mykhaya.db import get_db
+from mykhaya.dependencies import AuthContext, auth_context
 
 router = APIRouter(tags=["health"])
 log = structlog.get_logger()
@@ -81,13 +82,18 @@ async def ready(
     return {"status": "ready"}
 
 
-@router.get("/version")
-async def version(settings: Settings = Depends(get_settings)) -> dict[str, str]:
+@router.get("/version", include_in_schema=False)
+async def version(
+    settings: Settings = Depends(get_settings), _auth: AuthContext = Depends(auth_context)
+) -> dict[str, str]:
     return {"version": settings.version}
 
 
 @router.get("/health/build", include_in_schema=False)
-async def build(settings: Settings = Depends(get_settings)) -> dict[str, str]:
+async def build(
+    settings: Settings = Depends(get_settings), _auth: AuthContext = Depends(auth_context)
+) -> dict[str, str]:
+    """Detailed release metadata is available only to authenticated app sessions."""
     return {
         "version": settings.version,
         "commit": settings.commit_sha,

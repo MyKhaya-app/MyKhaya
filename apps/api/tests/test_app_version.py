@@ -82,6 +82,17 @@ def test_app_module_constructs_fastapi_with_non_empty_version() -> None:
     assert app.version
 
 
+def test_production_does_not_report_development_or_unknown_version() -> None:
+    for version in ("dev", "unknown", "Version unavailable"):
+        settings = Settings.model_construct(environment="production", version=version)
+        assert settings.prevent_unidentified_production_release().version == "Version unavailable"
+
+
+def test_production_release_tag_is_preserved() -> None:
+    settings = Settings.model_construct(environment="production", version="v0.10.4")
+    assert settings.prevent_unidentified_production_release().version == "v0.10.4"
+
+
 def test_production_disables_all_fastapi_documentation_surfaces() -> None:
     assert api_documentation_urls("production") == {
         "docs_url": None,

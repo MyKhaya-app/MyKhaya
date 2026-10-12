@@ -310,6 +310,19 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
+    def prevent_unidentified_production_release(self) -> "Settings":
+        """Never present development metadata as an identified production release."""
+        if self.environment == "production" and self.version.strip().casefold() in {
+            "",
+            "dev",
+            "development",
+            "unknown",
+            "version unavailable",
+        }:
+            self.version = "Version unavailable"
+        return self
+
+    @model_validator(mode="after")
     def secure_shared_development_defaults(self) -> "Settings":
         """Externally reachable development must retain its security defaults."""
         if self.environment == "development":

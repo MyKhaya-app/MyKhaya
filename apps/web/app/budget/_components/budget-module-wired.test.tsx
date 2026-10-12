@@ -140,7 +140,14 @@ describe("Budget consumer API wiring", () => {
     apiMock.incomingBudgetShares.mockResolvedValue([{ home_id: "home-1", owner_user_id: "owner-1", owner_display_name: "Partner", level: "summary" }]);
     render(<BudgetModule screen="together" />);
     expect(await screen.findByRole("link", { name: "Partner" })).toBeInTheDocument();
-    expect(apiMock.sharedBudgetMonth).toHaveBeenCalledWith("home-1", "owner-1", expect.any(Number), expect.any(Number));
+    await waitFor(() => {
+      expect(apiMock.sharedBudgetMonth).toHaveBeenCalledWith(
+        "home-1",
+        "owner-1",
+        expect.any(Number),
+        expect.any(Number),
+      );
+    });
   });
 
   it("does not show Together after a share is revoked", async () => {
