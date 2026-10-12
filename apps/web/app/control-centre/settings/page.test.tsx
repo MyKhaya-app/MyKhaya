@@ -30,57 +30,69 @@ const actor = {
   session_status: "full" as const,
 };
 
+type Item = Record<string, unknown> & { key: string };
+
+function item(key: string, overrides: Record<string, unknown>): Item {
+  return {
+    key,
+    label: key,
+    description: `Backend description for ${key}.`,
+    section: "General",
+    value_type: "text",
+    risk: "normal",
+    runtime_effect: "effective",
+    editable: true,
+    consumer_visible: false,
+    value: null,
+    state: "unset",
+    ...overrides,
+  };
+}
+
 function baseSettings() {
   return {
+    deployment_environment: "development",
     settings: [
-      {
-        key: "platform_display_name",
-        label: "Platform name",
-        description: "The name shown for MyKhaya in administrator-facing surfaces.",
-        section: "General",
-        value_type: "text",
-        risk: "normal",
-        runtime_effect: "informational",
-        editable: true,
-        consumer_visible: false,
-        value: null,
-        state: "unset",
-      },
-      {
-        key: "service_status_url",
-        label: "Service status page",
-        description: "The page consumers are sent to from Help & Support to check MyKhaya's status.",
-        section: "Support",
-        value_type: "url",
-        risk: "normal",
-        runtime_effect: "effective",
-        editable: true,
-        consumer_visible: true,
-        value: "https://status.dev.mykhaya.app/",
-        state: "default",
-      },
-      {
-        key: "maintenance_mode",
-        label: "Maintenance mode",
-        description: "Take MyKhaya offline for maintenance.",
-        section: "General",
-        value_type: "boolean",
-        risk: "sensitive",
-        runtime_effect: "not_enforced",
-        editable: true,
-        consumer_visible: false,
-        value: false,
-        state: "unset",
-      },
+      item("platform_display_name", { label: "Platform name", runtime_effect: "informational" }),
+      item("service_status_url", { section: "Support", value_type: "url", value: "https://status.dev.mykhaya.app/", state: "default" }),
+      item("support_contact_address", { section: "Support", value_type: "email", value: "support@mykhaya.app", state: "configured" }),
+      item("maintenance_mode", { value_type: "boolean", risk: "sensitive", runtime_effect: "not_enforced", value: false }),
+      item("maximum_homes_per_user", { section: "Home Limits", value_type: "integer" }),
+      item("default_locale", { section: "Regional", runtime_effect: "not_enforced", value: "en-GB", state: "configured" }),
+      item("driveway_dvla_enabled", { section: "Driveway integrations", value_type: "boolean", risk: "sensitive", value: false }),
+      item("driveway_dvsa_enabled", { section: "Driveway integrations", value_type: "boolean", risk: "sensitive", value: false }),
+      item("signup_mode", { section: "Signup", risk: "sensitive", value: "normal", state: "configured" }),
+      item("registration_enabled", { section: "Registration & Access", value_type: "boolean", risk: "sensitive", value: true }),
+      item("invite_only_mode", { section: "Registration & Access", value_type: "boolean", risk: "sensitive", value: false }),
+      item("email_verification_required", { section: "Registration & Access", value_type: "boolean", risk: "sensitive", value: true, state: "default" }),
+      item("allowed_registration_domains", { section: "Registration & Access", value_type: "list", risk: "sensitive" }),
+      item("invitation_expiry_days", { section: "Registration & Access", value_type: "integer" }),
     ],
     environment: [
       { key: "public_url", value: "https://dev.mykhaya.app", category: "environment_controlled", editable: false },
+      { key: "admin_url", value: "https://admin.dev.mykhaya.app", category: "environment_controlled", editable: false },
     ],
   };
 }
 
+const SYSLOG = {
+  enabled: false,
+  configured: false,
+  host: "",
+  port: 6514,
+  protocol: "tls",
+  facility: 16,
+  environment: "test",
+  tls_verify: true,
+  minimum_level: "INFO",
+  categories: ["application", "http", "security", "audit", "worker", "integration"],
+  last_successful_delivery: null,
+  last_error: null,
+  dropped_count: 0,
+};
+
 function mockRoutes(
-  settings = baseSettings(),
+  settings: ReturnType<typeof baseSettings> = baseSettings(),
   syslogOverrides: Record<string, unknown> = {},
   dvlaOverrides: Record<string, unknown> = {},
   dvsaOverrides: Record<string, unknown> = {},
@@ -88,15 +100,16 @@ function mockRoutes(
   get.mockImplementation((path: string) => {
     if (path === "/auth/me") return Promise.resolve(actor);
     if (path === "/settings") return Promise.resolve(settings);
-    if (path === "/signup-state") return Promise.resolve({
-      signup_mode: "normal",
-      registration_open: true,
-      invitation_required: false,
-      normal_signup_available: true,
-      beta_joining_available: false,
-      waitlist_available: false,
-      joinable_count: 0,
-    });
+    if (path === "/signup-state")
+      return Promise.resolve({
+        signup_mode: "normal",
+        registration_open: true,
+        invitation_required: false,
+        normal_signup_available: true,
+        beta_joining_available: false,
+        waitlist_available: false,
+        joinable_count: 0,
+      });
     if (path === "/integrations/dvla")
       return Promise.resolve({
         enabled: false,
@@ -122,10 +135,26 @@ function mockRoutes(
         last_failure_category: null,
         ...dvsaOverrides,
       });
-    if (path === "/logging/syslog") return Promise.resolve({ enabled: false, configured: false, host: "", port: 6514, protocol: "tls", facility: 16, environment: "test", tls_verify: true, minimum_level: "INFO", categories: ["application", "http", "security", "audit", "worker", "integration"], last_successful_delivery: null, last_error: null, dropped_count: 0, ...syslogOverrides });
-    if (path === "/logging/syslog/diagnostics") return Promise.resolve({ events_seen: 0, events_queued: 0, events_sent: 0, events_filtered: 0, events_category_filtered: 0, events_dropped: 0, transport_failures: 0 });
+    if (path === "/logging/syslog") return Promise.resolve({ ...SYSLOG, ...syslogOverrides });
+    if (path === "/logging/syslog/diagnostics")
+      return Promise.resolve({ events_seen: 0, events_queued: 0, events_sent: 0, events_filtered: 0, events_category_filtered: 0, events_dropped: 0, transport_failures: 0 });
     throw new Error(`Unexpected GET ${path}`);
   });
+}
+
+function withValue(key: string, value: unknown) {
+  const settings = baseSettings();
+  return { ...settings, settings: settings.settings.map((row) => (row.key === key ? { ...row, value, state: "configured" } : row)) };
+}
+
+async function renderPage() {
+  render(<PlatformSettingsPage />);
+  await screen.findByRole("heading", { name: "Settings", level: 1 });
+  await screen.findByRole("heading", { name: "General" });
+}
+
+function saveBar() {
+  return screen.getByRole("region", { name: "Unsaved changes" });
 }
 
 beforeEach(() => {
@@ -134,286 +163,356 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  // clearAllMocks (not restoreAllMocks) deliberately preserves each
-  // mock's implementation across tests -- PlatformShell/AppShell's own
-  // unawaited background auth-refresh effect can still be in flight when
-  // this fires, and restoring to a bare no-op vi.fn() made it crash with
-  // "Cannot read properties of undefined (reading 'then')" on whichever
-  // test happened to be running when it finally settled.
+  // clearAllMocks (not restoreAllMocks) deliberately preserves each mock's
+  // implementation: PlatformShell's unawaited auth refresh can still be in
+  // flight when a test finishes.
   vi.clearAllMocks();
+  vi.restoreAllMocks();
 });
 
-describe("PCC Settings — friendly labels, not raw keys", () => {
-  it("renders friendly labels as the primary heading, with the key only as secondary text", async () => {
-    render(<PlatformSettingsPage />);
-
-    const heading = await screen.findByRole("heading", { name: "Platform name" });
-    expect(heading).toBeInTheDocument();
-    expect(screen.getByText("platform_display_name")).toBeInTheDocument();
+describe("PCC Settings — layout and live values", () => {
+  it("renders the header, section navigation and grouped cards without raw setting keys", async () => {
+    await renderPage();
+    expect(screen.getByText("Platform-wide configuration. Changes are audited and need a reason.")).toBeInTheDocument();
+    const nav = screen.getByRole("navigation", { name: "Settings sections" });
+    for (const label of ["Environment", "Integrations", "Central logging", "General", "Operations", "Home limits", "Support", "Regional", "Legal", "Registration & access"]) {
+      expect(within(nav).getByRole("link", { name: label })).toBeInTheDocument();
+    }
+    expect(screen.getByRole("heading", { name: "System" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Platform" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Policy" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Platform name")).toBeInTheDocument();
+    expect(screen.queryByText("platform_display_name")).not.toBeInTheDocument();
+    expect(screen.queryByText("registration_enabled")).not.toBeInTheDocument();
   });
 
-  it("groups settings under section headings", async () => {
-    render(<PlatformSettingsPage />);
-
-    await screen.findByRole("heading", { name: "Platform name" });
-    expect(screen.getByRole("heading", { name: "General" })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Support" })).toBeInTheDocument();
-  });
-});
-
-describe("PCC Settings — value/state rendering, never Unavailable", () => {
-  it("loads registration state through the authenticated platform surface", async () => {
-    render(<PlatformSettingsPage />);
-
-    await screen.findByRole("heading", { name: "Maintenance mode" });
+  it("fills the at-a-glance strip from live data", async () => {
+    mockRoutes(withValue("signup_mode", "beta_only"), { enabled: true, dropped_count: 3 }, { configured: true });
+    await renderPage();
     expect(get).toHaveBeenCalledWith("/signup-state");
+    expect(screen.getByText("development")).toBeInTheDocument();
+    expect(screen.getByText("1 of 2 configured")).toBeInTheDocument();
+    expect(screen.getByText("Enabled · 3 dropped")).toBeInTheDocument();
+    expect(screen.getAllByText("Beta only").length).toBeGreaterThan(0);
   });
 
-  it("shows a default-sourced value with the 'Using deployment default' caption", async () => {
-    render(<PlatformSettingsPage />);
-
-    await screen.findByRole("heading", { name: "Service status page" });
-    expect(screen.getByDisplayValue("https://status.dev.mykhaya.app/")).toBeInTheDocument();
-    expect(screen.getByText("Using deployment default")).toBeInTheDocument();
+  it("shows deployment URLs read-only and existing values in their controls", async () => {
+    await renderPage();
+    expect(screen.getByText("https://admin.dev.mykhaya.app")).toBeInTheDocument();
+    expect(screen.getByLabelText("Service status page")).toHaveValue("https://status.dev.mykhaya.app/");
+    expect(screen.getByLabelText("Max homes per user")).toHaveAttribute("placeholder", "No limit");
+    expect(screen.getByLabelText("Default language")).toHaveValue("en-GB");
     expect(screen.queryByText("Unavailable")).not.toBeInTheDocument();
   });
 
-  it("shows an unset value as an empty field with neutral placeholder copy", async () => {
-    render(<PlatformSettingsPage />);
-
-    await screen.findByRole("heading", { name: "Platform name" });
-    const input = screen.getByPlaceholderText("Not yet set");
-    expect(input).toHaveValue("");
-    expect(screen.queryByText("Unavailable")).not.toBeInTheDocument();
+  it("marks Regional as not yet enforced only when the server says so", async () => {
+    await renderPage();
+    expect(screen.getByText("Not yet enforced by the app")).toBeInTheDocument();
+    const settings = baseSettings();
+    settings.settings = settings.settings.map((row) => (row.key === "default_locale" ? { ...row, runtime_effect: "effective" } : row));
+    mockRoutes(settings);
+    document.body.innerHTML = "";
+    await renderPage();
+    expect(screen.queryByText("Not yet enforced by the app")).not.toBeInTheDocument();
   });
 
-  it("shows a not_enforced caption without claiming an operational effect", async () => {
-    render(<PlatformSettingsPage />);
-
-    await screen.findByRole("heading", { name: "Maintenance mode" });
-    expect(screen.getByText("Not yet enforced by the application.")).toBeInTheDocument();
+  it("filters rows by label or description", async () => {
+    const user = userEvent.setup();
+    await renderPage();
+    await user.type(screen.getByPlaceholderText("Filter settings…"), "maintenance");
+    expect(screen.getByRole("switch", { name: "Maintenance mode" })).toBeInTheDocument();
+    expect(screen.queryByLabelText("Platform name")).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Support" })).not.toBeInTheDocument();
+    await user.clear(screen.getByPlaceholderText("Filter settings…"));
+    await user.type(screen.getByPlaceholderText("Filter settings…"), "zzzz");
+    expect(screen.getByText("No settings match “zzzz”.")).toBeInTheDocument();
   });
 });
 
-describe("PCC Settings — saving a normal setting", () => {
-  it("saves exactly one key/value/reason via PUT and shows the configured caption after reload", async () => {
+describe("PCC Settings — unified save bar", () => {
+  it("is hidden until something changes and lists each changed setting", async () => {
     const user = userEvent.setup();
-    put.mockResolvedValue({ key: "platform_display_name", value: "MyKhaya", risk: "normal" });
-    render(<PlatformSettingsPage />);
+    await renderPage();
+    expect(screen.queryByRole("region", { name: "Unsaved changes" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Save" })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Reason for this change")).not.toBeInTheDocument();
 
-    await screen.findByRole("heading", { name: "Platform name" });
-    const row = (await screen.findByRole("heading", { name: "Platform name" })).closest(
-      ".setting-row",
-    ) as HTMLElement;
-    const input = within(row).getByPlaceholderText("Not yet set");
-    await user.type(input, "MyKhaya");
-    await user.type(within(row).getByLabelText("Reason for this change"), "Setting the platform name.");
+    await user.type(screen.getByLabelText("Platform name"), "MyKhaya");
+    await user.click(screen.getByRole("switch", { name: "Maintenance mode" }));
+    const bar = saveBar();
+    expect(within(bar).getByText("2 unsaved changes")).toBeInTheDocument();
+    expect(within(bar).getByText("Platform name · Maintenance mode")).toBeInTheDocument();
+    expect(within(bar).getByRole("button", { name: "Save changes" })).toBeDisabled();
+  });
+
+  it("never treats a reverted edit or a read-only setting as dirty", async () => {
+    const user = userEvent.setup();
+    await renderPage();
+    const toggle = screen.getByRole("switch", { name: "Maintenance mode" });
+    await user.click(toggle);
+    await user.click(toggle);
+    expect(screen.queryByRole("region", { name: "Unsaved changes" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: /email verification/i })).not.toBeInTheDocument();
+  });
+
+  it("saves every changed setting with the single reason, then clears the bar", async () => {
+    const user = userEvent.setup();
+    put.mockResolvedValue({});
+    await renderPage();
+    await user.type(screen.getByLabelText("Platform name"), "MyKhaya");
+    await user.clear(screen.getByLabelText("Support email"));
+    await user.type(screen.getByLabelText("Support email"), "help@mykhaya.app");
+    await user.type(screen.getByLabelText("Max homes per user"), "5");
+    await user.type(within(saveBar()).getByPlaceholderText(/Reason for change/), "Routine platform update");
 
     mockRoutes({
       ...baseSettings(),
-      settings: baseSettings().settings.map((item) =>
-        item.key === "platform_display_name"
-          ? { ...item, value: "MyKhaya", state: "configured" }
-          : item,
+      settings: baseSettings().settings.map((row) =>
+        row.key === "platform_display_name" ? { ...row, value: "MyKhaya" }
+          : row.key === "support_contact_address" ? { ...row, value: "help@mykhaya.app" }
+          : row.key === "maximum_homes_per_user" ? { ...row, value: 5 }
+          : row,
       ),
     });
+    await user.click(within(saveBar()).getByRole("button", { name: "Save changes" }));
 
-    await user.click(within(row).getByRole("button", { name: "Save" }));
-
-    await waitFor(() =>
-      expect(put).toHaveBeenCalledWith("/settings/platform_display_name", {
-        value: "MyKhaya",
-        reason: "Setting the platform name.",
-        confirmed: true,
-      }),
-    );
-    await within(row).findByText("Configured in Platform Control Centre");
+    await waitFor(() => expect(put).toHaveBeenCalledTimes(3));
+    expect(put).toHaveBeenCalledWith("/settings/platform_display_name", { value: "MyKhaya", reason: "Routine platform update", confirmed: true });
+    expect(put).toHaveBeenCalledWith("/settings/support_contact_address", { value: "help@mykhaya.app", reason: "Routine platform update", confirmed: true });
+    expect(put).toHaveBeenCalledWith("/settings/maximum_homes_per_user", { value: 5, reason: "Routine platform update", confirmed: true });
+    await waitFor(() => expect(screen.queryByRole("region", { name: "Unsaved changes" })).not.toBeInTheDocument());
+    expect(screen.getByRole("status")).toHaveTextContent("Changes saved.");
+    expect(screen.getByLabelText("Platform name")).toHaveValue("MyKhaya");
   });
 
-  it("surfaces a validation error from a rejected save without clearing the field", async () => {
+  it("requires a reason of at least 10 characters", async () => {
     const user = userEvent.setup();
-    put.mockRejectedValue(new Error("That must be a valid http(s) URL."));
-    render(<PlatformSettingsPage />);
-
-    const row = (await screen.findByRole("heading", { name: "Service status page" })).closest(
-      ".setting-row",
-    ) as HTMLElement;
-    // A native <input type="url"> already blocks browser submission for a
-    // syntactically-invalid URL like "not-a-url" before this component's own
-    // onSubmit ever runs — using a value that *is* syntactically valid HTML5
-    // URL syntax (so it reaches our submit handler / the mocked PUT) but
-    // that the server's stricter scheme check rejects is what actually
-    // exercises the server-validation-error rendering path this test cares
-    // about.
-    const urlInput = within(row).getByDisplayValue("https://status.dev.mykhaya.app/");
-    fireEvent.change(urlInput, { target: { value: "ftp://status.example.com" } });
-    await user.type(within(row).getByLabelText("Reason for this change"), "Testing a bad URL.");
-
-    await user.click(within(row).getByRole("button", { name: "Save" }));
-
-    await waitFor(() => expect(put).toHaveBeenCalled());
-    await within(row).findByText("That must be a valid http(s) URL.");
-    expect(urlInput).toHaveValue("ftp://status.example.com");
-  });
-});
-
-describe("PCC Settings — central logging", () => {
-  it("sends only the backend configuration contract when saving", async () => {
-    const user = userEvent.setup();
-    put.mockResolvedValue({ enabled: true, configured: true, host: "graylog.internal", port: 6514, protocol: "tls", facility: 16, environment: "test", tls_verify: true, minimum_level: "INFO", categories: ["application", "http", "security", "audit", "worker", "integration"], last_successful_delivery: null, last_error: null, dropped_count: 0 });
-    render(<PlatformSettingsPage />);
-
-    const card = (await screen.findByRole("heading", { name: "Central logging" })).closest(".cc-card") as HTMLElement;
-    await user.click(within(card).getByLabelText("Enabled"));
-    await user.type(within(card).getByLabelText("Host"), "graylog.internal");
-    await user.type(within(card).getByLabelText("Reason for this change"), "Enable central logging safely");
-    await user.click(within(card).getByRole("button", { name: "Save settings" }));
-
-    await waitFor(() => expect(put).toHaveBeenCalledWith("/logging/syslog", {
-      enabled: true,
-      host: "graylog.internal",
-      port: 6514,
-      protocol: "tls",
-      facility: 16,
-      environment: "test",
-      tls_verify: true,
-      minimum_level: "INFO",
-      categories: ["application", "http", "security", "audit", "worker", "integration"],
-      reason: "Enable central logging safely",
-      confirmed: true,
-    }));
-    const savedPayload = put.mock.calls[0]?.[1] as Record<string, unknown>;
-    expect(savedPayload).not.toHaveProperty("configured");
-    expect(savedPayload).not.toHaveProperty("dropped_count");
-  });
-
-  it("shows field validation and does not submit an enabled configuration without a host", async () => {
-    const user = userEvent.setup();
-    render(<PlatformSettingsPage />);
-
-    const card = (await screen.findByRole("heading", { name: "Central logging" })).closest(".cc-card") as HTMLElement;
-    await user.click(within(card).getByLabelText("Enabled"));
-    await user.type(within(card).getByLabelText("Reason for this change"), "Enable central logging safely");
-    await user.click(within(card).getByRole("button", { name: "Save settings" }));
-
+    await renderPage();
+    await user.type(screen.getByLabelText("Platform name"), "MyKhaya");
+    await user.type(within(saveBar()).getByPlaceholderText(/Reason for change/), "short");
+    await user.click(within(saveBar()).getByRole("button", { name: "Save changes" }));
+    expect(screen.getByText("Reason for change must be at least 10 characters.")).toBeInTheDocument();
     expect(put).not.toHaveBeenCalled();
-    expect(screen.getByText("Host is required when central logging is enabled.")).toBeInTheDocument();
   });
 
-  it("keeps test message disabled until an enabled configuration is saved", async () => {
-    render(<PlatformSettingsPage />);
-    const card = (await screen.findByRole("heading", { name: "Central logging" })).closest(".cc-card") as HTMLElement;
-    expect(within(card).getByRole("button", { name: "Send test message" })).toBeDisabled();
-    const statusGrid = card.querySelector(".central-logging-status-grid");
-    expect(statusGrid).toBeInTheDocument();
-    expect(within(statusGrid as HTMLElement).getByText("None").parentElement).toHaveClass("cc-metadata-item-span");
-  });
-
-  it("saves the selected minimum level and disables TLS verification for UDP", async () => {
+  it("keeps failed rows dirty with their own error after a partial failure", async () => {
     const user = userEvent.setup();
-    put.mockResolvedValue({ enabled: false, configured: false, host: "", port: 6514, protocol: "udp", facility: 16, environment: "test", tls_verify: true, minimum_level: "WARNING", last_successful_delivery: null, last_error: null, dropped_count: 0 });
-    render(<PlatformSettingsPage />);
+    put.mockImplementation((path: string) =>
+      path === "/settings/service_status_url" ? Promise.reject(new Error("That must be a valid http(s) URL.")) : Promise.resolve({}),
+    );
+    await renderPage();
+    await user.type(screen.getByLabelText("Platform name"), "MyKhaya");
+    fireEvent.change(screen.getByLabelText("Service status page"), { target: { value: "ftp://status.example.com" } });
+    await user.type(within(saveBar()).getByPlaceholderText(/Reason for change/), "Routine platform update");
+    mockRoutes(withValue("platform_display_name", "MyKhaya"));
+    await user.click(within(saveBar()).getByRole("button", { name: "Save changes" }));
 
-    const card = (await screen.findByRole("heading", { name: "Central logging" })).closest(".cc-card") as HTMLElement;
-    await user.selectOptions(within(card).getByLabelText("Minimum log level"), "WARNING");
-    await user.selectOptions(within(card).getByLabelText("Protocol"), "udp");
-    expect(within(card).getByLabelText("Verify TLS certificate")).toBeDisabled();
-    await user.type(within(card).getByLabelText("Reason for this change"), "Adjust remote filtering safely");
-    await user.click(within(card).getByRole("button", { name: "Save settings" }));
-
-    await waitFor(() => expect(put).toHaveBeenCalledWith("/logging/syslog", expect.objectContaining({ minimum_level: "WARNING", protocol: "udp" })));
+    expect(await screen.findByText("That must be a valid http(s) URL.")).toBeInTheDocument();
+    expect(screen.getByLabelText("Service status page")).toHaveValue("ftp://status.example.com");
+    expect(within(saveBar()).getByText("1 unsaved change")).toBeInTheDocument();
+    expect(within(saveBar()).getByText("Service status page")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("1 change could not be saved.");
   });
 
-  it("saves category selections and clearly explains an empty selection", async () => {
+  it("discards every unsaved edit", async () => {
     const user = userEvent.setup();
-    put.mockResolvedValue({ enabled: true, configured: true, host: "graylog.internal", port: 6514, protocol: "tls", facility: 16, environment: "test", tls_verify: true, minimum_level: "INFO", categories: ["http"], last_successful_delivery: null, last_error: null, dropped_count: 0 });
-    mockRoutes(baseSettings(), { enabled: true, configured: true, host: "graylog.internal", categories: ["application", "http", "security", "audit", "worker", "integration"] });
-    render(<PlatformSettingsPage />);
-
-    const card = (await screen.findByRole("heading", { name: "Central logging" })).closest(".cc-card") as HTMLElement;
-    await user.click(within(card).getByLabelText("Application"));
-    await user.click(within(card).getByLabelText("HTTP / API Requests"));
-    await user.click(within(card).getByLabelText("Security & Authentication"));
-    await user.click(within(card).getByLabelText("Audit"));
-    await user.click(within(card).getByLabelText("Workers & Scheduler"));
-    await user.click(within(card).getByLabelText("External Integrations"));
-    expect(within(card).getByText("Central Logging remains enabled, but no normal application events will be forwarded.")).toBeInTheDocument();
-    await user.type(within(card).getByLabelText("Reason for this change"), "Disable normal remote categories");
-    await user.click(within(card).getByRole("button", { name: "Save settings" }));
-
-    await waitFor(() => expect(put).toHaveBeenCalledWith("/logging/syslog", expect.objectContaining({ categories: [] })));
+    await renderPage();
+    await user.type(screen.getByLabelText("Platform name"), "MyKhaya");
+    await user.click(screen.getByRole("switch", { name: "Maintenance mode" }));
+    await user.click(within(saveBar()).getByRole("button", { name: "Discard" }));
+    expect(screen.getByLabelText("Platform name")).toHaveValue("");
+    expect(screen.getByRole("switch", { name: "Maintenance mode" })).not.toBeChecked();
+    expect(screen.queryByRole("region", { name: "Unsaved changes" })).not.toBeInTheDocument();
   });
 
-  it("renders last delivery as a local human-readable timestamp", async () => {
-    mockRoutes(baseSettings(), { last_successful_delivery: "2026-09-28T18:30:20.818411+00:00" });
-    render(<PlatformSettingsPage />);
-    const card = (await screen.findByRole("heading", { name: "Central logging" })).closest(".cc-card") as HTMLElement;
-    expect(within(card).queryByText("2026-09-28T18:30:20.818411+00:00")).not.toBeInTheDocument();
-    expect(within(card).getByText(/28 Sept? 2026/)).toBeInTheDocument();
+  it("warns before leaving the page with unsaved changes", async () => {
+    const user = userEvent.setup();
+    await renderPage();
+    const clean = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(clean);
+    expect(clean.defaultPrevented).toBe(false);
+
+    await user.type(screen.getByLabelText("Platform name"), "MyKhaya");
+    const dirty = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(dirty);
+    expect(dirty.defaultPrevented).toBe(true);
+
+    const confirm = vi.spyOn(window, "confirm").mockReturnValue(false);
+    // The sidebar link would navigate away; it must be held behind a confirm.
+    const link = screen.getAllByRole("link", { name: "Overview" })[0]!;
+    const click = new MouseEvent("click", { bubbles: true, cancelable: true, button: 0 });
+    link.dispatchEvent(click);
+    expect(confirm).toHaveBeenCalled();
+    expect(click.defaultPrevented).toBe(true);
   });
 });
 
 describe("PCC Settings — sensitive settings require confirmation", () => {
-  it("opens CcConfirmDialog instead of saving directly when a sensitive value changes", async () => {
+  it("confirms before saving a sensitive change, with runtime-effect copy", async () => {
     const user = userEvent.setup();
-    render(<PlatformSettingsPage />);
-
-    const row = (await screen.findByRole("heading", { name: "Maintenance mode" })).closest(
-      ".setting-row",
-    ) as HTMLElement;
-    await user.click(within(row).getByRole("checkbox"));
-    await user.click(within(row).getByRole("button", { name: "Save" }));
+    put.mockResolvedValue({});
+    await renderPage();
+    await user.click(screen.getByRole("switch", { name: "Maintenance mode" }));
+    await user.type(within(saveBar()).getByPlaceholderText(/Reason for change/), "Planned maintenance window");
+    await user.click(within(saveBar()).getByRole("button", { name: "Save changes" }));
 
     const dialog = await screen.findByRole("dialog");
     expect(within(dialog).getByText(/does not currently change user access or behaviour/i)).toBeInTheDocument();
     expect(put).not.toHaveBeenCalled();
+    await user.click(within(dialog).getByRole("button", { name: "Save changes" }));
+    await waitFor(() =>
+      expect(put).toHaveBeenCalledWith("/settings/maintenance_mode", { value: true, reason: "Planned maintenance window", confirmed: true }),
+    );
+  });
+
+  it("warns about real access effects for enforced settings", async () => {
+    const user = userEvent.setup();
+    await renderPage();
+    await user.click(screen.getByRole("switch", { name: "Allow new registrations" }));
+    await user.type(within(saveBar()).getByPlaceholderText(/Reason for change/), "Pause new signups today");
+    await user.click(within(saveBar()).getByRole("button", { name: "Save changes" }));
+    const dialog = await screen.findByRole("dialog");
+    expect(within(dialog).getByText(/Allow new registrations affects real user access or availability/)).toBeInTheDocument();
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(put).not.toHaveBeenCalled();
   });
 });
 
-describe("PCC Settings — Driveway/DVLA integration", () => {
-  function driveawayCard() {
-    return screen.findByRole("heading", { name: "Driveway integrations" }).then(
-      (heading) => heading.closest(".cc-card") as HTMLElement,
+describe("PCC Settings — registration & access", () => {
+  it("shows the effective behaviour strip and keeps email verification read-only", async () => {
+    await renderPage();
+    const strip = screen.getByLabelText("Effective registration behaviour");
+    expect(within(strip).getByText("Normal signup")).toBeInTheDocument();
+    expect(within(strip).getByText("Email verification")).toBeInTheDocument();
+    expect(within(strip).getByText("Required")).toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: /verification/i })).not.toBeInTheDocument();
+  });
+
+  it("selects signup mode with a radiogroup supporting arrow keys", async () => {
+    const user = userEvent.setup();
+    put.mockResolvedValue({});
+    await renderPage();
+    const group = screen.getByRole("radiogroup", { name: "Signup mode" });
+    const normal = within(group).getByRole("radio", { name: "Normal" });
+    expect(normal).toHaveAttribute("aria-checked", "true");
+    expect(within(group).getByRole("radio", { name: "Mixed" })).toHaveAttribute("tabindex", "-1");
+
+    normal.focus();
+    await user.keyboard("{ArrowRight}");
+    const beta = within(group).getByRole("radio", { name: "Beta only" });
+    expect(beta).toHaveAttribute("aria-checked", "true");
+    expect(beta).toHaveFocus();
+    expect(screen.getByText("Only the approved Founding Beta registration path is available.")).toBeInTheDocument();
+    await user.keyboard("{ArrowLeft}{ArrowLeft}");
+    expect(within(group).getByRole("radio", { name: "Closed" })).toHaveAttribute("aria-checked", "true");
+
+    expect(within(saveBar()).getByText("Signup mode")).toBeInTheDocument();
+    await user.type(within(saveBar()).getByPlaceholderText(/Reason for change/), "Close signups for now");
+    await user.click(within(saveBar()).getByRole("button", { name: "Save changes" }));
+    await user.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(put).toHaveBeenCalledWith("/settings/signup_mode", { value: "closed", reason: "Close signups for now", confirmed: true }));
+  });
+
+  it("saves domains as a list and expiry as a number", async () => {
+    const user = userEvent.setup();
+    put.mockResolvedValue({});
+    await renderPage();
+    await user.type(screen.getByLabelText("Allowed email domains"), "mykhaya.app, example.com");
+    await user.type(screen.getByLabelText("Invitation expiry"), "14");
+    expect(screen.getByText("days")).toBeInTheDocument();
+    await user.type(within(saveBar()).getByPlaceholderText(/Reason for change/), "Tighten registration access");
+    await user.click(within(saveBar()).getByRole("button", { name: "Save changes" }));
+    await user.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(put).toHaveBeenCalledWith("/settings/allowed_registration_domains", expect.objectContaining({ value: ["mykhaya.app", "example.com"] })));
+    expect(put).toHaveBeenCalledWith("/settings/invitation_expiry_days", expect.objectContaining({ value: 14 }));
+  });
+});
+
+describe("PCC Settings — central logging", () => {
+  it("saves only the backend configuration contract with the shared reason", async () => {
+    const user = userEvent.setup();
+    put.mockResolvedValue({ ...SYSLOG, enabled: true, configured: true, host: "graylog.internal" });
+    await renderPage();
+    await user.click(screen.getByRole("switch", { name: "Enable central logging" }));
+    await user.type(screen.getByLabelText("Host"), "graylog.internal");
+    expect(within(saveBar()).getByText("Central logging")).toBeInTheDocument();
+    await user.type(within(saveBar()).getByPlaceholderText(/Reason for change/), "Enable central logging safely");
+    await user.click(within(saveBar()).getByRole("button", { name: "Save changes" }));
+
+    await waitFor(() =>
+      expect(put).toHaveBeenCalledWith("/logging/syslog", {
+        enabled: true,
+        host: "graylog.internal",
+        port: 6514,
+        protocol: "tls",
+        facility: 16,
+        environment: "test",
+        tls_verify: true,
+        minimum_level: "INFO",
+        categories: ["application", "http", "security", "audit", "worker", "integration"],
+        reason: "Enable central logging safely",
+        confirmed: true,
+      }),
     );
-  }
-
-  it("shows Not configured and disables Test connection when no environment is selected", async () => {
-    mockRoutes();
-    render(<PlatformSettingsPage />);
-    const card = await driveawayCard();
-    expect(within(card).getAllByText("Not configured").length).toBeGreaterThan(0);
-    expect(within(card).getByRole("button", { name: "Test connection" })).toBeDisabled();
+    const payload = put.mock.calls[0]?.[1] as Record<string, unknown>;
+    expect(payload).not.toHaveProperty("configured");
+    expect(payload).not.toHaveProperty("dropped_count");
   });
 
-  it("shows the friendly UAT label, endpoint, and never renders the API key", async () => {
-    mockRoutes(baseSettings(), {}, {
-      enabled: true,
-      configured: true,
-      environment: "UAT",
-      endpoint: "https://uat.dvla.example/vehicle-enquiry",
-      health: { state: "Healthy" },
-    });
-    render(<PlatformSettingsPage />);
-    const card = await driveawayCard();
-    expect(within(card).getByText("UAT")).toBeInTheDocument();
-    expect(within(card).getByText("https://uat.dvla.example/vehicle-enquiry")).toBeInTheDocument();
-    expect(screen.queryByText(/uat-secret|api-key|apikey/i)).not.toBeInTheDocument();
+  it("blocks saving an enabled configuration without a host", async () => {
+    const user = userEvent.setup();
+    await renderPage();
+    await user.click(screen.getByRole("switch", { name: "Enable central logging" }));
+    await user.type(within(saveBar()).getByPlaceholderText(/Reason for change/), "Enable central logging safely");
+    await user.click(within(saveBar()).getByRole("button", { name: "Save changes" }));
+    expect(put).not.toHaveBeenCalled();
+    expect(screen.getByText("Host is required when central logging is enabled.")).toBeInTheDocument();
   });
 
-  it("shows a Production warning notice only when the active environment is Production", async () => {
-    mockRoutes(baseSettings(), {}, {
-      enabled: true,
-      configured: true,
-      environment: "Production",
-      endpoint: "https://driver-vehicle-licensing.api.gov.uk/vehicle-enquiry/v1/vehicles",
-      health: { state: "Healthy" },
-    });
-    render(<PlatformSettingsPage />);
-    const card = await driveawayCard();
-    expect(within(card).getByText(/Production DVLA service/)).toBeInTheDocument();
+  it("keeps Send test disabled until an enabled configuration is saved", async () => {
+    const user = userEvent.setup();
+    await renderPage();
+    expect(screen.getByRole("button", { name: "Send test" })).toBeDisabled();
+    document.body.innerHTML = "";
+    mockRoutes(baseSettings(), { enabled: true, configured: true, host: "graylog.internal" });
+    await renderPage();
+    const send = screen.getByRole("button", { name: "Send test" });
+    expect(send).toBeEnabled();
+    await user.selectOptions(screen.getByLabelText("Minimum level"), "WARNING");
+    expect(send).toBeDisabled();
   });
 
-  it("shows last successful and failed lookup timestamps when available", async () => {
+  it("disables TLS verification for non-TLS protocols and explains an empty category selection", async () => {
+    const user = userEvent.setup();
+    await renderPage();
+    await user.selectOptions(screen.getByLabelText("Protocol"), "udp");
+    expect(screen.getByLabelText("Verify TLS certificate")).toBeDisabled();
+    for (const label of ["Application", "HTTP / API requests", "Security & authentication", "Audit", "Workers & schedules", "External integrations"]) {
+      await user.click(screen.getByLabelText(label));
+    }
+    expect(screen.getByText("Central logging stays enabled, but no normal application events will be forwarded.")).toBeInTheDocument();
+  });
+
+  it("renders last delivery as a short human-readable timestamp", async () => {
+    mockRoutes(baseSettings(), { last_successful_delivery: "2026-09-28T18:30:20.818411+00:00" });
+    await renderPage();
+    expect(screen.queryByText(/2026-09-28T18:30/)).not.toBeInTheDocument();
+    expect(screen.getByText(/Last delivery 28 Sept?, \d\d:\d\d/)).toBeInTheDocument();
+  });
+});
+
+describe("PCC Settings — Driveway integrations", () => {
+  it("shows status badges and keeps tests disabled until configured with a registration", async () => {
+    const user = userEvent.setup();
+    await renderPage();
+    expect(screen.getAllByText("Not configured").length).toBeGreaterThan(0);
+    expect(screen.getByText(/API key and endpoint are not configured\./)).toBeInTheDocument();
+    await user.type(screen.getByLabelText("Test reg"), "AB12 CDE");
+    expect(screen.getByRole("button", { name: "Test DVLA connection" })).toBeDisabled();
+    expect(screen.getByRole("button", { name: "Test DVSA connection" })).toBeDisabled();
+  });
+
+  it("shows DVLA environment, endpoint and lookup history but never the key", async () => {
     mockRoutes(baseSettings(), {}, {
       enabled: true,
       configured: true,
@@ -424,40 +523,41 @@ describe("PCC Settings — Driveway/DVLA integration", () => {
       last_failure_at: "2026-09-29T08:15:00Z",
       last_failure_summary: "Provider unavailable",
     });
-    render(<PlatformSettingsPage />);
-    const card = await driveawayCard();
-    expect(within(card).getByText(/20 Sept? 2026/)).toBeInTheDocument();
-    expect(within(card).getByText(/29 Sept? 2026/)).toBeInTheDocument();
-    expect(within(card).getByText("Provider unavailable")).toBeInTheDocument();
+    await renderPage();
+    expect(screen.getByText(/UAT · https:\/\/uat\.dvla\.example\/vehicle-enquiry/)).toBeInTheDocument();
+    expect(screen.getByText(/Last lookup 20 Sept? 2026/)).toBeInTheDocument();
+    expect(screen.getByText(/Last failed lookup 29 Sept? 2026/)).toBeInTheDocument();
+    expect(screen.getByText(/Provider unavailable/)).toBeInTheDocument();
+    expect(screen.getByText("Degraded")).toBeInTheDocument();
+    expect(screen.queryByText(/uat-secret|api-key|apikey/i)).not.toBeInTheDocument();
   });
 
-  it("runs the test connection using the entered registration and shows the result", async () => {
+  it("warns only for the Production DVLA service", async () => {
+    mockRoutes(baseSettings(), {}, { enabled: true, configured: true, environment: "Production", health: { state: "Healthy" } });
+    await renderPage();
+    expect(screen.getByText(/Production DVLA service/)).toBeInTheDocument();
+  });
+
+  it("runs the DVLA and DVSA tests with the shared test registration", async () => {
     const user = userEvent.setup();
-    mockRoutes(baseSettings(), {}, {
-      enabled: true,
-      configured: true,
-      environment: "UAT",
-      endpoint: "https://uat.dvla.example/vehicle-enquiry",
-      health: { state: "Healthy" },
+    mockRoutes(baseSettings(), {}, { enabled: true, configured: true, environment: "UAT", health: { state: "Healthy" } }, {
+      enabled: true, deployment_enabled: true, configured: true, environment: "Development", health: { state: "Healthy" },
     });
-    post.mockResolvedValue({ state: "Healthy", message: "DVLA UAT connection successful." });
-    render(<PlatformSettingsPage />);
-    const card = await driveawayCard();
-    await user.type(within(card).getByLabelText("Test registration"), "AB12 CDE");
-    await user.click(within(card).getByRole("button", { name: "Test connection" }));
-
-    await waitFor(() =>
-      expect(post).toHaveBeenCalledWith(
-        "/integrations/dvla/test",
-        expect.objectContaining({ registration: "AB12 CDE", confirmed: true }),
-      ),
+    post.mockImplementation((path: string) =>
+      Promise.resolve({ message: path.includes("dvla") ? "DVLA UAT connection successful." : "DVSA MOT History connection successful." }),
     );
-    expect(await within(card).findByText("DVLA UAT connection successful.")).toBeInTheDocument();
+    await renderPage();
+    await user.type(screen.getByLabelText("Test reg"), "AB12 CDE");
+    await user.click(screen.getByRole("button", { name: "Test DVLA connection" }));
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/integrations/dvla/test", expect.objectContaining({ registration: "AB12 CDE", confirmed: true })));
+    expect(await screen.findByText("DVLA UAT connection successful.")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Test DVSA connection" }));
+    await waitFor(() => expect(post).toHaveBeenCalledWith("/integrations/dvsa/test", expect.objectContaining({ registration: "AB12 CDE", confirmed: true })));
+    expect(await screen.findByText("DVSA MOT History connection successful.")).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Unsaved changes" })).not.toBeInTheDocument();
   });
-});
 
-describe("PCC Settings — DVSA MOT history integration", () => {
-  it("shows DVSA state with configured/not-configured only, and a friendly error category", async () => {
+  it("describes DVSA state with configured/not-configured only and a friendly error category", async () => {
     mockRoutes(baseSettings(), {}, {}, {
       enabled: true,
       deployment_enabled: true,
@@ -467,120 +567,20 @@ describe("PCC Settings — DVSA MOT history integration", () => {
       last_failure_at: "2026-10-12T09:00:00Z",
       last_failure_category: "rate_limited",
     });
-    render(<PlatformSettingsPage />);
-    const heading = await screen.findByRole("heading", { name: "DVSA MOT history" });
-    const card = heading.closest("section") ?? document.body;
-    expect(within(card).getByText("Configured")).toBeInTheDocument();
-    expect(within(card).getByText("Rate limited")).toBeInTheDocument();
-    expect(within(card).getByText("Development")).toBeInTheDocument();
-    // No credential-shaped field is rendered at all.
+    await renderPage();
+    expect(screen.getByText(/credentials configured · Development · Last error: Rate limited/)).toBeInTheDocument();
     expect(screen.queryByText(/client secret|api key value|bearer/i)).not.toBeInTheDocument();
   });
 
-  it("runs the DVSA connection test with an operator-supplied registration", async () => {
+  it("saves the provider toggles through the save bar", async () => {
     const user = userEvent.setup();
-    mockRoutes(baseSettings(), {}, {}, {
-      enabled: true,
-      deployment_enabled: true,
-      configured: true,
-      environment: "Development",
-      health: { state: "Healthy" },
-    });
-    post.mockResolvedValue({ state: "Healthy", message: "DVSA MOT History connection successful." });
-    render(<PlatformSettingsPage />);
-    await user.type(await screen.findByLabelText("DVSA test registration"), "AB12 CDE");
-    await user.click(screen.getByRole("button", { name: "Test DVSA connection" }));
-    await waitFor(() =>
-      expect(post).toHaveBeenCalledWith(
-        "/integrations/dvsa/test",
-        expect.objectContaining({ registration: "AB12 CDE", confirmed: true }),
-      ),
-    );
-    expect(await screen.findByText("DVSA MOT History connection successful.")).toBeInTheDocument();
-  });
-
-  it("disables the DVSA test until credentials are configured", async () => {
-    render(<PlatformSettingsPage />);
-    const button = await screen.findByRole("button", { name: "Test DVSA connection" });
-    expect(button).toBeDisabled();
-  });
-});
-
-describe("PCC Settings — enforced access controls", () => {
-  function enforcedSettings() {
-    const base = baseSettings();
-    const registration = ["registration_enabled", "invite_only_mode"].map((key) => ({
-      key,
-      label: key === "registration_enabled" ? "Allow any new registrations" : "Invitation-only access",
-      description: "Server-enforced signup control.",
-      section: "Registration & Access",
-      value_type: "boolean",
-      risk: "sensitive",
-      runtime_effect: "effective",
-      editable: true,
-      consumer_visible: false,
-      value: key === "registration_enabled",
-      state: "unset",
-    }));
-    return {
-      ...base,
-      settings: [
-        ...base.settings.map((item) =>
-          item.key === "maintenance_mode" ? { ...item, runtime_effect: "effective" } : item,
-        ),
-        ...registration,
-      ],
-    };
-  }
-
-  it("shows no 'not enforced' warning for a setting the server enforces", async () => {
-    mockRoutes(enforcedSettings());
-    render(<PlatformSettingsPage />);
-
-    await screen.findByRole("heading", { name: "Maintenance mode" });
-    expect(screen.queryByText("Not yet enforced by the application.")).not.toBeInTheDocument();
-  });
-
-  it("lists the registration controls and warns about real access effects when saving", async () => {
-    const user = userEvent.setup();
-    mockRoutes(enforcedSettings());
-    render(<PlatformSettingsPage />);
-
-    const heading = await screen.findByRole("heading", { name: "Allow any new registrations" });
-    expect(screen.getByRole("heading", { name: "Invitation-only access" })).toBeInTheDocument();
-    const row = heading.closest(".setting-row") as HTMLElement;
-    await user.click(within(row).getByRole("checkbox"));
-    await user.click(within(row).getByRole("button", { name: "Save" }));
-
-    expect(
-      await screen.findByText(/affects real user access or availability/),
-    ).toBeInTheDocument();
-    expect(screen.queryByText(/not yet enforced/i)).not.toBeInTheDocument();
-  });
-
-  it("shows effective registration summary and keeps email verification read-only", async () => {
-    const settings = enforcedSettings();
-    settings.settings.push({
-      key: "email_verification_required",
-      label: "Require email verification",
-      description: "Deployment safeguard.",
-      section: "Registration & Access",
-      value_type: "boolean",
-      risk: "sensitive",
-      runtime_effect: "effective",
-      editable: true,
-      consumer_visible: false,
-      value: true,
-      state: "default",
-    });
-    mockRoutes(settings);
-    render(<PlatformSettingsPage />);
-
-    expect(await screen.findByRole("heading", { name: "Effective registration behaviour" })).toBeInTheDocument();
-    expect(screen.getByText("Existing user sign-in")).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: "Email verification" })).toBeInTheDocument();
-    expect(screen.getByText("Managed by deployment policy. Production cannot turn this safeguard off from PCC.")).toBeInTheDocument();
-    const verificationHeading = screen.getByRole("heading", { name: "Email verification" });
-    expect(within(verificationHeading.closest(".cc-card") as HTMLElement).queryByRole("button", { name: /^Save$/ })).not.toBeInTheDocument();
+    put.mockResolvedValue({});
+    await renderPage();
+    await user.click(screen.getByRole("switch", { name: "Enable DVSA MOT history" }));
+    expect(within(saveBar()).getByText("DVSA MOT history")).toBeInTheDocument();
+    await user.type(within(saveBar()).getByPlaceholderText(/Reason for change/), "Enable DVSA checks on DEV");
+    await user.click(within(saveBar()).getByRole("button", { name: "Save changes" }));
+    await user.click(within(await screen.findByRole("dialog")).getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(put).toHaveBeenCalledWith("/settings/driveway_dvsa_enabled", { value: true, reason: "Enable DVSA checks on DEV", confirmed: true }));
   });
 });

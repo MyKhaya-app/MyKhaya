@@ -19,6 +19,7 @@ from test_platform_control_centre import (  # noqa: F401
     unsafe,
 )
 
+from mykhaya.config import get_settings
 from mykhaya.db import SessionFactory
 from mykhaya.models import (
     AdministrativeAuditEvent,
@@ -59,6 +60,7 @@ async def test_owner_can_read_settings_with_friendly_metadata(
     assert response.status_code == 200
     payload = response.json()
     by_key = {row["key"]: row for row in payload["settings"]}
+    assert payload["deployment_environment"] == get_settings().environment
 
     display_name = by_key["platform_display_name"]
     assert display_name["label"] == "Platform name"

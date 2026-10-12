@@ -5891,6 +5891,9 @@ async def settings_list(
         )
     return {
         "settings": items,
+        # Deployment label only (development/staging/production) for the PCC
+        # Settings at-a-glance strip; never a secret.
+        "deployment_environment": settings.environment,
         "environment": [
             {
                 "key": "public_url",
