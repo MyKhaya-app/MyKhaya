@@ -5,8 +5,10 @@ encryption of Tier-1 fields and for keyed lookup tokens (blind indexes). See
 the Phase 1 Sensitive Data Protection audit for the design rationale.
 
 **Status:** Phase 2A (library, key loading) is commissioned on DEV. **Phase 2B
-(Driveway dual-write) exists in code but is disabled by default.** See
-[Phase 2B: Driveway dual-write](#phase-2b-driveway-dual-write) below. While a
+(Driveway dual-write) is disabled by default** and commissioned on DEV only. Phase
+2C adds an operator-run backfill for missing ciphertext. See
+[Phase 2B: Driveway dual-write](#phase-2b-driveway-dual-write) and
+[Phase 2C: backfill](#phase-2c-backfill-missing-driveway-ciphertext) below. While a
 keyring is unprovisioned, the services log `sensitive_field_keys_not_provisioned`
 and run normally.
 
@@ -81,6 +83,55 @@ To roll back, set the flag back to `false` and restart the same services. Plaint
 was never changed by the flag. Rows written while it was on keep a valid envelope
 until their plaintext next changes, at which point it is cleared. The migration's
 downgrade drops only the two ciphertext columns.
+
+## Phase 2C: backfill missing Driveway ciphertext
+
+`mykhaya.tools.driveway_ciphertext_backfill` fills **missing ciphertext only**. It
+populates `registration_ciphertext` where `registration` is set and the ciphertext is
+NULL, and `vin_ciphertext` likewise.
+
+- **Operator-triggered only.** Nothing runs it automatically: no migration, startup,
+  worker, scheduler or deployment hook (tests enforce this).
+- **Dry-run is the default.** It counts what would change in a `READ ONLY`
+  transaction and writes nothing. Writing requires `--apply`, plus
+  `MYKHAYA_DRIVEWAY_FIELD_ENCRYPTION_WRITE=true` (so normal writes already keep
+  ciphertext in step) and a usable field-encryption keyring. Otherwise it refuses
+  with exit status 2 before touching any row.
+- **Uses the same keyring and bindings as normal writes** (`registration_binding` /
+  `vin_binding` on the vehicle id). It encrypts the stored plaintext exactly, with no
+  trimming or normalisation.
+- **Plaintext is never modified or removed.** No other column changes either,
+  including `updated_at`, so open edit forms are not invalidated. Existing ciphertext
+  is never replaced or re-encrypted, and NULL plaintext gets no ciphertext.
+- **One transaction.** Any failure rolls everything back (exit status 1). Eligible rows
+  are locked and each update is guarded on "ciphertext still NULL, plaintext
+  unchanged", so a concurrent edit is never overwritten. Re-running is a no-op.
+- **Counts only.** Output and logs never contain a registration, VIN, vehicle or Home
+  ID, ciphertext or key material.
+- **Plaintext remains authoritative.** Reads are **not** switched, and ciphertext is
+  still not the sole recoverable representation.
+- **This is not key rotation.** It never re-encrypts existing ciphertext under a newer
+  key; rotation remains the separate procedure below.
+- **This does not enable production rollout.** The Phase 2B gate (encrypted-backup
+  restore test **and** key-escrow recovery exercise) still applies before
+  dual-write, and therefore any backfill, in production.
+
+**DEV procedure**
+
+```sh
+dc() { docker compose -f compose.yml -f compose.dev.yml exec -T api "$@"; }
+dc python -m mykhaya.tools.driveway_ciphertext_check            # 1. baseline
+dc python -m mykhaya.tools.driveway_ciphertext_backfill          # 2. dry-run
+#                                                                   3. review counts
+make backup                                                      # 4. fresh encrypted backup
+dc python -m mykhaya.tools.driveway_ciphertext_backfill --apply  # 5. apply
+dc python -m mykhaya.tools.driveway_ciphertext_check            # 6. verify
+dc python -m mykhaya.tools.driveway_ciphertext_backfill --apply  # 8. re-run: 0 backfilled
+```
+
+Step 7: the check must report `registration_without_ciphertext = 0`,
+`vin_without_ciphertext = 0`, and zero `*_mismatch` / `*_decrypt_failed`. Step 8: the
+second `--apply` must report `registration_backfilled = 0` and `vin_backfilled = 0`.
 
 ## What the keys are, and what they are not
 

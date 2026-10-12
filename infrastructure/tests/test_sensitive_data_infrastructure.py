@@ -73,6 +73,19 @@ class SensitiveDataInfrastructureTests(unittest.TestCase):
         self.assertIn("com.docker.compose.volume=$key", self.volumes)
         self.assertIn("file_store_volume_mounts ro", self.backup)
 
+    def test_driveway_ciphertext_backfill_is_operator_run_only(self) -> None:
+        """Phase 2C: never wired into deploy scripts, Compose or migrations."""
+        candidates = [
+            *ROOT.glob("compose*.yml"),
+            ROOT / "Makefile",
+            *(ROOT / "infrastructure").rglob("*.sh"),
+            *(ROOT / "apps/api/migrations").rglob("*.py"),
+        ]
+        for path in candidates:
+            self.assertNotIn(
+                "driveway_ciphertext_backfill", path.read_text(encoding="utf-8"), str(path)
+            )
+
     def test_postgres_never_receives_the_application_env_file(self) -> None:
         for compose, name in ((self.compose, "postgres"), (self.test_compose, "postgres-test")):
             block = _service_block(compose, name)
