@@ -11,6 +11,7 @@ from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.calendar_provisioning import ensure_personal_calendar
+from mykhaya.driveway_reminders import ensure_driveway_category
 from mykhaya.models import (
     AuthIdentity,
     CalendarEvent,
@@ -123,6 +124,7 @@ class ManagedDemoService:
             )
         )
         db.add(HomeCalendar(group_id=home.id, name="Home Calendar", is_primary=True))
+        await ensure_driveway_category(db, home.id, user.id)
         row = await ManagedDemoService.register(
             db,
             fixture_key=fixture_key,

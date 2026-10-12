@@ -33,12 +33,18 @@ def is_occurrence_date(reminder: Reminder, day: date) -> bool:
 
 
 def next_occurrence_date(reminder: Reminder, on_or_after: date) -> date | None:
+    """The soonest occurrence on or after `on_or_after`. A one-off reminder's
+    only occurrence is its due date, returned however far ahead it is (an
+    MOT nudge can be most of a year away). Repeating reminders search at most
+    MAX_LOOKAHEAD_DAYS ahead."""
+    if reminder.repeat == ReminderRepeat.never:
+        if not reminder.enabled or reminder.due_date < on_or_after:
+            return None
+        return reminder.due_date
     for offset in range(MAX_LOOKAHEAD_DAYS + 1):
         candidate = on_or_after + timedelta(days=offset)
         if is_occurrence_date(reminder, candidate):
             return candidate
-        if reminder.repeat == ReminderRepeat.never and candidate > reminder.due_date:
-            return None
     return None
 
 

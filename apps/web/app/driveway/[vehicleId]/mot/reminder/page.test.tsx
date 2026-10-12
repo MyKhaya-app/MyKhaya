@@ -77,6 +77,13 @@ describe("New MOT reminder", () => {
     expect(screen.getByRole("switch", { name: "Repeat every year" })).toHaveAttribute("aria-checked", "true");
   });
 
+  it("goes back to Nudges when opened from a Nudges card", async () => {
+    window.history.replaceState(null, "", "/driveway/v1/mot/reminder?from=nudges");
+    renderPage();
+    expect(await screen.findByRole("link", { name: "Nudges" })).toHaveAttribute("href", "/settings/routines-reminders");
+    expect(screen.getByRole("link", { name: "Cancel" })).toHaveAttribute("href", "/settings/routines-reminders");
+  });
+
   it("only ever sends MOT nudges to the vehicle's owner", async () => {
     renderPage();
     const who = await screen.findByRole("group", { name: "Who should get it?" });

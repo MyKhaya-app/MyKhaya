@@ -168,7 +168,36 @@ stored in `vehicles.mot_nudge_plan`; see `mykhaya/driveway_mot_nudges.py`):
 - Saving is audited as `driveway.vehicle.mot_nudges_saved` with the chosen days and
   the repeat flag only. The title and registration are not audited.
 - Home Migration carries the plan with the vehicle (it is user intent, not provider
-  cache).
+  cache). Imported Driveway reminders are re-linked to the imported vehicle
+  (`reminders.source_id` is not a foreign key, so the importer remaps it).
+- **Deleting from Nudges** keeps the plan in step, so an MOT refresh never brings
+  a deleted nudge back:
+  - "Remove this reminder" (or any delete of one plan nudge) drops that lead day
+    from the plan. Deleting the last one turns MOT nudges off.
+  - "Remove MOT reminder plan" (`DELETE …/vehicles/{vehicle}/mot/nudges`, audited
+    as `driveway.vehicle.mot_nudges_removed`) deletes the plan and every MOT
+    reminder for the vehicle, and stores `{"off": true}`. Refreshes then create
+    nothing, not even the automatic "MOT due" reminder, until a new plan is saved.
+- Editing a plan nudge in Nudges opens this pre-filled screen (`?from=nudges`).
+
+#### The Driveway category in Nudges
+
+Every Home has a fixed system Nudges category, **Driveway**
+(`todo_categories.managed_source = 'driveway'`). It is seeded when a Home is created,
+and by migration `0118_driveway_nudge_category` for existing Homes; the migration
+also renames the old "Vehicles" category or adopts a Home's own "Driveway" one.
+
+- Every Driveway-sourced reminder (`reminders.source_type = 'driveway'`: plan
+  nudges, the automatic "MOT due" reminder, future tax/service/insurance ones) is
+  filed in it when created, and stays there when edited.
+- It can't be renamed or deleted, and it can't be picked by hand for an ordinary
+  routine, reminder or to-do. The API exposes it as `category.system = "driveway"`.
+- Nudges shows it, with a car icon, only once it holds something. Its cards read
+  "Reminder · Driveway · BMW i4 (AP22 OOJ) · 26 Jul 2027", with the vehicle
+  linking to its page.
+- One-off reminders report their own due date as their next date however far
+  ahead it is. Nudges lists anything more than 60 days out in a collapsed "Later"
+  section, which opens automatically when you search.
 
 ### Failure modes
 

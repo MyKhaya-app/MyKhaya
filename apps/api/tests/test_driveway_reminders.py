@@ -183,11 +183,11 @@ async def db_reminder(reminder_id: str) -> Reminder:
         return row
 
 
-# --- Vehicles category -------------------------------------------------------
+# --- Driveway system category --------------------------------------------------
 
 
 @pytest.mark.asyncio
-async def test_vehicles_category_created_on_first_driveway_reminder(client: AsyncClient) -> None:
+async def test_driveway_category_created_on_first_driveway_reminder(client: AsyncClient) -> None:
     await create_verified_user(client, unique_email("cat-first"), "Owner")
     home_id = await create_driveway_home(client)
     vehicle = await create_vehicle(client, home_id)
@@ -200,15 +200,16 @@ async def test_vehicles_category_created_on_first_driveway_reminder(client: Asyn
         json={"title": "MOT due", "due_date": today},
     )
     assert created.status_code == 201, created.text
-    assert created.json()["category"]["name"] == "Vehicles"
+    assert created.json()["category"]["name"] == "Driveway"
+    assert created.json()["category"]["system"] == "driveway"
 
     categories = await unsafe(client, "GET", f"/api/v1/homes/{home_id}/todo-categories")
     names = [row["name"] for row in categories.json()["items"]]
-    assert names.count("Vehicles") == 1
+    assert names.count("Driveway") == 1
 
 
 @pytest.mark.asyncio
-async def test_vehicles_category_reused_not_duplicated_on_second_reminder(
+async def test_driveway_category_reused_not_duplicated_on_second_reminder(
     client: AsyncClient,
 ) -> None:
     await create_verified_user(client, unique_email("cat-second"), "Owner")
@@ -234,7 +235,7 @@ async def test_vehicles_category_reused_not_duplicated_on_second_reminder(
         rows = (
             await db.scalars(
                 select(TodoCategory).where(
-                    TodoCategory.group_id == home_id, TodoCategory.name == "Vehicles"
+                    TodoCategory.group_id == home_id, TodoCategory.name == "Driveway"
                 )
             )
         ).all()
@@ -243,7 +244,7 @@ async def test_vehicles_category_reused_not_duplicated_on_second_reminder(
 
 
 @pytest.mark.asyncio
-async def test_vehicles_category_persists_after_last_managed_reminder_deleted(
+async def test_driveway_category_persists_after_last_managed_reminder_deleted(
     client: AsyncClient,
 ) -> None:
     await create_verified_user(client, unique_email("cat-persist"), "Owner")
@@ -269,7 +270,7 @@ async def test_vehicles_category_persists_after_last_managed_reminder_deleted(
 
 
 @pytest.mark.asyncio
-async def test_managed_category_deletion_blocked_while_in_use(client: AsyncClient) -> None:
+async def test_driveway_category_can_never_be_deleted(client: AsyncClient) -> None:
     await create_verified_user(client, unique_email("cat-protect"), "Owner")
     home_id = await create_driveway_home(client)
     vehicle = await create_vehicle(client, home_id)
@@ -287,11 +288,12 @@ async def test_managed_category_deletion_blocked_while_in_use(client: AsyncClien
     )
     assert blocked.status_code == 409
 
+    # Still refused once it is empty: it is a fixed system category.
     await unsafe(client, "DELETE", f"/api/v1/homes/{home_id}/reminders/{created.json()['id']}")
-    allowed = await unsafe(
+    still_blocked = await unsafe(
         client, "DELETE", f"/api/v1/homes/{home_id}/todo-categories/{category_id}"
     )
-    assert allowed.status_code == 204
+    assert still_blocked.status_code == 409
 
 
 # --- Create -------------------------------------------------------------------
@@ -372,7 +374,7 @@ async def test_driveway_reminder_appears_in_existing_nudges_query(client: AsyncC
     titles = [row["title"] for row in nudges.json()["items"]]
     assert "BMW i4 MOT due" in titles
     matching = next(row for row in nudges.json()["items"] if row["title"] == "BMW i4 MOT due")
-    assert matching["category"]["name"] == "Vehicles"
+    assert matching["category"]["name"] == "Driveway"
 
 
 # --- Idempotency ---------------------------------------------------------------

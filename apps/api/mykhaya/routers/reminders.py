@@ -13,6 +13,8 @@ from mykhaya.audit import audit
 from mykhaya.config import Settings, get_settings
 from mykhaya.db import get_db
 from mykhaya.dependencies import AuthContext, auth_context
+from mykhaya.driveway_mot_nudges import drop_lead_day
+from mykhaya.driveway_reminders import DRIVEWAY_SOURCE_TYPE, lead_days_of, vehicle_link
 from mykhaya.entitlements import require_entitlement
 from mykhaya.features import require_feature
 from mykhaya.household_permissions import Capability, require_capability
@@ -25,6 +27,7 @@ from mykhaya.models import (
     RoutineScope,
     TodoCategory,
     User,
+    Vehicle,
 )
 from mykhaya.notifications.quiet_hours import home_timezone
 from mykhaya.notifications.reminder_occurrences import (
@@ -41,6 +44,7 @@ from mykhaya.schemas import (
     ReminderListResponse,
     ReminderResponse,
     ReminderUpdate,
+    ReminderVehicleResponse,
     TodoCategoryResponse,
 )
 
@@ -103,6 +107,21 @@ def _category_response(category: TodoCategory | None) -> TodoCategoryResponse | 
         created_by=category.created_by,
         created_at=category.created_at,
         updated_at=category.updated_at,
+        system=category.managed_source,
+    )
+
+
+async def _vehicle_response(db: AsyncSession, reminder: Reminder) -> ReminderVehicleResponse | None:
+    link = await vehicle_link(db, reminder, get_settings())
+    if link is None:
+        return None
+    return ReminderVehicleResponse(
+        vehicle_id=link.vehicle_id,
+        nickname=link.nickname,
+        make=link.make,
+        model=link.model,
+        registration=link.registration,
+        mot_plan_lead_days=link.mot_plan_lead_days,
     )
 
 
@@ -142,6 +161,7 @@ async def _to_response(
         home_completed_at=home_completion.completed_at if home_completion else None,
         home_completed_by_user_id=home_completion.completed_by if home_completion else None,
         home_completed_by_display_name=home_completed_by_display_name,
+        vehicle=await _vehicle_response(db, reminder),
         created_by=reminder.created_by,
         updated_at=reminder.updated_at,
     )
@@ -167,6 +187,10 @@ async def _validate_members(
     return requested
 
 
+# Explicit upper bound on one Home's reminder list response.
+REMINDER_LIST_LIMIT = 1000
+
+
 @router.get("/{home_id}/reminders", response_model=ReminderListResponse)
 async def list_reminders(
     home_id: uuid.UUID,
@@ -184,10 +208,12 @@ async def list_reminders(
                 (Reminder.scope == RoutineScope.household)
                 | (Reminder.owner_user_id == auth.user.id),
             )
-            .order_by(Reminder.created_at)
-            .limit(200)
+            # Newest first, so a busy Home's newest reminders are never the
+            # ones cut off by the cap; returned oldest-first as before.
+            .order_by(Reminder.created_at.desc(), Reminder.id.desc())
+            .limit(REMINDER_LIST_LIMIT)
         )
-    ).all()
+    ).all()[::-1]
     if not home:
         return ReminderListResponse(
             items=[await _to_response(db, reminder) for reminder in reminders]
@@ -316,7 +342,10 @@ async def update_reminder(
         )
 
     member_ids = await _validate_members(db, home_id, body.member_ids)
-    await category_for_home(db, home_id, body.category_id)
+    # A Driveway-sourced reminder always stays in the Driveway system category.
+    driveway_sourced = reminder.source_type == DRIVEWAY_SOURCE_TYPE
+    if not driveway_sourced:
+        await category_for_home(db, home_id, body.category_id)
     await db.execute(delete(ReminderMember).where(ReminderMember.reminder_id == reminder.id))
     for user_id in member_ids:
         db.add(ReminderMember(reminder_id=reminder.id, user_id=user_id))
@@ -335,7 +364,8 @@ async def update_reminder(
     reminder.due_time = body.due_time
     reminder.repeat = body.repeat
     reminder.cadence = body.cadence
-    reminder.category_id = body.category_id
+    if not driveway_sourced:
+        reminder.category_id = body.category_id
     reminder.enabled = body.enabled
 
     audit(db, request, "reminder.updated", auth.user.id, home_id, "reminder", reminder.id)
@@ -359,6 +389,17 @@ async def delete_reminder(
     if reminder is None or not _is_visible(reminder, auth.user.id):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That reminder could not be found")
     audit(db, request, "reminder.deleted", auth.user.id, home_id, "reminder", reminder.id)
+    lead_days = lead_days_of(reminder)
+    if lead_days is not None and reminder.source_id is not None:
+        # One nudge of an MOT nudge plan: drop that lead day from the plan in
+        # the same transaction, so an MOT refresh never recreates it.
+        vehicle = await db.scalar(
+            select(Vehicle)
+            .where(Vehicle.id == reminder.source_id, Vehicle.group_id == home_id)
+            .with_for_update()
+        )
+        if vehicle is not None:
+            await drop_lead_day(db, vehicle, lead_days)
     await db.delete(reminder)
     await db.commit()
 

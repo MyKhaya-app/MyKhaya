@@ -55,7 +55,7 @@ from mykhaya.driveway_mot import (
     mot_view,
     refresh_vehicle_mot,
 )
-from mykhaya.driveway_mot_nudges import MotNudgePlan, apply_plan, read_plan
+from mykhaya.driveway_mot_nudges import MotNudgePlan, apply_plan, read_plan, remove_plan
 from mykhaya.driveway_providers import (
     UKDVLAProvider,
     VehicleLookupAuthFailed,
@@ -852,7 +852,7 @@ async def save_vehicle_mot_nudges(
     mykhaya.driveway_mot_nudges). Same authorization as adding any vehicle
     reminder: vehicle visibility, then the Nudges reminder capability."""
     membership = await require_capability(home_id, Capability.driveway_view, auth, db)
-    vehicle = await _get_vehicle(db, home_id, vehicle_id)
+    vehicle = await _get_vehicle(db, home_id, vehicle_id, for_update=True)
     _require_vehicle_visible(vehicle, auth, membership)
     await require_capability(home_id, Capability.household_manage_reminders, auth, db)
     if not is_mot_eligible(vehicle):
@@ -886,3 +886,32 @@ async def save_vehicle_mot_nudges(
     )
     await db.commit()
     return _plan_response(plan)
+
+
+@router.delete("/{home_id}/vehicles/{vehicle_id}/mot/nudges", status_code=204)
+async def delete_vehicle_mot_nudges(
+    home_id: uuid.UUID,
+    vehicle_id: uuid.UUID,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    """Removes the MOT nudge plan and every MOT reminder for the vehicle,
+    and records that MOT nudges are off so a refresh recreates nothing (see
+    mykhaya.driveway_mot_nudges.remove_plan). Same authorization as saving."""
+    membership = await require_capability(home_id, Capability.driveway_view, auth, db)
+    vehicle = await _get_vehicle(db, home_id, vehicle_id, for_update=True)
+    _require_vehicle_visible(vehicle, auth, membership)
+    await require_capability(home_id, Capability.household_manage_reminders, auth, db)
+    await remove_plan(db, vehicle)
+    audit(
+        db,
+        request,
+        "driveway.vehicle.mot_nudges_removed",
+        auth.user.id,
+        home_id,
+        "vehicle",
+        vehicle.id,
+        {},
+    )
+    await db.commit()

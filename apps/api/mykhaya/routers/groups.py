@@ -17,6 +17,7 @@ from mykhaya.colour_palette import PALETTE_HEX, ColourToken
 from mykhaya.config import Settings, get_settings
 from mykhaya.db import get_db
 from mykhaya.dependencies import AuthContext, auth_context, membership_for, require_adult_session
+from mykhaya.driveway_reminders import ensure_driveway_category
 from mykhaya.entitlements import (
     ensure_home_subscription,
     explain_user_entitlement,
@@ -166,6 +167,8 @@ async def create_group(
     db.add(membership)
     calendar = HomeCalendar(group_id=group.id, name="Home Calendar")
     db.add(calendar)
+    # Every Home has the fixed Driveway Nudges category (hidden until used).
+    await ensure_driveway_category(db, group.id, auth.user.id)
     await ensure_home_subscription(db, group.id)
     await db.flush()
     for index, (name, color) in enumerate(DEFAULT_LABELS):

@@ -17,6 +17,15 @@ any other reminder and follow every existing Driveway reminder rule:
 
 Lead days that would fall before today are skipped rather than creating an
 already-overdue reminder.
+
+Deleting from Nudges keeps the plan honest, so an MOT refresh never brings a
+deleted nudge back:
+- deleting one plan nudge drops that lead day from the plan
+  (``drop_lead_day``, called by the generic reminder delete);
+- removing the plan deletes every MOT reminder for the vehicle and stores
+  ``{"off": true}`` (``remove_plan``): the owner has said no MOT nudges, so
+  the automatic "MOT due" reminder is not recreated either, until a new plan
+  is saved.
 """
 
 from __future__ import annotations
@@ -31,6 +40,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.driveway_reminders import (
     DRIVEWAY_SOURCE_TYPE,
+    LEAD_EVENT_PREFIX,
     DrivewayReminderEventType,
     upsert_driveway_reminder,
 )
@@ -38,7 +48,6 @@ from mykhaya.models import Reminder, Vehicle
 
 # The lead days the UI offers: 30, 14 and 7 days before, and on the day.
 NUDGE_OFFSETS: tuple[int, ...] = (30, 14, 7, 0)
-LEAD_EVENT_PREFIX = "inspection_lead_"
 
 
 def lead_event(offset: int) -> str:
@@ -66,9 +75,17 @@ class MotNudgePlan:
         return sorted(day for day in dates if day >= today)
 
 
+OFF_MARKER: dict[str, Any] = {"off": True}
+
+
+def plan_is_off(vehicle: Vehicle) -> bool:
+    raw = vehicle.mot_nudge_plan
+    return isinstance(raw, dict) and raw.get("off") is True
+
+
 def read_plan(vehicle: Vehicle) -> MotNudgePlan | None:
     raw = vehicle.mot_nudge_plan
-    if not isinstance(raw, dict):
+    if not isinstance(raw, dict) or raw.get("off") is True:
         return None
     try:
         offsets = tuple(
@@ -150,6 +167,8 @@ async def sync_after_refresh(
     """Called by the MOT refresh with the vehicle's new MOT due date.
     Returns True when a plan is handling this vehicle's MOT reminders (so
     the automatic "MOT due" reminder must not be recreated)."""
+    if plan_is_off(vehicle):
+        return True
     plan = read_plan(vehicle)
     if plan is None:
         return False
@@ -178,3 +197,31 @@ def _with_date(plan: MotNudgePlan, due_date: date) -> MotNudgePlan:
     return MotNudgePlan(
         title=plan.title, offsets=plan.offsets, repeat=plan.repeat, due_date=due_date
     )
+
+
+async def drop_lead_day(db: AsyncSession, vehicle: Vehicle, offset: int) -> None:
+    """A single plan nudge was deleted: remove its lead day from the plan so
+    a refresh never recreates it. Removing the last day turns MOT nudges
+    off for the vehicle (see remove_plan)."""
+    plan = read_plan(vehicle)
+    if plan is None or offset not in plan.offsets:
+        return
+    remaining = tuple(day for day in plan.offsets if day != offset)
+    if not remaining:
+        await remove_plan(db, vehicle)
+        return
+    vehicle.mot_nudge_plan = MotNudgePlan(
+        title=plan.title, offsets=remaining, repeat=plan.repeat, due_date=plan.due_date
+    ).as_json()
+
+
+async def remove_plan(db: AsyncSession, vehicle: Vehicle) -> None:
+    """Deletes every MOT reminder for the vehicle (the plan's lead days and
+    the automatic one) and records that MOT nudges are off."""
+    await _delete_events(
+        db,
+        vehicle,
+        [DrivewayReminderEventType.inspection.value]
+        + [lead_event(offset) for offset in NUDGE_OFFSETS],
+    )
+    vehicle.mot_nudge_plan = dict(OFF_MARKER)

@@ -1066,6 +1066,9 @@ class TodoCategoryResponse(BaseModel):
     created_by: uuid.UUID
     created_at: datetime
     updated_at: datetime
+    # Set for a fixed system category ("driveway"): it can't be renamed or
+    # deleted, and only appears in Nudges once it holds something.
+    system: str | None = None
 
 
 class RoutineCreate(StrictModel):
@@ -1194,6 +1197,18 @@ class ReminderUpdate(StrictModel):
         return self
 
 
+class ReminderVehicleResponse(BaseModel):
+    """The vehicle a Driveway-sourced reminder belongs to (Nudges card line)."""
+
+    vehicle_id: uuid.UUID
+    nickname: str
+    make: str | None
+    model: str | None
+    registration: str | None
+    # Days before the MOT, for a reminder that belongs to an MOT nudge plan.
+    mot_plan_lead_days: int | None = None
+
+
 class ReminderResponse(BaseModel):
     id: uuid.UUID
     title: str
@@ -1213,6 +1228,7 @@ class ReminderResponse(BaseModel):
     home_completed_at: datetime | None = None
     home_completed_by_user_id: uuid.UUID | None = None
     home_completed_by_display_name: str | None = None
+    vehicle: ReminderVehicleResponse | None = None
     created_by: uuid.UUID
     updated_at: datetime
 

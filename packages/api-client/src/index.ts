@@ -1879,6 +1879,13 @@ export class MyKhayaClient {
       `/homes/${encodeURIComponent(homeId)}/vehicles/${encodeURIComponent(vehicleId)}/mot/nudges`,
       { method: "PUT", body: JSON.stringify(plan) },
     );
+  // Removes the plan and every MOT reminder for the vehicle; a refresh then
+  // recreates nothing until a new plan is saved.
+  deleteVehicleMotNudges = (homeId: string, vehicleId: string) =>
+    this.request<void>(
+      `/homes/${encodeURIComponent(homeId)}/vehicles/${encodeURIComponent(vehicleId)}/mot/nudges`,
+      { method: "DELETE" },
+    );
   // Reminders linked to one vehicle (Phase 4). Editing/deleting a linked
   // reminder reuses the existing generic updateReminder/deleteReminder
   // methods below — no separate Driveway edit/delete route exists.

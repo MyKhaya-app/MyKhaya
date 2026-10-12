@@ -107,6 +107,7 @@ def _category_response(category: TodoCategory | None) -> TodoCategoryResponse | 
         created_by=category.created_by,
         created_at=category.created_at,
         updated_at=category.updated_at,
+        system=category.managed_source,
     )
 
 

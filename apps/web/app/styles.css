@@ -9302,6 +9302,84 @@ select.plan-meal-field-input {
   flex: none;
 }
 
+/* Vehicle reminders (Driveway system category) on the Nudges page. */
+.rr-meta-link {
+  color: var(--colour-forest);
+  font-weight: 700;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.rr-category-name {
+  align-items: center;
+  display: inline-flex;
+  gap: 0.35rem;
+}
+.rr-category-system-note {
+  font-size: var(--font-small);
+}
+/* A vehicle reminder's upcoming card holds a link, so it edits through its
+   own trailing button rather than being one big button. */
+.rr-upcoming-card-split {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+.rr-upcoming-edit {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  display: flex;
+  height: 44px;
+  justify-content: center;
+  min-height: 0;
+  padding: 0;
+  width: 44px;
+}
+.rr-upcoming-edit:hover {
+  background: transparent;
+  box-shadow: none;
+  transform: none;
+}
+/* "Later": items due more than 60 days out, collapsed at the bottom. */
+.rr-later > summary {
+  align-items: center;
+  cursor: pointer;
+  display: flex;
+  gap: 0.5rem;
+  list-style: none;
+  min-height: 44px;
+}
+.rr-later > summary::-webkit-details-marker {
+  display: none;
+}
+.rr-later > summary .rr-section-heading {
+  margin: 0;
+}
+.rr-later-count {
+  background: var(--colour-sand);
+  border-radius: 999px;
+  color: var(--colour-slate);
+  font-size: var(--font-small);
+  font-weight: 700;
+  padding: 0.1rem 0.55rem;
+}
+.rr-later > summary svg {
+  color: var(--colour-muted);
+  transition: transform 0.15s ease;
+}
+.rr-later[open] > summary svg {
+  transform: rotate(180deg);
+}
+.rr-later[open] > summary {
+  margin-bottom: 0.6rem;
+}
+@media (prefers-reduced-motion: reduce) {
+  .rr-later > summary svg { transition: none; }
+}
+.sheet-actions-stacked {
+  display: grid;
+  gap: 0.6rem;
+}
+
 .rr-empty {
   align-items: center;
   background: var(--colour-cream-light);

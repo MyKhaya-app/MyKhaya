@@ -780,6 +780,12 @@ async def import_home(
                 }
             )
             await db.execute(insert(groups).values(home_values))
+            # Driveway reminders link to their vehicle through reminders.source_id,
+            # which is not a foreign key (so _rewrite can't remap it) and is
+            # imported before vehicles: allocate the new vehicle ids up front.
+            for vehicle_row in package["data"].get("vehicles", []):
+                if vehicle_row.get("id") is not None:
+                    maps["vehicles"][str(vehicle_row["id"])] = _new_id()
             for name in TABLE_ORDER[2:]:
                 table = _table(name)
                 for source in package["data"].get(name, []):
@@ -789,13 +795,30 @@ async def import_home(
                             source_user = maps["users"].get(str(source.get("user_id")))
                             if source_user in matched_user_ids:
                                 continue
-                        maps[name][str(old_id)] = _new_id()
+                        maps[name].setdefault(str(old_id), _new_id())
                     values = _rewrite(source, maps, table)
+                    if name == "reminders" and values.get("source_type") == "driveway":
+                        vehicle_id = maps["vehicles"].get(str(values.get("source_id")))
+                        if vehicle_id is None:
+                            # Its vehicle isn't in the package: keep the reminder,
+                            # detached, rather than linked to another Home's vehicle.
+                            values.update(source_type=None, source_id=None, source_event=None)
+                        else:
+                            values["source_id"] = str(vehicle_id)
                     values = {
                         key: _restore_value(table.c[key], value)
                         for key, value in values.items()
                         if key in table.c
                     }
+                    if (
+                        "created_by" in table.c
+                        and not table.c["created_by"].nullable
+                        and values.get("created_by") is None
+                    ):
+                        # Attribution columns are never carried across (see
+                        # ADMIN_COLUMNS); where one is required, the row is
+                        # attributed to the imported Home's creator instead.
+                        values["created_by"] = creator
                     if name == "vehicles":
                         # Same single write path as the Driveway router: the
                         # ciphertext (dual-write on) is bound to the NEW row id.

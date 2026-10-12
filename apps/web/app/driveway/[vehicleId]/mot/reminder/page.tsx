@@ -24,15 +24,16 @@ const WHENS: { offset: VehicleMotNudgeOffset; label: string }[] = [
   { offset: 0, label: "On the day" },
 ];
 
-type Origin = "vehicle" | "vehicle-mot" | "history";
+type Origin = "vehicle" | "vehicle-mot" | "history" | "nudges";
 
 function originFromUrl(): Origin {
   if (typeof window === "undefined") return "vehicle";
   const value = new URLSearchParams(window.location.search).get("from");
-  return value === "history" || value === "vehicle-mot" ? value : "vehicle";
+  return value === "history" || value === "vehicle-mot" || value === "nudges" ? value : "vehicle";
 }
 
 function backHref(vehicleId: string, origin: Origin): string {
+  if (origin === "nudges") return "/settings/routines-reminders";
   if (origin === "history") return `/driveway/${vehicleId}/mot`;
   if (origin === "vehicle-mot") return `/driveway/${vehicleId}?tab=mot`;
   return `/driveway/${vehicleId}`;
@@ -139,7 +140,7 @@ export default function NewMotReminderPage({ params }: { params: Promise<{ vehic
     <AppShellContent>
       <main className="standard-page module-page drv-page drv-nudge-page">
         <Link className="drv-back" href={href}>
-          <ChevronLeft size={18} aria-hidden="true" /> {name}
+          <ChevronLeft size={18} aria-hidden="true" /> {origin === "nudges" ? "Nudges" : name}
         </Link>
         <div className="drv-heading-copy">
           <p className="drv-eyebrow">Nudges</p>

@@ -15,6 +15,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mykhaya.calendar_provisioning import ensure_personal_calendar
 from mykhaya.colour_palette import PALETTE_HEX, ColourToken
 from mykhaya.config import Settings, get_settings
+from mykhaya.driveway_reminders import ensure_driveway_category
 from mykhaya.entitlements import ensure_home_subscription, record_subscription_event
 from mykhaya.member_colours import assign_member_colour
 from mykhaya.models import (
@@ -252,6 +253,7 @@ async def create_beta_home(db: AsyncSession, user_id: Any, name: str) -> Group:
     )
     db.add(HomeCalendar(group_id=group.id, name="Home Calendar"))
     await ensure_home_subscription(db, group.id)
+    await ensure_driveway_category(db, group.id, user_id)
     for index, (label, colour) in enumerate(DEFAULT_LABELS):
         db.add(
             CalendarEventLabel(
