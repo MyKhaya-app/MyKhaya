@@ -19,7 +19,8 @@ Cloudflare -> NetBird Proxy -> Caddy -> web/API
 5. Install Docker Engine and Docker Compose v2.
 6. Clone the approved release tag and verify the tag and commit.
 7. Copy `.env.production.example` to `.env`, generate every secret independently,
-   and restrict `.env` to the deployment user (`chmod 600`).
+   and restrict `.env` to the deployment user (`chmod 600`). This `.env` is the
+   single mutable deployment configuration; do not edit tracked Compose files.
 8. Replace every placeholder, especially `MYKHAYA_ADMIN_ALLOWED_NETWORKS`,
    `MYKHAYA_TRUSTED_PROXY_CIDRS`, and `MYKHAYA_CADDY_TRUSTED_PROXY_CIDRS`.
 9. Configure NetBird and Cloudflare manually using the approved ingress runbook.
@@ -29,6 +30,10 @@ Cloudflare -> NetBird Proxy -> Caddy -> web/API
     enrol MFA, then disable the flag.
 13. Run `make prod-health`, test email/push/Stripe, and perform a backup/restore
     rehearsal before accepting traffic.
+
+See [Deployment configuration ownership](../architecture/deployment-configuration.md)
+for the configuration inventory, PCC precedence rules, and migration procedure
+for installations that previously edited `compose.production.yml` locally.
 
 ## Updates and rollback
 

@@ -32,6 +32,34 @@ class ProductionDeploymentTests(unittest.TestCase):
             self.script,
         )
 
+    def test_production_preflight_requires_installation_values(self) -> None:
+        self.assertIn("require_installation_config", self.script)
+        for key in (
+            "MYKHAYA_REGISTRATION_MODE",
+            "MYKHAYA_PUBLIC_WEB_URL",
+            "MYKHAYA_ADMIN_URL",
+            "MYKHAYA_STATUS_URL",
+            "MYKHAYA_NATIVE_API_URL",
+            "MYKHAYA_CORS_ORIGINS",
+            "MYKHAYA_TRUSTED_HOSTS",
+            "MYKHAYA_TRUSTED_PROXY_CIDRS",
+            "WEB_DOMAIN",
+            "API_DOMAIN",
+            "ADMIN_DOMAIN",
+            "STATUS_DOMAIN",
+            "MYKHAYA_CADDY_TRUSTED_PROXY_CIDRS",
+        ):
+            self.assertIn(key, self.script)
+        self.assertLess(
+            self.script.index("require_installation_config"),
+            self.script.index("$COMPOSE config --quiet"),
+        )
+
+    def test_install_validates_before_starting_or_migrating(self) -> None:
+        install = (ROOT / "infrastructure/scripts/prod-install.sh").read_text(encoding="utf-8")
+        self.assertLess(install.index("prod-deploy.sh validate"), install.index("up -d postgres redis"))
+        self.assertLess(install.index("prod-deploy.sh validate"), install.index("run --rm --no-deps migrate"))
+
     def test_production_version_comes_from_release_tag(self) -> None:
         self.assertIn('MYKHAYA_VERSION="$MYKHAYA_RELEASE_TAG"', self.script)
         self.assertNotIn("cat VERSION", self.script)
@@ -71,10 +99,30 @@ class ProductionDeploymentTests(unittest.TestCase):
         self.assertIn("--no-build", self.script[start : start + 100])
 
     def test_production_trusted_hosts_include_loopback_and_all_origins(self) -> None:
-        self.assertIn(
-            'MYKHAYA_TRUSTED_HOSTS: \'["api","127.0.0.1","localhost","${WEB_DOMAIN:-mykhaya.app}","${API_DOMAIN:-api.mykhaya.app}","${ADMIN_DOMAIN:-admin.mykhaya.app}","${STATUS_DOMAIN:-status.mykhaya.app}"]\'',
-            self.compose,
-        )
+        self.assertNotIn("MYKHAYA_TRUSTED_HOSTS", self.compose)
+        self.assertNotIn("MYKHAYA_CORS_ORIGINS", self.compose)
+        self.assertNotIn("MYKHAYA_PUBLIC_WEB_URL", self.compose)
+
+    def test_production_application_policy_is_not_hardcoded_in_compose(self) -> None:
+        for key in (
+            "MYKHAYA_REGISTRATION_MODE",
+            "MYKHAYA_DEFAULT_TIMEZONE",
+            "MYKHAYA_DEFAULT_LOCALE",
+            "MYKHAYA_WEEK_START",
+        ):
+            self.assertNotIn(key, self.compose)
+        self.assertIn("MYKHAYA_ENVIRONMENT: production", self.compose)
+        self.assertIn("MYKHAYA_BUILD_CHANNEL: stable", self.compose)
+
+    def test_production_domains_are_required_compose_substitutions(self) -> None:
+        for key in ("WEB_DOMAIN", "API_DOMAIN", "ADMIN_DOMAIN", "STATUS_DOMAIN"):
+            self.assertIn(f'{key}: "${{{key}:?Set {key} in the production .env}}"', self.compose)
+
+    def test_production_template_owns_installation_policy_and_api_origin(self) -> None:
+        template = (ROOT / ".env.production.example").read_text(encoding="utf-8")
+        self.assertIn("MYKHAYA_REGISTRATION_MODE=open", template)
+        self.assertIn("MYKHAYA_NATIVE_API_URL=https://api.mykhaya.app", template)
+        self.assertIn("API_DOMAIN=api.mykhaya.app", template)
 
     def test_production_caddy_uses_http_origins_and_https_upstream_scheme(self) -> None:
         for address in (
