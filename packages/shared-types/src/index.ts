@@ -1089,6 +1089,27 @@ export interface VehicleMot {
   refresh?: VehicleMotRefreshResult | null;
 }
 
+// Driveway MOT nudges — mirrors mykhaya.driveway_schemas.VehicleMotNudge*.
+// Recipients are deliberately absent: MOT nudges always go to the vehicle
+// owner, like every Driveway reminder.
+export type VehicleMotNudgeOffset = 30 | 14 | 7 | 0;
+
+export interface VehicleMotNudgePlanInput {
+  title: string;
+  due_date: string;
+  offsets: VehicleMotNudgeOffset[];
+  repeat: boolean;
+}
+
+export interface VehicleMotNudgePlan extends VehicleMotNudgePlanInput {
+  // Reminder dates that exist for this plan (past lead days are skipped).
+  scheduled: string[];
+}
+
+export interface VehicleMotNudges {
+  plan: VehicleMotNudgePlan | null;
+}
+
 export interface VehicleCreatePayload {
   nickname: string;
   owner_user_id: string;

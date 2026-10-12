@@ -31,7 +31,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import structlog
 from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile, status
@@ -55,6 +55,7 @@ from mykhaya.driveway_mot import (
     mot_view,
     refresh_vehicle_mot,
 )
+from mykhaya.driveway_mot_nudges import MotNudgePlan, apply_plan, read_plan
 from mykhaya.driveway_providers import (
     UKDVLAProvider,
     VehicleLookupAuthFailed,
@@ -73,6 +74,9 @@ from mykhaya.driveway_schemas import (
     VehicleListResponse,
     VehicleLookupRequest,
     VehicleLookupResult,
+    VehicleMotNudgePlanRequest,
+    VehicleMotNudgePlanResponse,
+    VehicleMotNudgesResponse,
     VehicleMotRefreshRequest,
     VehicleMotRefreshResult,
     VehicleMotResponse,
@@ -803,3 +807,82 @@ async def refresh_vehicle_mot_endpoint(
     kind = outcome.error.category if outcome.error is not None else outcome.kind
     view["refresh"] = VehicleMotRefreshResult(outcome=kind, message=_MOT_REFRESH_MESSAGES.get(kind))
     return VehicleMotResponse.model_validate(view)
+
+
+def _plan_response(plan: MotNudgePlan | None) -> VehicleMotNudgesResponse:
+    if plan is None:
+        return VehicleMotNudgesResponse(plan=None)
+    return VehicleMotNudgesResponse(
+        plan=VehicleMotNudgePlanResponse(
+            title=plan.title,
+            due_date=plan.due_date,
+            offsets=list(plan.offsets),
+            repeat=plan.repeat,
+            scheduled=plan.scheduled_dates(datetime.now(UTC).date()),
+        )
+    )
+
+
+@router.get("/{home_id}/vehicles/{vehicle_id}/mot/nudges", response_model=VehicleMotNudgesResponse)
+async def get_vehicle_mot_nudges(
+    home_id: uuid.UUID,
+    vehicle_id: uuid.UUID,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> VehicleMotNudgesResponse:
+    """The vehicle's MOT nudge plan, if any. As private as the vehicle's
+    reminders: owner or Home Admin only, 404 for everyone else."""
+    membership = await require_capability(home_id, Capability.driveway_view, auth, db)
+    vehicle = await _get_vehicle(db, home_id, vehicle_id)
+    _require_vehicle_visible(vehicle, auth, membership)
+    return _plan_response(read_plan(vehicle))
+
+
+@router.put("/{home_id}/vehicles/{vehicle_id}/mot/nudges", response_model=VehicleMotNudgesResponse)
+async def save_vehicle_mot_nudges(
+    home_id: uuid.UUID,
+    vehicle_id: uuid.UUID,
+    body: VehicleMotNudgePlanRequest,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> VehicleMotNudgesResponse:
+    """Creates or replaces the MOT nudge plan and its reminders (ordinary
+    Driveway-linked Reminder rows for the vehicle owner — see
+    mykhaya.driveway_mot_nudges). Same authorization as adding any vehicle
+    reminder: vehicle visibility, then the Nudges reminder capability."""
+    membership = await require_capability(home_id, Capability.driveway_view, auth, db)
+    vehicle = await _get_vehicle(db, home_id, vehicle_id)
+    _require_vehicle_visible(vehicle, auth, membership)
+    await require_capability(home_id, Capability.household_manage_reminders, auth, db)
+    if not is_mot_eligible(vehicle):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "MOT reminders are only available for vehicles registered in the UK.",
+        )
+    today = datetime.now(UTC).date()
+    if not today - timedelta(days=366) <= body.due_date <= today + timedelta(days=366 * 4):
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, "Choose the date this MOT expires."
+        )
+    plan = MotNudgePlan(
+        title=" ".join(body.title.strip().split()),
+        offsets=tuple(sorted(set(body.offsets), reverse=True)),
+        repeat=body.repeat,
+        due_date=body.due_date,
+    )
+    if not plan.title:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Give the reminder a name.")
+    await apply_plan(db, vehicle, plan, actor_id=auth.user.id, today=today)
+    audit(
+        db,
+        request,
+        "driveway.vehicle.mot_nudges_saved",
+        auth.user.id,
+        home_id,
+        "vehicle",
+        vehicle.id,
+        {"offsets": list(plan.offsets), "repeat": plan.repeat},
+    )
+    await db.commit()
+    return _plan_response(plan)

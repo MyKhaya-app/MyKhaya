@@ -149,6 +149,27 @@ update the same reminder and never create duplicates. If the date changes, the
 reminder moves. If DVSA returns no date, the existing reminder is left as it is,
 matching existing Driveway reminder conventions. Manual reminders are never touched.
 
+#### MOT nudge plan
+
+"Set MOT reminder" (vehicle page and MOT history) opens a pre-filled Nudges form
+that saves the owner's **MOT nudge plan** (`PUT …/vehicles/{vehicle}/mot/nudges`,
+stored in `vehicles.mot_nudge_plan`; see `mykhaya/driveway_mot_nudges.py`):
+
+- The owner picks any of 30, 14 or 7 days before, or on the day. Each choice is an
+  ordinary Nudges reminder (`source_event=inspection_lead_<days>`), so it shows in
+  Nudges like any other reminder. Lead days already in the past are skipped.
+- While a plan exists it replaces the automatic "MOT due" reminder.
+- **Recipients are always the vehicle owner.** The form shows the owner only and
+  the API accepts no recipient field, matching the vehicle-reminder privacy rule
+  (owner or Home Admin can view or save a plan; anyone else gets 404).
+- "Repeat every year" on: after the next pass moves the expiry, the next refresh
+  re-dates the same reminders. Off: the plan is used up by the next pass, its
+  reminders stay where they were, and the automatic "MOT due" reminder resumes.
+- Saving is audited as `driveway.vehicle.mot_nudges_saved` with the chosen days and
+  the repeat flag only. The title and registration are not audited.
+- Home Migration carries the plan with the vehicle (it is user intent, not provider
+  cache).
+
 ### Failure modes
 
 | Situation | Behaviour |

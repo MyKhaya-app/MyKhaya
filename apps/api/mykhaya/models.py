@@ -4303,6 +4303,11 @@ class Vehicle(UuidTimeMixin, Base):
     mot_refresh_attempted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # success | not_found | auth_failed | rate_limited | unavailable | malformed
     mot_refresh_outcome: Mapped[str | None] = mapped_column(String(30))
+    # The owner's MOT nudge plan (Driveway MOT nudges): {"title", "offsets"
+    # (days before expiry), "repeat", "due_date"}. User intent, not provider
+    # cache — see mykhaya.driveway_mot_nudges. Null when there is no plan and
+    # the single automatic "MOT due" reminder applies instead.
+    mot_nudge_plan: Mapped[dict[str, Any] | None] = mapped_column(JSON)
     photo_key: Mapped[str | None] = mapped_column(String(120))
     photo_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

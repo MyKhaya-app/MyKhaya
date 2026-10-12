@@ -53,6 +53,13 @@ export default function AddVehiclePage() {
     api.members(activeHomeId).then(setMembers).catch(() => setMembers([]));
   }, [activeHomeId]);
 
+  // "Add a vehicle for {Name}" on the Driveway empty state links here with
+  // ?owner=<user id>; only a real member of this Home is accepted.
+  useEffect(() => {
+    const requested = new URLSearchParams(window.location.search).get("owner");
+    if (requested && members.some((member) => member.user_id === requested)) setOwnerUserId(requested);
+  }, [members]);
+
   useEffect(() => {
     if (user?.id && !ownerUserId) setOwnerUserId(user.id);
   }, [ownerUserId, user?.id]);

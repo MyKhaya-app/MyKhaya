@@ -101,7 +101,7 @@ async def upsert_driveway_reminder(
     *,
     group_id: uuid.UUID,
     vehicle: Vehicle,
-    event_type: DrivewayReminderEventType,
+    event_type: DrivewayReminderEventType | str,
     due_date: date,
     title: str,
     due_time: time = time(9, 0),
@@ -123,22 +123,28 @@ async def upsert_driveway_reminder(
     reminder for (source_type=driveway, vehicle.id, event_type) if one
     exists — at most one, matching uq_reminder_source_event_active — so a
     future structured resync (Phase 5+) can call this repeatedly as its
-    source data changes without ever creating duplicates.
+    source data changes without ever creating duplicates. A plain string
+    event is accepted for structured sub-events that need their own key,
+    such as the MOT nudge plan's per-lead-day reminders
+    (mykhaya.driveway_mot_nudges); it follows the same upsert rules.
 
     Reminder visibility/owner are derived from the vehicle owner, never client-supplied
     — see sync_reminder_scope_to_vehicle for what happens when a vehicle's
     own scope later changes.
     """
     category = await ensure_vehicles_category(db, group_id, created_by)
+    source_event = (
+        event_type.value if isinstance(event_type, DrivewayReminderEventType) else event_type
+    )
 
-    if event_type != DrivewayReminderEventType.manual:
+    if source_event != DrivewayReminderEventType.manual.value:
         existing = await db.scalar(
             select(Reminder)
             .where(
                 Reminder.group_id == group_id,
                 Reminder.source_type == DRIVEWAY_SOURCE_TYPE,
                 Reminder.source_id == vehicle.id,
-                Reminder.source_event == event_type.value,
+                Reminder.source_event == source_event,
                 Reminder.enabled.is_(True),
             )
             .with_for_update()
@@ -168,7 +174,7 @@ async def upsert_driveway_reminder(
         created_by=created_by,
         source_type=DRIVEWAY_SOURCE_TYPE,
         source_id=vehicle.id,
-        source_event=event_type.value,
+        source_event=source_event,
     )
     db.add(reminder)
     await db.flush()

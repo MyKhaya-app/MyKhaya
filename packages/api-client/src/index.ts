@@ -1865,6 +1865,20 @@ export class MyKhayaClient {
       `/homes/${encodeURIComponent(homeId)}/vehicles/${encodeURIComponent(vehicleId)}/mot/refresh`,
       { method: "POST", body: JSON.stringify({ mode }) },
     );
+  // The owner's MOT nudge plan (owner or Home Admin only).
+  vehicleMotNudges = (homeId: string, vehicleId: string) =>
+    this.request<import("@mykhaya/shared-types").VehicleMotNudges>(
+      `/homes/${encodeURIComponent(homeId)}/vehicles/${encodeURIComponent(vehicleId)}/mot/nudges`,
+    );
+  saveVehicleMotNudges = (
+    homeId: string,
+    vehicleId: string,
+    plan: import("@mykhaya/shared-types").VehicleMotNudgePlanInput,
+  ) =>
+    this.request<import("@mykhaya/shared-types").VehicleMotNudges>(
+      `/homes/${encodeURIComponent(homeId)}/vehicles/${encodeURIComponent(vehicleId)}/mot/nudges`,
+      { method: "PUT", body: JSON.stringify(plan) },
+    );
   // Reminders linked to one vehicle (Phase 4). Editing/deleting a linked
   // reminder reuses the existing generic updateReminder/deleteReminder
   // methods below — no separate Driveway edit/delete route exists.

@@ -40,6 +40,7 @@ from sqlalchemy.orm import selectinload
 
 from mykhaya.audit import audit
 from mykhaya.config import Settings
+from mykhaya.driveway_mot_nudges import sync_after_refresh
 from mykhaya.driveway_mot_provider import (
     DvsaMotHistoryProvider,
     MotHistory,
@@ -201,7 +202,13 @@ async def _sync_reminder(
 ) -> None:
     """Keep the single managed MOT reminder (event_type=inspection) on the
     current due date. upsert_driveway_reminder is idempotent per (vehicle,
-    event): repeated refreshes update the same row, never duplicate it."""
+    event): repeated refreshes update the same row, never duplicate it.
+    When the owner has an MOT nudge plan, the plan owns the MOT reminders
+    instead (see mykhaya.driveway_mot_nudges)."""
+    if await sync_after_refresh(
+        db, vehicle, summary.due_date, actor_id=actor_id, today=datetime.now(UTC).date()
+    ):
+        return
     if summary.due_date is None:
         return
     await upsert_driveway_reminder(

@@ -178,3 +178,32 @@ class VehicleMotRefreshRequest(StrictModel):
     # if_stale: the detail page's automatic check — no provider call while
     # the persisted data is still fresh.
     mode: Literal["if_stale", "force"] = "force"
+
+
+# --- MOT nudges (see mykhaya.driveway_mot_nudges) ------------------------------------
+
+MotNudgeOffset = Literal[30, 14, 7, 0]
+
+
+class VehicleMotNudgePlanRequest(StrictModel):
+    """The owner's MOT nudge plan. Recipients are deliberately absent: MOT
+    nudges always go to the vehicle owner, like every Driveway reminder."""
+
+    title: str = Field(min_length=1, max_length=160)
+    due_date: date
+    offsets: list[MotNudgeOffset] = Field(min_length=1, max_length=4)
+    repeat: bool = True
+
+
+class VehicleMotNudgePlanResponse(BaseModel):
+    title: str
+    due_date: date
+    offsets: list[int]
+    repeat: bool
+    # Reminder dates that exist for this plan (lead days already in the past
+    # are skipped), earliest first.
+    scheduled: list[date]
+
+
+class VehicleMotNudgesResponse(BaseModel):
+    plan: VehicleMotNudgePlanResponse | None
