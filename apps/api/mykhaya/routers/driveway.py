@@ -18,10 +18,12 @@ controls for now (no new encryption subsystem), but the value is never
 serialised to a viewer who isn't the vehicle's own owner or a home_admin,
 and never written into audit metadata or logs.
 
-Registration/VIN writes go only through mykhaya.driveway_sensitive, which
-(Phase 2B, behind MYKHAYA_DRIVEWAY_FIELD_ENCRYPTION_WRITE) also maintains
-the ciphertext columns. Reads here still use the plaintext columns only, and
-the ciphertext columns are never serialised.
+Registration/VIN writes AND reads go only through mykhaya.driveway_sensitive:
+writes also maintain the ciphertext columns (Phase 2B, behind
+MYKHAYA_DRIVEWAY_FIELD_ENCRYPTION_WRITE); reads are ciphertext-first with a
+NULL-ciphertext plaintext fallback (Phase 2D, behind
+MYKHAYA_DRIVEWAY_FIELD_ENCRYPTION_READ). The ciphertext columns are never
+serialised.
 """
 
 from __future__ import annotations
@@ -70,6 +72,9 @@ from mykhaya.driveway_schemas import (
 )
 from mykhaya.driveway_sensitive import (
     DrivewayFieldEncryptionUnavailable,
+    DrivewaySensitiveReadError,
+    get_vehicle_registration,
+    get_vehicle_vin,
     new_vehicle_id,
     set_vehicle_registration,
     set_vehicle_vin,
@@ -117,9 +122,23 @@ def _may_see_sensitive_fields(vehicle: Vehicle, auth: AuthContext, membership: M
 
 
 def _vehicle_response(
-    vehicle: Vehicle, auth: AuthContext, membership: Membership
+    vehicle: Vehicle, auth: AuthContext, membership: Membership, settings: Settings
 ) -> VehicleResponse:
+    # Visibility is decided BEFORE any VIN is read: get_vehicle_vin (which
+    # decrypts when the Phase 2D read flag is on) is only ever called for a
+    # viewer already entitled to the VIN — never speculatively.
     reveal_sensitive = _may_see_sensitive_fields(vehicle, auth, membership)
+    try:
+        registration = get_vehicle_registration(vehicle, settings)
+        vin = get_vehicle_vin(vehicle, settings) if reveal_sensitive else None
+    except DrivewaySensitiveReadError as exc:
+        # An existing ciphertext that will not decrypt is an integrity
+        # failure: no plaintext fallback, and a generic error with no value,
+        # envelope or ID (details are logged as an error class only).
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "Vehicle details can't be loaded right now. Please try again later.",
+        ) from exc
     return VehicleResponse(
         id=vehicle.id,
         group_id=vehicle.group_id,
@@ -132,9 +151,9 @@ def _vehicle_response(
         fuel_type=vehicle.fuel_type,
         engine_size=vehicle.engine_size,
         country_code=vehicle.country_code,
-        registration=vehicle.registration,
+        registration=registration,
         first_registration_date=vehicle.first_registration_date,
-        vin=vehicle.vin if reveal_sensitive else None,
+        vin=vin,
         lookup_provider=vehicle.lookup_provider,
         lookup_status=vehicle.lookup_status,
         last_successful_lookup=vehicle.last_successful_lookup,
@@ -247,13 +266,16 @@ async def list_vehicles(
     home_id: uuid.UUID,
     auth: AuthContext = Depends(auth_context),
     db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
 ) -> VehicleListResponse:
     membership = await require_capability(home_id, Capability.driveway_view, auth, db)
     filters = [Vehicle.group_id == home_id, Vehicle.archived_at.is_(None)]
     rows = (
         await db.scalars(select(Vehicle).where(*filters).order_by(Vehicle.created_at.asc()))
     ).all()
-    return VehicleListResponse(items=[_vehicle_response(row, auth, membership) for row in rows])
+    return VehicleListResponse(
+        items=[_vehicle_response(row, auth, membership, settings) for row in rows]
+    )
 
 
 @router.post("/{home_id}/vehicles/lookup", response_model=VehicleLookupResult)
@@ -398,7 +420,7 @@ async def create_vehicle(
     )
     await db.commit()
     await db.refresh(row)
-    return _vehicle_response(row, auth, membership)
+    return _vehicle_response(row, auth, membership, settings)
 
 
 @router.get("/{home_id}/vehicles/{vehicle_id}", response_model=VehicleResponse)
@@ -407,10 +429,11 @@ async def get_vehicle(
     vehicle_id: uuid.UUID,
     auth: AuthContext = Depends(auth_context),
     db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
 ) -> VehicleResponse:
     membership = await require_capability(home_id, Capability.driveway_view, auth, db)
     row = await _get_vehicle(db, home_id, vehicle_id)
-    return _vehicle_response(row, auth, membership)
+    return _vehicle_response(row, auth, membership, settings)
 
 
 @router.post("/{home_id}/vehicles/{vehicle_id}/photo", response_model=VehicleResponse)
@@ -456,7 +479,7 @@ async def upload_vehicle_photo(
     await db.refresh(row)
     if previous_key:
         await storage.delete(previous_key)
-    return _vehicle_response(row, auth, membership)
+    return _vehicle_response(row, auth, membership, settings)
 
 
 @router.get("/{home_id}/vehicles/{vehicle_id}/photo")
@@ -503,9 +526,14 @@ async def delete_vehicle_photo(
     row.photo_updated_at = None
     audit(db, request, "driveway.vehicle_photo.deleted", auth.user.id, home_id, "vehicle", row.id)
     await db.commit()
+    # Reload server-generated columns (updated_at) before serialising, as the
+    # other write handlers do; without it the expired attribute triggered a
+    # lazy load outside the async greenlet and the response failed with a 500
+    # even though the photo had been removed.
+    await db.refresh(row)
     if previous_key:
         await get_vehicle_photo_storage(settings).delete(previous_key)
-    return _vehicle_response(row, auth, membership)
+    return _vehicle_response(row, auth, membership, settings)
 
 
 @router.patch("/{home_id}/vehicles/{vehicle_id}", response_model=VehicleResponse)
@@ -562,7 +590,7 @@ async def update_vehicle(
     )
     await db.commit()
     await db.refresh(row)
-    return _vehicle_response(row, auth, membership)
+    return _vehicle_response(row, auth, membership, settings)
 
 
 @router.delete("/{home_id}/vehicles/{vehicle_id}", status_code=204)

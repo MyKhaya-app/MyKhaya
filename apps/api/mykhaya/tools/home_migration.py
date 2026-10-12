@@ -29,6 +29,9 @@ from mykhaya.config import Settings, get_settings
 from mykhaya.db import Base, SessionFactory
 from mykhaya.driveway_sensitive import (
     DrivewayFieldEncryptionUnavailable,
+    DrivewaySensitiveReadError,
+    logical_registration,
+    logical_vin,
     vehicle_sensitive_ciphertexts,
 )
 from mykhaya.ids import uuid7
@@ -308,6 +311,31 @@ def _safe_user(row: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in row.items() if key in allowed}
 
 
+def _logical_vehicle_row(row: dict[str, Any], settings: Settings) -> dict[str, Any]:
+    """Packages carry the LOGICAL registration/VIN, never ciphertext. With the
+    Phase 2D read flag on, that logical value comes from the same
+    ciphertext-first read path the API uses (mykhaya.driveway_sensitive); the
+    ciphertext columns are then stripped by _export_row as before. A stored
+    ciphertext that will not decrypt aborts the export (no plaintext
+    fallback)."""
+    try:
+        registration = logical_registration(
+            row["id"],
+            plaintext=row.get("registration"),
+            ciphertext=row.get("registration_ciphertext"),
+            settings=settings,
+        )
+        vin = logical_vin(
+            row["id"],
+            plaintext=row.get("vin"),
+            ciphertext=row.get("vin_ciphertext"),
+            settings=settings,
+        )
+    except DrivewaySensitiveReadError as exc:
+        raise MigrationError("A vehicle's protected details could not be read.") from exc
+    return {**row, "registration": registration, "vin": vin}
+
+
 def _export_row(row: dict[str, Any]) -> dict[str, Any]:
     return {
         key: value
@@ -410,7 +438,14 @@ async def export_home(home_id: uuid.UUID, output: Path, settings: Settings) -> d
             table = _table(name)
             rows = (await db.execute(select(table))).mappings().all()
             selected = [
-                _export_row({key: _json_value(value) for key, value in row.items()})
+                _export_row(
+                    {
+                        key: _json_value(value)
+                        for key, value in (
+                            _logical_vehicle_row(dict(row), settings) if name == "vehicles" else row
+                        ).items()
+                    }
+                )
                 for row in rows
                 if _row_matches_home(dict(row), home_id, member_ids)
             ]

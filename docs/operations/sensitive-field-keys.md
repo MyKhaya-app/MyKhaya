@@ -6,9 +6,11 @@ the Phase 1 Sensitive Data Protection audit for the design rationale.
 
 **Status:** Phase 2A (library, key loading) is commissioned on DEV. **Phase 2B
 (Driveway dual-write) is disabled by default** and commissioned on DEV only. Phase
-2C adds an operator-run backfill for missing ciphertext. See
-[Phase 2B: Driveway dual-write](#phase-2b-driveway-dual-write) and
-[Phase 2C: backfill](#phase-2c-backfill-missing-driveway-ciphertext) below. While a
+2C adds an operator-run backfill for missing ciphertext. Phase 2D adds
+ciphertext-first reads, also disabled by default. See
+[Phase 2B: Driveway dual-write](#phase-2b-driveway-dual-write),
+[Phase 2C: backfill](#phase-2c-backfill-missing-driveway-ciphertext) and
+[Phase 2D: ciphertext-first reads](#phase-2d-ciphertext-first-reads) below. While a
 keyring is unprovisioned, the services log `sensitive_field_keys_not_provisioned`
 and run normally.
 
@@ -132,6 +134,57 @@ dc python -m mykhaya.tools.driveway_ciphertext_backfill --apply  # 8. re-run: 0 
 Step 7: the check must report `registration_without_ciphertext = 0`,
 `vin_without_ciphertext = 0`, and zero `*_mismatch` / `*_decrypt_failed`. Step 8: the
 second `--apply` must report `registration_backfilled = 0` and `vin_backfilled = 0`.
+
+## Phase 2D: ciphertext-first reads
+
+`MYKHAYA_DRIVEWAY_FIELD_ENCRYPTION_READ` (default **`false`**, independent of the write
+flag) switches every application read of a stored registration or VIN to
+`mykhaya.driveway_sensitive`'s read functions. That covers vehicle list, detail,
+create, update and photo responses, Home Migration export, and the
+`registration_for_provider` helper that provider integrations such as DVSA must use.
+
+| Stored state (read flag on) | Result |
+|---|---|
+| Ciphertext present and decrypts | The decrypted value: **ciphertext is authoritative** |
+| Ciphertext NULL | Transitional fallback to the plaintext column; logs `driveway.sensitive_read_plaintext_fallback` (field name only, never a value) |
+| Ciphertext present but undecryptable (missing or unknown key, failed authentication, malformed envelope) | **No plaintext fallback.** The request fails with a generic 503 ("Vehicle details can't be loaded right now…"), a Home Migration export fails, and `driveway.sensitive_read_failed` is logged (field and error class only) |
+
+With the flag off, reads use the plaintext columns exactly as before.
+
+- **VIN decryption happens only after visibility is decided.** The response builder
+  first applies the unchanged owner/Home Admin rule, and only then reads the VIN. A
+  viewer who may not see it never causes a VIN decryption.
+- **No API, UI, schema or migration-format change.** Clients still receive
+  `registration` and, where permitted, `vin`. Ciphertext columns and `mkf1.` values
+  are never returned or exported.
+- **Plaintext columns still exist**, and the plaintext fallback still exists for NULL
+  ciphertext. With the read flag on, **plaintext is no longer authoritative**.
+  Removing plaintext is a later phase.
+- **No migration.** Writes (Phase 2B) are unchanged, and
+  `driveway_ciphertext_check` remains the parity check while plaintext exists.
+- **Production remains gated** by the encrypted-backup restore test and the
+  key-escrow recovery exercise.
+
+**DEV rollout**
+
+1. Confirm the Phase 2C checker is clean: `registration_without_ciphertext = 0`,
+   `vin_without_ciphertext = 0`, and zero mismatches or decrypt failures.
+2. Deploy the Phase 2D code with `MYKHAYA_DRIVEWAY_FIELD_ENCRYPTION_READ=false`.
+3. Verify normal Driveway behaviour: list, detail, edit, photo and reminders.
+4. Set `MYKHAYA_DRIVEWAY_FIELD_ENCRYPTION_READ=true` in the DEV `.env`.
+5. Restart only `api`, `worker` and `scheduler` through the supported DEV deployment
+   process.
+6. Verify list, detail and edit, and VIN visibility: the owner and a Home Admin see
+   the VIN; another member does not.
+7. Run `driveway_ciphertext_check`. It must still be clean, and the logs should show
+   no `driveway.sensitive_read_failed`.
+8. The plaintext/ciphertext disagreement proof (that the returned value comes from
+   ciphertext) lives in the automated tests
+   (`tests/test_driveway_field_encryption_read.py`). **Do not corrupt or edit DEV data
+   to reproduce it.**
+
+To roll back, set the read flag to `false` and restart the same services. Reads
+return to plaintext immediately; no data changes in either direction.
 
 ## What the keys are, and what they are not
 

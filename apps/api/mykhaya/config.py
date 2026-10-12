@@ -58,6 +58,11 @@ class Settings(BaseSettings):
     # write fails (rather than writing plaintext only) if no field-encryption
     # keyring is usable. See mykhaya.driveway_sensitive.
     driveway_field_encryption_write: bool = False
+    # Phase 2D: read Driveway registration/VIN ciphertext-first (decrypting
+    # with the field keyring), falling back to plaintext ONLY where the
+    # ciphertext column is NULL. Independent of the write flag. Off by
+    # default: reads then use plaintext exactly as before.
+    driveway_field_encryption_read: bool = False
     public_web_url: str = "http://localhost:8080"
     admin_url: str = "http://admin.localhost:8080"
     status_url: str = "http://status.localhost:8080"

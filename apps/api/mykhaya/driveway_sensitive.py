@@ -1,11 +1,13 @@
-"""The single write path for Driveway's sensitive vehicle identifiers.
+"""The single write AND read path for Driveway's sensitive vehicle identifiers.
 
-Phase 2B (Sensitive Data Protection): dual-write only. ``vehicles.registration``
-and ``vehicles.vin`` stay the authoritative, plaintext source for every read;
-when ``MYKHAYA_DRIVEWAY_FIELD_ENCRYPTION_WRITE`` is on, each change is *also*
-written as an AES-256-GCM envelope (``mykhaya.crypto``) into
-``registration_ciphertext`` / ``vin_ciphertext``. Nothing reads the
-ciphertext yet and there is no backfill.
+Phase 2B (Sensitive Data Protection) — writes: when
+``MYKHAYA_DRIVEWAY_FIELD_ENCRYPTION_WRITE`` is on, each registration/VIN
+change is *also* written as an AES-256-GCM envelope (``mykhaya.crypto``) into
+``registration_ciphertext`` / ``vin_ciphertext`` alongside the plaintext.
+
+Phase 2D — reads: when ``MYKHAYA_DRIVEWAY_FIELD_ENCRYPTION_READ`` is on, the
+ciphertext is authoritative (see the read section at the end of this module);
+otherwise reads use the plaintext columns exactly as before.
 
 Every code path that sets a registration or VIN goes through this module —
 the Driveway router (create/update) and Home Migration import — so the
@@ -34,7 +36,12 @@ from typing import Any
 import structlog
 
 from mykhaya.config import Settings
-from mykhaya.crypto import FieldBinding, SensitiveDataError, encrypt_sensitive_value
+from mykhaya.crypto import (
+    FieldBinding,
+    SensitiveDataError,
+    decrypt_sensitive_value,
+    encrypt_sensitive_value,
+)
 from mykhaya.crypto.config import get_field_keyring
 from mykhaya.ids import uuid7
 from mykhaya.models import Vehicle
@@ -116,3 +123,111 @@ def set_vehicle_vin(row: Vehicle, value: str | None, settings: Settings) -> None
     ciphertext = _ciphertext(value, vin_binding(row.id), settings)
     row.vin = value
     row.vin_ciphertext = ciphertext
+
+
+# --- Phase 2D: ciphertext-first reads -------------------------------------------
+#
+# With MYKHAYA_DRIVEWAY_FIELD_ENCRYPTION_READ on, the ciphertext column is the
+# authoritative source for a registration/VIN:
+#
+# * ciphertext present  -> decrypt it (keyring + the same row/column binding);
+# * ciphertext NULL     -> transitional fallback to the plaintext column
+#                          (logged as an event only, never the value);
+# * ciphertext present but undecryptable (missing/unknown key, failed
+#   authentication, malformed envelope) -> DrivewaySensitiveReadError. There
+#   is deliberately NO plaintext fallback here: a ciphertext that does not
+#   authenticate is an integrity failure, not a missing value.
+#
+# With the flag off every read returns the plaintext column, exactly as before.
+#
+# Every consumer of a stored vehicle's registration/VIN — API responses, Home
+# Migration export and (future) provider integrations — must read through
+# these functions, never vehicle.registration / vehicle.vin directly. VIN
+# callers must decide visibility FIRST: get_vehicle_vin decrypts
+# unconditionally, so it must only be called once the caller is entitled to
+# see the VIN.
+
+
+class DrivewaySensitiveReadError(Exception):
+    """A stored registration/VIN ciphertext exists but could not be read.
+    The message is generic; never carries a value, envelope, ID or key."""
+
+    def __init__(self) -> None:
+        super().__init__("A vehicle's protected details could not be read.")
+
+
+def _logical_value(
+    field: str,
+    *,
+    plaintext: str | None,
+    ciphertext: str | None,
+    binding: FieldBinding,
+    settings: Settings,
+) -> str | None:
+    if not settings.driveway_field_encryption_read:
+        return plaintext
+    if ciphertext is None:
+        if plaintext is not None:
+            log.info("driveway.sensitive_read_plaintext_fallback", field=field)
+        return plaintext
+    try:
+        return decrypt_sensitive_value(ciphertext, binding=binding, keyring=get_field_keyring())
+    except SensitiveDataError as exc:
+        # Field name and error class only — no vehicle ID, value or envelope.
+        log.error("driveway.sensitive_read_failed", field=field, error=type(exc).__name__)
+        raise DrivewaySensitiveReadError() from None
+
+
+def logical_registration(
+    vehicle_id: uuid.UUID, *, plaintext: str | None, ciphertext: str | None, settings: Settings
+) -> str | None:
+    """Row-agnostic form, for paths that hold column values rather than an
+    ORM Vehicle (Home Migration export)."""
+    return _logical_value(
+        "registration",
+        plaintext=plaintext,
+        ciphertext=ciphertext,
+        binding=registration_binding(vehicle_id),
+        settings=settings,
+    )
+
+
+def logical_vin(
+    vehicle_id: uuid.UUID, *, plaintext: str | None, ciphertext: str | None, settings: Settings
+) -> str | None:
+    """Row-agnostic form. Only call once the VIN may be revealed."""
+    return _logical_value(
+        "vin",
+        plaintext=plaintext,
+        ciphertext=ciphertext,
+        binding=vin_binding(vehicle_id),
+        settings=settings,
+    )
+
+
+def get_vehicle_registration(vehicle: Vehicle, settings: Settings) -> str | None:
+    return logical_registration(
+        vehicle.id,
+        plaintext=vehicle.registration,
+        ciphertext=vehicle.registration_ciphertext,
+        settings=settings,
+    )
+
+
+def get_vehicle_vin(vehicle: Vehicle, settings: Settings) -> str | None:
+    """Decrypts when the read flag is on. Callers MUST have already decided
+    the viewer may see this vehicle's VIN (see routers.driveway
+    ._may_see_sensitive_fields) — never call it speculatively."""
+    return logical_vin(
+        vehicle.id, plaintext=vehicle.vin, ciphertext=vehicle.vin_ciphertext, settings=settings
+    )
+
+
+def registration_for_provider(vehicle: Vehicle, settings: Settings) -> str | None:
+    """The registration to send to an official-data provider (e.g. the
+    planned DVSA MOT integration) for a STORED vehicle. Always the logical,
+    ciphertext-first value — provider code must use this, never
+    vehicle.registration. (Today's DVLA lookup takes the user's typed
+    registration from the request, not a stored vehicle, so it has no caller
+    yet.)"""
+    return get_vehicle_registration(vehicle, settings)
