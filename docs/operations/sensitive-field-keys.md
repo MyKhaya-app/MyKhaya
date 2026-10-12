@@ -4,16 +4,83 @@ This runbook covers the keyrings used by `mykhaya.crypto` for application-level
 encryption of Tier-1 fields and for keyed lookup tokens (blind indexes). See
 the Phase 1 Sensitive Data Protection audit for the design rationale.
 
-**Phase 2A status:** the library and key loading are in place, but **no data is
-encrypted with these keys yet**. Provisioning them now is safe and is a
-prerequisite for Phase 2B. While unprovisioned, the services log
-`sensitive_field_keys_not_provisioned` and run normally.
+**Status:** Phase 2A (library, key loading) is commissioned on DEV. **Phase 2B
+(Driveway dual-write) exists in code but is disabled by default.** See
+[Phase 2B: Driveway dual-write](#phase-2b-driveway-dual-write) below. While a
+keyring is unprovisioned, the services log `sensitive_field_keys_not_provisioned`
+and run normally.
 
 > **Phase 2B gate.** No production field may be encrypted until the
 > [recovery exercise](#recovery-exercise-phase-2b-gate) below **and** an
 > encrypted-backup restore test
 > ([backup-and-restore.md](backup-and-restore.md#phase-2b-prerequisite-mandatory-gate))
-> have both succeeded and been recorded.
+> have both succeeded and been recorded. This applies to enabling
+> `MYKHAYA_DRIVEWAY_FIELD_ENCRYPTION_WRITE` in production.
+
+## Phase 2B: Driveway dual-write
+
+**Current state**
+
+- Migration `0115_vehicle_ciphertext` adds nullable `vehicles.registration_ciphertext`
+  and `vehicles.vin_ciphertext` (TEXT, no index, no constraint, no default).
+- `MYKHAYA_DRIVEWAY_FIELD_ENCRYPTION_WRITE` defaults to **`false`**. Off, Driveway
+  behaves exactly as before and writes no ciphertext.
+- On, every registration/VIN write (Driveway create/update and Home Migration import,
+  all through `mykhaya.driveway_sensitive`) also stores an AES-256-GCM envelope. It is
+  bound to the vehicle's id and to its column (purposes `vehicle.registration` /
+  `vehicle.vin`). Unchanged values are not re-encrypted, and clearing a value clears
+  both columns. If no field-encryption keyring is usable, the write fails with a 503
+  and nothing is committed; it never writes plaintext only.
+- Whenever a plaintext value changes, its ciphertext is either re-encrypted (flag on)
+  or cleared (flag off), so a ciphertext can never describe an old value.
+- **Plaintext remains authoritative.** Every read (API, UI, reminders, provider
+  logic) uses `registration` / `vin`. Ciphertext is never serialised, logged,
+  audited or included in Home Migration packages; import re-derives it for the new
+  row.
+- **No backfill has occurred.** Vehicles written while the flag was off have no
+  ciphertext.
+- **Ciphertext must not yet be treated as a recoverable representation.** It is a
+  partial, redundant copy. Backups, restores and every recovery decision still rely
+  on the plaintext columns until a later phase says otherwise.
+
+**Verification tool (read-only, counts only):**
+
+```sh
+docker compose exec -T api python -m mykhaya.tools.driveway_ciphertext_check
+```
+
+It decrypts each populated ciphertext with the application's keyring and binding,
+compares it with the plaintext, and prints counts (`*_verified`, `*_mismatch`,
+`*_decrypt_failed`, `*_without_ciphertext`, …). It never prints a value, envelope or
+ID and runs in a `READ ONLY` transaction. Exit status 0 means every populated
+ciphertext matches.
+
+**Rollout sequence (DEV first; PROD only after the Phase 2B gate)**
+
+1. Deploy the migration and code with `MYKHAYA_DRIVEWAY_FIELD_ENCRYPTION_WRITE=false`
+   (the default) through the normal deployment process.
+2. Verify normal Driveway operation: list, create, edit, photo and reminders behave
+   as before. `driveway_ciphertext_check` shows `*_ciphertext: 0`.
+3. Enable dual-write in **DEV only**: set `MYKHAYA_DRIVEWAY_FIELD_ENCRYPTION_WRITE=true`
+   in the DEV `.env`. The field-encryption keyring must already load
+   (`sensitive_field_keys_loaded`).
+4. Restart only `api`, `worker` and `scheduler` through the supported DEV deployment
+   process (`make dev-update`/`dev-deploy.sh`), never by hand-editing containers.
+5. Create and update **synthetic** DEV vehicles (made-up registrations and VINs):
+   create with both, change each, clear each, and edit an unrelated field.
+6. Verify ciphertext exists without displaying it: run `driveway_ciphertext_check`
+   and confirm `registration_ciphertext` / `vin_ciphertext` counts rose. Never `SELECT`
+   the columns to a terminal.
+7. Confirm the same run reports `*_verified` equal to `*_ciphertext` and zero
+   `*_mismatch` / `*_decrypt_failed` (decryption through application code).
+8. Confirm the API still returns the plaintext contract only: vehicle list/detail
+   responses contain `registration` (and `vin` for owner/admin) and no
+   `*_ciphertext` field or `mkf1.` value.
+
+To roll back, set the flag back to `false` and restart the same services. Plaintext
+was never changed by the flag. Rows written while it was on keep a valid envelope
+until their plaintext next changes, at which point it is cleared. The migration's
+downgrade drops only the two ciphertext columns.
 
 ## What the keys are, and what they are not
 

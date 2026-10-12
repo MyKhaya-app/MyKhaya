@@ -17,11 +17,18 @@ Household-scoped vehicle, per the Phase 1.5 decision: normal MyKhaya access
 controls for now (no new encryption subsystem), but the value is never
 serialised to a viewer who isn't the vehicle's own owner or a home_admin,
 and never written into audit metadata or logs.
+
+Registration/VIN writes go only through mykhaya.driveway_sensitive, which
+(Phase 2B, behind MYKHAYA_DRIVEWAY_FIELD_ENCRYPTION_WRITE) also maintains
+the ciphertext columns. Reads here still use the plaintext columns only, and
+the ciphertext columns are never serialised.
 """
 
 from __future__ import annotations
 
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 
 import structlog
@@ -60,6 +67,13 @@ from mykhaya.driveway_schemas import (
     VehicleReminderCreate,
     VehicleResponse,
     VehicleUpdate,
+)
+from mykhaya.driveway_sensitive import (
+    DrivewayFieldEncryptionUnavailable,
+    new_vehicle_id,
+    set_vehicle_registration,
+    set_vehicle_vin,
+    vehicle_sensitive_ciphertexts,
 )
 from mykhaya.entitlements import require_entitlement
 from mykhaya.features import require_feature
@@ -208,6 +222,21 @@ async def _require_home_member_owner(
     return membership
 
 
+@contextmanager
+def _field_encryption_guard() -> Iterator[None]:
+    """Turns an unusable keyring (dual-write on) into a 503 *before* commit,
+    so the request's transaction is rolled back and no plaintext-only change
+    is persisted. The message is generic; details are logged by
+    mykhaya.driveway_sensitive as an error class only."""
+    try:
+        yield
+    except DrivewayFieldEncryptionUnavailable as exc:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "Vehicle details can't be saved right now. Please try again later.",
+        ) from exc
+
+
 def _audit_metadata(vehicle: Vehicle) -> dict[str, object]:
     """Never includes vin/registration — see module docstring."""
     return {"owner_user_id": str(vehicle.owner_user_id), "country_code": vehicle.country_code}
@@ -324,10 +353,21 @@ async def create_vehicle(
     request: Request,
     auth: AuthContext = Depends(auth_context),
     db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
 ) -> VehicleResponse:
     membership = await require_capability(home_id, Capability.driveway_manage, auth, db)
     await _require_home_member_owner(db, home_id, body.owner_user_id)
+    registration = body.registration.strip() if body.registration else None
+    vin = body.vin.strip() if body.vin else None
+    # The id is assigned up front (not left to the flush-time default) because
+    # the ciphertext's associated data binds it to this exact row.
+    vehicle_id = new_vehicle_id()
+    with _field_encryption_guard():
+        ciphertexts = vehicle_sensitive_ciphertexts(
+            vehicle_id, registration=registration, vin=vin, settings=settings
+        )
     row = Vehicle(
+        id=vehicle_id,
         group_id=home_id,
         owner_user_id=body.owner_user_id,
         scope=RoutineScope.household,
@@ -339,9 +379,10 @@ async def create_vehicle(
         fuel_type=body.fuel_type.strip() if body.fuel_type else None,
         engine_size=body.engine_size.strip() if body.engine_size else None,
         country_code=body.country_code.upper(),
-        registration=body.registration.strip() if body.registration else None,
+        registration=registration,
         first_registration_date=body.first_registration_date,
-        vin=body.vin.strip() if body.vin else None,
+        vin=vin,
+        **ciphertexts,
     )
     db.add(row)
     await db.flush()
@@ -475,6 +516,7 @@ async def update_vehicle(
     request: Request,
     auth: AuthContext = Depends(auth_context),
     db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
 ) -> VehicleResponse:
     membership = await require_capability(home_id, Capability.driveway_view, auth, db)
     await _require_vehicle_manage(db, home_id, auth)
@@ -492,15 +534,18 @@ async def update_vehicle(
     row.fuel_type = body.fuel_type.strip() if body.fuel_type else None
     row.engine_size = body.engine_size.strip() if body.engine_size else None
     row.country_code = body.country_code.upper()
-    row.registration = body.registration.strip() if body.registration else None
     row.first_registration_date = body.first_registration_date
-    # A viewer who cannot see this vehicle's VIN (not its owner, not a
-    # home_admin — see _may_see_sensitive_fields) never receives it in the
-    # form they're editing, so a full-replace PATCH must not let their
-    # always-empty field silently clear an existing value. Only a viewer
-    # who could see the real value may overwrite it.
-    if _may_see_sensitive_fields(row, auth, membership):
-        row.vin = body.vin.strip() if body.vin else None
+    with _field_encryption_guard():
+        set_vehicle_registration(
+            row, body.registration.strip() if body.registration else None, settings
+        )
+        # A viewer who cannot see this vehicle's VIN (not its owner, not a
+        # home_admin — see _may_see_sensitive_fields) never receives it in the
+        # form they're editing, so a full-replace PATCH must not let their
+        # always-empty field silently clear an existing value. Only a viewer
+        # who could see the real value may overwrite it.
+        if _may_see_sensitive_fields(row, auth, membership):
+            set_vehicle_vin(row, body.vin.strip() if body.vin else None, settings)
     if owner_changed:
         # Linked managed reminders follow the vehicle to its new owner (see
         # sync_reminder_scope_to_vehicle) rather than staying with the previous one.

@@ -4275,6 +4275,14 @@ class Vehicle(UuidTimeMixin, Base):
     # Sensitive — defaults to Personal visibility even on a Household-scoped
     # vehicle; never included in audit metadata/logs. See class docstring.
     vin: Mapped[str | None] = mapped_column(String(32))
+    # Sensitive Data Protection Phase 2B — dual-write only. AES-256-GCM
+    # envelopes (mkf1.<key_id>.<payload>, see mykhaya.crypto.field) of the
+    # plaintext columns above, bound to this row's id and to the column.
+    # Written ONLY through mykhaya.driveway_sensitive, and only when
+    # MYKHAYA_DRIVEWAY_FIELD_ENCRYPTION_WRITE is on; nothing reads them yet —
+    # registration/vin remain authoritative. Never serialise, log or audit.
+    registration_ciphertext: Mapped[str | None] = mapped_column(Text)
+    vin_ciphertext: Mapped[str | None] = mapped_column(Text)
     lookup_provider: Mapped[str | None] = mapped_column(String(40))
     lookup_status: Mapped[str | None] = mapped_column(String(30))
     last_successful_lookup: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

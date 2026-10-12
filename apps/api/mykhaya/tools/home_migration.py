@@ -27,6 +27,10 @@ from mykhaya import models as _models  # noqa: F401 - register ORM tables in Bas
 from mykhaya.avatars.storage import get_avatar_storage
 from mykhaya.config import Settings, get_settings
 from mykhaya.db import Base, SessionFactory
+from mykhaya.driveway_sensitive import (
+    DrivewayFieldEncryptionUnavailable,
+    vehicle_sensitive_ciphertexts,
+)
 from mykhaya.ids import uuid7
 from mykhaya.meal_images import get_meal_image_storage
 from mykhaya.models import TokenPurpose
@@ -149,6 +153,11 @@ SECRET_COLUMNS = {
     "join_code_hash",
     "join_code_encrypted",
     "credential_id",
+    # Field-encryption envelopes are bound to the source row id and the source
+    # environment's keyring, so they are never carried in a package; import
+    # re-derives them from the plaintext (see mykhaya.driveway_sensitive).
+    "registration_ciphertext",
+    "vin_ciphertext",
 }
 STRIPE_COLUMNS = {"external_customer_id", "external_subscription_id", "external_price_id"}
 ADMIN_COLUMNS = {"created_by", "updated_by", "published_by", "complimentary_granted_by"}
@@ -735,6 +744,22 @@ async def import_home(
                         for key, value in values.items()
                         if key in table.c
                     }
+                    if name == "vehicles":
+                        # Same single write path as the Driveway router: the
+                        # ciphertext (dual-write on) is bound to the NEW row id.
+                        try:
+                            values.update(
+                                vehicle_sensitive_ciphertexts(
+                                    values["id"],
+                                    registration=values.get("registration"),
+                                    vin=values.get("vin"),
+                                    settings=settings,
+                                )
+                            )
+                        except DrivewayFieldEncryptionUnavailable as exc:
+                            raise MigrationError(
+                                "Vehicle field encryption is enabled but unavailable."
+                            ) from exc
                     if name == "home_subscriptions":
                         values.update(
                             {

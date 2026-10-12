@@ -113,7 +113,15 @@ def redact(value: Any, key: str | None = None) -> Any:
         key.casefold() in SENSITIVE_NAMES
         or any(
             marker in key.casefold()
-            for marker in ("password", "token", "secret", "api_key", "authorization", "cookie")
+            for marker in (
+                "password",
+                "token",
+                "secret",
+                "api_key",
+                "authorization",
+                "cookie",
+                "ciphertext",
+            )
         )
     ):
         return REDACTED

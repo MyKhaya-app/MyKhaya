@@ -9,7 +9,7 @@ from mykhaya.audit_redaction import redact_audit_metadata
 from mykhaya.models import AdministrativeAuditEvent
 from mykhaya.platform_security import PlatformContext, safe_session_reference
 
-SECRET_MARKERS = ("password", "secret", "token", "credential", "api_key")
+SECRET_MARKERS = ("password", "secret", "token", "credential", "api_key", "ciphertext")
 
 
 def _audit_log_method(outcome: str) -> str:

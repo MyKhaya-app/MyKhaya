@@ -53,6 +53,11 @@ class Settings(BaseSettings):
     # Phase 2A: nothing encrypts with these keys yet, so unprovisioned keyrings
     # are allowed by default. Set true to make a missing keyring fatal at startup.
     sensitive_field_keys_required: bool = False
+    # Phase 2B: also write Driveway registration/VIN as ciphertext alongside
+    # the authoritative plaintext columns. Off by default; when on, a vehicle
+    # write fails (rather than writing plaintext only) if no field-encryption
+    # keyring is usable. See mykhaya.driveway_sensitive.
+    driveway_field_encryption_write: bool = False
     public_web_url: str = "http://localhost:8080"
     admin_url: str = "http://admin.localhost:8080"
     status_url: str = "http://status.localhost:8080"
