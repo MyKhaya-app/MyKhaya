@@ -31,6 +31,8 @@ vi.mock("@mykhaya/api-client", async (importOriginal) => {
       vehicle: vi.fn(),
       deleteVehicle: vi.fn(),
       uploadVehiclePhoto: vi.fn(),
+      vehicleMot: vi.fn(),
+      refreshVehicleMot: vi.fn(),
     },
   };
 });
@@ -77,8 +79,35 @@ function renderPage(vehicleId = "v1") {
   return render(<VehicleDetailPage params={resolvedParams(vehicleId)} />);
 }
 
+// A provider-neutral MOT response, as the backend returns it.
+function motResponse(overrides: Record<string, unknown> = {}, summary: Record<string, unknown> = {}) {
+  return {
+    eligible: true,
+    provider_available: true,
+    has_registration: true,
+    summary: {
+      status: null,
+      due_date: null,
+      expiry_date: null,
+      first_mot_due_date: null,
+      last_test_date: null,
+      last_result: null,
+      source: null,
+      refreshed_at: null,
+      stale: false,
+      last_attempt_at: null,
+      last_attempt_outcome: null,
+      ...summary,
+    },
+    tests: [],
+    refresh: null,
+    ...overrides,
+  };
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
+  (api.vehicleMot as ReturnType<typeof vi.fn>).mockResolvedValue(motResponse());
 });
 
 describe("Vehicle detail — real data only", () => {
@@ -179,5 +208,91 @@ describe("Vehicle detail — remove vehicle", () => {
     await user.click(within(dialog).getByRole("button", { name: "Remove vehicle" }));
     await waitFor(() => expect(api.deleteVehicle).toHaveBeenCalledWith("home-1", "v1"));
     await waitFor(() => expect(push).toHaveBeenCalledWith("/driveway"));
+  });
+});
+
+describe("Vehicle detail — MOT (DVSA, UK vehicles only)", () => {
+  const VALID = {
+    status: "valid",
+    due_date: "2027-03-14",
+    expiry_date: "2027-03-14",
+    refreshed_at: new Date(Date.now() - 2 * 3600 * 1000).toISOString(),
+    source: "dvsa",
+  };
+
+  it("shows the current MOT in family language with when it was last checked", async () => {
+    (api.vehicle as ReturnType<typeof vi.fn>).mockResolvedValue(VEHICLE);
+    (api.vehicleMot as ReturnType<typeof vi.fn>).mockResolvedValue(motResponse({}, VALID));
+    renderPage();
+    expect(await screen.findByText("Valid")).toBeInTheDocument();
+    expect(screen.getByText("Expires 14 March 2027")).toBeInTheDocument();
+    expect(screen.getByText("Last checked 2 hours ago")).toBeInTheDocument();
+    expect(api.refreshVehicleMot).not.toHaveBeenCalled(); // fresh data: no provider check
+  });
+
+  it("refreshes on request and shows the server's message", async () => {
+    const user = userEvent.setup();
+    (api.vehicle as ReturnType<typeof vi.fn>).mockResolvedValue(VEHICLE);
+    (api.vehicleMot as ReturnType<typeof vi.fn>).mockResolvedValue(motResponse({}, VALID));
+    (api.refreshVehicleMot as ReturnType<typeof vi.fn>).mockResolvedValue(
+      motResponse({ refresh: { outcome: "rate_limited", message: "MOT checks are busy right now. Please try again in a few minutes." } }, VALID),
+    );
+    renderPage();
+    await user.click(await screen.findByRole("button", { name: /Refresh/ }));
+    expect(api.refreshVehicleMot).toHaveBeenCalledWith("home-1", "v1", "force");
+    expect(await screen.findByText(/MOT checks are busy right now/)).toBeInTheDocument();
+  });
+
+  it("asks for one if-stale refresh when the stored MOT data is stale", async () => {
+    (api.vehicle as ReturnType<typeof vi.fn>).mockResolvedValue(VEHICLE);
+    (api.vehicleMot as ReturnType<typeof vi.fn>).mockResolvedValue(motResponse({}, { ...VALID, stale: true }));
+    (api.refreshVehicleMot as ReturnType<typeof vi.fn>).mockResolvedValue(motResponse({}, VALID));
+    renderPage();
+    await waitFor(() => expect(api.refreshVehicleMot).toHaveBeenCalledWith("home-1", "v1", "if_stale"));
+    expect(api.refreshVehicleMot).toHaveBeenCalledTimes(1);
+  });
+
+  it("describes a vehicle whose first MOT is not yet due", async () => {
+    (api.vehicle as ReturnType<typeof vi.fn>).mockResolvedValue(VEHICLE);
+    (api.vehicleMot as ReturnType<typeof vi.fn>).mockResolvedValue(
+      motResponse({}, { status: "not_yet_due", due_date: "2028-03-14", first_mot_due_date: "2028-03-14" }),
+    );
+    renderPage();
+    expect(await screen.findByText("Not yet due")).toBeInTheDocument();
+    expect(screen.getByText("First MOT due 14 March 2028")).toBeInTheDocument();
+  });
+
+  it("says when MOT checks are unavailable and offers no refresh", async () => {
+    (api.vehicle as ReturnType<typeof vi.fn>).mockResolvedValue(VEHICLE);
+    (api.vehicleMot as ReturnType<typeof vi.fn>).mockResolvedValue(motResponse({ provider_available: false }));
+    renderPage();
+    expect(await screen.findByText("MOT checks aren't available right now.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /Refresh|Check MOT/ })).not.toBeInTheDocument();
+  });
+
+  it("links to MOT history only once there is history to show", async () => {
+    (api.vehicle as ReturnType<typeof vi.fn>).mockResolvedValue(VEHICLE);
+    (api.vehicleMot as ReturnType<typeof vi.fn>).mockResolvedValue(
+      motResponse(
+        {
+          tests: [
+            { id: "t1", test_number: "1", test_date: "2026-09-01", completed_at: null, expiry_date: "2027-09-01", result: "passed", odometer_value: 45210, odometer_unit: "mi", odometer_result: "read", defects: [] },
+          ],
+        },
+        VALID,
+      ),
+    );
+    renderPage();
+    const row = await screen.findByRole("heading", { name: "MOT history" });
+    expect(row.closest("a")).toHaveAttribute("href", "/driveway/v1/mot");
+  });
+
+  it("never shows an MOT card or fetches MOT data for a non-UK vehicle", async () => {
+    (api.vehicle as ReturnType<typeof vi.fn>).mockResolvedValue({ ...VEHICLE, country_code: "ZA" });
+    renderPage();
+    await screen.findByRole("heading", { name: "BMW i4" });
+    expect(screen.queryByRole("heading", { name: "MOT" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "MOT history" })).not.toBeInTheDocument();
+    expect(api.vehicleMot).not.toHaveBeenCalled();
   });
 });

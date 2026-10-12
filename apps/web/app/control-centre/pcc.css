@@ -267,6 +267,13 @@
   margin: 0.35rem 0 0;
   max-width: 62ch;
 }
+/* A section heading inside a card that groups more than one provider
+   (e.g. Driveway integrations: DVLA, then DVSA). */
+.pcc-root .cc-subheading {
+  font-size: 0.95rem;
+  font-weight: 700;
+  margin: 1.5rem 0 0.75rem;
+}
 .cc-page-meta {
   color: #687981;
   display: flex;

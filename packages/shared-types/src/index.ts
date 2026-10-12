@@ -1028,6 +1028,67 @@ export interface VehicleListResponse {
   items: Vehicle[];
 }
 
+// Driveway MOT (Phase 1) — mirrors mykhaya.driveway_schemas.VehicleMot*.
+// Provider-neutral: never DVSA field names or terminology.
+export type VehicleMotStatus = "valid" | "expired" | "not_yet_due" | "no_record";
+export type VehicleMotResult = "passed" | "failed" | "other";
+export type VehicleMotDefectCategory =
+  | "dangerous"
+  | "major"
+  | "minor"
+  | "advisory"
+  | "prs"
+  | "fail"
+  | "user_entered"
+  | "other";
+
+export interface VehicleMotDefect {
+  text: string;
+  category: VehicleMotDefectCategory;
+  dangerous: boolean;
+}
+
+export interface VehicleMotTest {
+  id: string;
+  test_number: string | null;
+  test_date: string;
+  completed_at: string | null;
+  expiry_date: string | null;
+  result: VehicleMotResult;
+  odometer_value: number | null;
+  odometer_unit: "mi" | "km" | null;
+  odometer_result: string | null;
+  defects: VehicleMotDefect[];
+}
+
+export interface VehicleMotSummary {
+  status: VehicleMotStatus | null;
+  due_date: string | null;
+  expiry_date: string | null;
+  first_mot_due_date: string | null;
+  last_test_date: string | null;
+  last_result: VehicleMotResult | null;
+  source: string | null;
+  refreshed_at: string | null;
+  stale: boolean;
+  last_attempt_at: string | null;
+  last_attempt_outcome: string | null;
+}
+
+export interface VehicleMotRefreshResult {
+  outcome: string;
+  message: string | null;
+}
+
+export interface VehicleMot {
+  eligible: boolean;
+  provider_available: boolean;
+  has_registration: boolean;
+  summary: VehicleMotSummary;
+  tests: VehicleMotTest[];
+  refresh?: VehicleMotRefreshResult | null;
+}
+
 export interface VehicleCreatePayload {
   nickname: string;
   owner_user_id: string;

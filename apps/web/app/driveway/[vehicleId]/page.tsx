@@ -3,8 +3,8 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ChangeEvent, use, useEffect, useRef, useState } from "react";
-import { Bell, Camera, Car, ChevronLeft, ChevronRight, FileText, Info, Shield, Trash2 } from "lucide-react";
-import type { Vehicle } from "@mykhaya/shared-types";
+import { Bell, Camera, Car, ChevronLeft, ChevronRight, ClipboardCheck, FileText, Info, Trash2 } from "lucide-react";
+import type { Vehicle, VehicleMot } from "@mykhaya/shared-types";
 import { ApiError, api } from "@mykhaya/api-client";
 import { AppShellContent } from "@/components/app-shell";
 import { BottomSheet } from "@/components/bottom-sheet";
@@ -12,6 +12,7 @@ import { FormStatus } from "@/components/form-status";
 import { useActiveHome } from "@/components/use-active-home";
 import { useAuth } from "@/components/auth-provider";
 import { countryName } from "../countries";
+import { MotCard } from "../mot-card";
 import { fetchNativeImage } from "@/components/native-auth";
 import { isNativeShell } from "@/components/native-runtime";
 import { AvatarProcessingError, classifyAvatarBackendFailure, isImageFormatRejection, normalizeAvatarFile } from "@/components/avatar-upload";
@@ -54,6 +55,7 @@ export default function VehicleDetailPage({ params }: { params: Promise<{ vehicl
   const { user } = useAuth();
   const router = useRouter();
   const [vehicle, setVehicle] = useState<Vehicle | null>(null);
+  const [mot, setMot] = useState<VehicleMot | null>(null);
   const [notFound, setNotFound] = useState(false);
   const [error, setError] = useState("");
   const [confirmingDelete, setConfirmingDelete] = useState(false);
@@ -76,6 +78,22 @@ export default function VehicleDetailPage({ params }: { params: Promise<{ vehicl
         else setError(loadErrorMessage(cause, "Could not load this vehicle."));
       });
   }, [activeHomeId, vehicleId]);
+
+  // MOT data applies to UK vehicles only (DVSA); other countries never fetch
+  // it and never see an MOT card or history row.
+  const motEligible = vehicle?.country_code === "GB";
+  useEffect(() => {
+    if (!activeHomeId || !motEligible) {
+      setMot(null);
+      return;
+    }
+    let cancelled = false;
+    api
+      .vehicleMot(activeHomeId, vehicleId)
+      .then((next) => { if (!cancelled) setMot(next); })
+      .catch(() => { if (!cancelled) setMot(null); });
+    return () => { cancelled = true; };
+  }, [activeHomeId, vehicleId, motEligible]);
 
   async function removeVehicle() {
     if (!activeHomeId || !vehicle) return;
@@ -193,10 +211,13 @@ export default function VehicleDetailPage({ params }: { params: Promise<{ vehicl
           {photoError && <p className="notice error" role="alert">{photoError}</p>}
         </section>
 
-        {(vehicle.tax_status || vehicle.inspection_status) && (
+        {mot && mot.eligible && (
+          <MotCard homeId={activeHomeId} vehicleId={vehicle.id} mot={mot} onChange={setMot} />
+        )}
+
+        {vehicle.tax_status && (
           <div className="driveway-compliance-grid">
-            {vehicle.tax_status && <section className="card driveway-compliance-card"><FileText size={22} aria-hidden="true" /><strong>Vehicle tax</strong><b>{vehicle.tax_status}</b>{vehicle.tax_due_date && <small>Due {vehicle.tax_due_date}</small>}</section>}
-            {vehicle.inspection_status && <section className="card driveway-compliance-card"><Shield size={22} aria-hidden="true" /><strong>MOT</strong><b>{vehicle.inspection_status}</b>{vehicle.inspection_due_date && <small>Expires {vehicle.inspection_due_date}</small>}</section>}
+            <section className="card driveway-compliance-card"><FileText size={22} aria-hidden="true" /><strong>Vehicle tax</strong><b>{vehicle.tax_status}</b>{vehicle.tax_due_date && <small>Due {vehicle.tax_due_date}</small>}</section>
           </div>
         )}
 
@@ -228,6 +249,20 @@ export default function VehicleDetailPage({ params }: { params: Promise<{ vehicl
                   <ChevronRight size={18} strokeWidth={1.75} />
                 </span>
               </Link>
+              {mot && mot.eligible && mot.tests.length > 0 && (
+                <Link className="more-row" href={`/driveway/${vehicle.id}/mot`}>
+                  <span className="more-icon-tile sage" aria-hidden="true">
+                    <ClipboardCheck size={20} strokeWidth={1.75} />
+                  </span>
+                  <span className="more-row-text">
+                    <h2>MOT history</h2>
+                    <p>{mot.tests.length === 1 ? "1 test" : `${mot.tests.length} tests`} · results, mileage and advisories</p>
+                  </span>
+                  <span className="more-row-chevron" aria-hidden="true">
+                    <ChevronRight size={18} strokeWidth={1.75} />
+                  </span>
+                </Link>
+              )}
               <Link className="more-row" href={`/driveway/${vehicle.id}/reminders`}>
                 <span className="more-icon-tile blue" aria-hidden="true">
                   <Bell size={20} strokeWidth={1.75} />

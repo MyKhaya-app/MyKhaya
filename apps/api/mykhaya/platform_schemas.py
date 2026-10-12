@@ -334,6 +334,12 @@ class DrivewayDvlaTestRequest(SensitiveActionRequest):
     registration: str = Field(min_length=2, max_length=20)
 
 
+class DrivewayDvsaTestRequest(SensitiveActionRequest):
+    # Operator-supplied test registration: used for one provider call and
+    # never stored, logged or audited.
+    registration: str = Field(min_length=2, max_length=20)
+
+
 class ModuleUpdate(StrictModel):
     enabled: bool
     release_state: ReleaseState

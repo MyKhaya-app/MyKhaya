@@ -83,6 +83,7 @@ function mockRoutes(
   settings = baseSettings(),
   syslogOverrides: Record<string, unknown> = {},
   dvlaOverrides: Record<string, unknown> = {},
+  dvsaOverrides: Record<string, unknown> = {},
 ) {
   get.mockImplementation((path: string) => {
     if (path === "/auth/me") return Promise.resolve(actor);
@@ -108,6 +109,18 @@ function mockRoutes(
         last_failure_at: null,
         last_failure_summary: null,
         ...dvlaOverrides,
+      });
+    if (path === "/integrations/dvsa")
+      return Promise.resolve({
+        enabled: false,
+        deployment_enabled: false,
+        configured: false,
+        environment: null,
+        health: { state: "Not configured" },
+        last_success_at: null,
+        last_failure_at: null,
+        last_failure_category: null,
+        ...dvsaOverrides,
       });
     if (path === "/logging/syslog") return Promise.resolve({ enabled: false, configured: false, host: "", port: 6514, protocol: "tls", facility: 16, environment: "test", tls_verify: true, minimum_level: "INFO", categories: ["application", "http", "security", "audit", "worker", "integration"], last_successful_delivery: null, last_error: null, dropped_count: 0, ...syslogOverrides });
     if (path === "/logging/syslog/diagnostics") return Promise.resolve({ events_seen: 0, events_queued: 0, events_sent: 0, events_filtered: 0, events_category_filtered: 0, events_dropped: 0, transport_failures: 0 });
@@ -440,6 +453,56 @@ describe("PCC Settings — Driveway/DVLA integration", () => {
       ),
     );
     expect(await within(card).findByText("DVLA UAT connection successful.")).toBeInTheDocument();
+  });
+});
+
+describe("PCC Settings — DVSA MOT history integration", () => {
+  it("shows DVSA state with configured/not-configured only, and a friendly error category", async () => {
+    mockRoutes(baseSettings(), {}, {}, {
+      enabled: true,
+      deployment_enabled: true,
+      configured: true,
+      environment: "Development",
+      health: { state: "Degraded" },
+      last_failure_at: "2026-10-12T09:00:00Z",
+      last_failure_category: "rate_limited",
+    });
+    render(<PlatformSettingsPage />);
+    const heading = await screen.findByRole("heading", { name: "DVSA MOT history" });
+    const card = heading.closest("section") ?? document.body;
+    expect(within(card).getByText("Configured")).toBeInTheDocument();
+    expect(within(card).getByText("Rate limited")).toBeInTheDocument();
+    expect(within(card).getByText("Development")).toBeInTheDocument();
+    // No credential-shaped field is rendered at all.
+    expect(screen.queryByText(/client secret|api key value|bearer/i)).not.toBeInTheDocument();
+  });
+
+  it("runs the DVSA connection test with an operator-supplied registration", async () => {
+    const user = userEvent.setup();
+    mockRoutes(baseSettings(), {}, {}, {
+      enabled: true,
+      deployment_enabled: true,
+      configured: true,
+      environment: "Development",
+      health: { state: "Healthy" },
+    });
+    post.mockResolvedValue({ state: "Healthy", message: "DVSA MOT History connection successful." });
+    render(<PlatformSettingsPage />);
+    await user.type(await screen.findByLabelText("DVSA test registration"), "AB12 CDE");
+    await user.click(screen.getByRole("button", { name: "Test DVSA connection" }));
+    await waitFor(() =>
+      expect(post).toHaveBeenCalledWith(
+        "/integrations/dvsa/test",
+        expect.objectContaining({ registration: "AB12 CDE", confirmed: true }),
+      ),
+    );
+    expect(await screen.findByText("DVSA MOT History connection successful.")).toBeInTheDocument();
+  });
+
+  it("disables the DVSA test until credentials are configured", async () => {
+    render(<PlatformSettingsPage />);
+    const button = await screen.findByRole("button", { name: "Test DVSA connection" });
+    expect(button).toBeDisabled();
   });
 });
 

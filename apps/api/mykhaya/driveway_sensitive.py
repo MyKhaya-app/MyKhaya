@@ -105,14 +105,18 @@ def new_vehicle_id() -> uuid.UUID:
     return uuid7()
 
 
-def set_vehicle_registration(row: Vehicle, value: str | None, settings: Settings) -> None:
+def set_vehicle_registration(row: Vehicle, value: str | None, settings: Settings) -> bool:
     """Set an existing row's registration and keep its ciphertext in step.
-    A no-op when the value is unchanged (no needless re-encryption)."""
+    A no-op when the value is unchanged (no needless re-encryption). Returns
+    whether the registration changed, so callers can drop data that belonged
+    to the previous registration (e.g. MOT history) without reading the
+    plaintext column themselves."""
     if row.registration == value:
-        return
+        return False
     ciphertext = _ciphertext(value, registration_binding(row.id), settings)
     row.registration = value
     row.registration_ciphertext = ciphertext
+    return True
 
 
 def set_vehicle_vin(row: Vehicle, value: str | None, settings: Settings) -> None:

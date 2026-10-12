@@ -4286,10 +4286,80 @@ class Vehicle(UuidTimeMixin, Base):
     lookup_provider: Mapped[str | None] = mapped_column(String(40))
     lookup_status: Mapped[str | None] = mapped_column(String(30))
     last_successful_lookup: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Ownership: tax_* belongs to the DVLA provider; inspection_* belongs to
+    # the MOT provider (DVSA for GB vehicles) and is written ONLY by
+    # mykhaya.driveway_mot after a successful refresh — never by a client.
     tax_status: Mapped[str | None] = mapped_column(String(30))
     tax_due_date: Mapped[date | None] = mapped_column(Date())
+    # Normalised MOT status: valid | expired | not_yet_due | no_record.
     inspection_status: Mapped[str | None] = mapped_column(String(30))
+    # The next MOT date that matters: the current MOT's expiry, or the first
+    # MOT due date for a vehicle that has never needed one.
     inspection_due_date: Mapped[date | None] = mapped_column(Date())
+    # MOT provider cache state (Driveway MOT Phase 1). Derived provider data:
+    # never exported by Home Migration (re-fetched in the target instead).
+    mot_first_due_date: Mapped[date | None] = mapped_column(Date())
+    mot_refreshed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    mot_refresh_attempted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # success | not_found | auth_failed | rate_limited | unavailable | malformed
+    mot_refresh_outcome: Mapped[str | None] = mapped_column(String(30))
     photo_key: Mapped[str | None] = mapped_column(String(120))
     photo_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     archived_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class VehicleMotTest(UuidTimeMixin, Base):
+    """One MOT test result for a vehicle, normalised from the MOT provider
+    (DVSA for GB). Replaced wholesale on each successful refresh, so a
+    repeated refresh never duplicates history. Never stores the registration
+    (that is the vehicle's own sensitive field) or a raw provider payload.
+    ``group_id`` keeps every query Home-scoped without a join."""
+
+    __tablename__ = "vehicle_mot_tests"
+    __table_args__ = (
+        Index("ix_vehicle_mot_tests_vehicle_date", "vehicle_id", "test_date"),
+        Index(
+            "uq_vehicle_mot_tests_provider_number",
+            "vehicle_id",
+            "provider",
+            "test_number",
+            unique=True,
+            postgresql_where=text("test_number IS NOT NULL"),
+        ),
+    )
+    group_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("groups.id", ondelete="CASCADE"), index=True
+    )
+    vehicle_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("vehicles.id", ondelete="CASCADE"))
+    provider: Mapped[str] = mapped_column(String(20))
+    test_number: Mapped[str | None] = mapped_column(String(32))
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    test_date: Mapped[date] = mapped_column(Date())
+    expiry_date: Mapped[date | None] = mapped_column(Date())
+    # passed | failed | other
+    result: Mapped[str] = mapped_column(String(20))
+    odometer_value: Mapped[int | None] = mapped_column(Integer)
+    # mi | km
+    odometer_unit: Mapped[str | None] = mapped_column(String(4))
+    # read | no_odometer | unreadable | other
+    odometer_result: Mapped[str | None] = mapped_column(String(20))
+    defects: Mapped[list["VehicleMotDefect"]] = orm_relationship(
+        back_populates="test",
+        cascade="all, delete-orphan",
+        order_by="VehicleMotDefect.position",
+    )
+
+
+class VehicleMotDefect(UuidTimeMixin, Base):
+    """A defect/advisory recorded against one MOT test."""
+
+    __tablename__ = "vehicle_mot_defects"
+    mot_test_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("vehicle_mot_tests.id", ondelete="CASCADE"), index=True
+    )
+    position: Mapped[int] = mapped_column(Integer)
+    # dangerous | major | minor | advisory | prs | fail | user_entered | other
+    category: Mapped[str] = mapped_column(String(20))
+    dangerous: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    text: Mapped[str] = mapped_column(Text)
+    test: Mapped[VehicleMotTest] = orm_relationship(back_populates="defects")

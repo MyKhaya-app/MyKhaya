@@ -190,6 +190,31 @@ class Settings(BaseSettings):
     )
     dvla_production_api_key: SecretStr | None = None
     driveway_lookup_rate_limit: int = Field(default=10, ge=1, le=100)
+    # Driveway / DVSA MOT History API (OAuth 2.0 client credentials via
+    # Microsoft Entra ID + an X-API-Key header — see
+    # docs/operations/driveway-providers.md). Credentials are deployment
+    # secrets only: never stored in the database, never shown in PCC. The
+    # provider runs only when dvsa_enabled is true, every credential is set,
+    # AND the PCC "driveway_dvsa_enabled" platform setting is on.
+    dvsa_enabled: bool = False
+    # A label for which DVSA credential set is installed (DVSA issues
+    # credentials per registration; there is no separately documented
+    # sandbox base URL). Shown in PCC; never changes which host is called.
+    dvsa_environment: Literal["development", "production"] | None = None
+    dvsa_api_base_url: str = "https://history.mot.api.gov.uk/v1/trade/vehicles"
+    # The full token URL from the DVSA credentials email (it embeds the
+    # Entra tenant ID), e.g. https://login.microsoftonline.com/<tenant>/oauth2/v2.0/token
+    dvsa_token_url: str | None = None
+    dvsa_scope: str = "https://tapi.dvsa.gov.uk/.default"
+    dvsa_client_id: SecretStr | None = None
+    dvsa_client_secret: SecretStr | None = None
+    dvsa_api_key: SecretStr | None = None
+    dvsa_timeout_seconds: float = Field(default=10.0, ge=1.0, le=30.0)
+    # How long persisted MOT data counts as fresh before an "if stale"
+    # refresh (vehicle detail open) calls DVSA again.
+    dvsa_refresh_hours: int = Field(default=24, ge=1, le=24 * 30)
+    # Per-user cap on MOT refresh requests per hour (manual + automatic).
+    dvsa_refresh_rate_limit: int = Field(default=30, ge=1, le=1000)
     vehicle_photo_storage_dir: str = "/data/vehicle-photos"
     vehicle_photo_max_upload_bytes: int = Field(default=20_971_520, ge=1024, le=52_428_800)
     request_body_limit: int = Field(default=1_048_576, ge=1024, le=2_097_152)
@@ -270,6 +295,44 @@ class Settings(BaseSettings):
         if isinstance(value, str) and (not value.strip() or value.strip() == "unknown"):
             return resolve_app_version()
         return value
+
+    @field_validator(
+        "dvsa_environment",
+        "dvsa_token_url",
+        "dvsa_client_id",
+        "dvsa_client_secret",
+        "dvsa_api_key",
+        mode="before",
+    )
+    @classmethod
+    def resolve_blank_dvsa_values(cls, value: object) -> object:
+        """A present-but-empty DVSA variable means "not configured"."""
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @field_validator("dvsa_token_url")
+    @classmethod
+    def validate_dvsa_token_url(cls, value: str | None) -> str | None:
+        """Credentials are only ever posted to Microsoft Entra ID over HTTPS —
+        a typo'd or hostile URL must not receive the client secret."""
+        if value is None:
+            return None
+        parts = urlsplit(value)
+        if parts.scheme != "https" or parts.hostname != "login.microsoftonline.com":
+            raise ValueError(
+                "MYKHAYA_DVSA_TOKEN_URL must be the https://login.microsoftonline.com/... "
+                "token URL from the DVSA credentials email."
+            )
+        return value
+
+    @field_validator("dvsa_api_base_url")
+    @classmethod
+    def validate_dvsa_api_base_url(cls, value: str) -> str:
+        parts = urlsplit(value)
+        if parts.scheme != "https" or not (parts.hostname or "").endswith(".api.gov.uk"):
+            raise ValueError("MYKHAYA_DVSA_API_BASE_URL must be an https://*.api.gov.uk URL.")
+        return value.rstrip("/")
 
     @field_validator("dvla_environment", mode="before")
     @classmethod
@@ -603,6 +666,22 @@ class Settings(BaseSettings):
         selected environment missing either value, is "Not configured" — the
         provider must never guess or partially operate."""
         return bool(self.dvla_active_endpoint) and self.dvla_active_api_key is not None
+
+    @property
+    def dvsa_environment_label(self) -> str | None:
+        if self.dvsa_environment is None:
+            return None
+        return {"development": "Development", "production": "Production"}[self.dvsa_environment]
+
+    @property
+    def dvsa_configured(self) -> bool:
+        """Every credential present. Never partially operates."""
+        return bool(
+            self.dvsa_token_url
+            and self.dvsa_client_id
+            and self.dvsa_client_secret
+            and self.dvsa_api_key
+        )
 
 
 @lru_cache

@@ -11,6 +11,7 @@ import { useActiveHome } from "@/components/use-active-home";
 import { useAuth } from "@/components/auth-provider";
 import { VehiclePhoto } from "@/components/vehicle-photo";
 import { countryName } from "./countries";
+import { motStatusLabel } from "./mot-format";
 
 // Driveway — vehicle management (Ultimate-only). Phase 3 ships the mobile
 // consumer UI for the Phase 2 core vehicle model only: no DVLA/DVSA lookup,
@@ -36,6 +37,8 @@ function vehicleMeta(vehicle: Vehicle): string | null {
 
 function vehicleStatus(status: string | null, date: string | null, label: string): string | null {
   if (!status) return null;
+  // MOT status arrives as a normalised code (valid/expired/…); show words.
+  if (label === "MOT") status = motStatusLabel(status) ?? status;
   const formatted = date ? new Date(`${date}T00:00:00`).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }) : null;
   return `${label}: ${status}${formatted ? ` · ${formatted}` : ""}`;
 }

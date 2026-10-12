@@ -29,6 +29,12 @@ fails that check in production. `api.mykhaya.app` is already served by
 `trusted_hosts` list, so no other production change is required — only adding this one
 setting to the real, deployed `.env`.
 
+## Driveway / DVSA MOT History
+
+DVSA MOT history is configured separately from DVLA and is disabled by default.
+See [driveway-providers.md](driveway-providers.md) for authentication,
+configuration, refresh behaviour and the rollout checklist.
+
 ## Driveway / DVLA integration (UAT)
 
 Vehicle lookup credentials live only in `.env`, never in the database or a

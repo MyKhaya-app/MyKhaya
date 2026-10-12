@@ -48,6 +48,13 @@ from mykhaya.audit import audit
 from mykhaya.config import Settings, get_settings
 from mykhaya.db import get_db
 from mykhaya.dependencies import AuthContext, auth_context, membership_for
+from mykhaya.driveway_mot import (
+    MotRefreshRefused,
+    clear_mot_data,
+    is_mot_eligible,
+    mot_view,
+    refresh_vehicle_mot,
+)
 from mykhaya.driveway_providers import (
     UKDVLAProvider,
     VehicleLookupAuthFailed,
@@ -66,6 +73,9 @@ from mykhaya.driveway_schemas import (
     VehicleListResponse,
     VehicleLookupRequest,
     VehicleLookupResult,
+    VehicleMotRefreshRequest,
+    VehicleMotRefreshResult,
+    VehicleMotResponse,
     VehicleReminderCreate,
     VehicleResponse,
     VehicleUpdate,
@@ -561,10 +571,11 @@ async def update_vehicle(
     row.year = body.year
     row.fuel_type = body.fuel_type.strip() if body.fuel_type else None
     row.engine_size = body.engine_size.strip() if body.engine_size else None
+    country_was_mot_eligible = is_mot_eligible(row)
     row.country_code = body.country_code.upper()
     row.first_registration_date = body.first_registration_date
     with _field_encryption_guard():
-        set_vehicle_registration(
+        registration_changed = set_vehicle_registration(
             row, body.registration.strip() if body.registration else None, settings
         )
         # A viewer who cannot see this vehicle's VIN (not its owner, not a
@@ -574,6 +585,9 @@ async def update_vehicle(
         # who could see the real value may overwrite it.
         if _may_see_sensitive_fields(row, auth, membership):
             set_vehicle_vin(row, body.vin.strip() if body.vin else None, settings)
+    if registration_changed or (country_was_mot_eligible and not is_mot_eligible(row)):
+        # Stored MOT history describes the previous registration/country.
+        await clear_mot_data(db, row)
     if owner_changed:
         # Linked managed reminders follow the vehicle to its new owner (see
         # sync_reminder_scope_to_vehicle) rather than staying with the previous one.
@@ -700,3 +714,92 @@ async def create_vehicle_reminder(
     await db.commit()
     await db.refresh(reminder)
     return await _reminder_response(db, reminder)
+
+
+# --- MOT (Driveway MOT Phase 1) ------------------------------------------------------
+
+_MOT_REFUSALS = {
+    "unsupported_country": (
+        status.HTTP_409_CONFLICT,
+        "MOT history is only available for vehicles registered in the UK.",
+    ),
+    "no_registration": (
+        status.HTTP_409_CONFLICT,
+        "Add this vehicle's registration to check its MOT.",
+    ),
+    "provider_unavailable": (
+        status.HTTP_503_SERVICE_UNAVAILABLE,
+        "MOT checks aren't available right now.",
+    ),
+}
+_MOT_REFRESH_MESSAGES = {
+    "not_found": "We couldn't find an MOT record for this registration.",
+    "busy": "We're already checking this vehicle's MOT. Try again in a moment.",
+    "rate_limited": "MOT checks are busy right now. Please try again in a few minutes.",
+    "auth_failed": "We couldn't check the MOT right now. Please try again later.",
+    "unavailable": "We couldn't check the MOT right now. Please try again later.",
+    "malformed": "We couldn't check the MOT right now. Please try again later.",
+    "not_configured": "MOT checks aren't available right now.",
+}
+
+
+@router.get("/{home_id}/vehicles/{vehicle_id}/mot", response_model=VehicleMotResponse)
+async def get_vehicle_mot(
+    home_id: uuid.UUID,
+    vehicle_id: uuid.UUID,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> VehicleMotResponse:
+    """Persisted MOT summary and history — never calls the provider."""
+    await require_capability(home_id, Capability.driveway_view, auth, db)
+    row = await _get_vehicle(db, home_id, vehicle_id)
+    return VehicleMotResponse.model_validate(
+        await mot_view(db, settings, home_id=home_id, vehicle=row)
+    )
+
+
+@router.post("/{home_id}/vehicles/{vehicle_id}/mot/refresh", response_model=VehicleMotResponse)
+async def refresh_vehicle_mot_endpoint(
+    home_id: uuid.UUID,
+    vehicle_id: uuid.UUID,
+    request: Request,
+    body: VehicleMotRefreshRequest | None = None,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> VehicleMotResponse:
+    """Refreshes the STORED vehicle's MOT from the provider. There is no
+    way to look up an arbitrary registration here: the registration always
+    comes from the vehicle itself, via the sensitive-field read path, after
+    Home authorization."""
+    await require_capability(home_id, Capability.driveway_view, auth, db)
+    await enforce_rate_limit(
+        request,
+        settings,
+        f"dvsa-mot-refresh:{auth.user.id}",
+        settings.dvsa_refresh_rate_limit,
+        3600,
+    )
+    mode = body.mode if body is not None else "force"
+    row = await _get_vehicle(db, home_id, vehicle_id)
+    try:
+        outcome = await refresh_vehicle_mot(
+            db,
+            request,
+            settings,
+            home_id=home_id,
+            vehicle=row,
+            actor_id=auth.user.id,
+            mode=mode,
+        )
+    except MotRefreshRefused as refused:
+        status_code, message = _MOT_REFUSALS[refused.reason]
+        raise HTTPException(status_code, message) from refused
+    # The refresh may have ended the request transaction; reload rather than
+    # reuse a possibly-expired instance.
+    fresh = await _get_vehicle(db, home_id, vehicle_id)
+    view = await mot_view(db, settings, home_id=home_id, vehicle=fresh)
+    kind = outcome.error.category if outcome.error is not None else outcome.kind
+    view["refresh"] = VehicleMotRefreshResult(outcome=kind, message=_MOT_REFRESH_MESSAGES.get(kind))
+    return VehicleMotResponse.model_validate(view)

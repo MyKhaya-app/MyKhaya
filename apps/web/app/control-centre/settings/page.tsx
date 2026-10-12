@@ -50,6 +50,23 @@ type DrivewayDvlaStatus = {
   last_failure_at: string | null;
   last_failure_summary: string | null;
 };
+type DrivewayDvsaStatus = {
+  enabled: boolean;
+  deployment_enabled: boolean;
+  configured: boolean;
+  environment: string | null;
+  health: { state: string };
+  last_success_at: string | null;
+  last_failure_at: string | null;
+  last_failure_category: string | null;
+};
+const DVSA_FAILURE_LABELS: Record<string, string> = {
+  auth_failed: "Authentication failed",
+  rate_limited: "Rate limited",
+  unavailable: "Service unavailable or timed out",
+  malformed: "Unexpected response",
+  not_configured: "Not configured",
+};
 type SyslogSettings = {
   enabled: boolean;
   configured: boolean;
@@ -439,6 +456,10 @@ export default function PlatformSettingsPage() {
   const [data, setData] = useState<SettingsResponse | null>(null);
   const [publicSignupState, setPublicSignupState] = useState<PublicSignupState | null>(null);
   const [dvla, setDvla] = useState<DrivewayDvlaStatus | null>(null);
+  const [dvsa, setDvsa] = useState<DrivewayDvsaStatus | null>(null);
+  const [dvsaTestRegistration, setDvsaTestRegistration] = useState("");
+  const [dvsaTestResult, setDvsaTestResult] = useState("");
+  const [dvsaTestBusy, setDvsaTestBusy] = useState(false);
   const [syslog, setSyslog] = useState<SyslogSettings | null>(null);
   const [syslogDraft, setSyslogDraft] = useState<SyslogSettings | null>(null);
   const [syslogDiagnostics, setSyslogDiagnostics] = useState<SyslogDiagnostics | null>(null);
@@ -454,16 +475,18 @@ export default function PlatformSettingsPage() {
   const load = useCallback(async () => {
     setError("");
     try {
-      const [settings, publicState, dvlaStatus, syslogStatus, diagnostics] = await Promise.all([
+      const [settings, publicState, dvlaStatus, dvsaStatus, syslogStatus, diagnostics] = await Promise.all([
         platformApi.get<SettingsResponse>("/settings"),
         platformApi.get<PublicSignupState>("/signup-state"),
         platformApi.get<DrivewayDvlaStatus>("/integrations/dvla"),
+        platformApi.get<DrivewayDvsaStatus>("/integrations/dvsa"),
         platformApi.get<SyslogSettings>("/logging/syslog"),
         platformApi.get<SyslogDiagnostics>("/logging/syslog/diagnostics"),
       ]);
       setData(settings);
       setPublicSignupState(publicState);
       setDvla(dvlaStatus);
+      setDvsa(dvsaStatus);
       const normalisedSyslog = normaliseSyslogSettings(syslogStatus);
       setSyslog(normalisedSyslog);
       setSyslogDraft(normalisedSyslog);
@@ -493,6 +516,25 @@ export default function PlatformSettingsPage() {
       setTestResult(cause instanceof Error ? cause.message : "The DVLA connection test failed.");
     } finally {
       setTestBusy(false);
+    }
+  }
+
+  async function testDvsa() {
+    if (!dvsaTestRegistration.trim() || dvsaTestBusy) return;
+    setDvsaTestBusy(true);
+    setDvsaTestResult("");
+    try {
+      const result = await platformApi.post<{ message: string }>("/integrations/dvsa/test", {
+        registration: dvsaTestRegistration,
+        reason: "Verify the configured DVSA MOT History connection",
+        confirmed: true,
+      });
+      setDvsaTestResult(result.message);
+      await load();
+    } catch (cause) {
+      setDvsaTestResult(cause instanceof Error ? cause.message : "The DVSA connection test failed.");
+    } finally {
+      setDvsaTestBusy(false);
     }
   }
 
@@ -576,7 +618,7 @@ export default function PlatformSettingsPage() {
                   ))}
                 </CcMetadataGrid>
               </CcCard>
-              <CcCard title="Driveway integrations" description="Operational status for the server-side UK vehicle lookup provider.">
+              <CcCard title="Driveway integrations" description="Operational status for the server-side UK vehicle providers: DVLA vehicle lookup and DVSA MOT history.">
                 <CcMetadataGrid>
                   <CcMetadataItem label="Environment">
                     {dvla ? (dvla.environment ?? "Not configured") : "Loading…"}
@@ -605,6 +647,35 @@ export default function PlatformSettingsPage() {
                   <label>Test registration<input value={testRegistration} onChange={(event) => setTestRegistration(event.target.value)} placeholder="AB12 CDE" /></label>
                   <button className="button secondary" type="button" onClick={() => void testDvla()} disabled={testBusy || !testRegistration.trim() || !dvla?.configured}>{testBusy ? "Testing…" : "Test connection"}</button>
                   {testResult && <p role="status">{testResult}</p>}
+                </div>
+                <h3 className="cc-subheading">DVSA MOT history</h3>
+                <CcMetadataGrid>
+                  <CcMetadataItem label="Environment">
+                    {dvsa ? (dvsa.environment ?? "Not set") : "Loading…"}
+                  </CcMetadataItem>
+                  <CcMetadataItem label="Integration status">
+                    <CcBadge tone={dvsa?.enabled && dvsa?.deployment_enabled ? "success" : "neutral"}>
+                      {dvsa?.enabled && dvsa?.deployment_enabled ? "Enabled" : "Disabled"}
+                    </CcBadge>
+                  </CcMetadataItem>
+                  <CcMetadataItem label="Deployment switch">{dvsa?.deployment_enabled ? "On" : "Off"}</CcMetadataItem>
+                  <CcMetadataItem label="Credentials">{dvsa?.configured ? "Configured" : "Not configured"}</CcMetadataItem>
+                  <CcMetadataItem label="Health"><CcBadge tone={dvlaHealthTone(dvsa?.health.state)}>{dvsa?.health.state ?? "Loading…"}</CcBadge></CcMetadataItem>
+                  {dvsa?.last_success_at && (
+                    <CcMetadataItem label="Last successful request">{formatTimestamp(dvsa.last_success_at, "Never")}</CcMetadataItem>
+                  )}
+                  {dvsa?.last_failure_at && (
+                    <CcMetadataItem label="Last failed request">{formatTimestamp(dvsa.last_failure_at, "Never")}</CcMetadataItem>
+                  )}
+                  {dvsa?.last_failure_category && (
+                    <CcMetadataItem label="Last error" span>{DVSA_FAILURE_LABELS[dvsa.last_failure_category] ?? "Provider error"}</CcMetadataItem>
+                  )}
+                </CcMetadataGrid>
+                <p className="cc-page-meta">DVSA needs the deployment switch (MYKHAYA_DVSA_ENABLED), configured credentials and the "DVSA MOT history checks" setting below. Credentials are deployment-managed and never displayed.</p>
+                <div className="cc-inline-form">
+                  <label>DVSA test registration<input value={dvsaTestRegistration} onChange={(event) => setDvsaTestRegistration(event.target.value)} placeholder="AB12 CDE" /></label>
+                  <button className="button secondary" type="button" onClick={() => void testDvsa()} disabled={dvsaTestBusy || !dvsaTestRegistration.trim() || !dvsa?.configured}>{dvsaTestBusy ? "Testing…" : "Test DVSA connection"}</button>
+                  {dvsaTestResult && <p role="status">{dvsaTestResult}</p>}
                 </div>
               </CcCard>
               {syslogDraft && syslog && (

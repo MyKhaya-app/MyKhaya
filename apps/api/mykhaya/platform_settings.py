@@ -58,6 +58,19 @@ SETTINGS_SCHEMA: dict[str, SettingDefinition] = {
         risk="sensitive",
         runtime_effect="effective",
     ),
+    "driveway_dvsa_enabled": SettingDefinition(
+        key="driveway_dvsa_enabled",
+        label="DVSA MOT history checks",
+        description=(
+            "Allow Driveway to refresh MOT status and history for UK vehicles through the "
+            "configured DVSA MOT History API. Requires MYKHAYA_DVSA_ENABLED and credentials."
+        ),
+        section="Driveway integrations",
+        value_type="boolean",
+        python_type=bool,
+        risk="sensitive",
+        runtime_effect="effective",
+    ),
     "platform_display_name": SettingDefinition(
         key="platform_display_name",
         label="Platform name",

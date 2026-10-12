@@ -145,6 +145,10 @@ EXCLUDED_TABLES = {
     "support_ticket_messages",
     "support_ticket_attachments",
     "support_ticket_diagnostics",
+    # Driveway MOT history is provider cache tied to the source environment's
+    # lookups; the target re-fetches it (see PROVIDER_CACHE_COLUMNS).
+    "vehicle_mot_tests",
+    "vehicle_mot_defects",
 }
 
 SECRET_COLUMNS = {
@@ -161,6 +165,16 @@ SECRET_COLUMNS = {
     # re-derives them from the plaintext (see mykhaya.driveway_sensitive).
     "registration_ciphertext",
     "vin_ciphertext",
+}
+# Derived provider state on vehicles (Driveway MOT). Never carried across:
+# an imported vehicle starts "not yet checked" and refreshes in the target.
+PROVIDER_CACHE_COLUMNS = {
+    "inspection_status",
+    "inspection_due_date",
+    "mot_first_due_date",
+    "mot_refreshed_at",
+    "mot_refresh_attempted_at",
+    "mot_refresh_outcome",
 }
 STRIPE_COLUMNS = {"external_customer_id", "external_subscription_id", "external_price_id"}
 ADMIN_COLUMNS = {"created_by", "updated_by", "published_by", "complimentary_granted_by"}
@@ -340,7 +354,10 @@ def _export_row(row: dict[str, Any]) -> dict[str, Any]:
     return {
         key: value
         for key, value in row.items()
-        if key not in SECRET_COLUMNS and key not in STRIPE_COLUMNS and key not in ADMIN_COLUMNS
+        if key not in SECRET_COLUMNS
+        and key not in STRIPE_COLUMNS
+        and key not in ADMIN_COLUMNS
+        and key not in PROVIDER_CACHE_COLUMNS
     }
 
 
@@ -523,7 +540,7 @@ def _rewrite(
     old_id = str(result.get("id")) if result.get("id") is not None else None
     for column in table.columns:
         name = column.name
-        if name in SECRET_COLUMNS or name in STRIPE_COLUMNS:
+        if name in SECRET_COLUMNS or name in STRIPE_COLUMNS or name in PROVIDER_CACHE_COLUMNS:
             result.pop(name, None)
             continue
         if name in ADMIN_COLUMNS:

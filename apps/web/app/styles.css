@@ -9461,6 +9461,67 @@ select.plan-meal-field-input {
 .driveway-compliance-card svg { color: var(--colour-forest); }
 .driveway-compliance-card b { color: var(--colour-forest-dark); }
 .driveway-compliance-card small { color: var(--colour-muted); }
+
+/* --- Driveway MOT (Phase 1). Mobile-first, scoped to .driveway-mot-*;
+   the only wide-screen change is the min-width block below. --- */
+.driveway-mot-card {
+  display: grid;
+  gap: 0.4rem;
+  margin-bottom: var(--space-card-stack);
+  padding: 1rem;
+}
+.driveway-mot-card > button { justify-self: start; margin-top: 0.35rem; }
+.driveway-mot-heading { align-items: center; display: flex; gap: 0.5rem; }
+.driveway-mot-heading svg { color: var(--colour-forest); }
+.driveway-mot-heading h2 { font-size: 1rem; margin: 0; }
+.driveway-mot-status { font-size: 1.35rem; font-weight: 700; margin: 0; }
+.driveway-mot-date, .driveway-mot-checked, .driveway-mot-message { margin: 0; }
+.driveway-mot-checked { font-size: var(--font-small); }
+.driveway-mot-message { color: var(--colour-forest-dark); font-size: var(--font-small); }
+/* Status is never colour-only: the word itself always carries the meaning. */
+.driveway-mot-status-good { color: var(--colour-forest-dark); }
+.driveway-mot-status-warning { color: var(--colour-danger); }
+.driveway-mot-status-neutral { color: var(--colour-slate); }
+.driveway-mot-tests {
+  display: grid;
+  gap: 0.75rem;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.driveway-mot-test { padding: 0; }
+.driveway-mot-test summary {
+  align-items: baseline;
+  cursor: pointer;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.75rem;
+  list-style: none;
+  min-height: 44px;
+  padding: 1rem;
+}
+.driveway-mot-test summary::-webkit-details-marker { display: none; }
+.driveway-mot-test summary:focus-visible { outline: 3px solid var(--colour-mustard); outline-offset: 2px; }
+.driveway-mot-result { font-weight: 700; }
+.driveway-mot-test-date { font-weight: 600; }
+.driveway-mot-test-meta { font-size: var(--font-small); }
+.driveway-mot-test-body { display: grid; gap: 0.75rem; padding: 0 1rem 1rem; }
+.driveway-mot-test-body p { margin: 0; }
+.driveway-mot-defects h3 { font-size: 0.9rem; margin: 0 0 0.35rem; }
+.driveway-mot-defects ul { display: grid; gap: 0.35rem; margin: 0; padding-left: 1.1rem; }
+.driveway-mot-defects li { overflow-wrap: anywhere; }
+.driveway-mot-dangerous {
+  align-items: center;
+  color: var(--colour-danger);
+  display: inline-flex;
+  font-weight: 700;
+  gap: 0.2rem;
+  margin-right: 0.35rem;
+}
+.driveway-mot-test-number { font-size: var(--font-small); }
+@media (min-width: 1024px) {
+  .driveway-mot-page .driveway-mot-tests { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
 @media (max-width: 430px) {
   .driveway-heading-art { height: 78px; right: 0; top: 0; width: 104px; }
   .driveway-page .page-heading > div { padding-right: 112px; }
