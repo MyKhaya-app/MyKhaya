@@ -14,6 +14,7 @@ class ProductionDeploymentTests(unittest.TestCase):
             encoding="utf-8"
         )
         cls.compose = (ROOT / "compose.production.yml").read_text(encoding="utf-8")
+        cls.base_compose = (ROOT / "compose.yml").read_text(encoding="utf-8")
         cls.caddy = (ROOT / "infrastructure/caddy/Caddyfile.production").read_text(
             encoding="utf-8"
         )
@@ -154,8 +155,34 @@ class ProductionDeploymentTests(unittest.TestCase):
         for endpoint in ("live", "ready", "build"):
             self.assertIn(f"http://127.0.0.1/api/v1/health/{endpoint}", self.health)
         self.assertIn('-H "Host: $WEB_DOMAIN"', self.health)
+        self.assertIn("build_status=$(curl -sS", self.health)
+        self.assertIn("-w '%{http_code}'", self.health)
+        self.assertIn('[ "$build_status" = 401 ]', self.health)
+        self.assertNotIn("curl -fsS --max-time 10 -H \"Host: $WEB_DOMAIN\" http://127.0.0.1/api/v1/health/build", self.health)
         self.assertNotIn("https://mykhaya.app", self.health)
         self.assertNotIn("--resolve", self.health)
+
+    def test_release_metadata_is_wired_to_every_application_runtime(self) -> None:
+        for service in ("api", "worker", "scheduler"):
+            self.assertIn("MYKHAYA_VERSION: \"${MYKHAYA_VERSION:-dev}\"", self.base_compose)
+            self.assertIn("MYKHAYA_COMMIT_SHA: \"${MYKHAYA_COMMIT_SHA:-unknown}\"", self.base_compose)
+            self.assertIn("MYKHAYA_BUILD_TIME: \"${MYKHAYA_BUILD_TIME:-unknown}\"", self.base_compose)
+            self.assertIn("MYKHAYA_BUILD_CHANNEL: \"${MYKHAYA_BUILD_CHANNEL:-development}\"", self.base_compose)
+            self.assertIn(service, self.base_compose)
+        web_start = self.base_compose.index("\n  web:\n    build:")
+        api_start = self.base_compose.index("\n  api: &api\n", web_start)
+        web_block = self.base_compose[web_start:api_start]
+        for key, default in (("MYKHAYA_VERSION", "dev"), ("MYKHAYA_COMMIT_SHA", "unknown"), ("MYKHAYA_BUILD_TIME", "unknown"), ("MYKHAYA_BUILD_CHANNEL", "development")):
+            self.assertIn(f'{key}: "${{{key}:-{default}}}"', web_block)
+
+    def test_release_metadata_is_exported_before_follow_up_compose_operations(self) -> None:
+        export = 'export MYKHAYA_VERSION MYKHAYA_COMMIT_SHA="$head_commit"'
+        for operation in (
+            "$COMPOSE build web api worker scheduler migrate",
+            "$COMPOSE run --rm --no-deps migrate",
+            "$COMPOSE up -d --no-build caddy web api worker scheduler",
+        ):
+            self.assertLess(self.script.index(export), self.script.index(operation))
 
 
 if __name__ == "__main__":

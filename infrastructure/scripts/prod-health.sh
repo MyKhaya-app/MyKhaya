@@ -13,5 +13,10 @@ for service in postgres redis api web worker scheduler; do
 done
 curl -fsS --max-time 10 -H "Host: $WEB_DOMAIN" http://127.0.0.1/api/v1/health/live >/dev/null
 curl -fsS --max-time 10 -H "Host: $WEB_DOMAIN" http://127.0.0.1/api/v1/health/ready >/dev/null
-curl -fsS --max-time 10 -H "Host: $WEB_DOMAIN" http://127.0.0.1/api/v1/health/build
+build_status=$(curl -sS --max-time 10 -o /dev/null -w '%{http_code}' \
+  -H "Host: $WEB_DOMAIN" http://127.0.0.1/api/v1/health/build)
+[ "$build_status" = 401 ] || {
+  printf 'Expected authenticated /health/build to return 401, got %s\n' "$build_status" >&2
+  exit 1
+}
 printf '\nProduction health checks passed.\n'
