@@ -71,6 +71,7 @@ from mykhaya.entitlements import (
 from mykhaya.founding_beta_schemas import SignupStateResponse
 from mykhaya.home_migration_pcc import (
     PACKAGE_STORE,
+    discard_package_file,
     get_package,
     load_package,
     migration_enabled,
@@ -4941,6 +4942,9 @@ async def permanent_delete_home(
         reason=body.reason,
         previous={"lifecycle": "archived", "name": group.name},
         new={"lifecycle": "deleted"},
+        # Documented retention (docs/security/data-retention.md): this record
+        # is the only surviving trace of a hard-deleted Home's identity.
+        retain=frozenset({"name"}),
     )
     # A bulk statement, not `db.delete()` on loaded objects — Group.memberships
     # has no cascade="all, delete-orphan"/passive_deletes configured at the
@@ -8828,26 +8832,50 @@ async def home_migration_import(
         new={"package_checksum": row["package_checksum"], "target_environment": "production"},
     )
     await db.commit()
+    # The import no longer needs the package bytes; remove the plaintext copy
+    # now rather than waiting for the TTL purge. The row, checksum and
+    # reports remain as the audit trail.
+    await discard_package_file(settings, row["storage_key"])
     return {"report": report, "status": "completed"}
 
 
 @router.get("/home-migration/packages/{package_id}/download")
 async def home_migration_download(
     package_id: uuid.UUID,
-    _: PlatformContext = Depends(require_roles(*HOME_MIGRATION_ROLES)),
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*HOME_MIGRATION_ROLES)),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> FileResponse:
+    """The package is a complete plaintext copy of a Home, so downloading it
+    gets the same gates as creating it: development-only (the export side of
+    the dev → production transfer), Home Migration enabled, recent
+    re-authentication, and an audit record. The audit carries the checksum
+    only, never package content."""
+    _home_migration_environment(settings, "development")
+    await _home_migration_guard(db, settings)
+    require_recent_auth(context, settings)
     row = await get_package(db, package_id)
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That migration package was not found.")
     path = storage_path(settings, row["storage_key"])
     if not path.is_file():
         raise HTTPException(status.HTTP_410_GONE, "That migration package is no longer available.")
+    platform_audit(
+        db,
+        request,
+        context,
+        "home_migration.package_downloaded",
+        "migration",
+        row["migration_id"],
+        new={"package_checksum": row["package_checksum"]},
+    )
+    await db.commit()
     return FileResponse(
         path,
         media_type="application/json",
         filename=f"home-migration-{row['migration_id']}.json",
+        headers={"Cache-Control": "no-store"},
     )
 
 

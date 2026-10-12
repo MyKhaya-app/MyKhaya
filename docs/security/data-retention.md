@@ -19,7 +19,8 @@ This is the initial policy baseline and requires owner/legal review before produ
 | Background jobs | 90 days; failures up to 12 months where needed for investigation |
 | Administrative notes | Review annually and remove when no longer necessary |
 | Incidents/maintenance | 3 years for operational learning |
-| Backups | Rolling encrypted schedule, target 35 days; documented expiry and restore testing |
+| Backups | Rolling age-encrypted schedule (database + persistent file stores), target 35 days; documented expiry and restore testing |
+| Home Migration package files | Deleted immediately after a completed import; any other package file is purged by the scheduler after `MYKHAYA_HOME_MIGRATION_PACKAGE_TTL_HOURS` (default 24 h). The package row (checksum, counts, reports, no package content) is retained as the audit trail with status `expired`. Packages are excluded from backups. |
 
 Retention automation, legal holds and verified deletion from backups are not yet implemented.
 

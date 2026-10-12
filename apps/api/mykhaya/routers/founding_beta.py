@@ -783,6 +783,7 @@ async def set_capacity_exemption(
         "beta.capacity_exemption_changed",
         "beta_enrollment",
         enrollment.id,
-        new={"capacity_exempt": body.exempt, "reason": body.reason},
+        reason=body.reason,
+        new={"capacity_exempt": body.exempt},
     )
     await db.commit()

@@ -39,6 +39,20 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://mykhaya:mykhaya@postgres:5432/mykhaya"
     redis_url: str = "redis://redis:6379/0"
     secret_key: SecretStr = Field(min_length=32)
+    # Sensitive-field keyrings (mykhaya.crypto) — deliberately independent of
+    # secret_key so rotating the session secret can never make encrypted
+    # household data unreadable. Production supplies them as read-only files
+    # mounted into api/worker/scheduler only; the *_KEYS environment variables
+    # are a development/test fallback and are rejected in production (see
+    # reject_environment_supplied_field_keys). See mykhaya.crypto.config and
+    # docs/operations/sensitive-field-keys.md.
+    field_encryption_keys_file: str = "/run/secrets/mykhaya/field-encryption-keys.json"
+    blind_index_keys_file: str = "/run/secrets/mykhaya/blind-index-keys.json"
+    field_encryption_keys: SecretStr | None = None
+    blind_index_keys: SecretStr | None = None
+    # Phase 2A: nothing encrypts with these keys yet, so unprovisioned keyrings
+    # are allowed by default. Set true to make a missing keyring fatal at startup.
+    sensitive_field_keys_required: bool = False
     public_web_url: str = "http://localhost:8080"
     admin_url: str = "http://admin.localhost:8080"
     status_url: str = "http://status.localhost:8080"
@@ -185,6 +199,10 @@ class Settings(BaseSettings):
     # package is the only transport between environments; this path is never
     # accepted from package contents or request parameters.
     home_migration_storage_dir: str = "/data/home-migrations"
+    # How long a package file that hasn't completed an import may stay on
+    # disk before the scheduler purges it (completed imports are removed
+    # immediately). Packages are full plaintext Home copies — keep this short.
+    home_migration_package_ttl_hours: int = Field(default=24, ge=1, le=168)
     # The `le` ceiling here is a schema safety bound, not a production recommendation
     # — it exists so test/CI environments (which register far more accounts per
     # window than a real deployment ever would) and unusual self-hosted deployments
@@ -284,6 +302,26 @@ class Settings(BaseSettings):
         if any(word in lowered for word in ("changeme", "development-only", "example-secret")):
             raise ValueError("MYKHAYA_SECRET_KEY must not be a documented placeholder")
         return value
+
+    @field_validator("field_encryption_keys", "blind_index_keys", mode="before")
+    @classmethod
+    def resolve_blank_sensitive_keys(cls, value: object) -> object:
+        """Compose blanks these explicitly for services that must never hold
+        them; a present-but-empty variable means unset, not an empty keyring."""
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @model_validator(mode="after")
+    def reject_environment_supplied_field_keys(self) -> "Settings":
+        if self.environment == "production" and (
+            self.field_encryption_keys is not None or self.blind_index_keys is not None
+        ):
+            raise ValueError(
+                "MYKHAYA_FIELD_ENCRYPTION_KEYS / MYKHAYA_BLIND_INDEX_KEYS are a development/test "
+                "fallback only. Production must supply sensitive-field keyrings as mounted files."
+            )
+        return self
 
     @field_validator("cookie_secure")
     @classmethod

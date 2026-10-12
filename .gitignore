@@ -20,6 +20,11 @@ playwright-report/
 test-results/
 backups/
 *.sql.gz
+*.age
+# Sensitive-field keyrings (mykhaya.crypto). Never committed, never inside a
+# backup. Development default for MYKHAYA_FIELD_KEYS_HOST_DIR is
+# ./secrets/field-keys; production keeps them outside the checkout.
+/secrets/
 
 # Firebase Cloud Messaging (Phase 5). Server-side FCM credentials are three
 # plain settings values (mykhaya.config: fcm_project_id/fcm_client_email/

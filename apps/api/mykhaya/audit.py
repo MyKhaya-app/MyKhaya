@@ -5,8 +5,8 @@ import structlog
 from fastapi import Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from mykhaya.audit_redaction import redact_audit_metadata
 from mykhaya.models import AuditEvent
-from mykhaya.syslog_forwarding import redact
 
 log = structlog.get_logger("audit")
 
@@ -21,6 +21,9 @@ def audit(
     target_id: uuid.UUID | None = None,
     metadata: dict[str, Any] | None = None,
 ) -> None:
+    # Redacted once, before storage: the stored row and the log line carry the
+    # same structural-only metadata (see mykhaya.audit_redaction).
+    safe_metadata = redact_audit_metadata(metadata)
     db.add(
         AuditEvent(
             action=action,
@@ -29,7 +32,7 @@ def audit(
             target_type=target_type,
             target_id=target_id,
             request_id=getattr(request.state, "request_id", None),
-            metadata_=metadata or {},
+            metadata_=safe_metadata,
         )
     )
     log.info(
@@ -40,5 +43,5 @@ def audit(
         target_type=target_type,
         target_id=str(target_id) if target_id else None,
         request_id=getattr(request.state, "request_id", None),
-        metadata=redact(metadata or {}),
+        metadata=safe_metadata,
     )

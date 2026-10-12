@@ -38,7 +38,7 @@ from mykhaya.attachments.processing import (
 from mykhaya.audit import audit
 from mykhaya.config import Settings, get_settings
 from mykhaya.db import get_db
-from mykhaya.dependencies import AuthContext, auth_context
+from mykhaya.dependencies import AuthContext, auth_context, membership_for
 from mykhaya.driveway_providers import (
     UKDVLAProvider,
     VehicleLookupAuthFailed,
@@ -78,7 +78,16 @@ from mykhaya.schemas import ReminderListResponse, ReminderResponse
 from mykhaya.vehicle_photo_storage import get_vehicle_photo_storage, vehicle_photo_filename
 
 
-async def _require_driveway(home_id: uuid.UUID, db: AsyncSession = Depends(get_db)) -> None:
+async def _require_driveway(
+    home_id: uuid.UUID,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> None:
+    # Membership first: a caller who isn't an active member of this Home gets
+    # the same "Home could not be found" 404 for every Home ID, before any
+    # feature/entitlement state (or vehicle row) is looked at — so Driveway
+    # can't be used to learn whether an arbitrary Home has Ultimate.
+    await membership_for(home_id, auth, db)
     await require_feature(db, FeatureKey.driveway, home_id)
     await require_entitlement(db, home_id, "driveway.enabled")
 
@@ -175,9 +184,10 @@ async def _record_lookup_health(db: AsyncSession, *, success: bool, summary: str
         log.warning("driveway.dvla.health_record_failed")
 
 
-async def _require_vehicle_manage(
-    db: AsyncSession, home_id: uuid.UUID, row: Vehicle, auth: AuthContext
-) -> None:
+async def _require_vehicle_manage(db: AsyncSession, home_id: uuid.UUID, auth: AuthContext) -> None:
+    """Checked *before* any vehicle row is loaded or locked: authorization
+    first, then the row, so a caller without manage access can neither take a
+    row lock nor learn whether a vehicle ID exists from a 403-vs-404 split."""
     await require_capability(home_id, Capability.driveway_manage, auth, db)
 
 
@@ -373,9 +383,9 @@ async def upload_vehicle_photo(
     settings: Settings = Depends(get_settings),
 ) -> VehicleResponse:
     await enforce_rate_limit(request, settings, "vehicle-photo-upload", 20, 3600)
-    row = await _get_vehicle(db, home_id, vehicle_id, for_update=True)
-    await _require_vehicle_manage(db, home_id, row, auth)
     membership = await require_capability(home_id, Capability.driveway_view, auth, db)
+    await _require_vehicle_manage(db, home_id, auth)
+    row = await _get_vehicle(db, home_id, vehicle_id, for_update=True)
     raw = await file.read(settings.vehicle_photo_max_upload_bytes + 1)
     if len(raw) > settings.vehicle_photo_max_upload_bytes:
         raise HTTPException(
@@ -426,7 +436,12 @@ async def get_vehicle_photo(
     return Response(
         content=data,
         media_type=OUTPUT_CONTENT_TYPE,
-        headers={"Cache-Control": "public, max-age=31536000, immutable"},
+        # Private household media: never storable by a shared cache/CDN/proxy,
+        # and only briefly reusable by this browser (the URL is versioned by
+        # photo_version, so a changed photo still refreshes immediately). The
+        # previous "public, max-age=31536000, immutable" let any intermediary
+        # keep an authenticated photo for a year and outlive sign-out.
+        headers={"Cache-Control": "private, max-age=300"},
     )
 
 
@@ -439,9 +454,9 @@ async def delete_vehicle_photo(
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> VehicleResponse:
-    row = await _get_vehicle(db, home_id, vehicle_id, for_update=True)
-    await _require_vehicle_manage(db, home_id, row, auth)
     membership = await require_capability(home_id, Capability.driveway_view, auth, db)
+    await _require_vehicle_manage(db, home_id, auth)
+    row = await _get_vehicle(db, home_id, vehicle_id, for_update=True)
     previous_key = row.photo_key
     row.photo_key = None
     row.photo_updated_at = None
@@ -461,9 +476,9 @@ async def update_vehicle(
     auth: AuthContext = Depends(auth_context),
     db: AsyncSession = Depends(get_db),
 ) -> VehicleResponse:
-    row = await _get_vehicle(db, home_id, vehicle_id, for_update=True)
-    await _require_vehicle_manage(db, home_id, row, auth)
     membership = await require_capability(home_id, Capability.driveway_view, auth, db)
+    await _require_vehicle_manage(db, home_id, auth)
+    row = await _get_vehicle(db, home_id, vehicle_id, for_update=True)
     if row.updated_at != body.expected_updated_at:
         raise HTTPException(status.HTTP_409_CONFLICT, "This vehicle changed. Reload and try again.")
     await _require_home_member_owner(db, home_id, body.owner_user_id)
@@ -513,8 +528,8 @@ async def delete_vehicle(
     auth: AuthContext = Depends(auth_context),
     db: AsyncSession = Depends(get_db),
 ) -> None:
+    await _require_vehicle_manage(db, home_id, auth)
     row = await _get_vehicle(db, home_id, vehicle_id, for_update=True)
-    await _require_vehicle_manage(db, home_id, row, auth)
     row.archived_at = datetime.now(UTC)
     # Reminder has no soft-delete of its own (see routers.reminders.
     # delete_reminder) — a managed reminder must never keep pointing at a

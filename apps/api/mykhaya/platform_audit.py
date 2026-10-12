@@ -5,9 +5,9 @@ import structlog
 from fastapi import Request
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from mykhaya.audit_redaction import redact_audit_metadata
 from mykhaya.models import AdministrativeAuditEvent
 from mykhaya.platform_security import PlatformContext, safe_session_reference
-from mykhaya.syslog_forwarding import redact
 
 SECRET_MARKERS = ("password", "secret", "token", "credential", "api_key")
 
@@ -42,9 +42,15 @@ def platform_audit(
     previous: dict[str, Any] | None = None,
     new: dict[str, Any] | None = None,
     failure_category: str | None = None,
+    retain: frozenset[str] = frozenset(),
 ) -> None:
-    forwarded_previous = redact(previous or {})
-    forwarded_new = redact(new or {})
+    """``retain`` names fields whose retention in this specific record is
+    documented policy (see mykhaya.audit_redaction); everything else personal
+    is redacted *before* storage, not only before logging."""
+    stored_previous = redact_audit_metadata(safe_values(previous), retain=retain)
+    stored_new = redact_audit_metadata(safe_values(new), retain=retain)
+    forwarded_previous = redact_audit_metadata(safe_values(previous))
+    forwarded_new = redact_audit_metadata(safe_values(new))
     db.add(
         AdministrativeAuditEvent(
             administrator_id=context.administrator.id,
@@ -57,8 +63,8 @@ def platform_audit(
             source_ip=context.source_ip,
             request_id=getattr(request.state, "request_id", None),
             session_reference=safe_session_reference(context.session.id),
-            previous_values=safe_values(previous),
-            new_values=safe_values(new),
+            previous_values=stored_previous,
+            new_values=stored_new,
             failure_category=failure_category,
         )
     )

@@ -129,6 +129,23 @@ describe("Add vehicle — manual creation", () => {
     await waitFor(() => expect(push).toHaveBeenCalledWith("/driveway/v1"));
   });
 
+  it("never defaults the nickname to the registration when make and model are blank", async () => {
+    (api.createVehicle as ReturnType<typeof vi.fn>).mockResolvedValue({ id: "v2" });
+    const user = userEvent.setup();
+    render(<AddVehiclePage />);
+    await user.type(await screen.findByLabelText("Registration / licence plate"), "AP22 OOJ");
+    await user.click(screen.getByRole("button", { name: "Add manually" }));
+    await user.click(screen.getByRole("button", { name: "Add vehicle" }));
+
+    await waitFor(() => expect(api.createVehicle).toHaveBeenCalledTimes(1));
+    const [, body] = (api.createVehicle as ReturnType<typeof vi.fn>).mock.calls[0] as [
+      string,
+      Record<string, unknown>,
+    ];
+    expect(body).toMatchObject({ registration: "AP22 OOJ", nickname: "My vehicle" });
+    expect(String(body.nickname).replace(/\s+/g, "")).not.toContain("AP22OOJ");
+  });
+
   it("stays on the form and shows the API error when creation fails", async () => {
     (api.createVehicle as ReturnType<typeof vi.fn>).mockRejectedValue(
       new ApiError(400, "That registration is already in use."),

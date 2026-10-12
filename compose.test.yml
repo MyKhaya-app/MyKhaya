@@ -19,12 +19,14 @@ name: mykhaya-test
 services:
   postgres-test:
     image: postgres:17.5-alpine3.22
-    env_file: [.env]
+    # Same scoping as compose.yml's postgres: no application secrets.
     environment:
       {
         POSTGRES_DB: mykhaya,
         POSTGRES_USER: postgres,
         POSTGRES_PASSWORD: "${MYKHAYA_POSTGRES_ADMIN_PASSWORD}",
+        MYKHAYA_MIGRATION_DB_PASSWORD: "${MYKHAYA_MIGRATION_DB_PASSWORD}",
+        MYKHAYA_DB_PASSWORD: "${MYKHAYA_DB_PASSWORD}",
       }
     volumes:
       [
@@ -56,6 +58,8 @@ services:
     environment:
       {
         MYKHAYA_DATABASE_URL: "postgresql+asyncpg://mykhaya_migrator:${MYKHAYA_MIGRATION_DB_PASSWORD}@postgres-test:5432/mykhaya",
+        MYKHAYA_FIELD_ENCRYPTION_KEYS: "",
+        MYKHAYA_BLIND_INDEX_KEYS: "",
       }
     command: ["alembic", "upgrade", "head"]
     networks: [data]
