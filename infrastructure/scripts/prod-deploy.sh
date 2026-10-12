@@ -7,10 +7,28 @@ COMPOSE="docker compose -f compose.yml -f compose.production.yml"
 
 die() { printf '%s\n' "ERROR: $*" >&2; exit 1; }
 production() { [ "${MYKHAYA_PRODUCTION:-}" = 1 ] || die "set MYKHAYA_PRODUCTION=1 explicitly"; }
+env_value() {
+  key=$1
+  sed -n "s/^${key}=//p" .env | tail -n 1 | tr -d '\r'
+}
+
+require_installation_config() {
+  missing=""
+  for key in \
+    MYKHAYA_REGISTRATION_MODE \
+    MYKHAYA_PUBLIC_WEB_URL MYKHAYA_ADMIN_URL MYKHAYA_STATUS_URL MYKHAYA_NATIVE_API_URL \
+    MYKHAYA_CORS_ORIGINS MYKHAYA_TRUSTED_HOSTS MYKHAYA_TRUSTED_PROXY_CIDRS \
+    WEB_DOMAIN API_DOMAIN ADMIN_DOMAIN STATUS_DOMAIN \
+    MYKHAYA_CADDY_TRUSTED_PROXY_CIDRS; do
+    [ -n "$(env_value "$key")" ] || missing="$missing $key"
+  done
+  [ -z "$missing" ] || die "production .env is missing required installation values:$missing"
+}
 
 validate() {
   production
   [ -f .env ] || die "missing production .env"
+  require_installation_config
   branch=$(git branch --show-current)
   if [ "$branch" != "main" ]; then
     [ -n "${MYKHAYA_RELEASE_TAG:-}" ] || die "production must use main or set MYKHAYA_RELEASE_TAG for an approved detached tag"

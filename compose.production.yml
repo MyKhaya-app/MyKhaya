@@ -2,10 +2,10 @@ services:
   caddy:
     ports: ["80:80"]
     environment:
-      WEB_DOMAIN: "${WEB_DOMAIN:-mykhaya.app}"
-      API_DOMAIN: "${API_DOMAIN:-api.mykhaya.app}"
-      ADMIN_DOMAIN: "${ADMIN_DOMAIN:-admin.mykhaya.app}"
-      STATUS_DOMAIN: "${STATUS_DOMAIN:-status.mykhaya.app}"
+      WEB_DOMAIN: "${WEB_DOMAIN:?Set WEB_DOMAIN in the production .env}"
+      API_DOMAIN: "${API_DOMAIN:?Set API_DOMAIN in the production .env}"
+      ADMIN_DOMAIN: "${ADMIN_DOMAIN:?Set ADMIN_DOMAIN in the production .env}"
+      STATUS_DOMAIN: "${STATUS_DOMAIN:?Set STATUS_DOMAIN in the production .env}"
       MYKHAYA_CADDY_TRUSTED_PROXY_CIDRS: "${MYKHAYA_CADDY_TRUSTED_PROXY_CIDRS:?Set exact NetBird/Cloudflare proxy CIDRs in production .env}"
     volumes:
       [
@@ -16,18 +16,11 @@ services:
   api:
     environment: &production_api_environment
       MYKHAYA_ENVIRONMENT: production
-      MYKHAYA_REGISTRATION_MODE: invitation_only
-      MYKHAYA_DEFAULT_TIMEZONE: Europe/London
-      MYKHAYA_DEFAULT_LOCALE: en-GB
-      MYKHAYA_WEEK_START: monday
+      # Stable is a production invariant; the release script also exports it
+      # before builds so image labels and runtime metadata agree.
       MYKHAYA_BUILD_CHANNEL: stable
       MYKHAYA_COOKIE_SECURE: "true"
       MYKHAYA_ADMIN_MFA_REQUIRED: "true"
-      MYKHAYA_PUBLIC_WEB_URL: "https://${WEB_DOMAIN:-mykhaya.app}"
-      MYKHAYA_ADMIN_URL: "https://${ADMIN_DOMAIN:-admin.mykhaya.app}"
-      MYKHAYA_STATUS_URL: "https://${STATUS_DOMAIN:-status.mykhaya.app}"
-      MYKHAYA_CORS_ORIGINS: '["https://${WEB_DOMAIN:-mykhaya.app}","https://${ADMIN_DOMAIN:-admin.mykhaya.app}"]'
-      MYKHAYA_TRUSTED_HOSTS: '["api","127.0.0.1","localhost","${WEB_DOMAIN:-mykhaya.app}","${API_DOMAIN:-api.mykhaya.app}","${ADMIN_DOMAIN:-admin.mykhaya.app}","${STATUS_DOMAIN:-status.mykhaya.app}"]'
   worker:
     environment: *production_api_environment
   scheduler:
