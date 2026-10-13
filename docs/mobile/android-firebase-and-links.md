@@ -3,10 +3,31 @@
 The Android shell is repository-ready for FCM and environment-specific HTTPS
 App Links. Credentials and signing material are intentionally not committed.
 
+## Environment and branding matrix
+
+Android mirrors the existing iOS identity and deployment matrix:
+
+| | DEV | PROD |
+| --- | --- | --- |
+| Application ID | `app.mykhaya.mobile` | `app.mykhaya.mobile.prod` |
+| Display name | `MyKhaya-Dev` | `MyKhaya` |
+| Frontend/backend origin | `https://dev.mykhaya.app` | `https://mykhaya.app` |
+| Launcher icon | Official logo with Android-only DEV badge | Official logo |
+
+The distinct application IDs keep Android Keystore-backed secure storage,
+biometric preferences, notification registrations, and app data separate. An
+APK update preserves DEV data when it is signed with the same certificate.
+The existing iOS icon set currently uses the official logo for both schemes and
+does not contain a DEV badge; iOS was not changed.
+
+Android launcher resources include adaptive, round, legacy density, and Android
+13+ monochrome variants. PROD resources live in `src/main/res`; DEV overlays
+live in `src/development/res`.
+
 ## DEV FCM setup
 
-1. In Firebase Console, register an Android app with package
-   `app.mykhaya.mobile`.
+1. In Firebase Console, retain the existing DEV Android registration with
+   package `app.mykhaya.mobile`.
 2. Download its `google-services.json` to
    `apps/android-shell/android/app/src/development/google-services.json`.
    This path is gitignored. Do not place service-account private keys in the
@@ -78,6 +99,22 @@ adb install -r app\build\outputs\apk\development\debug\app-development-debug.apk
 
 The exact DEV APK path is
 `apps/android-shell/android/app/build/outputs/apk/development/debug/app-development-debug.apk`.
+
+Build PROD separately:
+
+```powershell
+.\gradlew.bat assembleProductionDebug
+adb install -r app\build\outputs\apk\production\debug\app-production-debug.apk
+```
+
+Because the IDs differ, installing either APK does not replace the other. Use
+`adb uninstall app.mykhaya.mobile` or
+`adb uninstall app.mykhaya.mobile.prod` only after confirming the replacement
+installation works; uninstalling removes that environment's local data.
+
+Run DEV and PROD as separate Gradle invocations. DEV applies the local
+`src/development/google-services.json`; PROD requires its own Firebase file
+only when a production Firebase build is intentionally requested.
 
 ## Physical-device validation
 

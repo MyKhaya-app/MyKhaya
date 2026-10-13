@@ -84,6 +84,19 @@ Gradle build itself has not been executed here — only statically verified
 runtime/device verification is still required before this ships — see the
 Phase 1 completion report for exactly what was and wasn't verified.
 
+The development and production debug variants have been built successfully
+with the locally installed JDK and Android SDK. Run them in separate Gradle
+invocations so the DEV-only Firebase configuration is not applied to PROD:
+
+```powershell
+cd android
+.\gradlew.bat assembleDevelopmentDebug --offline --no-daemon
+.\gradlew.bat assembleProductionDebug --offline --no-daemon
+```
+
+Outputs are `app/build/outputs/apk/development/debug/app-development-debug.apk`
+and `app/build/outputs/apk/production/debug/app-production-debug.apk`.
+
 ## Environment selection
 
 `MYKHAYA_ANDROID_ENV` (`development` | `production`, default `development`)
@@ -105,7 +118,8 @@ until a real keystore is supplied.
 
 ## Application identity
 
-`app.mykhaya.mobile` — reused from the retired `apps/mobile` Expo app's own
+DEV uses `app.mykhaya.mobile` and PROD uses `app.mykhaya.mobile.prod` — DEV is
+reused from the retired `apps/mobile` Expo app's own
 `android.package` configuration (its final `app.config.ts`, before ADR 0011
 retired it, set `android: { package: "app.mykhaya.mobile" }` — the exact
 same identifier already reused for iOS's `appId` in ADR 0012). Using the

@@ -3,6 +3,9 @@ apply plugin: 'com.android.application'
 def developmentFirebaseConfig = file('src/development/google-services.json')
 def productionFirebaseConfig = file('src/production/google-services.json')
 def rootFirebaseConfig = file('google-services.json')
+def requestedGradleTasks = gradle.startParameter.taskNames.collect { it.toLowerCase() }
+def developmentBuildRequested = requestedGradleTasks.any { it.contains('development') }
+def productionBuildRequested = requestedGradleTasks.any { it.contains('production') }
 
 android {
     namespace = "app.mykhaya.mobile"
@@ -11,8 +14,8 @@ android {
         applicationId "app.mykhaya.mobile"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "0.1.0"
+        versionCode 30
+        versionName "0.1.30"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -65,7 +68,10 @@ dependencies {
 apply from: 'capacitor.build.gradle'
 
 try {
-    if ([rootFirebaseConfig, developmentFirebaseConfig, productionFirebaseConfig].any { it.isFile() }) {
+    def firebaseConfigForRequestedVariant = rootFirebaseConfig.isFile() ||
+        (developmentBuildRequested && developmentFirebaseConfig.isFile()) ||
+        (productionBuildRequested && productionFirebaseConfig.isFile())
+    if (firebaseConfigForRequestedVariant) {
         apply plugin: 'com.google.gms.google-services'
     }
 } catch(Exception e) {

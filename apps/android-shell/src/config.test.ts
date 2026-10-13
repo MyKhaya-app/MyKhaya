@@ -100,6 +100,8 @@ describe("allowedNavigationHosts", () => {
 
 describe("Android application identity matrix", () => {
   it("keeps DEV and PROD installable side by side", () => {
+    expect(ANDROID_APP_ENVIRONMENTS.development.applicationId).toBe("app.mykhaya.mobile");
+    expect(ANDROID_APP_ENVIRONMENTS.production.applicationId).toBe("app.mykhaya.mobile.prod");
     expect(ANDROID_APP_ENVIRONMENTS.development.applicationId).not.toBe(
       ANDROID_APP_ENVIRONMENTS.production.applicationId,
     );

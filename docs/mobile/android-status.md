@@ -10,8 +10,9 @@ See "Resume point" below.
 
 ## Completed (implemented and covered by unit/integration tests)
 
-- **Phase 1 — Android Capacitor shell** (`apps/android-shell`, package id
-  `app.mykhaya.mobile`). Live-frontend model: the WebView loads the real
+- **Phase 1 — Android Capacitor shell** (`apps/android-shell`, package ids
+  `app.mykhaya.mobile` for DEV and `app.mykhaya.mobile.prod` for PROD). Live-
+  frontend model: the WebView loads the real
   deployed `apps/web` origin (`dev.mykhaya.app` / `mykhaya.app`), never a
   bundled copy — see
   [ADR 0014](../architecture/adr/0014-capacitor-android-shell.md).
@@ -119,14 +120,25 @@ against a real Firebase project — only unit/integration-tested:
   Backend provider dispatch is centralized in one function
   (`worker._send_native_push()`) keyed on `NativePushDevice.platform` — no
   caller elsewhere branches on platform.
+- Android launcher branding now uses the official iOS logo artwork for PROD and
+  a deterministic small DEV badge overlay for the DEV flavor. Android includes
+  adaptive, round, legacy density, and Android 13+ monochrome resources.
 - No Firebase secrets are committed anywhere in this repository (see audit
   below) — FCM server credentials are three plain env-var-sourced settings
   values (`fcm_project_id`/`fcm_client_email`/`fcm_private_key`), never a
   service-account JSON file; the Android client's `google-services.json` is
-  gitignored and has never existed in this repo.
+  gitignored and local-only. The DEV file may exist on a developer machine;
+  it must never be committed.
 - One MyKhaya entitlement model remains the intended billing architecture —
   Android does not get its own parallel entitlement/billing system when
   Play Billing work eventually starts.
+
+## Current validation note
+
+The DEV Firebase file is now present locally at
+`apps/android-shell/android/app/src/development/google-services.json` and is
+gitignored. It matches package `app.mykhaya.mobile`; no secret values are
+committed. Android DEV and PROD debug APKs have been built separately.
 
 ## Resume point: Phase 5B — real Firebase/FCM runtime validation
 
