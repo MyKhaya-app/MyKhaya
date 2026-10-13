@@ -2368,6 +2368,13 @@
 .cc-move-member-disposition legend { font-size: 0.78rem; font-weight: 650; margin-bottom: 0.4rem; padding: 0; }
 .cc-move-member-disposition-options { align-items: center; border: 1px solid var(--platform-line); border-radius: 0.45rem; display: flex; flex-wrap: wrap; gap: 0.4rem 1.1rem; padding: 0.55rem 0.8rem; }
 .cc-move-member-disposition-options label { align-items: center; display: flex; gap: 0.4rem; margin-bottom: 0 !important; white-space: nowrap; }
+/* Showcase Demo Home options: the Demo & Test Homes create form and the
+   Reset Showcase Data dialog (PCC only). */
+.cc-showcase-options { border: 0; display: grid; gap: 0.6rem; margin: 0 0 1rem; min-width: 0; padding: 0; }
+.cc-showcase-options legend { font-size: 0.78rem; font-weight: 650; margin-bottom: 0.4rem; padding: 0; }
+.cc-showcase-options > label { align-items: center; display: flex; gap: 0.4rem; margin-bottom: 0 !important; }
+.cc-showcase-options > .cc-field { margin-bottom: 0; max-width: 18rem; }
+.cc-showcase-options > small { color: var(--cc-text-muted); font-size: 0.78rem; }
 .cc-move-member-summary { background: #f3f6f7; border-radius: 0.45rem; margin: 0 0 0.9rem; padding: 0.7rem 0.9rem; }
 .cc-move-member-summary h3 { font-size: 0.85rem; margin: 0 0 0.4rem; }
 .cc-move-member-summary ul { margin: 0.5rem 0 0; padding-left: 1.1rem; }

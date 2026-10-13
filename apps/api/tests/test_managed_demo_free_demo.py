@@ -499,8 +499,9 @@ async def test_deleting_a_family_demo_fixture_allows_recreating_one(
     assert deleted.status_code == 204, deleted.text
     demo_keys.remove(first["fixture_key"])
 
-    # Must succeed, not collide on jamie-carter@demo.mykhaya.invalid (or any
-    # other seed_template member email) left behind by the delete above.
+    # Must succeed, not collide on any seeded member email (Family Demo's
+    # Parker members, or the legacy templates' members) left behind by the
+    # delete above.
     second = await create_free_demo(admin_client, owner, demo_keys, fixture_type="demo")
     assert second["fixture_type"] == "demo"
 
@@ -554,13 +555,13 @@ async def test_family_demos_namespace_fixture_members_and_isolate_lifecycle(
 
     first_members = await member_emails(first["home_id"])
     second_members = await member_emails(second["home_id"])
-    assert set(first_members) >= {"Jamie Carter", "Sophie Carter", "Noah Carter"}
-    assert set(second_members) >= {"Jamie Carter", "Sophie Carter", "Noah Carter"}
+    # Family Demo is now the Parker family showcase (mykhaya.showcase).
+    parkers = {"James Parker", "Sophie Parker", "Oliver Parker"}
+    assert set(first_members) >= parkers
+    assert set(second_members) >= parkers
     assert set(first_members.values()).isdisjoint(second_members.values())
-    assert first_members["Jamie Carter"].endswith(
-        f"+{first['fixture_key']}@managed.mykhaya.invalid"
-    )
-    assert second_members["Jamie Carter"].endswith(
+    assert first_members["James Parker"].endswith(f"+{first['fixture_key']}@example.com")
+    assert second_members["Sophie Parker"].endswith(
         f"+{second['fixture_key']}@managed.mykhaya.invalid"
     )
 

@@ -3,14 +3,15 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime, time, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from typing import cast
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.calendar_provisioning import ensure_personal_calendar
+from mykhaya.config import get_settings
 from mykhaya.driveway_reminders import ensure_driveway_category
 from mykhaya.models import (
     AuthIdentity,
@@ -50,8 +51,30 @@ from mykhaya.models import (
     User,
 )
 from mykhaya.security import generate_home_code, normalise_email, password_hash
+from mykhaya.showcase.context import StoredFiles
+from mykhaya.showcase.guards import is_showcase_type
 
 FIXTURE_TIMEZONE = ZoneInfo("Europe/London")
+SHOWCASE_TEMPLATE_VERSION = "showcase-1"
+SHOWCASE_ROLLING = "rolling"
+SHOWCASE_PINNED = "pinned"
+
+
+def fixture_plan(fixture_type: ManagedDemoType) -> SubscriptionPlan:
+    """The real commercial plan each template provisions (never a UI flag).
+
+    Free Plan Demo exercises the genuine Free path, Ultimate Demo the genuine
+    Ultimate path; every other template is a Family-access fixture. All are
+    complimentary subscriptions — no Stripe customer or payment."""
+    if fixture_type == ManagedDemoType.free_demo:
+        return SubscriptionPlan.free
+    if fixture_type == ManagedDemoType.ultimate_demo:
+        return SubscriptionPlan.ultimate
+    return SubscriptionPlan.family
+
+
+def showcase_today() -> date:
+    return datetime.now(FIXTURE_TIMEZONE).date()
 
 
 class ManagedDemoError(RuntimeError):
@@ -89,9 +112,19 @@ class ManagedDemoService:
         expires_at: datetime | None = None,
         enabled: bool = True,
         home_code: str | None = None,
+        populate_showcase: bool | None = None,
+        reference_date: date | None = None,
     ) -> ManagedDemoHome:
-        """Create the managed identity and Home; callers then seed a template."""
+        """Create the managed identity and Home; callers then seed a template.
+
+        Showcase templates (Family/Ultimate Demo) are populated by default;
+        ``populate_showcase=False`` gives a clean Home on the same plan for
+        engineering tests. ``reference_date`` pins the showcase dates
+        (screenshot mode); otherwise they roll from today."""
         email = normalise_email(email)
+        showcase = is_showcase_type(fixture_type)
+        if not showcase and (populate_showcase is not None or reference_date is not None):
+            raise ManagedDemoError("Showcase options apply only to Family and Ultimate Demo.")
         if await ManagedDemoService.get(db, fixture_key):
             raise ManagedDemoError("A managed demo/test Home with that fixture key already exists.")
         if await db.scalar(select(User).where(User.email == email)):
@@ -124,6 +157,7 @@ class ManagedDemoService:
             )
         )
         db.add(HomeCalendar(group_id=home.id, name="Home Calendar", is_primary=True))
+        await db.flush()
         await ensure_driveway_category(db, home.id, user.id)
         row = await ManagedDemoService.register(
             db,
@@ -138,18 +172,20 @@ class ManagedDemoService:
         row.status = ManagedDemoStatus.enabled if enabled else ManagedDemoStatus.disabled
         if not enabled:
             row.disabled_at = datetime.now(UTC)
+        if showcase:
+            row.showcase_populated = populate_showcase is not False
+            row.showcase_date_mode = SHOWCASE_PINNED if reference_date else SHOWCASE_ROLLING
+            row.showcase_reference_date = reference_date or showcase_today()
+            row.template_version = SHOWCASE_TEMPLATE_VERSION
         from mykhaya.entitlements import ensure_home_subscription
 
         subscription = await ensure_home_subscription(db, home.id)
         # Free Plan Demo must exercise the real Free-plan entitlement path
         # (see docs/architecture/commercial-entitlements.md) rather than a
-        # Home override — every other template is a Family-access fixture
-        # (App Store review, sales demo, generic QA), unchanged.
-        subscription.plan = (
-            SubscriptionPlan.free
-            if fixture_type == ManagedDemoType.free_demo
-            else SubscriptionPlan.family
-        )
+        # Home override, and Ultimate Demo the real Ultimate path — every
+        # other template is a Family-access fixture (App Store review, sales
+        # demo, generic QA), unchanged. See fixture_plan.
+        subscription.plan = fixture_plan(fixture_type)
         subscription.provider = SubscriptionProvider.complimentary
         subscription.complimentary_reason = f"Managed Demo/Test Home: {fixture_key}"
         await ManagedDemoService.seed_template(db, row)
@@ -164,6 +200,9 @@ class ManagedDemoService:
         preserved_member_emails: dict[str, str] | None = None,
     ) -> None:
         """Seed the selected supported template using normal Home-owned rows."""
+        if is_showcase_type(row.fixture_type):
+            await ManagedDemoService._seed_showcase(db, row)
+            return
         owner = await db.get(User, row.owner_user_id)
         calendar = await db.scalar(
             select(HomeCalendar).where(
@@ -423,8 +462,159 @@ class ManagedDemoService:
         await db.flush()
 
     @staticmethod
-    async def refresh_template(db: AsyncSession, row: ManagedDemoHome) -> None:
-        """Delete only Home-owned content and reseed without changing lifecycle state."""
+    async def _seed_showcase(db: AsyncSession, row: ManagedDemoHome) -> None:
+        from mykhaya.entitlements import effective_plan
+        from mykhaya.showcase import family
+        from mykhaya.showcase.context import ShowcaseContext
+        from mykhaya.showcase.registry import seed_showcase
+
+        owner = await db.get(User, row.owner_user_id)
+        calendar = await db.scalar(
+            select(HomeCalendar).where(
+                HomeCalendar.group_id == row.home_id, HomeCalendar.is_primary.is_(True)
+            )
+        )
+        owner_membership = await db.scalar(
+            select(Membership).where(
+                Membership.group_id == row.home_id, Membership.user_id == row.owner_user_id
+            )
+        )
+        if owner is None or calendar is None or owner_membership is None:
+            raise ManagedDemoError("Managed Home is missing its owner or primary calendar")
+        settings = get_settings()
+        # The plan the Home actually resolves to decides which modules are
+        # seeded — never the template name alone.
+        plan = await effective_plan(db, row.home_id)
+        reference_date = (
+            row.showcase_reference_date
+            if row.showcase_date_mode == SHOWCASE_PINNED and row.showcase_reference_date
+            else showcase_today()
+        )
+        row.showcase_reference_date = reference_date
+        if row.showcase_populated:
+            await seed_showcase(
+                db,
+                settings,
+                home_id=row.home_id,
+                owner=owner,
+                owner_membership=owner_membership,
+                home_calendar=calendar,
+                fixture_key=row.fixture_key,
+                plan=plan,
+                reference_date=reference_date,
+            )
+        else:
+            await family.seed_baseline(
+                ShowcaseContext(
+                    db=db,
+                    settings=settings,
+                    home_id=row.home_id,
+                    owner=owner,
+                    owner_membership=owner_membership,
+                    plan=plan,
+                    fixture_key=row.fixture_key,
+                    reference_date=reference_date,
+                    home_calendar=calendar,
+                )
+            )
+        row.template_version = SHOWCASE_TEMPLATE_VERSION
+        row.refreshed_at = datetime.now(UTC)
+        await db.flush()
+
+    @staticmethod
+    async def reset_showcase(
+        db: AsyncSession, row: ManagedDemoHome, *, reference_date: date | None
+    ) -> StoredFiles:
+        """Restore a showcase Home to its curated (or clean) seeded state.
+
+        Server-enforced scope: only showcase fixtures, only this Home's own
+        content (see mykhaya.showcase.purge), in the caller's transaction so
+        a failure leaves the previous content intact. ``reference_date``
+        pins the dates for screenshot sessions; None rolls them from today.
+        Returns the image files the reset made obsolete, which the caller
+        removes only after committing."""
+        from mykhaya.showcase.purge import ShowcasePurgeRefused, purge_showcase_home
+
+        locked = await db.scalar(
+            select(ManagedDemoHome).where(ManagedDemoHome.id == row.id).with_for_update()
+        )
+        if locked is None or not is_showcase_type(locked.fixture_type):
+            raise ManagedDemoError("Only Family Demo and Ultimate Demo Homes can be reset.")
+        try:
+            stale = await purge_showcase_home(db, locked)
+        except ShowcasePurgeRefused as exc:
+            raise ManagedDemoError(str(exc)) from exc
+        locked.showcase_date_mode = SHOWCASE_PINNED if reference_date else SHOWCASE_ROLLING
+        locked.showcase_reference_date = reference_date
+        await ManagedDemoService._seed_showcase(db, locked)
+        return stale
+
+    @staticmethod
+    async def showcase_counts(db: AsyncSession, row: ManagedDemoHome) -> dict[str, int]:
+        """Live content volumes per module, for PCC verification."""
+        from mykhaya.models import (
+            BudgetMonth,
+            BudgetMonthCategory,
+            BudgetProfile,
+            BudgetSpendingEntry,
+            Todo,
+            Vehicle,
+            Wishlist,
+        )
+
+        home_id = row.home_id
+        statements = {
+            "members": select(func.count())
+            .select_from(Membership)
+            .where(Membership.group_id == home_id, Membership.removed_at.is_(None)),
+            "calendar_events": select(func.count())
+            .select_from(CalendarEvent)
+            .where(CalendarEvent.group_id == home_id, CalendarEvent.deleted_at.is_(None)),
+            "routines": select(func.count())
+            .select_from(HouseholdRoutine)
+            .where(HouseholdRoutine.group_id == home_id),
+            "reminders": select(func.count())
+            .select_from(Reminder)
+            .where(Reminder.group_id == home_id),
+            "todos": select(func.count()).select_from(Todo).where(Todo.group_id == home_id),
+            "meals": select(func.count())
+            .select_from(Meal)
+            .where(Meal.group_id == home_id, Meal.deleted_at.is_(None)),
+            "lists": select(func.count())
+            .select_from(HouseholdList)
+            .where(HouseholdList.group_id == home_id, HouseholdList.deleted_at.is_(None)),
+            "wishlists": select(func.count())
+            .select_from(Wishlist)
+            .where(Wishlist.home_id == home_id, Wishlist.deleted_at.is_(None)),
+            "budget_transactions": select(func.count())
+            .select_from(BudgetSpendingEntry)
+            .join(
+                BudgetMonthCategory,
+                BudgetMonthCategory.id == BudgetSpendingEntry.month_category_id,
+            )
+            .join(BudgetMonth, BudgetMonth.id == BudgetMonthCategory.month_id)
+            .join(BudgetProfile, BudgetProfile.id == BudgetMonth.profile_id)
+            .where(
+                BudgetProfile.owner_user_id == row.owner_user_id,
+                BudgetSpendingEntry.archived_at.is_(None),
+            ),
+            "vehicles": select(func.count())
+            .select_from(Vehicle)
+            .where(Vehicle.group_id == home_id, Vehicle.archived_at.is_(None)),
+        }
+        return {key: int(await db.scalar(statement) or 0) for key, statement in statements.items()}
+
+    @staticmethod
+    async def refresh_template(db: AsyncSession, row: ManagedDemoHome) -> StoredFiles | None:
+        """Delete only Home-owned content and reseed without changing lifecycle state.
+
+        Showcase Homes reset through reset_showcase, keeping their date mode
+        (a pinned Home stays on its pinned date)."""
+        if is_showcase_type(row.fixture_type):
+            pinned = (
+                row.showcase_reference_date if row.showcase_date_mode == SHOWCASE_PINNED else None
+            )
+            return await ManagedDemoService.reset_showcase(db, row, reference_date=pinned)
         preserved_member_emails = {
             name: email
             for name, email in (
@@ -517,6 +707,7 @@ class ManagedDemoService:
         await ManagedDemoService.seed_template(
             db, row, preserved_member_emails=preserved_member_emails
         )
+        return None
 
     @staticmethod
     async def register(
@@ -625,11 +816,16 @@ class ManagedDemoService:
         return len(rows)
 
     @staticmethod
-    async def delete(db: AsyncSession, row: ManagedDemoHome) -> None:
+    async def delete(db: AsyncSession, row: ManagedDemoHome) -> StoredFiles:
+        """Returns the Home's image files, which the caller removes after
+        committing (the database cascade cannot reach files on disk)."""
+        from mykhaya.models import Vehicle
+
+        files = StoredFiles()
         home = await db.get(Group, row.home_id)
         if home is None:
             await db.delete(row)
-            return
+            return files
         owner_id = row.owner_user_id
         memberships = list(
             await db.scalars(select(Membership).where(Membership.user_id == owner_id))
@@ -651,6 +847,24 @@ class ManagedDemoService:
                     Membership.group_id == row.home_id, Membership.user_id != owner_id
                 )
             )
+        )
+        files.meal_images.extend(
+            key
+            for key in await db.scalars(
+                select(Meal.image_key).where(
+                    Meal.group_id == row.home_id, Meal.image_key.is_not(None)
+                )
+            )
+            if key
+        )
+        files.vehicle_photos.extend(
+            key
+            for key in await db.scalars(
+                select(Vehicle.photo_key).where(
+                    Vehicle.group_id == row.home_id, Vehicle.photo_key.is_not(None)
+                )
+            )
+            if key
         )
         # Bulk-delete via Core `delete()`, not ORM object deletion — with
         # the Membership row(s) above loaded into the session's identity
@@ -675,4 +889,14 @@ class ManagedDemoService:
             orphaned_member_ids = select(User.id).where(
                 User.id.in_(other_member_ids), ~User.id.in_(remaining_members)
             )
+            files.avatars.extend(
+                key
+                for key in await db.scalars(
+                    select(User.avatar_key).where(
+                        User.id.in_(orphaned_member_ids), User.avatar_key.is_not(None)
+                    )
+                )
+                if key
+            )
             await db.execute(delete(User).where(User.id.in_(orphaned_member_ids)))
+        return files

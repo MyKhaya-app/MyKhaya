@@ -110,6 +110,124 @@ describe("Demo & Test Homes PCC list", () => {
     expect(post).toHaveBeenCalledWith("/auth/reauthenticate", { password: "operator-password" });
   });
 
+  describe("showcase templates", () => {
+    const templates = [
+      { fixture_type: "apple_review", label: "Apple Review", access: "family", showcase: false, showcase_modules: [] },
+      {
+        fixture_type: "demo",
+        label: "Family Demo",
+        access: "family",
+        showcase: true,
+        showcase_modules: [
+          { key: "calendar", name: "Calendar" },
+          { key: "meals", name: "Meal Plans" },
+        ],
+      },
+      {
+        fixture_type: "ultimate_demo",
+        label: "Ultimate Demo",
+        access: "ultimate",
+        showcase: true,
+        showcase_modules: [
+          { key: "calendar", name: "Calendar" },
+          { key: "budget", name: "Budget" },
+          { key: "driveway", name: "Driveway" },
+        ],
+      },
+      { fixture_type: "free_demo", label: "Free Plan Demo", access: "free", showcase: false, showcase_modules: [] },
+    ];
+    const ultimateRow = { ...rows[0], id: "2", display_name: "The Parker Family", fixture_type: "ultimate_demo", access: "ultimate" };
+
+    beforeEach(() => {
+      get.mockImplementation((path: string) => {
+        if (path === "/auth/me") return Promise.resolve({ id: "op", email: "op@example.com", display_name: "Operator", role: "platform_owner", mfa_enrolled: true, session_status: "full" });
+        if (path === "/demo-test-homes/templates") return Promise.resolve(templates);
+        return Promise.resolve([...rows, ultimateRow]);
+      });
+    });
+
+    async function openFormAndFill() {
+      render(<DemoTestHomesPage />);
+      await userEvent.click(await screen.findByRole("button", { name: /create demo\/test home/i }));
+      await screen.findByRole("option", { name: "Ultimate Demo" });
+      await userEvent.type(screen.getByLabelText("Fixture key"), "parker-ultimate");
+      await userEvent.type(screen.getByLabelText("Home name"), "The Parker Family");
+      await userEvent.type(screen.getByLabelText("Account email"), "demo@example.com");
+      await userEvent.type(screen.getByLabelText("New password"), "long-enough-password");
+      await userEvent.type(screen.getByLabelText("Confirm password"), "long-enough-password");
+    }
+
+    it("lists all four templates and shows Ultimate plan access", async () => {
+      render(<DemoTestHomesPage />);
+      expect(await screen.findByText("The Parker Family")).toBeInTheDocument();
+      expect(screen.getAllByText("Ultimate").length).toBeGreaterThan(0);
+      await userEvent.click(screen.getByRole("button", { name: /create demo\/test home/i }));
+      await waitFor(() =>
+        expect(within(screen.getByLabelText("Template")).getAllByRole("option").map((option) => option.textContent)).toEqual([
+          "Apple Review",
+          "Family Demo",
+          "Ultimate Demo",
+          "Free Plan Demo",
+        ]),
+      );
+      // Non-showcase templates show no showcase options.
+      expect(screen.queryByLabelText("Populate with showcase data")).not.toBeInTheDocument();
+    });
+
+    it("explains the showcase and lists server-derived modules for the selected plan", async () => {
+      await openFormAndFill();
+      await userEvent.selectOptions(screen.getByLabelText("Template"), "ultimate_demo");
+      expect(screen.getByText(/Emma, James, Sophie and Oliver Parker/)).toBeInTheDocument();
+      expect(screen.getByText(/Calendar, Budget, Driveway/)).toBeInTheDocument();
+      expect(screen.getByLabelText("Populate with showcase data")).toBeChecked();
+      await userEvent.selectOptions(screen.getByLabelText("Template"), "demo");
+      expect(screen.getByText(/Calendar, Meal Plans/)).toBeInTheDocument();
+      expect(screen.queryByText(/Budget/)).not.toBeInTheDocument();
+    });
+
+    it("creates a populated showcase with rolling dates by default", async () => {
+      await openFormAndFill();
+      await userEvent.selectOptions(screen.getByLabelText("Template"), "ultimate_demo");
+      await userEvent.click(screen.getByRole("button", { name: /^Create$/ }));
+      await waitFor(() =>
+        expect(post).toHaveBeenCalledWith(
+          "/demo-test-homes",
+          expect.objectContaining({ fixture_type: "ultimate_demo", populate_showcase: true, showcase_reference_date: null }),
+        ),
+      );
+    });
+
+    it("sends a pinned reference date in screenshot mode", async () => {
+      await openFormAndFill();
+      await userEvent.selectOptions(screen.getByLabelText("Template"), "demo");
+      await userEvent.click(screen.getByLabelText(/Pin dates to a reference date/));
+      const dateInput = screen.getByLabelText("Reference date");
+      await userEvent.clear(dateInput);
+      await userEvent.type(dateInput, "2026-11-04");
+      await userEvent.click(screen.getByRole("button", { name: /^Create$/ }));
+      await waitFor(() =>
+        expect(post).toHaveBeenCalledWith(
+          "/demo-test-homes",
+          expect.objectContaining({ fixture_type: "demo", populate_showcase: true, showcase_reference_date: "2026-11-04" }),
+        ),
+      );
+    });
+
+    it("can create a clean, unpopulated Home on the same plan", async () => {
+      await openFormAndFill();
+      await userEvent.selectOptions(screen.getByLabelText("Template"), "ultimate_demo");
+      await userEvent.click(screen.getByLabelText("Populate with showcase data"));
+      expect(screen.getByText(/Creates a clean Home with genuine Ultimate access/)).toBeInTheDocument();
+      await userEvent.click(screen.getByRole("button", { name: /^Create$/ }));
+      await waitFor(() =>
+        expect(post).toHaveBeenCalledWith(
+          "/demo-test-homes",
+          expect.objectContaining({ fixture_type: "ultimate_demo", populate_showcase: false }),
+        ),
+      );
+    });
+  });
+
   it("shows an empty state when there are no managed Homes", async () => {
     get.mockImplementation((path: string) => path === "/auth/me" ? Promise.resolve({ id: "op", email: "op@example.com", display_name: "Operator", role: "platform_owner", mfa_enrolled: true, session_status: "full" }) : Promise.resolve([]));
     render(<DemoTestHomesPage />);

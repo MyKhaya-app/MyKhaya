@@ -88,7 +88,7 @@ from mykhaya.home_migration_pcc import (
 )
 from mykhaya.household_permissions import default_profile, home_admin_count, legacy_role
 from mykhaya.mailer import resolve_smtp_config, send_email
-from mykhaya.managed_demo_homes import ManagedDemoError, ManagedDemoService
+from mykhaya.managed_demo_homes import ManagedDemoError, ManagedDemoService, fixture_plan
 from mykhaya.member_colours import assign_member_colour
 from mykhaya.models import (
     ActionToken,
@@ -251,6 +251,9 @@ from mykhaya.platform_schemas import (
     ManagedDemoHomeCreate,
     ManagedDemoHomeResponse,
     ManagedDemoPasswordReset,
+    ManagedDemoShowcaseReset,
+    ManagedDemoTemplateModule,
+    ManagedDemoTemplateResponse,
     MfaPolicyResponse,
     MfaPolicyUpdate,
     ModuleUpdate,
@@ -350,6 +353,8 @@ from mykhaya.security import (
     password_hash,
     verify_password,
 )
+from mykhaya.showcase.guards import is_showcase_type
+from mykhaya.showcase.registry import modules_for_plan as showcase_modules_for_plan
 from mykhaya.status_aggregation import (
     PUBLIC_SERVICES,
     highest_severity,
@@ -377,16 +382,42 @@ OPERATORS = (PlatformRole.owner, PlatformRole.administrator)
 SUPPORT = (*OPERATORS, PlatformRole.support)
 
 
+_MANAGED_DEMO_ACCESS: dict[SubscriptionPlan, Literal["family", "free", "ultimate"]] = {
+    SubscriptionPlan.free: "free",
+    SubscriptionPlan.family: "family",
+    SubscriptionPlan.ultimate: "ultimate",
+}
+
+# The PCC "Template" choices, in display order. QA Test remains a supported
+# type for existing fixtures but is not offered for new ones.
+_MANAGED_DEMO_TEMPLATES: tuple[tuple[ManagedDemoType, str], ...] = (
+    (ManagedDemoType.apple_review, "Apple Review"),
+    (ManagedDemoType.demo, "Family Demo"),
+    (ManagedDemoType.ultimate_demo, "Ultimate Demo"),
+    (ManagedDemoType.free_demo, "Free Plan Demo"),
+)
+
+
+async def _reload_context_after_rollback(db: AsyncSession, context: PlatformContext) -> None:
+    """A rollback expires every loaded row, including the operator's own
+    administrator/session rows the failure audit record is built from."""
+    await db.refresh(context.administrator)
+    await db.refresh(context.session)
+
+
 async def _managed_demo_response(
     db: AsyncSession, row: ManagedDemoHome, owner: User
 ) -> ManagedDemoHomeResponse:
-    # Computed from the Home's actual subscription, never assumed —
-    # Free Plan Demo resolves to the real Free plan through the normal
-    # entitlement path (see ManagedDemoService.create), so this must reflect
-    # that rather than hardcoding "family" for every template.
+    # Computed from the Home's actual subscription, never assumed — Free
+    # Plan Demo and Ultimate Demo resolve to their real plans through the
+    # normal entitlement path (see ManagedDemoService.create), so this must
+    # reflect the resolved plan rather than hardcoding "family".
     subscription = await get_home_subscription(db, row.home_id)
-    is_free = subscription is not None and subscription.plan == SubscriptionPlan.free
-    access: Literal["family", "free"] = "free" if is_free else "family"
+    access = _MANAGED_DEMO_ACCESS[resolve_effective_plan(subscription)]
+    showcase = is_showcase_type(row.fixture_type)
+    date_mode: Literal["rolling", "pinned"] | None = (
+        "pinned" if row.showcase_date_mode == "pinned" else "rolling" if showcase else None
+    )
     return ManagedDemoHomeResponse(
         id=row.id,
         fixture_key=row.fixture_key,
@@ -404,7 +435,40 @@ async def _managed_demo_response(
         account_email=owner.email,
         email_verified=owner.email_verified_at is not None,
         access=access,
+        showcase=showcase,
+        showcase_populated=row.showcase_populated,
+        showcase_date_mode=date_mode,
+        showcase_reference_date=row.showcase_reference_date if showcase else None,
+        showcase_counts=await ManagedDemoService.showcase_counts(db, row) if showcase else None,
     )
+
+
+@router.get("/demo-test-homes/templates", response_model=list[ManagedDemoTemplateResponse])
+async def managed_demo_templates(
+    _: PlatformContext = Depends(require_roles(*SUPPORT)),
+) -> list[ManagedDemoTemplateResponse]:
+    """The create-form catalogue. Showcase modules come from the plan's real
+    entitlements via the showcase registry, so the PCC description can never
+    promise a module the provisioned plan does not include."""
+    result: list[ManagedDemoTemplateResponse] = []
+    for fixture_type, label in _MANAGED_DEMO_TEMPLATES:
+        plan = fixture_plan(fixture_type)
+        showcase = is_showcase_type(fixture_type)
+        result.append(
+            ManagedDemoTemplateResponse(
+                fixture_type=fixture_type.value,
+                label=label,
+                access=_MANAGED_DEMO_ACCESS[plan],
+                showcase=showcase,
+                showcase_modules=[
+                    ManagedDemoTemplateModule(key=module.key, name=module.name)
+                    for module in showcase_modules_for_plan(plan)
+                ]
+                if showcase
+                else [],
+            )
+        )
+    return result
 
 
 @router.get("/demo-test-homes", response_model=list[ManagedDemoHomeResponse])
@@ -430,19 +494,23 @@ async def create_managed_demo_home(
 ) -> ManagedDemoHomeResponse:
     settings = get_settings()
     require_recent_auth(context, settings)
+    fixture_type = ManagedDemoType(body.fixture_type)
     try:
         row = await ManagedDemoService.create(
             db,
             fixture_key=body.fixture_key,
             display_name=body.display_name,
-            fixture_type=ManagedDemoType(body.fixture_type),
+            fixture_type=fixture_type,
             email=str(body.email),
             password=body.password,
             created_by=context.administrator.id,
             expires_at=body.expires_at,
             enabled=body.enabled,
+            populate_showcase=body.populate_showcase,
+            reference_date=body.showcase_reference_date,
         )
     except ManagedDemoError as exc:
+        await db.rollback()
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     except IntegrityError as exc:
         await db.rollback()
@@ -453,6 +521,43 @@ async def create_managed_demo_home(
             status.HTTP_409_CONFLICT,
             "A managed demo/test Home with that fixture key or account email already exists.",
         ) from exc
+    except Exception as exc:
+        # Provisioning (including showcase seeding) is one transaction: a
+        # failure creates nothing, and is audited as such rather than leaving
+        # a half-populated Home reported as created.
+        await db.rollback()
+        log.error(
+            "managed_demo_provisioning_failed",
+            fixture_type=fixture_type.value,
+            error_type=type(exc).__name__,
+        )
+        await _reload_context_after_rollback(db, context)
+        platform_audit(
+            db,
+            request,
+            context,
+            "managed_demo.created",
+            "managed_demo_home",
+            None,
+            outcome="failed",
+            new={"fixture_key": body.fixture_key, "fixture_type": fixture_type.value},
+            failure_category=type(exc).__name__,
+        )
+        await db.commit()
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            "The Demo/Test Home could not be provisioned. Nothing was created; try again.",
+        ) from exc
+    audit_new: dict[str, object] = {
+        "fixture_key": row.fixture_key,
+        "fixture_type": row.fixture_type.value,
+    }
+    if is_showcase_type(row.fixture_type):
+        audit_new["showcase_populated"] = row.showcase_populated
+        audit_new["showcase_date_mode"] = row.showcase_date_mode
+        audit_new["showcase_reference_date"] = (
+            row.showcase_reference_date.isoformat() if row.showcase_reference_date else None
+        )
     platform_audit(
         db,
         request,
@@ -460,7 +565,7 @@ async def create_managed_demo_home(
         "managed_demo.created",
         "managed_demo_home",
         row.id,
-        new={"fixture_key": row.fixture_key, "fixture_type": row.fixture_type.value},
+        new=audit_new,
     )
     await db.commit()
     owner = await db.get(User, row.owner_user_id)
@@ -543,7 +648,11 @@ async def refresh_managed_demo_home(
     row = await db.get(ManagedDemoHome, fixture_id)
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Managed Home not found")
-    await ManagedDemoService.refresh_template(db, row)
+    try:
+        stale = await ManagedDemoService.refresh_template(db, row)
+    except ManagedDemoError as exc:
+        await db.rollback()
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     platform_audit(
         db,
         request,
@@ -554,6 +663,89 @@ async def refresh_managed_demo_home(
         reason=body.reason,
     )
     await db.commit()
+    if stale is not None:
+        await stale.delete_all(get_settings())
+    owner = await db.get(User, row.owner_user_id)
+    assert owner is not None
+    return await _managed_demo_response(db, row, owner)
+
+
+@router.post("/demo-test-homes/{fixture_id}/showcase-reset", response_model=ManagedDemoHomeResponse)
+async def reset_managed_demo_showcase(
+    fixture_id: uuid.UUID,
+    body: ManagedDemoShowcaseReset,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+) -> ManagedDemoHomeResponse:
+    """Restore a Family/Ultimate Demo Home to its curated state.
+
+    Eligibility is enforced here, not in PCC: only a registered showcase
+    fixture can be reset, never an ordinary customer Home (which has no
+    managed record at all) or another fixture type. Keeps the Home, owner
+    account, credentials and Home-level settings; replaces the showcase
+    content in one transaction."""
+    settings = get_settings()
+    require_recent_auth(context, settings)
+    row = await db.get(ManagedDemoHome, fixture_id)
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Managed Home not found")
+    if not is_showcase_type(row.fixture_type):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Only Family Demo and Ultimate Demo Homes have showcase data to reset.",
+        )
+    previous = {
+        "showcase_date_mode": row.showcase_date_mode,
+        "showcase_reference_date": (
+            row.showcase_reference_date.isoformat() if row.showcase_reference_date else None
+        ),
+    }
+    try:
+        stale = await ManagedDemoService.reset_showcase(db, row, reference_date=body.reference_date)
+    except ManagedDemoError as exc:
+        await db.rollback()
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    except Exception as exc:
+        await db.rollback()
+        log.error("managed_demo_showcase_reset_failed", error_type=type(exc).__name__)
+        await _reload_context_after_rollback(db, context)
+        platform_audit(
+            db,
+            request,
+            context,
+            "managed_demo.showcase_reset",
+            "managed_demo_home",
+            fixture_id,
+            outcome="failed",
+            reason=body.reason,
+            previous=previous,
+            failure_category=type(exc).__name__,
+        )
+        await db.commit()
+        raise HTTPException(
+            status.HTTP_500_INTERNAL_SERVER_ERROR,
+            "The showcase data could not be reset. The previous data is unchanged; try again.",
+        ) from exc
+    platform_audit(
+        db,
+        request,
+        context,
+        "managed_demo.showcase_reset",
+        "managed_demo_home",
+        row.id,
+        reason=body.reason,
+        previous=previous,
+        new={
+            "showcase_date_mode": row.showcase_date_mode,
+            "showcase_reference_date": (
+                row.showcase_reference_date.isoformat() if row.showcase_reference_date else None
+            ),
+            "showcase_populated": row.showcase_populated,
+        },
+    )
+    await db.commit()
+    await stale.delete_all(settings)
     owner = await db.get(User, row.owner_user_id)
     assert owner is not None
     return await _managed_demo_response(db, row, owner)
@@ -600,7 +792,7 @@ async def delete_managed_demo_home(
     if row is None:
         return
     try:
-        await ManagedDemoService.delete(db, row)
+        files = await ManagedDemoService.delete(db, row)
     except ManagedDemoError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     platform_audit(
@@ -613,6 +805,7 @@ async def delete_managed_demo_home(
         reason=body.reason,
     )
     await db.commit()
+    await files.delete_all(get_settings())
 
 
 SECURITY = (PlatformRole.owner, PlatformRole.security)

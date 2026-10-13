@@ -583,6 +583,9 @@ class ManagedDemoType(StrEnum):
     demo = "demo"
     qa_test = "qa_test"
     free_demo = "free_demo"
+    # Complimentary Ultimate access plus the Family showcase and the
+    # Ultimate-only module showcase — see mykhaya.showcase.
+    ultimate_demo = "ultimate_demo"
 
 
 class ManagedDemoStatus(StrEnum):
@@ -619,6 +622,15 @@ class ManagedDemoHome(UuidTimeMixin, Base):
         ForeignKey("platform_administrators.id", ondelete="SET NULL")
     )
     disabled_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # Showcase templates only (demo, ultimate_demo — see mykhaya.showcase).
+    # False for every legacy fixture and for a deliberately clean showcase
+    # Home; a reset always restores whichever state the Home was created in.
+    showcase_populated: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    # "rolling" dates content relative to the day it was (re)seeded;
+    # "pinned" reseeds against showcase_reference_date so screenshot sessions
+    # see identical content. NULL for fixtures that are not showcases.
+    showcase_date_mode: Mapped[str | None] = mapped_column(String(10))
+    showcase_reference_date: Mapped[date | None] = mapped_column(Date)
 
 
 class Membership(UuidTimeMixin, Base):

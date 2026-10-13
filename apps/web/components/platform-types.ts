@@ -25,8 +25,33 @@ export type PlatformActor = {
   recovery_codes?: string[] | null;
 };
 
-export type ManagedDemoType = "apple_review" | "demo" | "qa_test" | "free_demo";
+export type ManagedDemoType = "apple_review" | "demo" | "qa_test" | "free_demo" | "ultimate_demo";
 export type ManagedDemoStatus = "enabled" | "disabled" | "expired";
+export type ManagedDemoAccess = "family" | "free" | "ultimate";
+// Live content volumes per module for showcase Homes (Family/Ultimate Demo).
+export type ManagedDemoShowcaseCounts = Partial<
+  Record<
+    | "members"
+    | "calendar_events"
+    | "routines"
+    | "reminders"
+    | "todos"
+    | "meals"
+    | "lists"
+    | "wishlists"
+    | "budget_transactions"
+    | "vehicles",
+    number
+  >
+>;
+export type ManagedDemoTemplate = {
+  fixture_type: ManagedDemoType;
+  label: string;
+  access: ManagedDemoAccess;
+  showcase: boolean;
+  // Derived server-side from the plan's real entitlements.
+  showcase_modules: { key: string; name: string }[];
+};
 export type ManagedDemoHome = {
   id: string;
   fixture_key: string;
@@ -43,7 +68,12 @@ export type ManagedDemoHome = {
   disabled_at: string | null;
   account_email: string;
   email_verified: boolean;
-  access: "family" | "free";
+  access: ManagedDemoAccess;
+  showcase?: boolean;
+  showcase_populated?: boolean;
+  showcase_date_mode?: "rolling" | "pinned" | null;
+  showcase_reference_date?: string | null;
+  showcase_counts?: ManagedDemoShowcaseCounts | null;
 };
 
 export type ManagedDemoHomeCreateRequest = {
@@ -54,6 +84,9 @@ export type ManagedDemoHomeCreateRequest = {
   password: string;
   expires_at: string | null;
   enabled: boolean;
+  // Family/Ultimate Demo only; omitted for every other template.
+  populate_showcase?: boolean;
+  showcase_reference_date?: string | null;
 };
 
 export type WebAuthnCredential = {

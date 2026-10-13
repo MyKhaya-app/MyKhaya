@@ -9,6 +9,7 @@ import {
   Fingerprint,
   Home as HomeIcon,
   KeyRound,
+  LayoutGrid,
   Power,
   PowerOff,
   RefreshCw,
@@ -32,16 +33,25 @@ import { CcNotice, CcLoadingState, CcErrorState } from "@/components/control-cen
 import { CcField } from "@/components/control-centre/form-field";
 import { CcDialog, CcDialogActions, CcConfirmDialog } from "@/components/control-centre/dialog";
 import { validateManagedDemoPassword, MANAGED_DEMO_PASSWORD_MIN_LENGTH } from "../password-validation";
+import { ACCESS_LABELS, TEMPLATE_LABELS, formatReferenceDate, todayIso } from "../templates";
 
 const formatDate = (value: string | null) => (value ? new Date(value).toLocaleString() : "No expiry");
-const typeLabel = (value: ManagedDemoHome["fixture_type"]) =>
-  value === "apple_review"
-    ? "Apple Review"
-    : value === "demo"
-      ? "Family Demo"
-      : value === "free_demo"
-        ? "Free Plan Demo"
-        : "QA Test";
+const typeLabel = (value: ManagedDemoHome["fixture_type"]) => TEMPLATE_LABELS[value];
+
+// Live content volumes shown for showcase Homes, in display order. Budget and
+// Driveway only appear for Ultimate access.
+const COUNT_LABELS: { key: keyof NonNullable<ManagedDemoHome["showcase_counts"]>; label: string; ultimate?: boolean }[] = [
+  { key: "members", label: "Household members" },
+  { key: "calendar_events", label: "Calendar events" },
+  { key: "routines", label: "Routines" },
+  { key: "reminders", label: "Reminders" },
+  { key: "todos", label: "To-dos" },
+  { key: "meals", label: "Recipes" },
+  { key: "lists", label: "Lists" },
+  { key: "wishlists", label: "Wishlists" },
+  { key: "budget_transactions", label: "Budget transactions", ultimate: true },
+  { key: "vehicles", label: "Vehicles", ultimate: true },
+];
 const safeError = (error: unknown, fallback: string) =>
   error instanceof Error && error.message ? error.message : fallback;
 
@@ -71,6 +81,10 @@ export default function ManagedDemoHomeDetailPage() {
   const [enableOpen, setEnableOpen] = useState(false);
   const [disableOpen, setDisableOpen] = useState(false);
   const [refreshOpen, setRefreshOpen] = useState(false);
+  const [showcaseOpen, setShowcaseOpen] = useState(false);
+  const [showcaseMode, setShowcaseMode] = useState<"rolling" | "pinned">("rolling");
+  const [showcaseDate, setShowcaseDate] = useState(todayIso);
+  const [showcaseError, setShowcaseError] = useState("");
   const [deleteOpen, setDeleteOpen] = useState(false);
   const { guarded, modal } = useReauthGuard();
 
@@ -149,6 +163,47 @@ export default function ManagedDemoHomeDetailPage() {
       setBusy("");
     }
   });
+
+  const submitShowcaseReset = guarded(async (reason: string, referenceDate: string | null) => {
+    setShowcaseOpen(false);
+    setBusy("showcase");
+    setError("");
+    try {
+      await platformApi.post(`/demo-test-homes/${id}/showcase-reset`, {
+        reference_date: referenceDate,
+        reason,
+        confirmed: true,
+      });
+      setMessage(
+        referenceDate
+          ? `Showcase data reset, pinned to ${formatReferenceDate(referenceDate)}.`
+          : "Showcase data reset, with dates rolling from today.",
+      );
+      await load();
+    } catch (cause) {
+      if (cause instanceof ApiError && cause.status === 403) throw cause;
+      setError(safeError(cause, "Unable to reset the showcase data. The previous data is unchanged."));
+    } finally {
+      setBusy("");
+    }
+  });
+
+  function openShowcaseReset() {
+    if (!home) return;
+    setShowcaseError("");
+    setShowcaseMode(home.showcase_date_mode === "pinned" ? "pinned" : "rolling");
+    setShowcaseDate(home.showcase_reference_date ?? todayIso());
+    setShowcaseOpen(true);
+  }
+
+  async function resetShowcase(formData: FormData) {
+    const reason = (formData.get("audit_reason") as string | null) ?? "";
+    if (showcaseMode === "pinned" && !showcaseDate) {
+      setShowcaseError("Choose a reference date, or use rolling dates.");
+      return;
+    }
+    await submitShowcaseReset(reason, showcaseMode === "pinned" ? showcaseDate : null);
+  }
 
   const remove = guarded(async (formData: FormData) => {
     if (!home) return;
@@ -254,14 +309,23 @@ export default function ManagedDemoHomeDetailPage() {
               },
             ]
           : []),
-        {
-          key: "refresh",
-          label: "Refresh / Reset",
-          icon: RefreshCw,
-          variant: "caution",
-          disabled: Boolean(busy),
-          onClick: () => setRefreshOpen(true),
-        },
+        home.showcase
+          ? {
+              key: "showcase-reset",
+              label: "Reset Showcase Data",
+              icon: RefreshCw,
+              variant: "caution" as const,
+              disabled: Boolean(busy),
+              onClick: openShowcaseReset,
+            }
+          : {
+              key: "refresh",
+              label: "Refresh / Reset",
+              icon: RefreshCw,
+              variant: "caution" as const,
+              disabled: Boolean(busy),
+              onClick: () => setRefreshOpen(true),
+            },
         {
           key: "reset-password",
           label: "Reset Password",
@@ -318,7 +382,7 @@ export default function ManagedDemoHomeDetailPage() {
                     {home.refreshed_at ? formatDate(home.refreshed_at) : "Never"}
                   </CcMetadataItem>
                   <CcMetadataItem label="Plan access">
-                    <CcBadge tone="info">{home.access === "family" ? "Family" : "Free"}</CcBadge>
+                    <CcBadge tone="info">{ACCESS_LABELS[home.access]}</CcBadge>
                   </CcMetadataItem>
                   <CcMetadataItem label="Expiry">{formatDate(home.expires_at)}</CcMetadataItem>
                   <CcMetadataItem label="Template version">
@@ -343,16 +407,44 @@ export default function ManagedDemoHomeDetailPage() {
                   icon={statusIcon[home.status]}
                   items={[
                     { label: "Expiry", value: formatDate(home.expires_at) },
-                    { label: "Access", value: home.access === "family" ? "Family" : "Free" },
+                    { label: "Access", value: ACCESS_LABELS[home.access] },
                   ]}
                 >
                   <p className="cc-status-card-note">
-                    This is a managed demo/test Home — its data is fixture-owned and may be reset by a
-                    Refresh / Reset.
+                    {home.showcase
+                      ? "This is a managed showcase Home — its data is fictional and may be restored by Reset Showcase Data."
+                      : "This is a managed demo/test Home — its data is fixture-owned and may be reset by a Refresh / Reset."}
                   </p>
                 </CcStatusCard>
               </CcCard>
             </CcColumns>
+
+            {home.showcase && (
+              <CcCard
+                title="Showcase data"
+                description="The fictional Parker household seeded for screenshots and product demos."
+                icon={LayoutGrid}
+              >
+                <CcMetadataGrid columns="fixed-2">
+                  <CcMetadataItem label="Content">
+                    <CcBadge tone={home.showcase_populated ? "success" : "neutral"}>
+                      {home.showcase_populated ? "Populated" : "Clean Home"}
+                    </CcBadge>
+                  </CcMetadataItem>
+                  <CcMetadataItem label="Dates">
+                    {home.showcase_date_mode === "pinned"
+                      ? `Pinned to ${formatReferenceDate(home.showcase_reference_date)}`
+                      : `Rolling — last seeded ${formatReferenceDate(home.showcase_reference_date)}`}
+                  </CcMetadataItem>
+                  {home.showcase_counts &&
+                    COUNT_LABELS.filter((row) => !row.ultimate || home.access === "ultimate").map((row) => (
+                      <CcMetadataItem key={row.key} label={row.label}>
+                        {home.showcase_counts?.[row.key] ?? 0}
+                      </CcMetadataItem>
+                    ))}
+                </CcMetadataGrid>
+              </CcCard>
+            )}
 
             <CcCard
               title="Lifecycle"
@@ -444,6 +536,53 @@ export default function ManagedDemoHomeDetailPage() {
         confirmLabel="Refresh / Reset"
         variant="destructive"
         onConfirm={refresh}
+      />
+
+      <CcConfirmDialog
+        open={showcaseOpen}
+        onClose={() => setShowcaseOpen(false)}
+        title="Reset Showcase Data"
+        description="This permanently replaces every record in this Home — events, Nudges, recipes, lists, wishlists, Budget, vehicles, household members and their images — with the original curated showcase. Changes made during demos or testing are lost. The Home, the sign-in account, its password and Home-level settings are kept."
+        extraFields={
+          <fieldset className="cc-showcase-options">
+            <legend>Dates</legend>
+            <label>
+              <input
+                type="radio"
+                name="date_mode"
+                value="rolling"
+                checked={showcaseMode === "rolling"}
+                onChange={() => setShowcaseMode("rolling")}
+              />{" "}
+              Rolling — relative to today
+            </label>
+            <label>
+              <input
+                type="radio"
+                name="date_mode"
+                value="pinned"
+                checked={showcaseMode === "pinned"}
+                onChange={() => setShowcaseMode("pinned")}
+              />{" "}
+              Pinned to a reference date (screenshot mode)
+            </label>
+            {showcaseMode === "pinned" && (
+              <CcField label="Reference date" help="Resetting again with the same date reproduces identical content.">
+                <input
+                  type="date"
+                  name="reference_date"
+                  value={showcaseDate}
+                  onChange={(event) => setShowcaseDate(event.target.value)}
+                  required
+                />
+              </CcField>
+            )}
+            {showcaseError && <CcNotice tone="error">{showcaseError}</CcNotice>}
+          </fieldset>
+        }
+        confirmLabel="Reset Showcase Data"
+        variant="destructive"
+        onConfirm={resetShowcase}
       />
 
       <CcConfirmDialog

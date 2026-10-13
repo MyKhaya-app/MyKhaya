@@ -65,7 +65,11 @@ def _classification_clause(
             ),
         )
     types = {
-        UsageClassification.demo: (ManagedDemoType.demo, ManagedDemoType.free_demo),
+        UsageClassification.demo: (
+            ManagedDemoType.demo,
+            ManagedDemoType.ultimate_demo,
+            ManagedDemoType.free_demo,
+        ),
         UsageClassification.test: (ManagedDemoType.qa_test,),
         UsageClassification.apple_review: (ManagedDemoType.apple_review,),
     }[classification]

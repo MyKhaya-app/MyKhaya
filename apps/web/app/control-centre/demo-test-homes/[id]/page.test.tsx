@@ -205,6 +205,82 @@ describe("managed Demo/Test Home detail", () => {
     expect(post.mock.calls.filter((call) => call[0] === "/demo-test-homes/1/enable")).toHaveLength(2);
   });
 
+  describe("showcase Homes", () => {
+    const showcaseHome = {
+      ...enabledHome,
+      display_name: "The Parker Family",
+      fixture_type: "ultimate_demo" as const,
+      access: "ultimate" as const,
+      showcase: true,
+      showcase_populated: true,
+      showcase_date_mode: "pinned" as const,
+      showcase_reference_date: "2026-10-14",
+      showcase_counts: { members: 4, calendar_events: 36, meals: 20, budget_transactions: 93, vehicles: 3 },
+    };
+
+    beforeEach(() => {
+      get.mockResolvedValue([showcaseHome]);
+    });
+
+    it("shows showcase metadata and content volumes, and replaces Refresh with Reset Showcase Data", async () => {
+      render(<DetailPage />);
+      expect(await screen.findByRole("heading", { name: /The Parker Family/ })).toBeInTheDocument();
+      expect(screen.getAllByText("Ultimate").length).toBeGreaterThan(0);
+      expect(screen.getByText("Populated")).toBeInTheDocument();
+      expect(screen.getByText(/Pinned to/)).toBeInTheDocument();
+      expect(screen.getByText("Budget transactions")).toBeInTheDocument();
+      expect(screen.getByText("93")).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Reset Showcase Data" })).toBeInTheDocument();
+      expect(screen.queryByRole("button", { name: "Refresh / Reset" })).not.toBeInTheDocument();
+    });
+
+    it("hides Ultimate-only volumes for a Family showcase", async () => {
+      get.mockResolvedValue([{ ...showcaseHome, fixture_type: "demo", access: "family" }]);
+      render(<DetailPage />);
+      expect(await screen.findByText("Recipes")).toBeInTheDocument();
+      expect(screen.queryByText("Budget transactions")).not.toBeInTheDocument();
+      expect(screen.queryByText("Vehicles")).not.toBeInTheDocument();
+    });
+
+    it("warns, requires a reason and resets with the pinned reference date", async () => {
+      post.mockResolvedValue(showcaseHome);
+      render(<DetailPage />);
+      await userEvent.click(await screen.findByRole("button", { name: "Reset Showcase Data" }));
+      const dialog = await findDialog(/Reset Showcase Data/i);
+      expect(within(dialog).getByText(/permanently replaces every record in this Home/)).toBeInTheDocument();
+      expect(within(dialog).getByLabelText(/Pinned to a reference date/)).toBeChecked();
+      expect(within(dialog).getByLabelText("Reference date")).toHaveValue("2026-10-14");
+      await userEvent.type(within(dialog).getByLabelText(/reason for this administrative action/i), "Screenshot session reset");
+      await userEvent.click(within(dialog).getByRole("button", { name: "Reset Showcase Data" }));
+      await waitFor(() =>
+        expect(post).toHaveBeenCalledWith("/demo-test-homes/1/showcase-reset", {
+          reference_date: "2026-10-14",
+          reason: "Screenshot session reset",
+          confirmed: true,
+        }),
+      );
+      expect(post).not.toHaveBeenCalledWith("/demo-test-homes/1/refresh", expect.anything());
+    });
+
+    it("sends no reference date when rolling dates are chosen", async () => {
+      post.mockResolvedValue(showcaseHome);
+      render(<DetailPage />);
+      await userEvent.click(await screen.findByRole("button", { name: "Reset Showcase Data" }));
+      const dialog = await findDialog(/Reset Showcase Data/i);
+      await userEvent.click(within(dialog).getByLabelText(/Rolling/));
+      expect(within(dialog).queryByLabelText("Reference date")).not.toBeInTheDocument();
+      await userEvent.type(within(dialog).getByLabelText(/reason for this administrative action/i), "Weekly demo refresh");
+      await userEvent.click(within(dialog).getByRole("button", { name: "Reset Showcase Data" }));
+      await waitFor(() =>
+        expect(post).toHaveBeenCalledWith("/demo-test-homes/1/showcase-reset", {
+          reference_date: null,
+          reason: "Weekly demo refresh",
+          confirmed: true,
+        }),
+      );
+    });
+  });
+
   it("shows a safe error notice when an action fails", async () => {
     post.mockRejectedValueOnce(new Error("Managed Home not found"));
     render(<DetailPage />);
