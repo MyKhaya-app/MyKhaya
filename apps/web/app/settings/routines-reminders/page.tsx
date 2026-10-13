@@ -6,6 +6,7 @@ import Link from "next/link";
 import {
   Bell,
   CalendarCheck2,
+  Car,
   ClipboardCheck,
   ChevronDown,
   ChevronRight,
@@ -40,6 +41,7 @@ import { useActiveHome } from "@/components/use-active-home";
 import { dueCountdownSuffix, routineDueLabel } from "@/app/home/routine-utils";
 import { syncWidgetSnapshot } from "@/components/widget-bridge";
 import { Toast } from "@/components/toast";
+import { formatPlate, formatShortDate, vehicleName } from "@/app/driveway/vehicle-display";
 
 // Routines and Reminders stay separate backend domains (separate models,
 // APIs, completion semantics — see docs/architecture/notification-engine.md)
@@ -76,8 +78,18 @@ function todayIso(): string {
   return new Date().toISOString().slice(0, 10);
 }
 
+// Items due further out than this go in the collapsed "Later" section, so a
+// reminder months away (an MOT nudge) is findable without crowding today.
+const LATER_AFTER_DAYS = 60;
+
+function addDaysIso(iso: string, days: number): string {
+  const date = new Date(`${iso}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() + days);
+  return date.toISOString().slice(0, 10);
+}
+
 type TypeFilter = "all" | "routines" | "reminders" | "todos";
-type Section = "overdue" | "today" | "upcoming" | "completed";
+type Section = "overdue" | "today" | "upcoming" | "later" | "completed";
 
 type UiItem =
   | { kind: "routine"; id: string; data: Routine }
@@ -91,7 +103,38 @@ function sectionFor(item: UiItem, today: string): Section | null {
   if (!dueDate) return null;
   if (dueDate < today) return "overdue";
   if (dueDate === today) return "today";
+  if (dueDate > addDaysIso(today, LATER_AFTER_DAYS)) return "later";
   return "upcoming";
+}
+
+type MotPlanNudge = { kind: "reminder"; id: string; data: Reminder & { vehicle: NonNullable<Reminder["vehicle"]> } };
+
+// A reminder that belongs to an MOT nudge plan (Driveway): edited on the MOT
+// reminder screen, and deleted with a choice of one day or the whole plan.
+function isMotPlanNudge(item: UiItem): item is MotPlanNudge {
+  return item.kind === "reminder" && item.data.vehicle?.mot_plan_lead_days != null;
+}
+
+// "Reminder · Driveway · BMW i4 (AP22 OOJ) · 26 Jul 2027" for a vehicle
+// reminder, with the vehicle linking to its page; the usual
+// kind/category/scope line for everything else.
+function MetaLine({ item }: { item: UiItem }) {
+  if (item.kind === "reminder" && item.data.vehicle) {
+    const vehicle = item.data.vehicle;
+    const plate = formatPlate(vehicle.registration);
+    const date = formatShortDate(item.data.next_occurrence_date ?? item.data.due_date);
+    return (
+      <>
+        Reminder · {item.data.category?.name ?? "Driveway"} ·{" "}
+        <Link className="rr-meta-link" href={`/driveway/${vehicle.vehicle_id}`}>
+          {vehicleName(vehicle)}
+          {plate ? ` (${plate})` : ""}
+        </Link>
+        {date ? ` · ${date}` : ""}
+      </>
+    );
+  }
+  return <>{kindScopeLabel(item)}</>;
 }
 
 function compareItems(a: UiItem, b: UiItem): number {
@@ -205,6 +248,8 @@ export default function RoutinesRemindersPage() {
   const [showCategoryManager, setShowCategoryManager] = useState(false);
   const [editingCategoryId, setEditingCategoryId] = useState<string | null>(null);
   const [categoryDraft, setCategoryDraft] = useState("");
+  const [planDeleteTarget, setPlanDeleteTarget] = useState<Reminder | null>(null);
+  const [planDeleteBusy, setPlanDeleteBusy] = useState(false);
 
   const dismissMessage = useCallback(() => setMessage(""), []);
 
@@ -487,6 +532,24 @@ export default function RoutinesRemindersPage() {
     }
   }
 
+  async function removeMotNudge(reminder: Reminder, whole: boolean) {
+    if (!activeHomeId || !reminder.vehicle) return;
+    setPlanDeleteBusy(true);
+    setError("");
+    setMessage("");
+    try {
+      if (whole) await api.deleteVehicleMotNudges(activeHomeId, reminder.vehicle.vehicle_id);
+      else await api.deleteReminder(activeHomeId, reminder.id);
+      setMessage(whole ? "MOT reminder plan removed." : "Reminder deleted.");
+      setPlanDeleteTarget(null);
+      await loadReminders();
+    } catch (cause) {
+      setError((cause as Error).message);
+    } finally {
+      setPlanDeleteBusy(false);
+    }
+  }
+
   async function removeTodo(todo: Todo) {
     if (!activeHomeId) return;
     if (!window.confirm(`Delete "${todo.title}"? This cannot be undone.`)) return;
@@ -657,6 +720,14 @@ export default function RoutinesRemindersPage() {
     [todoCategories, allItems],
   );
 
+  // A system category (Driveway) is only listed once it holds something,
+  // and is never offered when choosing a category by hand.
+  const visibleCategories = useMemo(
+    () => todoCategories.filter((category) => !category.system || (categoryCounts.get(category.id) ?? 0) > 0),
+    [todoCategories, categoryCounts],
+  );
+  const assignableCategories = useMemo(() => todoCategories.filter((category) => !category.system), [todoCategories]);
+
   // Client-side only, on top of the type/scope filters above — the data is
   // already loaded in full for this Home, so there's no need for a backend
   // search endpoint here.
@@ -666,7 +737,7 @@ export default function RoutinesRemindersPage() {
   );
 
   const sections = useMemo(() => {
-    const groups: Record<Section, UiItem[]> = { overdue: [], today: [], upcoming: [], completed: [] };
+    const groups: Record<Section, UiItem[]> = { overdue: [], today: [], upcoming: [], later: [], completed: [] };
     for (const item of searchFiltered) {
       const section = sectionFor(item, today);
       if (section) groups[section].push(item);
@@ -676,6 +747,10 @@ export default function RoutinesRemindersPage() {
   }, [searchFiltered, today]);
 
   function openEditItem(item: UiItem) {
+    if (isMotPlanNudge(item)) {
+      router.push(`/driveway/${item.data.vehicle.vehicle_id}/mot/reminder?from=nudges`);
+      return;
+    }
     if (item.kind === "routine") openEditRoutine(item.data);
     else if (item.kind === "reminder") openEditReminder(item.data);
     else openEditTodo(item.data);
@@ -712,7 +787,7 @@ export default function RoutinesRemindersPage() {
               <p className="text-wrap-anywhere">{item.data.description}</p>
             )}
             <small className="rr-card-meta">
-              {kindScopeLabel(item)}
+              <MetaLine item={item} />
               {item.kind !== "todo" && !item.data.enabled ? " · Disabled" : ""}
             </small>
           </div>
@@ -729,7 +804,9 @@ export default function RoutinesRemindersPage() {
               onClick={() =>
                 item.kind === "routine"
                   ? removeRoutine(item.data)
-                  : item.kind === "reminder"
+                  : isMotPlanNudge(item)
+                    ? setPlanDeleteTarget(item.data)
+                    : item.kind === "reminder"
                     ? removeReminder(item.data)
                     : removeTodo(item.data)
               }
@@ -747,7 +824,17 @@ export default function RoutinesRemindersPage() {
   // (same openEditItem the Edit button above uses, not a second flow)
   // rather than its own action strip, with a chevron affordance only when
   // there's actually something to tap into.
+  // Called through Array.map by renderGroupedItems, so the eyebrow can't be
+  // a second positional argument (map would pass the index there).
   function renderUpcomingCard(item: UiItem) {
+    return renderCompactCard(item, "Upcoming");
+  }
+
+  function renderLaterCard(item: UiItem) {
+    return renderCompactCard(item, "Later");
+  }
+
+  function renderCompactCard(item: UiItem, eyebrow: string) {
     const canManage = item.kind === "routine" ? canManageRoutines : canManageReminders;
     const Icon = itemIcon(item);
     const due = dueLine(item);
@@ -757,10 +844,10 @@ export default function RoutinesRemindersPage() {
           <Icon size={17} />
         </span>
         <span className="rr-upcoming-body">
-          <span className="rr-upcoming-eyebrow">Upcoming</span>
+          <span className="rr-upcoming-eyebrow">{eyebrow}</span>
           <strong className="rr-upcoming-title">{item.data.title}</strong>
           <small className="rr-upcoming-meta">
-            {kindScopeLabel(item)}
+            <MetaLine item={item} />
             {item.kind !== "todo" && !item.data.enabled ? " · Disabled" : ""}
           </small>
           {due && (
@@ -782,6 +869,34 @@ export default function RoutinesRemindersPage() {
         </div>
       );
     }
+    if (item.kind === "reminder" && item.data.vehicle) {
+      // The meta line links to the vehicle, and a link can not sit inside a
+      // button, so this card edits through its own button instead.
+      return (
+        <div className="rr-upcoming-card rr-upcoming-card-split" key={item.id}>
+          <span className="rr-upcoming-icon" aria-hidden="true">
+            <Icon size={17} />
+          </span>
+          <span className="rr-upcoming-body">
+            <span className="rr-upcoming-eyebrow">{eyebrow}</span>
+            <strong className="rr-upcoming-title">{item.data.title}</strong>
+            <small className="rr-upcoming-meta">
+              <MetaLine item={item} />
+              {!item.data.enabled ? " · Disabled" : ""}
+            </small>
+            {due && (
+              <span className="rr-upcoming-due">
+                <Clock size={12} aria-hidden="true" />
+                {due}
+              </span>
+            )}
+          </span>
+          <button type="button" className="rr-upcoming-edit" aria-label={`Edit ${item.data.title}`} onClick={() => openEditItem(item)}>
+            <ChevronRight size={18} className="rr-upcoming-chevron" aria-hidden="true" />
+          </button>
+        </div>
+      );
+    }
     return (
       <button
         type="button"
@@ -798,6 +913,7 @@ export default function RoutinesRemindersPage() {
     overdue: "Overdue",
     today: "Today",
     upcoming: "Upcoming",
+    later: "Later",
     completed: "Completed",
   };
 
@@ -808,7 +924,7 @@ export default function RoutinesRemindersPage() {
         {categoryGroups(items).map(([name, group]) => (
           <div className="rr-category-group" key={name}>
             <div className="rr-category-heading">
-              <Tag size={17} aria-hidden="true" />
+              {group[0]?.data.category?.system ? <Car size={17} aria-hidden="true" /> : <Tag size={17} aria-hidden="true" />}
               <strong>{name}</strong>
               <span className="rr-category-heading-line" aria-hidden="true" />
               <span className="rr-category-heading-count">{group.length} {group.length === 1 ? "item" : "items"}</span>
@@ -997,6 +1113,17 @@ export default function RoutinesRemindersPage() {
           </section>
         )}
 
+        {sections.later.length > 0 && (
+          <details className="rr-later" open={searchQuery.trim() ? true : undefined}>
+            <summary className="rr-later-summary">
+              <h2 className="rr-section-heading">{sectionTitles.later}</h2>
+              <span className="rr-later-count">{sections.later.length}</span>
+              <ChevronDown size={16} aria-hidden="true" />
+            </summary>
+            {renderGroupedItems(sections.later, renderLaterCard)}
+          </details>
+        )}
+
         {searchFiltered.length === 0 && allItems.length > 0 && (
           <div className="rr-empty">
             <span className="rr-empty-icon" aria-hidden="true">
@@ -1078,11 +1205,11 @@ export default function RoutinesRemindersPage() {
                 </button>
               )}
             </div>
-            {todoCategories.length === 0 ? (
+            {visibleCategories.length === 0 ? (
               <p className="quiet-state">No categories yet.</p>
             ) : (
               <ul className="rr-categories-panel-list">
-                {todoCategories.map((category) => (
+                {visibleCategories.map((category) => (
                   <li key={category.id}>
                     <button
                       type="button"
@@ -1091,7 +1218,10 @@ export default function RoutinesRemindersPage() {
                         setSelectedCategoryId(selectedCategoryId === category.id ? null : category.id)
                       }
                     >
-                      <span>{category.name}</span>
+                      <span className="rr-category-name">
+                        {category.system && <Car size={15} aria-hidden="true" />}
+                        {category.name}
+                      </span>
                       <span className="rr-categories-panel-count">{categoryCounts.get(category.id) ?? 0}</span>
                     </button>
                   </li>
@@ -1175,6 +1305,31 @@ export default function RoutinesRemindersPage() {
         )}
       </div>
 
+      {planDeleteTarget && (
+        <BottomSheet
+          title="Delete MOT reminder?"
+          onDismiss={() => {
+            if (!planDeleteBusy) setPlanDeleteTarget(null);
+          }}
+        >
+          <p className="muted">
+            “{planDeleteTarget.title}” is part of the MOT reminder plan for{" "}
+            {planDeleteTarget.vehicle ? vehicleName(planDeleteTarget.vehicle) : "this vehicle"}.
+          </p>
+          <div className="sheet-actions sheet-actions-stacked">
+            <button type="button" className="secondary" disabled={planDeleteBusy} onClick={() => void removeMotNudge(planDeleteTarget, false)}>
+              Remove this reminder
+            </button>
+            <button type="button" className="danger" disabled={planDeleteBusy} onClick={() => void removeMotNudge(planDeleteTarget, true)}>
+              Remove MOT reminder plan
+            </button>
+            <button type="button" className="tertiary" disabled={planDeleteBusy} onClick={() => setPlanDeleteTarget(null)}>
+              Cancel
+            </button>
+          </div>
+        </BottomSheet>
+      )}
+
       {showCategoryPicker && (
         <BottomSheet title="Choose category" onDismiss={() => setShowCategoryPicker(false)}>
           <div className="rr-category-picker" role="group" aria-label="Choose category">
@@ -1185,13 +1340,14 @@ export default function RoutinesRemindersPage() {
             >
               All categories
             </button>
-            {todoCategories.map((category) => (
+            {visibleCategories.map((category) => (
               <button
                 type="button"
                 className={`rr-category-option${selectedCategoryId === category.id ? " rr-category-option-active" : ""}`}
                 key={category.id}
                 onClick={() => { setSelectedCategoryId(category.id); setShowCategoryPicker(false); }}
               >
+                {category.system && <Car size={15} aria-hidden="true" />}
                 {category.name}
               </button>
             ))}
@@ -1218,7 +1374,14 @@ export default function RoutinesRemindersPage() {
               </button>
             </form>
             <div className="rr-category-manager-list" aria-label="Existing categories">
-              {todoCategories.map((category) => (
+              {visibleCategories.map((category) => category.system ? (
+                <div className="rr-category-manager-row" key={category.id}>
+                  <strong className="rr-category-name">
+                    <Car size={15} aria-hidden="true" /> {category.name}
+                  </strong>
+                  <span className="muted rr-category-system-note">Managed by Driveway</span>
+                </div>
+              ) : (
                 <div className="rr-category-manager-row" key={category.id}>
                   {editingCategoryId === category.id ? (
                     <input
@@ -1246,7 +1409,7 @@ export default function RoutinesRemindersPage() {
                   </div>
                 </div>
               ))}
-              {todoCategories.length === 0 && <p className="muted">No categories yet.</p>}
+              {visibleCategories.length === 0 && <p className="muted">No categories yet.</p>}
             </div>
           </div>
         </BottomSheet>
@@ -1303,7 +1466,7 @@ export default function RoutinesRemindersPage() {
               Category (optional)
               <select name="category_id" defaultValue={editingRoutine?.category?.id ?? ""}>
                 <option value="">No category</option>
-                {todoCategories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
+                {assignableCategories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
               </select>
             </label>
             {!householdRoutinesEnabled && (
@@ -1439,9 +1602,16 @@ export default function RoutinesRemindersPage() {
             </label>
             <label>
               Category (optional)
-              <select name="category_id" defaultValue={editingReminder?.category?.id ?? ""}>
+              <select
+                name="category_id"
+                defaultValue={editingReminder?.category?.id ?? ""}
+                disabled={Boolean(editingReminder?.category?.system)}
+              >
+                {editingReminder?.category?.system && (
+                  <option value={editingReminder.category.id}>{editingReminder.category.name}</option>
+                )}
                 <option value="">No category</option>
-                {todoCategories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
+                {assignableCategories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
               </select>
             </label>
           </fieldset>
@@ -1524,7 +1694,7 @@ export default function RoutinesRemindersPage() {
                 Category (optional)
                 <select name="category_id" defaultValue={editingTodo?.category?.id ?? ""}>
                   <option value="">No category</option>
-                  {todoCategories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
+                  {assignableCategories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
                 </select>
               </label>
               <label>

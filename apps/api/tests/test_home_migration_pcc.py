@@ -1,6 +1,8 @@
 import io
+import os
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
+from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 import pytest
@@ -19,9 +21,12 @@ from test_platform_control_centre import (
 from mykhaya.config import get_settings
 from mykhaya.db import SessionFactory
 from mykhaya.home_migration_pcc import (
+    PACKAGE_STORE,
+    discard_package_file,
     migration_enabled,
     package_checksum,
     package_summary,
+    purge_expired_packages,
     store_package,
 )
 from mykhaya.main import app
@@ -241,3 +246,216 @@ async def test_setting_is_enforced_through_the_authenticated_pcc_api(
             elif row is not None:
                 row.value = previous_value
             await db.commit()
+
+
+# --- Phase 2A′: download gating and package file lifecycle -------------------
+
+
+def _minimal_package(migration_id: uuid.UUID) -> dict:
+    package = {
+        "format": "mykhaya-home-migration",
+        "version": 1,
+        "migration_id": str(migration_id),
+        "source_environment": "development",
+        "source_home_id": str(uuid.uuid4()),
+        "exported_at": "2026-01-01T00:00:00+00:00",
+        "home": {"id": "22222222-2222-2222-2222-222222222222", "name": "Test Home"},
+        "members": [{"id": str(uuid.uuid4()), "email": "redacted@example.test"}],
+        "data": {"todos": []},
+        "files": [],
+    }
+    package["integrity_sha256"] = package_checksum(package)
+    return package
+
+
+async def _store(settings, created_by: uuid.UUID) -> dict:
+    async with SessionFactory() as db:
+        return await store_package(
+            db, settings, _minimal_package(uuid.uuid4()), created_by=created_by
+        )
+
+
+async def _delete_package_rows(ids: list[str]) -> None:
+    async with SessionFactory() as db:
+        await db.execute(
+            PACKAGE_STORE.delete().where(PACKAGE_STORE.c.id.in_([uuid.UUID(i) for i in ids]))
+        )
+        await db.commit()
+
+
+async def _allow_migration(db, settings) -> None:
+    return None
+
+
+@pytest.mark.asyncio
+async def test_package_download_requires_the_development_environment(
+    admin_client, admin_factory
+) -> None:
+    admin = await admin_factory()
+    await login(admin_client, admin)
+    response = await admin_client.get(
+        f"/api/v1/platform/home-migration/packages/{uuid.uuid4()}/download"
+    )
+    assert response.status_code == 409
+    assert "available only in development" in response.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_package_download_requires_home_migration_enabled(
+    admin_client, admin_factory, monkeypatch
+) -> None:
+    monkeypatch.setattr(
+        platform_router, "_home_migration_environment", lambda settings, expected: None
+    )
+
+    async def disabled(db, settings) -> None:
+        raise HTTPException(409, "Home Migration is disabled.")
+
+    monkeypatch.setattr(platform_router, "_home_migration_guard", disabled)
+    admin = await admin_factory()
+    await login(admin_client, admin)
+    response = await admin_client.get(
+        f"/api/v1/platform/home-migration/packages/{uuid.uuid4()}/download"
+    )
+    assert response.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_package_download_requires_recent_authentication_and_is_audited(
+    admin_client, admin_factory, monkeypatch, tmp_path
+) -> None:
+    monkeypatch.setattr(
+        platform_router, "_home_migration_environment", lambda settings, expected: None
+    )
+    monkeypatch.setattr(platform_router, "_home_migration_guard", _allow_migration)
+    settings = get_settings().model_copy(update={"home_migration_storage_dir": str(tmp_path)})
+    app.dependency_overrides[get_settings] = lambda: settings
+    admin = await admin_factory()
+    created: list[str] = []
+    try:
+        await login(admin_client, admin)
+        row = await _store(settings, admin.id)
+        created.append(row["id"])
+        url = f"/api/v1/platform/home-migration/packages/{row['id']}/download"
+
+        downloaded = await admin_client.get(url)
+        assert downloaded.status_code == 200, downloaded.text
+        assert downloaded.headers["cache-control"] == "no-store"
+        assert downloaded.json()["migration_id"] == row["migration_id"]
+        async with SessionFactory() as db:
+            event = await db.scalar(
+                select(AdministrativeAuditEvent).where(
+                    AdministrativeAuditEvent.administrator_id == admin.id,
+                    AdministrativeAuditEvent.action == "home_migration.package_downloaded",
+                )
+            )
+        assert event is not None
+        assert event.new_values == {"package_checksum": row["package_checksum"]}
+        assert "redacted@example.test" not in str(event.new_values)
+
+        # Stale authentication: the same session can no longer download.
+        async with SessionFactory() as db:
+            await db.execute(
+                PlatformSession.__table__.update()
+                .where(PlatformSession.administrator_id == admin.id)
+                .values(authenticated_at=datetime.now(UTC) - timedelta(hours=2))
+            )
+            await db.commit()
+        stale = await admin_client.get(url)
+        assert stale.status_code == 403
+        assert stale.json()["detail"] == "Recent administrator authentication required."
+    finally:
+        app.dependency_overrides.pop(get_settings, None)
+        await _delete_package_rows(created)
+
+
+@pytest.mark.asyncio
+async def test_purge_removes_completed_and_expired_packages_but_keeps_fresh_ones(
+    tmp_path,
+) -> None:
+    settings = get_settings().model_copy(
+        update={"home_migration_storage_dir": str(tmp_path), "home_migration_package_ttl_hours": 24}
+    )
+    creator = uuid.uuid4()
+    fresh = await _store(settings, creator)
+    stale = await _store(settings, creator)
+    completed = await _store(settings, creator)
+    ids = [fresh["id"], stale["id"], completed["id"]]
+    now = datetime.now(UTC)
+    async with SessionFactory() as db:
+        await db.execute(
+            PACKAGE_STORE.update()
+            .where(PACKAGE_STORE.c.id == uuid.UUID(stale["id"]))
+            .values(created_at=now - timedelta(hours=25))
+        )
+        await db.execute(
+            PACKAGE_STORE.update()
+            .where(PACKAGE_STORE.c.id == uuid.UUID(completed["id"]))
+            .values(status="completed", completed_at=now)
+        )
+        await db.commit()
+    fresh_orphan = tmp_path / f"{uuid.uuid4()}.json"
+    fresh_orphan.write_text("{}", encoding="utf-8")
+    old_orphan = tmp_path / f"{uuid.uuid4()}.json"
+    old_orphan.write_text("{}", encoding="utf-8")
+    old_time = (now - timedelta(hours=30)).timestamp()
+    os.utime(old_orphan, (old_time, old_time))
+    unrelated = tmp_path / "keep.txt"
+    unrelated.write_text("not a package", encoding="utf-8")
+    try:
+        async with SessionFactory() as db:
+            result = await purge_expired_packages(db, settings, now=now)
+            await db.commit()
+        assert (result.removed_completed, result.removed_expired, result.removed_orphaned) == (
+            1,
+            1,
+            1,
+        )
+        assert (tmp_path / fresh["storage_key"]).is_file()
+        assert not (tmp_path / stale["storage_key"]).exists()
+        assert not (tmp_path / completed["storage_key"]).exists()
+        assert fresh_orphan.is_file()
+        assert not old_orphan.exists()
+        assert unrelated.is_file()
+        async with SessionFactory() as db:
+            statuses = {
+                str(row.id): row.status
+                for row in await db.execute(
+                    select(PACKAGE_STORE.c.id, PACKAGE_STORE.c.status).where(
+                        PACKAGE_STORE.c.id.in_([uuid.UUID(i) for i in ids])
+                    )
+                )
+            }
+        # Rows survive as the audit trail; only the expired one changes state.
+        assert statuses == {
+            fresh["id"]: "uploaded",
+            stale["id"]: "expired",
+            completed["id"]: "completed",
+        }
+        # Idempotent: a second pass has nothing left to do.
+        async with SessionFactory() as db:
+            again = await purge_expired_packages(db, settings, now=now)
+        assert again.removed == 0
+    finally:
+        await _delete_package_rows(ids)
+
+
+@pytest.mark.asyncio
+async def test_purge_is_a_no_op_when_storage_is_absent(tmp_path) -> None:
+    settings = get_settings().model_copy(
+        update={"home_migration_storage_dir": str(tmp_path / "missing")}
+    )
+    async with SessionFactory() as db:
+        result = await purge_expired_packages(db, settings)
+    assert result.removed == 0 and result.scanned == 0
+
+
+@pytest.mark.asyncio
+async def test_discard_package_file_is_best_effort(tmp_path) -> None:
+    settings = get_settings().model_copy(update={"home_migration_storage_dir": str(tmp_path)})
+    target = tmp_path / "abc.json"
+    target.write_text("{}", encoding="utf-8")
+    await discard_package_file(settings, "abc.json")
+    assert not target.exists()
+    await discard_package_file(settings, "abc.json")  # already gone: no error
+    await discard_package_file(settings, "../escape.json")  # rejected key: logged, no error

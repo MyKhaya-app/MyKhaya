@@ -2,13 +2,17 @@ import asyncio
 import json
 from datetime import UTC, date, datetime, timedelta
 
+import structlog
 from redis.asyncio import Redis
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.calendar_highlights import sync_due_holiday_sources
-from mykhaya.config import get_settings
+from mykhaya.config import Settings, get_settings
+from mykhaya.crypto.config import validate_sensitive_key_configuration
 from mykhaya.db import SessionFactory
 from mykhaya.family_retention import scan_family_retention
+from mykhaya.home_migration_pcc import purge_expired_packages
 from mykhaya.managed_demo_homes import ManagedDemoService
 from mykhaya.models import OperationalHeartbeat, OutboxEvent, PlatformSetting
 from mykhaya.notifications.birthdays import scan_due_birthdays
@@ -33,12 +37,31 @@ from mykhaya.usage import aggregate_recent_usage, purge_expired_usage_events
 # worker.py). If the worker crashes mid-job, the lease simply expires and the
 # row becomes selectable again without needing the worker to release it.
 LEASE_SECONDS = 120
+log = structlog.get_logger()
 _last_usage_maintenance_date: date | None = None
+# Home Migration package files are purged at most hourly (bounded work per
+# pass — see mykhaya.home_migration_pcc.purge_expired_packages).
+MIGRATION_PURGE_INTERVAL = timedelta(hours=1)
+_last_migration_purge_at: datetime | None = None
+
+
+async def _purge_migration_packages(db: AsyncSession, settings: Settings) -> None:
+    global _last_migration_purge_at
+    now = datetime.now(UTC)
+    if _last_migration_purge_at and now - _last_migration_purge_at < MIGRATION_PURGE_INTERVAL:
+        return
+    _last_migration_purge_at = now
+    try:
+        await purge_expired_packages(db, settings, now=now)
+    except Exception as exc:  # a storage problem must never stop notification scans
+        await db.rollback()
+        log.warning("home_migration.package_purge_pass_failed", error=type(exc).__name__)
 
 
 async def run() -> None:
     global _last_usage_maintenance_date
     settings = get_settings()
+    validate_sensitive_key_configuration(settings, service="scheduler")
 
     async def load_syslog_config() -> SyslogConfig:
         async with SessionFactory() as db:
@@ -76,6 +99,10 @@ async def run() -> None:
                     await aggregate_recent_usage(db)
                     _last_usage_maintenance_date = maintenance_date
                 await db.commit()
+            # Own session: a purge failure's rollback must never discard the
+            # scan work committed above.
+            async with SessionFactory() as db:
+                await _purge_migration_packages(db, settings)
             async with SessionFactory() as db:
                 rows = (
                     await db.scalars(

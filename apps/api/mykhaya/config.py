@@ -39,6 +39,30 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://mykhaya:mykhaya@postgres:5432/mykhaya"
     redis_url: str = "redis://redis:6379/0"
     secret_key: SecretStr = Field(min_length=32)
+    # Sensitive-field keyrings (mykhaya.crypto) — deliberately independent of
+    # secret_key so rotating the session secret can never make encrypted
+    # household data unreadable. Production supplies them as read-only files
+    # mounted into api/worker/scheduler only; the *_KEYS environment variables
+    # are a development/test fallback and are rejected in production (see
+    # reject_environment_supplied_field_keys). See mykhaya.crypto.config and
+    # docs/operations/sensitive-field-keys.md.
+    field_encryption_keys_file: str = "/run/secrets/mykhaya/field-encryption-keys.json"
+    blind_index_keys_file: str = "/run/secrets/mykhaya/blind-index-keys.json"
+    field_encryption_keys: SecretStr | None = None
+    blind_index_keys: SecretStr | None = None
+    # Phase 2A: nothing encrypts with these keys yet, so unprovisioned keyrings
+    # are allowed by default. Set true to make a missing keyring fatal at startup.
+    sensitive_field_keys_required: bool = False
+    # Phase 2B: also write Driveway registration/VIN as ciphertext alongside
+    # the authoritative plaintext columns. Off by default; when on, a vehicle
+    # write fails (rather than writing plaintext only) if no field-encryption
+    # keyring is usable. See mykhaya.driveway_sensitive.
+    driveway_field_encryption_write: bool = False
+    # Phase 2D: read Driveway registration/VIN ciphertext-first (decrypting
+    # with the field keyring), falling back to plaintext ONLY where the
+    # ciphertext column is NULL. Independent of the write flag. Off by
+    # default: reads then use plaintext exactly as before.
+    driveway_field_encryption_read: bool = False
     public_web_url: str = "http://localhost:8080"
     admin_url: str = "http://admin.localhost:8080"
     status_url: str = "http://status.localhost:8080"
@@ -166,6 +190,31 @@ class Settings(BaseSettings):
     )
     dvla_production_api_key: SecretStr | None = None
     driveway_lookup_rate_limit: int = Field(default=10, ge=1, le=100)
+    # Driveway / DVSA MOT History API (OAuth 2.0 client credentials via
+    # Microsoft Entra ID + an X-API-Key header — see
+    # docs/operations/driveway-providers.md). Credentials are deployment
+    # secrets only: never stored in the database, never shown in PCC. The
+    # provider runs only when dvsa_enabled is true, every credential is set,
+    # AND the PCC "driveway_dvsa_enabled" platform setting is on.
+    dvsa_enabled: bool = False
+    # A label for which DVSA credential set is installed (DVSA issues
+    # credentials per registration; there is no separately documented
+    # sandbox base URL). Shown in PCC; never changes which host is called.
+    dvsa_environment: Literal["development", "production"] | None = None
+    dvsa_api_base_url: str = "https://history.mot.api.gov.uk/v1/trade/vehicles"
+    # The full token URL from the DVSA credentials email (it embeds the
+    # Entra tenant ID), e.g. https://login.microsoftonline.com/<tenant>/oauth2/v2.0/token
+    dvsa_token_url: str | None = None
+    dvsa_scope: str = "https://tapi.dvsa.gov.uk/.default"
+    dvsa_client_id: SecretStr | None = None
+    dvsa_client_secret: SecretStr | None = None
+    dvsa_api_key: SecretStr | None = None
+    dvsa_timeout_seconds: float = Field(default=10.0, ge=1.0, le=30.0)
+    # How long persisted MOT data counts as fresh before an "if stale"
+    # refresh (vehicle detail open) calls DVSA again.
+    dvsa_refresh_hours: int = Field(default=24, ge=1, le=24 * 30)
+    # Per-user cap on MOT refresh requests per hour (manual + automatic).
+    dvsa_refresh_rate_limit: int = Field(default=30, ge=1, le=1000)
     vehicle_photo_storage_dir: str = "/data/vehicle-photos"
     vehicle_photo_max_upload_bytes: int = Field(default=20_971_520, ge=1024, le=52_428_800)
     request_body_limit: int = Field(default=1_048_576, ge=1024, le=2_097_152)
@@ -185,6 +234,10 @@ class Settings(BaseSettings):
     # package is the only transport between environments; this path is never
     # accepted from package contents or request parameters.
     home_migration_storage_dir: str = "/data/home-migrations"
+    # How long a package file that hasn't completed an import may stay on
+    # disk before the scheduler purges it (completed imports are removed
+    # immediately). Packages are full plaintext Home copies — keep this short.
+    home_migration_package_ttl_hours: int = Field(default=24, ge=1, le=168)
     # The `le` ceiling here is a schema safety bound, not a production recommendation
     # — it exists so test/CI environments (which register far more accounts per
     # window than a real deployment ever would) and unusual self-hosted deployments
@@ -243,6 +296,44 @@ class Settings(BaseSettings):
             return resolve_app_version()
         return value
 
+    @field_validator(
+        "dvsa_environment",
+        "dvsa_token_url",
+        "dvsa_client_id",
+        "dvsa_client_secret",
+        "dvsa_api_key",
+        mode="before",
+    )
+    @classmethod
+    def resolve_blank_dvsa_values(cls, value: object) -> object:
+        """A present-but-empty DVSA variable means "not configured"."""
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @field_validator("dvsa_token_url")
+    @classmethod
+    def validate_dvsa_token_url(cls, value: str | None) -> str | None:
+        """Credentials are only ever posted to Microsoft Entra ID over HTTPS —
+        a typo'd or hostile URL must not receive the client secret."""
+        if value is None:
+            return None
+        parts = urlsplit(value)
+        if parts.scheme != "https" or parts.hostname != "login.microsoftonline.com":
+            raise ValueError(
+                "MYKHAYA_DVSA_TOKEN_URL must be the https://login.microsoftonline.com/... "
+                "token URL from the DVSA credentials email."
+            )
+        return value
+
+    @field_validator("dvsa_api_base_url")
+    @classmethod
+    def validate_dvsa_api_base_url(cls, value: str) -> str:
+        parts = urlsplit(value)
+        if parts.scheme != "https" or not (parts.hostname or "").endswith(".api.gov.uk"):
+            raise ValueError("MYKHAYA_DVSA_API_BASE_URL must be an https://*.api.gov.uk URL.")
+        return value.rstrip("/")
+
     @field_validator("dvla_environment", mode="before")
     @classmethod
     def resolve_blank_dvla_environment(cls, value: object) -> object:
@@ -284,6 +375,26 @@ class Settings(BaseSettings):
         if any(word in lowered for word in ("changeme", "development-only", "example-secret")):
             raise ValueError("MYKHAYA_SECRET_KEY must not be a documented placeholder")
         return value
+
+    @field_validator("field_encryption_keys", "blind_index_keys", mode="before")
+    @classmethod
+    def resolve_blank_sensitive_keys(cls, value: object) -> object:
+        """Compose blanks these explicitly for services that must never hold
+        them; a present-but-empty variable means unset, not an empty keyring."""
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
+
+    @model_validator(mode="after")
+    def reject_environment_supplied_field_keys(self) -> "Settings":
+        if self.environment == "production" and (
+            self.field_encryption_keys is not None or self.blind_index_keys is not None
+        ):
+            raise ValueError(
+                "MYKHAYA_FIELD_ENCRYPTION_KEYS / MYKHAYA_BLIND_INDEX_KEYS are a development/test "
+                "fallback only. Production must supply sensitive-field keyrings as mounted files."
+            )
+        return self
 
     @field_validator("cookie_secure")
     @classmethod
@@ -555,6 +666,22 @@ class Settings(BaseSettings):
         selected environment missing either value, is "Not configured" — the
         provider must never guess or partially operate."""
         return bool(self.dvla_active_endpoint) and self.dvla_active_api_key is not None
+
+    @property
+    def dvsa_environment_label(self) -> str | None:
+        if self.dvsa_environment is None:
+            return None
+        return {"development": "Development", "production": "Production"}[self.dvsa_environment]
+
+    @property
+    def dvsa_configured(self) -> bool:
+        """Every credential present. Never partially operates."""
+        return bool(
+            self.dvsa_token_url
+            and self.dvsa_client_id
+            and self.dvsa_client_secret
+            and self.dvsa_api_key
+        )
 
 
 @lru_cache

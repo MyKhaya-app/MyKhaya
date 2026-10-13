@@ -27,6 +27,13 @@ from mykhaya import models as _models  # noqa: F401 - register ORM tables in Bas
 from mykhaya.avatars.storage import get_avatar_storage
 from mykhaya.config import Settings, get_settings
 from mykhaya.db import Base, SessionFactory
+from mykhaya.driveway_sensitive import (
+    DrivewayFieldEncryptionUnavailable,
+    DrivewaySensitiveReadError,
+    logical_registration,
+    logical_vin,
+    vehicle_sensitive_ciphertexts,
+)
 from mykhaya.ids import uuid7
 from mykhaya.meal_images import get_meal_image_storage
 from mykhaya.models import TokenPurpose
@@ -138,6 +145,10 @@ EXCLUDED_TABLES = {
     "support_ticket_messages",
     "support_ticket_attachments",
     "support_ticket_diagnostics",
+    # Driveway MOT history is provider cache tied to the source environment's
+    # lookups; the target re-fetches it (see PROVIDER_CACHE_COLUMNS).
+    "vehicle_mot_tests",
+    "vehicle_mot_defects",
 }
 
 SECRET_COLUMNS = {
@@ -149,6 +160,21 @@ SECRET_COLUMNS = {
     "join_code_hash",
     "join_code_encrypted",
     "credential_id",
+    # Field-encryption envelopes are bound to the source row id and the source
+    # environment's keyring, so they are never carried in a package; import
+    # re-derives them from the plaintext (see mykhaya.driveway_sensitive).
+    "registration_ciphertext",
+    "vin_ciphertext",
+}
+# Derived provider state on vehicles (Driveway MOT). Never carried across:
+# an imported vehicle starts "not yet checked" and refreshes in the target.
+PROVIDER_CACHE_COLUMNS = {
+    "inspection_status",
+    "inspection_due_date",
+    "mot_first_due_date",
+    "mot_refreshed_at",
+    "mot_refresh_attempted_at",
+    "mot_refresh_outcome",
 }
 STRIPE_COLUMNS = {"external_customer_id", "external_subscription_id", "external_price_id"}
 ADMIN_COLUMNS = {"created_by", "updated_by", "published_by", "complimentary_granted_by"}
@@ -299,11 +325,39 @@ def _safe_user(row: dict[str, Any]) -> dict[str, Any]:
     return {key: value for key, value in row.items() if key in allowed}
 
 
+def _logical_vehicle_row(row: dict[str, Any], settings: Settings) -> dict[str, Any]:
+    """Packages carry the LOGICAL registration/VIN, never ciphertext. With the
+    Phase 2D read flag on, that logical value comes from the same
+    ciphertext-first read path the API uses (mykhaya.driveway_sensitive); the
+    ciphertext columns are then stripped by _export_row as before. A stored
+    ciphertext that will not decrypt aborts the export (no plaintext
+    fallback)."""
+    try:
+        registration = logical_registration(
+            row["id"],
+            plaintext=row.get("registration"),
+            ciphertext=row.get("registration_ciphertext"),
+            settings=settings,
+        )
+        vin = logical_vin(
+            row["id"],
+            plaintext=row.get("vin"),
+            ciphertext=row.get("vin_ciphertext"),
+            settings=settings,
+        )
+    except DrivewaySensitiveReadError as exc:
+        raise MigrationError("A vehicle's protected details could not be read.") from exc
+    return {**row, "registration": registration, "vin": vin}
+
+
 def _export_row(row: dict[str, Any]) -> dict[str, Any]:
     return {
         key: value
         for key, value in row.items()
-        if key not in SECRET_COLUMNS and key not in STRIPE_COLUMNS and key not in ADMIN_COLUMNS
+        if key not in SECRET_COLUMNS
+        and key not in STRIPE_COLUMNS
+        and key not in ADMIN_COLUMNS
+        and key not in PROVIDER_CACHE_COLUMNS
     }
 
 
@@ -401,7 +455,14 @@ async def export_home(home_id: uuid.UUID, output: Path, settings: Settings) -> d
             table = _table(name)
             rows = (await db.execute(select(table))).mappings().all()
             selected = [
-                _export_row({key: _json_value(value) for key, value in row.items()})
+                _export_row(
+                    {
+                        key: _json_value(value)
+                        for key, value in (
+                            _logical_vehicle_row(dict(row), settings) if name == "vehicles" else row
+                        ).items()
+                    }
+                )
                 for row in rows
                 if _row_matches_home(dict(row), home_id, member_ids)
             ]
@@ -479,7 +540,7 @@ def _rewrite(
     old_id = str(result.get("id")) if result.get("id") is not None else None
     for column in table.columns:
         name = column.name
-        if name in SECRET_COLUMNS or name in STRIPE_COLUMNS:
+        if name in SECRET_COLUMNS or name in STRIPE_COLUMNS or name in PROVIDER_CACHE_COLUMNS:
             result.pop(name, None)
             continue
         if name in ADMIN_COLUMNS:
@@ -719,6 +780,12 @@ async def import_home(
                 }
             )
             await db.execute(insert(groups).values(home_values))
+            # Driveway reminders link to their vehicle through reminders.source_id,
+            # which is not a foreign key (so _rewrite can't remap it) and is
+            # imported before vehicles: allocate the new vehicle ids up front.
+            for vehicle_row in package["data"].get("vehicles", []):
+                if vehicle_row.get("id") is not None:
+                    maps["vehicles"][str(vehicle_row["id"])] = _new_id()
             for name in TABLE_ORDER[2:]:
                 table = _table(name)
                 for source in package["data"].get(name, []):
@@ -728,13 +795,46 @@ async def import_home(
                             source_user = maps["users"].get(str(source.get("user_id")))
                             if source_user in matched_user_ids:
                                 continue
-                        maps[name][str(old_id)] = _new_id()
+                        maps[name].setdefault(str(old_id), _new_id())
                     values = _rewrite(source, maps, table)
+                    if name == "reminders" and values.get("source_type") == "driveway":
+                        vehicle_id = maps["vehicles"].get(str(values.get("source_id")))
+                        if vehicle_id is None:
+                            # Its vehicle isn't in the package: keep the reminder,
+                            # detached, rather than linked to another Home's vehicle.
+                            values.update(source_type=None, source_id=None, source_event=None)
+                        else:
+                            values["source_id"] = str(vehicle_id)
                     values = {
                         key: _restore_value(table.c[key], value)
                         for key, value in values.items()
                         if key in table.c
                     }
+                    if (
+                        "created_by" in table.c
+                        and not table.c["created_by"].nullable
+                        and values.get("created_by") is None
+                    ):
+                        # Attribution columns are never carried across (see
+                        # ADMIN_COLUMNS); where one is required, the row is
+                        # attributed to the imported Home's creator instead.
+                        values["created_by"] = creator
+                    if name == "vehicles":
+                        # Same single write path as the Driveway router: the
+                        # ciphertext (dual-write on) is bound to the NEW row id.
+                        try:
+                            values.update(
+                                vehicle_sensitive_ciphertexts(
+                                    values["id"],
+                                    registration=values.get("registration"),
+                                    vin=values.get("vin"),
+                                    settings=settings,
+                                )
+                            )
+                        except DrivewayFieldEncryptionUnavailable as exc:
+                            raise MigrationError(
+                                "Vehicle field encryption is enabled but unavailable."
+                            ) from exc
                     if name == "home_subscriptions":
                         values.update(
                             {

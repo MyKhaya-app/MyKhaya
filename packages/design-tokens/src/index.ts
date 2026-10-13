@@ -14,6 +14,15 @@ export const colour = {
   muted: "#62706F",
   white: "#FFFEFB",
   danger: "#A33E2B",
+  dangerSoft: "#F9E0DA",
+  terracottaInk: "#B4532E",
+  line: "#ECE6DA",
+  lineStrong: "#DDD6C8",
+  sand: "#E9E4D9",
+  sandDark: "#D9D2C4",
+  infoSoft: "#E2EAF4",
+  infoInk: "#2C4669",
+  plate: "#F7C948",
 } as const;
 
 // The one curated colour palette shared by member identity and calendar

@@ -84,7 +84,9 @@ services:
         MYKHAYA_APNS_KEY_ID: "",
         MYKHAYA_APNS_BUNDLE_ID: "",
         MYKHAYA_APNS_PRIVATE_KEY: "",
-        MYKHAYA_SYSLOG_DEBUG: "true"
+        # Opt-in transport diagnostics only (no event content). Off by default
+        # so production never prints debug chatter unless an operator sets it.
+        MYKHAYA_SYSLOG_DEBUG: "${MYKHAYA_SYSLOG_DEBUG:-false}"
       }
     depends_on:
       {
@@ -107,8 +109,16 @@ services:
     # attachments (see mykhaya/attachments/) — a separate volume, not a reuse
     # of avatar_data, matching that module's own dedicated storage
     # abstraction (mykhaya.attachments.storage, not mykhaya.avatars.storage).
+    # Sensitive-field keyrings (mykhaya.crypto): a read-only bind mount of a
+    # host directory holding field-encryption-keys.json and
+    # blind-index-keys.json, mounted into api and — via this anchor — worker
+    # and scheduler ONLY. Never into postgres, migrate, web, caddy or test,
+    # and never inside a backed-up volume. A missing host directory is
+    # created empty, which the app treats as "not provisioned" (allowed in
+    # Phase 2A). Set MYKHAYA_FIELD_KEYS_HOST_DIR (production:
+    # /etc/mykhaya/field-keys). See docs/operations/sensitive-field-keys.md.
     volumes:
-      ["avatar_data:/data/avatars", "support_attachment_data:/data/support-attachments", "vehicle_photo_data:/data/vehicle-photos", "meal_image_data:/data/meal-images", "home_migration_data:/data/home-migrations"]
+      ["avatar_data:/data/avatars", "support_attachment_data:/data/support-attachments", "vehicle_photo_data:/data/vehicle-photos", "meal_image_data:/data/meal-images", "home_migration_data:/data/home-migrations", "${MYKHAYA_FIELD_KEYS_HOST_DIR:-./secrets/field-keys}:/run/secrets/mykhaya:ro"]
     restart: unless-stopped
     logging: *default-logging
     cap_drop: [ALL]
@@ -150,6 +160,10 @@ services:
     environment:
       {
         MYKHAYA_DATABASE_URL: "postgresql+asyncpg://mykhaya_migrator:${MYKHAYA_MIGRATION_DB_PASSWORD}@postgres:5432/mykhaya",
+        # migrate needs the app Settings but never the sensitive-field keys:
+        # blank any development fallback inherited from .env.
+        MYKHAYA_FIELD_ENCRYPTION_KEYS: "",
+        MYKHAYA_BLIND_INDEX_KEYS: "",
         MYKHAYA_VERSION: "${MYKHAYA_VERSION:-dev}",
         MYKHAYA_COMMIT_SHA: "${MYKHAYA_COMMIT_SHA:-unknown}",
         MYKHAYA_BUILD_TIME: "${MYKHAYA_BUILD_TIME:-unknown}",
@@ -173,6 +187,10 @@ services:
     environment:
       MYKHAYA_ENVIRONMENT: test
       MYKHAYA_DATABASE_URL: "postgresql+asyncpg://mykhaya_app:${MYKHAYA_DB_PASSWORD}@postgres:5432/mykhaya"
+      # Tests build their own deterministic test-only keyrings in code; they
+      # never inherit a developer's keyring from .env.
+      MYKHAYA_FIELD_ENCRYPTION_KEYS: ""
+      MYKHAYA_BLIND_INDEX_KEYS: ""
       MYKHAYA_APNS_DELIVERY_CONFIGURED: "false"
       MYKHAYA_APNS_TEAM_ID: ""
       MYKHAYA_APNS_KEY_ID: ""
@@ -231,12 +249,16 @@ services:
     tmpfs: [/tmp]
   postgres:
     image: postgres:17.5-alpine3.22
-    env_file: [.env]
+    # No env_file: PostgreSQL receives only what it and init-db.sh need, never
+    # the application's secrets (MYKHAYA_SECRET_KEY, provider keys, field
+    # keyrings). Values are still interpolated from .env by Compose itself.
     environment:
       {
         POSTGRES_DB: mykhaya,
         POSTGRES_USER: postgres,
         POSTGRES_PASSWORD: "${MYKHAYA_POSTGRES_ADMIN_PASSWORD}",
+        MYKHAYA_MIGRATION_DB_PASSWORD: "${MYKHAYA_MIGRATION_DB_PASSWORD}",
+        MYKHAYA_DB_PASSWORD: "${MYKHAYA_DB_PASSWORD}",
       }
     volumes:
       [

@@ -30,6 +30,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from webauthn.helpers import base64url_to_bytes, bytes_to_base64url
 
+from mykhaya import driveway_mot
 from mykhaya.auth_providers import external_auth_provider_status, external_auth_provider_statuses
 from mykhaya.avatars.storage import get_avatar_storage
 from mykhaya.billing.client import StripeRequestError, StripeUnavailableError, call_stripe
@@ -49,6 +50,12 @@ from mykhaya.consumer_mfa_policy import (
     resolve_consumer_mfa_policy,
 )
 from mykhaya.db import get_db
+from mykhaya.driveway_mot_provider import (
+    MotAuthFailed,
+    MotLookupError,
+    MotRateLimited,
+    MotVehicleNotFound,
+)
 from mykhaya.driveway_providers import (
     UKDVLAProvider,
     VehicleLookupAuthFailed,
@@ -71,6 +78,7 @@ from mykhaya.entitlements import (
 from mykhaya.founding_beta_schemas import SignupStateResponse
 from mykhaya.home_migration_pcc import (
     PACKAGE_STORE,
+    discard_package_file,
     get_package,
     load_package,
     migration_enabled,
@@ -223,6 +231,7 @@ from mykhaya.platform_schemas import (
     ConsumerMfaPolicyResponse,
     ConsumerMfaPolicyUpdate,
     DrivewayDvlaTestRequest,
+    DrivewayDvsaTestRequest,
     EntitlementsResponse,
     FeatureFlagUpdate,
     GrantComplimentaryRequest,
@@ -4941,6 +4950,9 @@ async def permanent_delete_home(
         reason=body.reason,
         previous={"lifecycle": "archived", "name": group.name},
         new={"lifecycle": "deleted"},
+        # Documented retention (docs/security/data-retention.md): this record
+        # is the only surviving trace of a hard-deleted Home's identity.
+        retain=frozenset({"name"}),
     )
     # A bulk statement, not `db.delete()` on loaded objects — Group.memberships
     # has no cascade="all, delete-orphan"/passive_deletes configured at the
@@ -5879,6 +5891,9 @@ async def settings_list(
         )
     return {
         "settings": items,
+        # Deployment label only (development/staging/production) for the PCC
+        # Settings at-a-glance strip; never a secret.
+        "deployment_environment": settings.environment,
         "environment": [
             {
                 "key": "public_url",
@@ -6230,7 +6245,8 @@ async def update_setting(
             "value": body.value,
             **(
                 {"health": row.value.get("health")}
-                if key == "driveway_dvla_enabled" and row.value.get("health")
+                if key in {"driveway_dvla_enabled", "driveway_dvsa_enabled"}
+                and row.value.get("health")
                 else {}
             ),
         }
@@ -6344,6 +6360,104 @@ async def driveway_dvla_test(
         request,
         context,
         "driveway.dvla.test_connection",
+        "integration",
+        reason=body.reason,
+        new={"state": result["state"]},
+    )
+    await db.commit()
+    return result
+
+
+@router.get("/integrations/dvsa")
+async def driveway_dvsa_status(
+    _: PlatformContext = Depends(require_roles(*ALL_ROLES)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    """Operational state only. Credentials are deployment secrets and are
+    never returned — only whether they are configured."""
+    row = await db.scalar(
+        select(PlatformSetting).where(PlatformSetting.key == "driveway_dvsa_enabled")
+    )
+    value = row.value if row else {}
+    enabled = value.get("value") is True
+    stored_health = dict(value.get("health") or {})
+    if not settings.dvsa_configured:
+        state = "Not configured"
+    elif not settings.dvsa_enabled or not enabled:
+        state = "Disabled"
+    else:
+        state = stored_health.get("state", "Unknown")
+    return {
+        "enabled": enabled,
+        "deployment_enabled": settings.dvsa_enabled,
+        "configured": settings.dvsa_configured,
+        "environment": settings.dvsa_environment_label,
+        "health": {"state": state},
+        "last_success_at": stored_health.get("last_success_at"),
+        "last_failure_at": stored_health.get("last_failure_at"),
+        "last_failure_category": stored_health.get("last_failure_category"),
+    }
+
+
+@router.post("/integrations/dvsa/test")
+async def driveway_dvsa_test(
+    body: DrivewayDvsaTestRequest,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    """Token + one MOT lookup with an operator-supplied registration, to
+    prove credentials and connectivity. The registration is not stored,
+    logged or audited; only the resulting state is."""
+    require_recent_auth(context, settings)
+    if not settings.dvsa_configured:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "DVSA is not configured.")
+    try:
+        # Module reference (not a bound name): one provider seam for every caller.
+        await driveway_mot.build_provider(settings).fetch(body.registration)
+        result = {"state": "Healthy", "message": "DVSA MOT History connection successful."}
+        category = None
+    except MotVehicleNotFound:
+        result = {
+            "state": "Healthy",
+            "message": "No MOT record for that registration, but the DVSA connection is working.",
+        }
+        category = None
+    except MotAuthFailed:
+        result = {"state": "Unavailable", "message": "DVSA authentication failed."}
+        category = "auth_failed"
+    except MotRateLimited:
+        result = {"state": "Degraded", "message": "DVSA rate limit reached."}
+        category = "rate_limited"
+    except MotLookupError as exc:
+        result = {"state": "Unavailable", "message": "DVSA MOT History is unavailable."}
+        category = exc.category
+    row = await db.scalar(
+        select(PlatformSetting)
+        .where(PlatformSetting.key == "driveway_dvsa_enabled")
+        .with_for_update()
+    )
+    if row is None:
+        row = PlatformSetting(
+            key="driveway_dvsa_enabled", value={"value": False}, updated_by=context.administrator.id
+        )
+        db.add(row)
+    health = dict(row.value.get("health") or {})
+    now = datetime.now(UTC).isoformat()
+    health["state"] = result["state"]
+    if category is None:
+        health["last_success_at"] = now
+    else:
+        health["last_failure_at"] = now
+        health["last_failure_category"] = category
+    row.value = {**row.value, "health": health}
+    platform_audit(
+        db,
+        request,
+        context,
+        "driveway.dvsa.test_connection",
         "integration",
         reason=body.reason,
         new={"state": result["state"]},
@@ -8828,26 +8942,50 @@ async def home_migration_import(
         new={"package_checksum": row["package_checksum"], "target_environment": "production"},
     )
     await db.commit()
+    # The import no longer needs the package bytes; remove the plaintext copy
+    # now rather than waiting for the TTL purge. The row, checksum and
+    # reports remain as the audit trail.
+    await discard_package_file(settings, row["storage_key"])
     return {"report": report, "status": "completed"}
 
 
 @router.get("/home-migration/packages/{package_id}/download")
 async def home_migration_download(
     package_id: uuid.UUID,
-    _: PlatformContext = Depends(require_roles(*HOME_MIGRATION_ROLES)),
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*HOME_MIGRATION_ROLES)),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> FileResponse:
+    """The package is a complete plaintext copy of a Home, so downloading it
+    gets the same gates as creating it: development-only (the export side of
+    the dev → production transfer), Home Migration enabled, recent
+    re-authentication, and an audit record. The audit carries the checksum
+    only, never package content."""
+    _home_migration_environment(settings, "development")
+    await _home_migration_guard(db, settings)
+    require_recent_auth(context, settings)
     row = await get_package(db, package_id)
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That migration package was not found.")
     path = storage_path(settings, row["storage_key"])
     if not path.is_file():
         raise HTTPException(status.HTTP_410_GONE, "That migration package is no longer available.")
+    platform_audit(
+        db,
+        request,
+        context,
+        "home_migration.package_downloaded",
+        "migration",
+        row["migration_id"],
+        new={"package_checksum": row["package_checksum"]},
+    )
+    await db.commit()
     return FileResponse(
         path,
         media_type="application/json",
         filename=f"home-migration-{row['migration_id']}.json",
+        headers={"Cache-Control": "no-store"},
     )
 
 

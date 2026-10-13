@@ -4,7 +4,7 @@ import uuid
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.audit import audit
@@ -16,13 +16,13 @@ from mykhaya.household_permissions import Capability, require_capability
 from mykhaya.models import (
     FeatureKey,
     Membership,
-    Reminder,
     RoutineScope,
     Todo,
     TodoCategory,
     TodoMember,
 )
 from mykhaya.notifications.visibility import active_membership
+from mykhaya.nudge_categories import reject_system_category
 from mykhaya.schemas import (
     TodoCategoryCreate,
     TodoCategoryListResponse,
@@ -64,6 +64,12 @@ def _visible(todo: Todo, user_id: uuid.UUID) -> bool:
     return todo.scope == RoutineScope.household or todo.owner_user_id == user_id
 
 
+# The fixed system categories (TodoCategory.managed_source set, e.g. the
+# Driveway category every vehicle reminder belongs to) are never renamed or
+# deleted, whoever asks and however empty they are.
+SYSTEM_CATEGORY_MESSAGE = "This is a MyKhaya system category, so it can't be renamed or deleted."
+
+
 async def _category_response(row: TodoCategory) -> TodoCategoryResponse:
     return TodoCategoryResponse(
         id=row.id,
@@ -71,6 +77,7 @@ async def _category_response(row: TodoCategory) -> TodoCategoryResponse:
         created_by=row.created_by,
         created_at=row.created_at,
         updated_at=row.updated_at,
+        system=row.managed_source,
     )
 
 
@@ -125,6 +132,7 @@ async def _category_for_home(
     )
     if row is None:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "That To-do category is invalid")
+    reject_system_category(row)
     return row
 
 
@@ -188,6 +196,8 @@ async def update_category(
     )
     if row is None or row.created_by != auth.user.id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That To-do category could not be found")
+    if row.managed_source is not None:
+        raise HTTPException(status.HTTP_409_CONFLICT, SYSTEM_CATEGORY_MESSAGE)
     if row.updated_at != body.expected_updated_at:
         raise HTTPException(
             status.HTTP_409_CONFLICT, "This category changed. Reload and try again."
@@ -227,17 +237,7 @@ async def delete_category(
     if row is None or row.created_by != auth.user.id:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That To-do category could not be found")
     if row.managed_source is not None:
-        linked = await db.scalar(
-            select(func.count())
-            .select_from(Reminder)
-            .where(Reminder.category_id == row.id, Reminder.source_type == row.managed_source)
-        )
-        if linked:
-            raise HTTPException(
-                status.HTTP_409_CONFLICT,
-                "This category is managed by Driveway and is still in use by vehicle "
-                "reminders. Remove those reminders first.",
-            )
+        raise HTTPException(status.HTTP_409_CONFLICT, SYSTEM_CATEGORY_MESSAGE)
     audit(db, request, "todo_category.deleted", auth.user.id, home_id, "todo_category", row.id)
     await db.delete(row)
     await db.commit()

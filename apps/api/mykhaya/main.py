@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from starlette.types import Message
 
 from mykhaya.config import get_settings
+from mykhaya.crypto.config import validate_sensitive_key_configuration
 from mykhaya.db import SessionFactory, get_db
 from mykhaya.models import PlatformSetting
 from mykhaya.platform_runtime import require_not_in_maintenance
@@ -118,6 +119,13 @@ async def handle_unhandled_exception(request: Request, exc: Exception) -> JSONRe
         {"detail": "An unexpected error occurred."},
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
     )
+
+
+@app.on_event("startup")
+async def validate_sensitive_field_keys() -> None:
+    # Fail closed before serving: a malformed or wrong-environment keyring
+    # must stop startup rather than surface later as unreadable data.
+    validate_sensitive_key_configuration(settings, service="api")
 
 
 @app.on_event("startup")

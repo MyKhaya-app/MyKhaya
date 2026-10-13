@@ -28,4 +28,15 @@ async def category_for_home(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
             "That Nudge category is invalid",
         )
+    reject_system_category(category)
     return category
+
+
+def reject_system_category(category: TodoCategory) -> None:
+    """A system category (e.g. Driveway) is assigned by its module only —
+    never chosen for an ordinary routine, reminder or to-do."""
+    if category.managed_source is not None:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "That category is kept for vehicle reminders from Driveway.",
+        )

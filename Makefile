@@ -1,4 +1,4 @@
-.PHONY: init up down logs build backend-rebuild migrate test test-clean lint typecheck format seed reset prod backup restore generate-client version-check compose-check caddy-check web-check release-check security-check dev-preflight dev-up dev-down dev-logs dev-health dev-update prod-install prod-update prod-health prod-logs prod-config prod-backup prod-restore
+.PHONY: init up down logs build backend-rebuild migrate test test-clean lint typecheck format seed reset prod backup restore generate-client version-check compose-check caddy-check web-check release-check security-check dev-preflight dev-up dev-down dev-logs dev-health dev-update prod-install prod-update prod-health prod-logs prod-config prod-backup prod-restore prod-restore-files restore-files
 # Local developer workstation only (see docs/operations/local-development.md — the
 # separate persistent dev-server workflow below never touches compose.override.yml).
 # Ensures a fresh clone gets both files `docker compose`/`make up` need without any
@@ -66,13 +66,19 @@ prod-config:
 prod-backup:
 	MYKHAYA_PRODUCTION=1 sh infrastructure/scripts/backup.sh
 prod-restore:
-	@test -n "$(FILE)" || (echo "Use make prod-restore FILE=/absolute/path/backup.sql.gz" && exit 1)
+	@test -n "$(FILE)" || (echo "Use make prod-restore FILE=/absolute/path/backup.sql.gz.age (MYKHAYA_BACKUP_AGE_IDENTITY=offline identity)" && exit 1)
 	MYKHAYA_PRODUCTION=1 sh infrastructure/scripts/restore.sh "$(FILE)"
+prod-restore-files:
+	@test -n "$(FILE)" || (echo "Use make prod-restore-files FILE=/absolute/path/backup-files.tar.gz.age (MYKHAYA_BACKUP_AGE_IDENTITY=offline identity)" && exit 1)
+	MYKHAYA_PRODUCTION=1 sh infrastructure/scripts/restore-files.sh "$(FILE)"
 backup:
 	sh infrastructure/scripts/backup.sh
 restore:
-	@test -n "$(FILE)" || (echo "Use make restore FILE=/absolute/path/backup.sql.gz" && exit 1)
+	@test -n "$(FILE)" || (echo "Use make restore FILE=/absolute/path/backup.sql.gz.age (MYKHAYA_BACKUP_AGE_IDENTITY=offline identity)" && exit 1)
 	sh infrastructure/scripts/restore.sh "$(FILE)"
+restore-files:
+	@test -n "$(FILE)" || (echo "Use make restore-files FILE=/absolute/path/backup-files.tar.gz.age (MYKHAYA_BACKUP_AGE_IDENTITY=offline identity)" && exit 1)
+	sh infrastructure/scripts/restore-files.sh "$(FILE)"
 generate-client:
 	docker compose exec api python -c "import json; from mykhaya.main import app; print(json.dumps(app.openapi()))" > apps/api/openapi.json
 version-check:

@@ -12,9 +12,13 @@ import { DRIVEWAY_COUNTRIES } from "../countries";
 
 const FUEL_TYPES = ["Petrol", "Diesel", "Electric", "Hybrid", "Plug-in hybrid", "LPG", "Other"];
 
-function defaultNickname(make: string, model: string, registration: string): string {
+// Never falls back to the registration: a nickname is shown and shared far
+// more widely than the registration itself (lists, reminders, notifications),
+// so defaulting it to the plate would copy a sensitive identifier into an
+// unprotected field.
+function defaultNickname(make: string, model: string): string {
   const makeModel = [make.trim(), model.trim()].filter(Boolean).join(" ");
-  return makeModel || registration.trim() || "My vehicle";
+  return makeModel || "My vehicle";
 }
 
 function normaliseRegistration(value: string): string {
@@ -48,6 +52,13 @@ export default function AddVehiclePage() {
     if (!activeHomeId) return;
     api.members(activeHomeId).then(setMembers).catch(() => setMembers([]));
   }, [activeHomeId]);
+
+  // "Add a vehicle for {Name}" on the Driveway empty state links here with
+  // ?owner=<user id>; only a real member of this Home is accepted.
+  useEffect(() => {
+    const requested = new URLSearchParams(window.location.search).get("owner");
+    if (requested && members.some((member) => member.user_id === requested)) setOwnerUserId(requested);
+  }, [members]);
 
   useEffect(() => {
     if (user?.id && !ownerUserId) setOwnerUserId(user.id);
@@ -96,7 +107,7 @@ export default function AddVehiclePage() {
     setBusy(true);
     setError("");
     const body: VehicleCreatePayload = {
-      nickname: nickname.trim() || defaultNickname(make, model, normalizedRegistration),
+      nickname: nickname.trim() || defaultNickname(make, model),
       owner_user_id: ownerUserId,
       country_code: countryCode,
       registration: normalizedRegistration,
@@ -199,7 +210,7 @@ export default function AddVehiclePage() {
             value={nickname}
             onChange={(event) => setNickname(event.target.value)}
             maxLength={120}
-            placeholder={defaultNickname(make, model, registration)}
+            placeholder={defaultNickname(make, model)}
           />
         </label>
         <label>

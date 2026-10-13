@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.config import Settings, get_settings
+from mykhaya.crypto.config import validate_sensitive_key_configuration
 from mykhaya.db import SessionFactory
 from mykhaya.mailer import EmailPermanentError, EmailTemporaryError, resolve_smtp_config, send_email
 from mykhaya.models import (
@@ -435,6 +436,7 @@ async def process(event_id: uuid.UUID) -> None:
 
 async def run() -> None:
     settings = get_settings()
+    validate_sensitive_key_configuration(settings, service="worker")
 
     async def load_syslog_config() -> SyslogConfig:
         async with SessionFactory() as db:

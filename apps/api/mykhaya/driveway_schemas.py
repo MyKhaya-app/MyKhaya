@@ -6,6 +6,7 @@ fields yet (later phases), no official-lookup provider state (Phase 5).
 
 import uuid
 from datetime import date, datetime, time
+from typing import Literal
 
 from pydantic import BaseModel, Field
 
@@ -111,3 +112,98 @@ class VehicleReminderCreate(StrictModel):
     due_time: time = time(9, 0)
     repeat: ReminderRepeat = ReminderRepeat.never
     cadence: ReminderCadence = ReminderCadence.once
+
+
+# --- MOT (Driveway MOT Phase 1) --------------------------------------------------
+# Provider-neutral: the frontend never sees DVSA response structures or
+# terminology beyond these normalised values.
+
+
+class VehicleMotDefectResponse(BaseModel):
+    text: str
+    # dangerous | major | minor | advisory | prs | fail | user_entered | other
+    category: str
+    dangerous: bool
+
+
+class VehicleMotTestResponse(BaseModel):
+    id: uuid.UUID
+    test_number: str | None
+    test_date: date
+    completed_at: datetime | None
+    expiry_date: date | None
+    # passed | failed | other
+    result: str
+    odometer_value: int | None
+    # mi | km
+    odometer_unit: str | None
+    # read | no_odometer | unreadable | other
+    odometer_result: str | None
+    defects: list[VehicleMotDefectResponse]
+
+
+class VehicleMotSummaryResponse(BaseModel):
+    # valid | expired | not_yet_due | no_record | None (never checked)
+    status: str | None
+    due_date: date | None
+    expiry_date: date | None
+    first_mot_due_date: date | None
+    last_test_date: date | None
+    last_result: str | None
+    source: str | None
+    refreshed_at: datetime | None
+    stale: bool
+    last_attempt_at: datetime | None
+    last_attempt_outcome: str | None
+
+
+class VehicleMotRefreshResult(BaseModel):
+    # refreshed | not_found | cached | busy | rate_limited | auth_failed |
+    # unavailable | malformed
+    outcome: str
+    message: str | None = None
+
+
+class VehicleMotResponse(BaseModel):
+    eligible: bool
+    provider_available: bool
+    has_registration: bool
+    summary: VehicleMotSummaryResponse
+    tests: list[VehicleMotTestResponse]
+    refresh: VehicleMotRefreshResult | None = None
+
+
+class VehicleMotRefreshRequest(StrictModel):
+    # force: an explicit user refresh (short server-side cooldown applies).
+    # if_stale: the detail page's automatic check — no provider call while
+    # the persisted data is still fresh.
+    mode: Literal["if_stale", "force"] = "force"
+
+
+# --- MOT nudges (see mykhaya.driveway_mot_nudges) ------------------------------------
+
+MotNudgeOffset = Literal[30, 14, 7, 0]
+
+
+class VehicleMotNudgePlanRequest(StrictModel):
+    """The owner's MOT nudge plan. Recipients are deliberately absent: MOT
+    nudges always go to the vehicle owner, like every Driveway reminder."""
+
+    title: str = Field(min_length=1, max_length=160)
+    due_date: date
+    offsets: list[MotNudgeOffset] = Field(min_length=1, max_length=4)
+    repeat: bool = True
+
+
+class VehicleMotNudgePlanResponse(BaseModel):
+    title: str
+    due_date: date
+    offsets: list[int]
+    repeat: bool
+    # Reminder dates that exist for this plan (lead days already in the past
+    # are skipped), earliest first.
+    scheduled: list[date]
+
+
+class VehicleMotNudgesResponse(BaseModel):
+    plan: VehicleMotNudgePlanResponse | None

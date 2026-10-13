@@ -429,7 +429,7 @@ async def _reconcile_month_categories(
                 actor_id,
                 target_type="budget_month",
                 target_id=month.id,
-                metadata={"category_count": len(missing), "reason": "legacy_snapshot_repair"},
+                metadata={"category_count": len(missing), "trigger": "legacy_snapshot_repair"},
             )
     return len(missing)
 
@@ -482,7 +482,7 @@ async def _reconcile_month_income(
                 actor_id,
                 target_type="budget_month",
                 target_id=month.id,
-                metadata={"source_count": len(missing), "reason": "income_source_created"},
+                metadata={"source_count": len(missing), "trigger": "income_source_created"},
             )
     return len(missing)
 

@@ -83,6 +83,16 @@ PRIVATE_NAMES = {
     "title",
     "filename",
     "registration",
+    "registration_number",
+    "vehicle_registration",
+    "vin",
+    "policy_number",
+    "insurance_policy_number",
+    "address",
+    "postcode",
+    "location_text",
+    "recipient_email",
+    "provider_email",
     "vehicle_notes",
     "support_message",
 }
@@ -103,7 +113,15 @@ def redact(value: Any, key: str | None = None) -> Any:
         key.casefold() in SENSITIVE_NAMES
         or any(
             marker in key.casefold()
-            for marker in ("password", "token", "secret", "api_key", "authorization", "cookie")
+            for marker in (
+                "password",
+                "token",
+                "secret",
+                "api_key",
+                "authorization",
+                "cookie",
+                "ciphertext",
+            )
         )
     ):
         return REDACTED

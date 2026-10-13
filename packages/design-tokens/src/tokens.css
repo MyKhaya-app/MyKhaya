@@ -14,6 +14,20 @@
   --colour-muted: #62706f;
   --colour-white: #fffefb;
   --colour-danger: #a33e2b;
+  --colour-danger-soft: #f9e0da; /* tinted surface behind danger text */
+  /* Darker terracotta that stays legible as small text (eyebrows) on cream. */
+  --colour-terracotta-ink: #b4532e;
+  /* Warm hairlines: card/divider line, and the stronger control border. */
+  --colour-line: #ece6da;
+  --colour-line-strong: #ddd6c8;
+  /* Sand: inset surfaces on cream (segmented tracks, chips, placeholders). */
+  --colour-sand: #e9e4d9;
+  --colour-sand-dark: #d9d2c4;
+  /* Calm informational tint (e.g. "filled in for you" notes). */
+  --colour-info-soft: #e2eaf4;
+  --colour-info-ink: #2c4669;
+  /* UK number plate yellow. */
+  --colour-plate: #f7c948;
 
   /* The one curated colour palette shared by member identity and calendar
      categories. Muted deliberately, to sit quietly against the warm paper

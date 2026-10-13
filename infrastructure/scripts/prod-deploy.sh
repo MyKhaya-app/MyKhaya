@@ -25,10 +25,17 @@ require_installation_config() {
   [ -z "$missing" ] || die "production .env is missing required installation values:$missing"
 }
 
+backup_preflight() {
+  # Encrypted backups are a hard production requirement: verify the tooling
+  # before anything is fetched, built, migrated or restarted.
+  sh infrastructure/scripts/backup-preflight.sh || die "backup preflight failed; nothing was changed"
+}
+
 validate() {
   production
   [ -f .env ] || die "missing production .env"
   require_installation_config
+  backup_preflight
   branch=$(git branch --show-current)
   if [ "$branch" != "main" ]; then
     [ -n "${MYKHAYA_RELEASE_TAG:-}" ] || die "production must use main or set MYKHAYA_RELEASE_TAG for an approved detached tag"
@@ -49,6 +56,7 @@ validate() {
 update() {
   production
   [ -n "${MYKHAYA_RELEASE_TAG:-}" ] || die "set MYKHAYA_RELEASE_TAG to an approved release tag"
+  backup_preflight
   git status --porcelain --untracked-files=all | grep . >/dev/null && die "worktree is not clean"
   git check-ref-format "refs/tags/$MYKHAYA_RELEASE_TAG" >/dev/null 2>&1 ||
     die "invalid release tag $MYKHAYA_RELEASE_TAG"

@@ -623,8 +623,20 @@ export interface Reminder {
   home_completed_at?: string | null;
   home_completed_by_user_id?: string | null;
   home_completed_by_display_name?: string | null;
+  // The vehicle a Driveway-sourced reminder belongs to.
+  vehicle?: ReminderVehicle | null;
   created_by: string;
   updated_at: string;
+}
+
+export interface ReminderVehicle {
+  vehicle_id: string;
+  nickname: string;
+  make: string | null;
+  model: string | null;
+  registration: string | null;
+  // Days before the MOT, for a reminder that belongs to an MOT nudge plan.
+  mot_plan_lead_days: number | null;
 }
 
 export interface ReminderPayload {
@@ -654,6 +666,9 @@ export interface TodoCategory {
   created_by: string;
   created_at: string;
   updated_at: string;
+  // A fixed system category ("driveway"): can't be renamed, deleted or
+  // chosen by hand, and is only listed once it holds something.
+  system?: string | null;
 }
 
 export interface Todo {
@@ -1026,6 +1041,88 @@ export interface Vehicle {
 
 export interface VehicleListResponse {
   items: Vehicle[];
+}
+
+// Driveway MOT (Phase 1) — mirrors mykhaya.driveway_schemas.VehicleMot*.
+// Provider-neutral: never DVSA field names or terminology.
+export type VehicleMotStatus = "valid" | "expired" | "not_yet_due" | "no_record";
+export type VehicleMotResult = "passed" | "failed" | "other";
+export type VehicleMotDefectCategory =
+  | "dangerous"
+  | "major"
+  | "minor"
+  | "advisory"
+  | "prs"
+  | "fail"
+  | "user_entered"
+  | "other";
+
+export interface VehicleMotDefect {
+  text: string;
+  category: VehicleMotDefectCategory;
+  dangerous: boolean;
+}
+
+export interface VehicleMotTest {
+  id: string;
+  test_number: string | null;
+  test_date: string;
+  completed_at: string | null;
+  expiry_date: string | null;
+  result: VehicleMotResult;
+  odometer_value: number | null;
+  odometer_unit: "mi" | "km" | null;
+  odometer_result: string | null;
+  defects: VehicleMotDefect[];
+}
+
+export interface VehicleMotSummary {
+  status: VehicleMotStatus | null;
+  due_date: string | null;
+  expiry_date: string | null;
+  first_mot_due_date: string | null;
+  last_test_date: string | null;
+  last_result: VehicleMotResult | null;
+  source: string | null;
+  refreshed_at: string | null;
+  stale: boolean;
+  last_attempt_at: string | null;
+  last_attempt_outcome: string | null;
+}
+
+export interface VehicleMotRefreshResult {
+  outcome: string;
+  message: string | null;
+}
+
+export interface VehicleMot {
+  eligible: boolean;
+  provider_available: boolean;
+  has_registration: boolean;
+  summary: VehicleMotSummary;
+  tests: VehicleMotTest[];
+  refresh?: VehicleMotRefreshResult | null;
+}
+
+// Driveway MOT nudges — mirrors mykhaya.driveway_schemas.VehicleMotNudge*.
+// Recipients are deliberately absent: MOT nudges always go to the vehicle
+// owner, like every Driveway reminder.
+export type VehicleMotNudgeOffset = 30 | 14 | 7 | 0;
+
+export interface VehicleMotNudgePlanInput {
+  title: string;
+  due_date: string;
+  offsets: VehicleMotNudgeOffset[];
+  repeat: boolean;
+}
+
+export interface VehicleMotNudgePlan extends VehicleMotNudgePlanInput {
+  // Reminder dates that exist for this plan (past lead days are skipped).
+  scheduled: string[];
+}
+
+export interface VehicleMotNudges {
+  plan: VehicleMotNudgePlan | null;
 }
 
 export interface VehicleCreatePayload {
