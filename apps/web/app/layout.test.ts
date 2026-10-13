@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { metadataForSurface } from "./layout";
+import { metadataForSurface } from "./layout-metadata";
 
 describe("root metadata by application surface", () => {
   it("keeps consumer PWA metadata on consumer surfaces", () => {

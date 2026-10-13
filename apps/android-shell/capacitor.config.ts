@@ -20,11 +20,9 @@ console.log(`API: ${shellConfiguration.api}`);
 // inventing a competing Android-only namespace. Confirm with Anthony
 // before this is ever registered against a real Google Play Console
 // account.
-const appId = "app.mykhaya.mobile";
-
 const config: CapacitorConfig = {
-  appId,
-  appName: "MyKhaya",
+  appId: shellConfiguration.applicationId,
+  appName: shellConfiguration.displayName,
   // Required by Capacitor even in "live remote frontend" mode — never
   // actually shown except as a brief loading flash before the WebView
   // navigates to server.url below, or as an offline fallback if the

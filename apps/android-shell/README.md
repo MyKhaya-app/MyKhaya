@@ -12,11 +12,9 @@ equivalent iOS decision) and
 [ADR 0011](../../docs/architecture/adr/0011-single-pwa-retire-mobile-app.md)
 for why this is a thin shell and not a second frontend implementation.
 
-**Phase 1 only.** This package currently establishes the shell and a
-development build. It intentionally does **not** yet implement push
-notifications (FCM), notification channels/permissions, biometric unlock,
-Android App Links, Play Billing, or widgets — see "What's intentionally not
-implemented yet" below.
+The shell and shared Android native capability path are implemented. The
+remaining first milestone is live Firebase/device validation; credentials and
+signing material remain external and local.
 
 ## What lives here vs. what doesn't
 
@@ -72,7 +70,7 @@ the Android SDK/a JDK.
 
 ```sh
 npx cap open android    # opens Android Studio
-cd android && ./gradlew assembleDebug   # builds a debug APK from the command line
+cd android && ./gradlew assembleDevelopmentDebug   # builds the DEV debug APK
 ```
 
 `cap sync android` needs re-running only when `capacitor.config.ts`, `www/`,
@@ -99,6 +97,11 @@ throughout the backend and by `apps/ios-shell`'s `MYKHAYA_IOS_ENV`.
 ```sh
 MYKHAYA_ANDROID_ENV=production npx cap sync android
 ```
+
+The matching production debug variant is `android/gradlew.bat
+assembleProductionDebug`. DEV and PROD use separate application IDs so both
+can be installed side by side; release signing is intentionally not configured
+until a real keystore is supplied.
 
 ## Application identity
 
@@ -134,14 +137,14 @@ Deferred to later Android phases (see the audit/phased plan referenced in
 ADR 0014) — present in the shared web app already but inert or unreachable
 on this platform until each phase lands:
 
-- **Push notifications (FCM)** — no Firebase dependency, no
-  `google-services.json` (never commit one — see `android/.gitignore`), no
-  notification channels/permissions. `apps/web/components/native-push.ts`'s
-  native push functions remain gated to iOS only.
-- **Biometric unlock** — no `BiometricPrompt` configuration.
-- **Android App Links** — no `assetlinks.json`, no manifest intent-filter
-  for `https://` MyKhaya links; tapping one currently opens the browser, not
-  the app (the same gap iOS has today, per ADR 0012).
+- **Firebase project registration and physical FCM delivery** — repository
+  code and the Capacitor plugin are wired, but `google-services.json` must be
+  supplied locally for the selected flavor. See
+  `docs/mobile/android-firebase-and-links.md`.
+- **Android App Links verification** — the environment-specific manifest
+  intent-filter is wired. Domain verification remains blocked until signing
+  certificate fingerprints are supplied and published as
+  `/.well-known/assetlinks.json`.
 - **Google Play Billing** — no purchase flow; `SubscriptionProvider.google`
   is a reserved-but-unimplemented enum value in the backend.
 - **Widgets** — no Android App Widgets / Glance equivalent of the iOS

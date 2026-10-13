@@ -47,6 +47,15 @@ export const LIVE_FRONTEND_ORIGINS: Record<AndroidShellEnvironment, string> = {
   production: "https://mykhaya.app",
 };
 
+export const ANDROID_APP_ENVIRONMENTS = {
+  development: { applicationId: "app.mykhaya.mobile", displayName: "MyKhaya-Dev", gradleFlavor: "development" },
+  production: { applicationId: "app.mykhaya.mobile.prod", displayName: "MyKhaya", gradleFlavor: "production" },
+} as const satisfies Record<AndroidShellEnvironment, {
+  applicationId: string;
+  displayName: string;
+  gradleFlavor: string;
+}>;
+
 export function nativeApiBaseUrl(environment: AndroidShellEnvironment): string {
   return `${LIVE_FRONTEND_ORIGINS[environment]}/api/v1`;
 }
@@ -56,6 +65,7 @@ export function androidShellConfiguration(environment: AndroidShellEnvironment) 
     environment,
     frontend: LIVE_FRONTEND_ORIGINS[environment],
     api: nativeApiBaseUrl(environment),
+    ...ANDROID_APP_ENVIRONMENTS[environment],
   } as const;
 }
 
