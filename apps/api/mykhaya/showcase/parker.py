@@ -503,6 +503,8 @@ class RoutineSpec:
     timing: RoutineReminderTiming = RoutineReminderTiming.same_day
     description: str | None = None
     completed_days: tuple[int, ...] = ()
+    # Weekly series: how many of the most recent past occurrences are done.
+    completed_weeks: int = 0
     pinned: bool = False
 
 
@@ -546,6 +548,7 @@ ROUTINES: tuple[RoutineSpec, ...] = (
         CATEGORY_FAMILY,
         weekday=6,
         description="Batch-cook two dinners and plan next week's meals.",
+        completed_weeks=3,
     ),
     RoutineSpec(
         "Weekly household reset",
@@ -554,6 +557,7 @@ ROUTINES: tuple[RoutineSpec, ...] = (
         CATEGORY_HOUSEHOLD,
         weekday=5,
         description="Change bedding, hoover upstairs, empty all the bins.",
+        completed_weeks=3,
     ),
 )
 
@@ -589,6 +593,7 @@ REMINDERS: tuple[ReminderSpec, ...] = (
         (EMMA,),
         CATEGORY_SCHOOL,
         description="£18 for Sophie's Natural History Museum trip.",
+        personal_owner=EMMA,
     ),
     ReminderSpec(
         "Dentist appointment",
@@ -597,6 +602,7 @@ REMINDERS: tuple[ReminderSpec, ...] = (
         (EMMA,),
         CATEGORY_FAMILY,
         description="Oliver at 4pm — bring his dental card.",
+        personal_owner=EMMA,
     ),
     ReminderSpec(
         "Buy birthday present",
@@ -613,6 +619,7 @@ REMINDERS: tuple[ReminderSpec, ...] = (
         (EMMA,),
         CATEGORY_SCHOOL,
         description="Glue sticks, a maths set and two exercise books.",
+        personal_owner=EMMA,
     ),
     ReminderSpec(
         "Water the plants",
@@ -625,7 +632,7 @@ REMINDERS: tuple[ReminderSpec, ...] = (
     ),
     ReminderSpec(
         "Renew library books",
-        -1,
+        1,
         "16:00",
         (OLIVER, EMMA),
         CATEGORY_FAMILY,
@@ -671,7 +678,7 @@ TODOS: tuple[TodoSpec, ...] = (
         completed_day=0,
         completed_by=JAMES,
     ),
-    TodoSpec("Sort children's uniforms", -1, CATEGORY_SCHOOL, people=(EMMA,)),
+    TodoSpec("Sort children's uniforms", -1, CATEGORY_SCHOOL, personal_owner=EMMA),
     TodoSpec("Plan weekend activities", 3, CATEGORY_FAMILY, people=ADULTS),
     TodoSpec(
         "Clean out fridge",
@@ -688,7 +695,7 @@ TODOS: tuple[TodoSpec, ...] = (
         people=(EMMA,),
         description="Party bags, balloons and the cake order — see the party list.",
     ),
-    TodoSpec("Book pet sitter for Biscuit", 14, CATEGORY_HOUSEHOLD, people=(EMMA,)),
+    TodoSpec("Book pet sitter for Biscuit", 14, CATEGORY_HOUSEHOLD, personal_owner=EMMA),
     TodoSpec("Fix Oliver's bike puncture", 2, CATEGORY_HOUSEHOLD, people=(JAMES,)),
     TodoSpec(
         "Pack for the Lake District",
@@ -886,7 +893,7 @@ RECIPES: tuple[RecipeSpec, ...] = (
             "Top with mozzarella and bake at 190°C for 40 minutes.",
         ),
         ("batch cook",),
-        MealArt("tray", "#F1DFCF", "#C9552F", "#F2C95E", "#7A4A2A"),
+        MealArt("lasagne", "#F1DFCF", "#C9552F", "#F2C95E", "#A8622E"),
     ),
     RecipeSpec(
         "chicken-stir-fry",
@@ -1012,7 +1019,7 @@ RECIPES: tuple[RecipeSpec, ...] = (
             "Top with mozzarella and bake for 15 minutes.",
         ),
         ("vegetarian", "batch cook"),
-        MealArt("tray", "#EEF0DE", "#D9573A", "#F0D27C", "#5E9B3E"),
+        MealArt("bake", "#EEF0DE", "#D9573A", "#F6E3A8", "#4F8F3A"),
     ),
     RecipeSpec(
         "chicken-fajitas",
@@ -1248,7 +1255,31 @@ class MealPlanSpec:
     makes_leftovers: bool = False
 
 
+_SCHOOL_DAYS = (0, 1, 2, 3, 4, 7, 8, 9, 10, 11)
+_WEEKDAY_BREAKFASTS = ("Porridge and berries", "Toast and fruit")
+
 MEAL_PLAN: tuple[MealPlanSpec, ...] = (
+    *(
+        MealPlanSpec(
+            day,
+            MealSlot.breakfast,
+            quick_name=_WEEKDAY_BREAKFASTS[day % 2],
+            time="07:30",
+        )
+        for day in _SCHOOL_DAYS
+    ),
+    # Ties in with James's "Make packed lunches" routine.
+    *(
+        MealPlanSpec(
+            day,
+            MealSlot.lunch,
+            quick_name="Packed lunches",
+            cook=JAMES,
+            people=CHILDREN,
+            time="12:15",
+        )
+        for day in _SCHOOL_DAYS
+    ),
     MealPlanSpec(0, MealSlot.dinner, "spaghetti-bolognese", cook=JAMES, makes_leftovers=True),
     MealPlanSpec(1, MealSlot.dinner, "chicken-stir-fry", cook=EMMA),
     MealPlanSpec(2, MealSlot.dinner, "vegetable-pasta-bake", cook=JAMES),
@@ -1292,6 +1323,8 @@ class ListSpec:
     name: str
     icon: str
     items: tuple[ListItemSpec, ...]
+    # Personal Lists belong to Emma, the primary demo account.
+    personal: bool = False
 
 
 LISTS: tuple[ListSpec, ...] = (
@@ -1344,6 +1377,18 @@ LISTS: tuple[ListSpec, ...] = (
             ListItemSpec("Exercise books", "2"),
             ListItemSpec("PE socks for Oliver"),
         ),
+    ),
+    ListSpec(
+        "Christmas gift ideas",
+        "christmas",
+        (
+            ListItemSpec("James — running watch", note="Check the one he bookmarked"),
+            ListItemSpec("Mum — cashmere scarf", checked_by=EMMA),
+            ListItemSpec("Sophie — pottery class voucher"),
+            ListItemSpec("Oliver — LEGO space set"),
+            ListItemSpec("Teacher gifts", "2"),
+        ),
+        personal=True,
     ),
 )
 

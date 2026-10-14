@@ -254,6 +254,105 @@ def _food(canvas: Image.Image, art: MealArt, rng: random.Random) -> None:
                 s = r * 0.08
                 draw.rectangle((x - s, y - s, x + s, y + s), fill=accent)
         return
+    if motif == "lasagne":
+        # A plated slice seen from the front: the layers are what make it
+        # lasagne at a glance, never a generic red tray.
+        _plate(canvas, cx, cy, r)
+        draw = ImageDraw.Draw(canvas)
+        sw, sh, depth = r * 1.1, r * 0.72, r * 0.36
+        x0, y0 = cx - sw * 0.5 - depth * 0.35, cy - sh * 0.5 + depth * 0.4
+        cream = (247, 236, 214)
+        strata = (secondary, primary, cream, secondary, primary, cream, secondary)
+        band = sh / len(strata)
+        for index, fill in enumerate(strata):
+            top = y0 + index * band
+            draw.rectangle((x0, top, x0 + sw, top + band + 1), fill=fill)
+        # Top face: browned, bubbling cheese.
+        top_face = [
+            (x0, y0),
+            (x0 + depth * 0.7, y0 - depth),
+            (x0 + sw + depth * 0.7, y0 - depth),
+            (x0 + sw, y0),
+        ]
+        draw.polygon(top_face, fill=_shade(secondary, -0.05))
+        for _ in range(14):
+            t, s = rng.uniform(0.08, 0.92), rng.uniform(0.15, 0.85)
+            x = x0 + t * sw + s * depth * 0.7
+            y = y0 - s * depth
+            spot = r * rng.uniform(0.025, 0.05)
+            draw.ellipse((x - spot * 1.6, y - spot, x + spot * 1.6, y + spot), fill=accent)
+        # Side face, darker, so the slice reads as a solid block.
+        side = [
+            (x0 + sw, y0),
+            (x0 + sw + depth * 0.7, y0 - depth),
+            (x0 + sw + depth * 0.7, y0 + sh - depth),
+            (x0 + sw, y0 + sh),
+        ]
+        draw.polygon(side, fill=_shade(primary, -0.22))
+        # A trickle of sauce on the plate and a basil garnish.
+        _blob(draw, rng, x0 + sw * 0.15, y0 + sh + r * 0.06, r * 0.12, primary, 5)
+        _leaf(draw, x0 + sw * 0.55, y0 - depth * 0.55, r * 0.11, -0.5, (62, 125, 52))
+        _leaf(draw, x0 + sw * 0.68, y0 - depth * 0.45, r * 0.09, 0.6, (78, 145, 62))
+        return
+    if motif == "bake":
+        # An oval baking dish of penne with vegetables and melted cheese.
+        dw, dh = r * 1.45, r * 0.98
+        _soft_shadow(
+            canvas, (cx - dw, cy - dh * 0.85, cx + dw * 1.04, cy + dh * 1.12), 80, r * 0.08
+        )
+        draw = ImageDraw.Draw(canvas)
+        dish = (196, 104, 70)
+        draw.ellipse((cx - dw, cy - dh, cx + dw, cy + dh), fill=dish)
+        draw.ellipse(
+            (cx - dw * 0.92, cy - dh * 0.88, cx + dw * 0.92, cy + dh * 0.88),
+            fill=_shade(primary, -0.1),
+        )
+        iw, ih = dw * 0.84, dh * 0.78
+        tube = (238, 200, 118)
+        for _ in range(70):
+            angle = rng.uniform(0, 2 * math.pi)
+            dist = math.sqrt(rng.uniform(0, 1))
+            x = cx + math.cos(angle) * dist * iw
+            y = cy + math.sin(angle) * dist * ih
+            heading = rng.uniform(0, math.pi)
+            length, width = r * 0.13, r * 0.045
+            dx, dy = math.cos(heading), math.sin(heading)
+            colour = _shade(tube, rng.uniform(-0.08, 0.08))
+            draw.line(
+                [(x - dx * length, y - dy * length), (x + dx * length, y + dy * length)],
+                fill=colour,
+                width=int(width * 2),
+            )
+            # The hollow end of each penne tube.
+            draw.ellipse(
+                (
+                    x + dx * length - width,
+                    y + dy * length - width * 0.8,
+                    x + dx * length + width,
+                    y + dy * length + width * 0.8,
+                ),
+                fill=_shade(tube, -0.3),
+            )
+        # Courgette slices, peppers and spinach.
+        for _ in range(9):
+            angle, dist = rng.uniform(0, 2 * math.pi), math.sqrt(rng.uniform(0, 0.8))
+            x, y = cx + math.cos(angle) * dist * iw, cy + math.sin(angle) * dist * ih
+            s = r * 0.07
+            draw.ellipse((x - s, y - s, x + s, y + s), fill=(74, 132, 58))
+            draw.ellipse(
+                (x - s * 0.72, y - s * 0.72, x + s * 0.72, y + s * 0.72), fill=(214, 228, 160)
+            )
+        _scatter(draw, rng, cx, cy, ih * 0.85, 14, (r * 0.03, r * 0.045), (primary, (232, 168, 52)))
+        for _ in range(6):
+            x = cx + rng.uniform(-0.6, 0.6) * iw
+            y = cy + rng.uniform(-0.6, 0.6) * ih
+            _leaf(draw, x, y, r * 0.07, rng.uniform(0, math.pi), accent)
+        # Melted cheese patches, lightly browned.
+        for _ in range(7):
+            x = cx + rng.uniform(-0.55, 0.55) * iw
+            y = cy + rng.uniform(-0.55, 0.55) * ih
+            _blob(draw, rng, x, y, r * 0.1, secondary, 4)
+        return
     if motif in {"tray", "brownies"}:
         tw, th = r * 1.5, r * 1.05
         _soft_shadow(canvas, (cx - tw, cy - th * 0.9, cx + tw * 1.04, cy + th * 1.12), 80, r * 0.08)
@@ -705,8 +804,13 @@ def render_vehicle_illustration(slug: str, colour_hex: str, body_style: str) -> 
 
     colour = _rgb(colour_hex)
     profile = _BODY_PROFILES.get(body_style, _BODY_PROFILES["saloon"])
-    left, right = w * 0.12, w * 0.88
-    height = h * (0.36 if body_style == "saloon" else 0.42)
+    # Driveway shows vehicle photos as square thumbnails (object-fit: cover),
+    # which keep only the centre 62.5% of a 16:10 image: the whole car sits
+    # inside that square.
+    left, right = w * 0.215, w * 0.785
+    # Details below were drawn for a car 76% of the frame wide.
+    scale = (right - left) / (w * 0.76)
+    height = h * (0.27 if body_style == "saloon" else 0.32)
     top = ground - h * 0.05 - height
 
     def point(fx: float, fy: float) -> tuple[float, float]:
@@ -734,14 +838,14 @@ def render_vehicle_illustration(slug: str, colour_hex: str, body_style: str) -> 
     draw.line(
         (pillar, min(p[1] for p in glass), pillar, max(p[1] for p in glass)),
         fill=colour,
-        width=int(w * 0.008),
+        width=int(w * 0.008 * scale),
     )
     draw.polygon(
         [
             glass[0],
             glass[1],
-            (glass[1][0] + w * 0.04, glass[1][1]),
-            (glass[0][0] + w * 0.08, glass[0][1]),
+            (glass[1][0] + w * 0.04 * scale, glass[1][1]),
+            (glass[0][0] + w * 0.08 * scale, glass[0][1]),
         ],
         fill=(92, 110, 128),
     )
@@ -754,10 +858,12 @@ def render_vehicle_illustration(slug: str, colour_hex: str, body_style: str) -> 
     for fx in (0.36, 0.56):
         hx, hy = point(fx, 0.55)
         draw.rounded_rectangle(
-            (hx, hy, hx + w * 0.03, hy + h * 0.008), radius=4, fill=_shade(colour, -0.3)
+            (hx, hy, hx + w * 0.03 * scale, hy + h * 0.008 * scale),
+            radius=4,
+            fill=_shade(colour, -0.3),
         )
     # Wheels.
-    wheel_r = h * 0.1
+    wheel_r = h * 0.1 * scale
     for fx in (0.2, 0.8):
         wx, _ = point(fx, 0.86)
         wy = ground - wheel_r * 0.85

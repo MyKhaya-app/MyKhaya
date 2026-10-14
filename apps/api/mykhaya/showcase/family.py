@@ -317,7 +317,12 @@ async def seed_nudges(ctx: ShowcaseContext) -> int:
             HouseholdRoutineMember(routine_id=routine.id, user_id=user_id)
             for user_id in ctx.user_ids(spec.people)
         )
-        for offset in spec.completed_days:
+        offsets = list(spec.completed_days)
+        if spec.weekday is not None and spec.completed_weeks:
+            # The most recent occurrences strictly before the reference day.
+            latest = -1 - (ctx.day(-1).weekday() - spec.weekday) % 7
+            offsets.extend(latest - 7 * week for week in range(spec.completed_weeks))
+        for offset in offsets:
             db.add(
                 HouseholdRoutineCompletion(
                     routine_id=routine.id,
@@ -329,12 +334,16 @@ async def seed_nudges(ctx: ShowcaseContext) -> int:
         total += 1
     for reminder_spec in parker.REMINDERS:
         first_due = min((reminder_spec.day, *reminder_spec.completed_days))
+        reminder_owner = (
+            ctx.users[reminder_spec.personal_owner] if reminder_spec.personal_owner else None
+        )
         reminder = Reminder(
             group_id=ctx.home_id,
             title=reminder_spec.title,
             description=reminder_spec.description,
             category_id=ctx.nudge_categories[reminder_spec.category].id,
-            scope=RoutineScope.household,
+            scope=RoutineScope.personal if reminder_owner else RoutineScope.household,
+            owner_user_id=reminder_owner.id if reminder_owner else None,
             due_date=ctx.day(first_due),
             due_time=ctx.clock(reminder_spec.time),
             repeat=reminder_spec.repeat,
@@ -344,10 +353,11 @@ async def seed_nudges(ctx: ShowcaseContext) -> int:
         )
         db.add(reminder)
         await db.flush()
-        db.add_all(
-            ReminderMember(reminder_id=reminder.id, user_id=user_id)
-            for user_id in ctx.user_ids(reminder_spec.people)
-        )
+        if reminder_owner is None:
+            db.add_all(
+                ReminderMember(reminder_id=reminder.id, user_id=user_id)
+                for user_id in ctx.user_ids(reminder_spec.people)
+            )
         for offset in reminder_spec.completed_days:
             db.add(
                 ReminderCompletion(
@@ -470,7 +480,7 @@ async def seed_lists(ctx: ShowcaseContext) -> int:
             group_id=ctx.home_id,
             name=spec.name,
             icon=spec.icon,
-            scope=RoutineScope.household.value,
+            scope=(RoutineScope.personal if spec.personal else RoutineScope.household).value,
             created_by=ctx.owner.id,
         )
         db.add(household_list)

@@ -40,12 +40,17 @@ from mykhaya.models import (
     FeatureFlag,
     FeatureKey,
     GuardianAssignment,
+    HouseholdList,
     HouseholdRelationship,
+    HouseholdRoutine,
+    HouseholdRoutineCompletion,
     ManagedDemoHome,
     Membership,
     PlatformRole,
+    Reminder,
     SubscriptionPlan,
     SubscriptionProvider,
+    Todo,
     User,
 )
 from mykhaya.showcase import parker
@@ -162,6 +167,67 @@ async def test_family_demo_provisions_a_populated_family_home(
     assert budget.json()["detail"]["code"] == "plan_feature_unavailable"
     vehicles = await household_client.get(f"/api/v1/homes/{home_id}/vehicles")
     assert vehicles.status_code in (403, 404)
+
+
+@pytest.mark.asyncio
+async def test_primary_account_landing_views_are_populated_and_mostly_on_track(
+    admin_client: AsyncClient,
+    admin_factory: Factory,
+    demo_keys: list[str],
+) -> None:
+    """Nudges and Lists open on the signed-in member's Personal tab, so Emma
+    must own personal items there; and the dashboard must not open on a run
+    of overdue weekly chores."""
+    admin = await admin_factory(PlatformRole.owner)
+    created = await provision(
+        admin_client, admin, demo_keys, fixture_type="demo", showcase_reference_date=str(PINNED)
+    )
+    home_id = uuid.UUID(created["home_id"])
+    async with SessionFactory() as db:
+        owner_id = await db.scalar(
+            select(ManagedDemoHome.owner_user_id).where(ManagedDemoHome.home_id == home_id)
+        )
+        personal_reminders = await db.scalar(
+            select(func.count())
+            .select_from(Reminder)
+            .where(Reminder.group_id == home_id, Reminder.owner_user_id == owner_id)
+        )
+        personal_todos = await db.scalar(
+            select(func.count())
+            .select_from(Todo)
+            .where(Todo.group_id == home_id, Todo.owner_user_id == owner_id)
+        )
+        personal_lists = await db.scalar(
+            select(func.count())
+            .select_from(HouseholdList)
+            .where(HouseholdList.group_id == home_id, HouseholdList.scope == "personal")
+        )
+        assert personal_reminders == sum(1 for r in parker.REMINDERS if r.personal_owner)
+        assert personal_reminders and personal_reminders >= 3
+        assert personal_todos and personal_todos >= 3
+        assert personal_lists == 1
+
+        weekly = (
+            await db.scalars(
+                select(HouseholdRoutine).where(
+                    HouseholdRoutine.group_id == home_id,
+                    HouseholdRoutine.repeat_unit == "weekly",
+                )
+            )
+        ).all()
+        assert weekly
+        for routine in weekly:
+            yesterday = PINNED - timedelta(days=1)
+            spec = next(s for s in parker.ROUTINES if s.title == routine.title)
+            assert spec.weekday is not None
+            latest = yesterday - timedelta(days=(yesterday.weekday() - spec.weekday) % 7)
+            done = await db.scalar(
+                select(HouseholdRoutineCompletion.id).where(
+                    HouseholdRoutineCompletion.routine_id == routine.id,
+                    HouseholdRoutineCompletion.occurrence_date == latest,
+                )
+            )
+            assert done is not None, f"{routine.title} is overdue on the showcase dashboard"
 
 
 @pytest.mark.asyncio
