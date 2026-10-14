@@ -930,7 +930,12 @@ textarea {
   border-radius: 0 0 var(--radius-hero) var(--radius-hero);
   box-shadow: var(--shadow-hero);
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  /* Each side column is never narrower than its own controls (logo; bell +
+     avatar), and the Home name's column may shrink to nothing so the name
+     ellipsises instead of running under the bell on narrow phones or with a
+     long Home name. With room to spare both 1fr sides are wider than their
+     contents, so the name stays centred exactly as before. */
+  grid-template-columns: minmax(max-content, 1fr) minmax(0, auto) minmax(max-content, 1fr);
   overflow: hidden;
   padding: calc(var(--safe-top) + 13px) 20px 13px;
   position: sticky;
@@ -990,10 +995,15 @@ textarea {
   font-weight: 700;
   gap: 0.3rem;
   grid-column: 2;
-  justify-self: center;
+  /* Fills its column (which is exactly the name's width when there is room)
+     so a squeezed column ellipsises the name rather than letting the button
+     spill out under the logo or the bell. */
+  justify-content: center;
+  justify-self: stretch;
   letter-spacing: -0.01em;
   max-width: min(52vw, 220px);
   min-height: 38px;
+  min-width: 0;
   padding: 0.2rem 0.5rem;
 }
 .app-header-home:hover {
@@ -11214,6 +11224,12 @@ a.family-feed-row {
   }
   .app-shell:not(.native-shell-app) .home-page > .home-summary-card {
     margin: 0;
+  }
+  /* The hero tuck is a phone treatment: summary cards already sit flat in
+     the wide grid (above), so a leading Birthdays banner does too, rather
+     than sliding under the hero. */
+  .app-shell:not(.native-shell-app) .home-page > .birthday-banner.home-section-overlap {
+    margin-top: 0;
   }
   .app-shell:not(.native-shell-app) .standard-page.calendar-page {
     max-width: 1320px;

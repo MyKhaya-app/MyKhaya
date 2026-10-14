@@ -1528,7 +1528,11 @@ BUDGET_CATEGORIES: tuple[BudgetCategorySpec, ...] = (
         Decimal("1000"),
         (
             FixedCommitment("Rainy-day savings", Decimal("600"), 26, "Easy-access saver"),
-            FixedCommitment("Junior ISAs", Decimal("200"), 26, "£100 each for Sophie and Oliver"),
+            # A standing order early in the month, so mid-month Savings shows
+            # real progress rather than nothing until the end-of-month transfers.
+            FixedCommitment(
+                "Junior ISAs", Decimal("200"), 2, "Standing order — £100 each for Sophie and Oliver"
+            ),
             FixedCommitment("Pension top-up", Decimal("200"), 27),
         ),
     ),

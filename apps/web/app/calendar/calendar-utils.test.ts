@@ -21,6 +21,7 @@ import {
   isCalendarLockedForSelection,
   isCalendarVisible,
   isEventStillUpcoming,
+  initialCalendarView,
   layoutWeekEvents,
   monthCells,
   monthRange,
@@ -1814,6 +1815,56 @@ describe("layoutWeekEvents — multi-day lane priority in the month grid", () =>
     const rows = layout([longUnderlyingEndsEarlyThisWeek, shortButFullyVisible]);
     expect(rowOf(rows, "short-visible")).toBeLessThan(rowOf(rows, "long-underlying"));
   });
+
+  it("keeps a daily recurring event in one lane all week, ordered by time not title", () => {
+    // A weekday 08:30 school run, plus later events whose titles sort first.
+    const schoolRun = [5, 6, 7, 8, 9].map((day) =>
+      event({
+        occurrence_id: `run-${day}`,
+        event_id: "school-run",
+        title: "School drop-off",
+        recurrence: "weekdays",
+        start_at: `2026-01-0${day}T08:30:00+00:00`,
+        end_at: `2026-01-0${day}T08:50:00+00:00`,
+      }),
+    );
+    const later = [
+      event({ occurrence_id: "coding", title: "Coding club", start_at: "2026-01-06T15:15:00+00:00", end_at: "2026-01-06T16:15:00+00:00" }),
+      event({ occurrence_id: "dentist", title: "Dentist", start_at: "2026-01-07T16:00:00+00:00", end_at: "2026-01-07T16:45:00+00:00" }),
+      event({ occurrence_id: "art", title: "Art class", start_at: "2026-01-07T17:00:00+00:00", end_at: "2026-01-07T18:00:00+00:00" }),
+    ];
+    const rows = layout([...later, ...schoolRun]);
+    for (const day of [5, 6, 7, 8, 9]) expect(rowOf(rows, `run-${day}`)).toBe(0);
+    expect(rowOf(rows, "coding")).toBe(1);
+    expect(rowOf(rows, "dentist")).toBe(1);
+    expect(rowOf(rows, "art")).toBe(2);
+  });
+
+  it("puts all-day events before timed ones on the same day", () => {
+    const timed = event({ occurrence_id: "timed", title: "A timed event", start_at: "2026-01-06T07:00:00+00:00", end_at: "2026-01-06T08:00:00+00:00" });
+    const allDay = event({ occurrence_id: "all-day", title: "Zoo trip", start_at: "2026-01-06T00:00:00+00:00", end_at: "2026-01-07T00:00:00+00:00", is_all_day: true });
+    const rows = layout([timed, allDay]);
+    expect(rowOf(rows, "all-day")).toBe(0);
+    expect(rowOf(rows, "timed")).toBe(1);
+  });
+
+  it("never needs more lanes on a day than that day has events", () => {
+    const events = [5, 6, 7, 8, 9, 10, 11].flatMap((day) =>
+      Array.from({ length: (day % 3) + 1 }, (_, i) =>
+        event({
+          occurrence_id: `d${day}-${i}`,
+          title: `${String.fromCharCode(90 - i)} event`,
+          start_at: `2026-01-${String(day).padStart(2, "0")}T${String(9 + 3 - i).padStart(2, "0")}:00:00+00:00`,
+          end_at: `2026-01-${String(day).padStart(2, "0")}T${String(10 + 3 - i).padStart(2, "0")}:00:00+00:00`,
+        }),
+      ),
+    );
+    const rows = layout(events);
+    for (const day of [5, 6, 7, 8, 9, 10, 11]) {
+      const onDay = rows.filter((r) => r.event.occurrence_id.startsWith(`d${day}-`));
+      expect(Math.max(...onDay.map((r) => r.row)) + 1).toBe(onDay.length);
+    }
+  });
 });
 
 // Free/Family visual QA follow-up, Part A: the new-event Calendar picker's
@@ -1921,5 +1972,24 @@ describe("resolveMultiDaySegmentDay — which date a Month-view tap resolves to"
   it("tolerates a zero-width rect (not yet laid out) without dividing by zero", () => {
     const rect = { left: 0, width: 0 };
     expect(() => resolveMultiDaySegmentDay(days, 0, 3, 50, rect)).not.toThrow();
+  });
+});
+
+describe("initialCalendarView", () => {
+  it("defaults to Agenda on a phone and Month on the desktop shell", () => {
+    expect(initialCalendarView(null, false)).toBe("agenda");
+    expect(initialCalendarView(null, true)).toBe("month");
+  });
+
+  it("always honours a saved view", () => {
+    for (const saved of ["month", "week", "day", "agenda"] as const) {
+      expect(initialCalendarView(saved, false)).toBe(saved);
+      expect(initialCalendarView(saved, true)).toBe(saved);
+    }
+  });
+
+  it("ignores an unrecognised saved value", () => {
+    expect(initialCalendarView("", false)).toBe("agenda");
+    expect(initialCalendarView("timeline", true)).toBe("month");
   });
 });

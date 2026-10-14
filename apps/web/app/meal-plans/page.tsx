@@ -48,6 +48,7 @@ import { useActiveHome } from "@/components/use-active-home";
 import { isNativeShell } from "@/components/native-runtime";
 import { pickAvatarFromGallery } from "@/components/native-avatar-picker";
 import { useDaySwipe } from "./use-day-swipe";
+import { recentPlannedLabel } from "./recent-label";
 
 // Meal Plans is a native MyKhaya module, not a bolted-on mini-app — this
 // page reuses AppShell, BottomSheet, Avatar/AvatarStack, .card/.button/
@@ -130,24 +131,6 @@ function dayHeading(iso: string): string {
 function formatTime(value: string | null): string | null {
   if (!value) return null;
   return value.slice(0, 5);
-}
-// Calendar-date subtraction, not a Date.now() wall-clock diff — comparing
-// "now" (whatever time of day it happens to be) against a date's UTC
-// midnight would round today itself up to "Yesterday" once the clock
-// passes noon UTC. Both sides are anchored at UTC midnight instead, the
-// same convention addDays/startOfWeek already use.
-function daysSince(iso: string): number {
-  const today = new Date(`${isoToday()}T00:00:00Z`).getTime();
-  const then = new Date(`${iso}T00:00:00Z`).getTime();
-  return Math.round((today - then) / 86_400_000);
-}
-function relativeWeeksAgo(iso: string): string {
-  const days = daysSince(iso);
-  if (days <= 0) return "Today";
-  if (days === 1) return "Yesterday";
-  if (days < 14) return `${days} days ago`;
-  const weeks = Math.round(days / 7);
-  return `${weeks} week${weeks === 1 ? "" : "s"} ago`;
 }
 
 function entryTitle(entry: MealPlanEntry): string {
@@ -1761,7 +1744,7 @@ function MealsLibraryTab({
               >
                 <span>{row.meal.name}</span>
                 <span className="quiet-state">
-                  Last planned {relativeWeeksAgo(row.last_planned)}
+                  {recentPlannedLabel(row.last_planned, isoToday())}
                 </span>
               </button>
             ))}

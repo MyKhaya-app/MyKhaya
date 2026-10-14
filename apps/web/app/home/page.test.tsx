@@ -498,6 +498,51 @@ describe("Home — hero markup contract", () => {
   });
 });
 
+describe("Home — first card hero overlap", () => {
+  function enableCalendar() {
+    (api.featureMatrix as ReturnType<typeof vi.fn>).mockResolvedValue({
+      features: [{ feature: "calendar", enabled: true }],
+    });
+  }
+
+  it("tucks the Today card into the hero when no birthday banner leads", async () => {
+    enableCalendar();
+    render(<HomePage />);
+    await screen.findByText("Today");
+
+    const overlapping = document.querySelectorAll(".home-page > .home-section-overlap");
+    expect(overlapping).toHaveLength(1);
+    expect(overlapping[0]?.classList.contains("home-today-card")).toBe(true);
+  });
+
+  it("gives the overlap to the Birthdays banner so Today is never pulled over it", async () => {
+    enableCalendar();
+    const now = new Date();
+    (api.birthdays as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [
+        {
+          owner_type: "child",
+          owner_id: "c1",
+          display_name: "Sophie Parker",
+          month: now.getMonth() + 1,
+          day: now.getDate(),
+          next_occurrence_date: now.toISOString().slice(0, 10),
+        },
+      ],
+    });
+    render(<HomePage />);
+    await screen.findByText("Birthdays this month");
+    await screen.findByText("Today");
+
+    const overlapping = document.querySelectorAll(".home-page > .home-section-overlap");
+    expect(overlapping).toHaveLength(1);
+    expect(overlapping[0]?.classList.contains("birthday-banner")).toBe(true);
+    expect(document.querySelector(".home-today-card")?.classList.contains("home-section-overlap")).toBe(
+      false,
+    );
+  });
+});
+
 describe("Home — Coming up", () => {
   it("shows the empty-state copy when there are genuinely no future events", async () => {
     enableCalendarOnly();

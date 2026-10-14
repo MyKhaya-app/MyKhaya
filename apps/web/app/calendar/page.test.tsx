@@ -74,8 +74,25 @@ vi.mock("@mykhaya/api-client", async (importOriginal) => {
 
 const { api } = await import("@mykhaya/api-client");
 
+// Calendar's initial view depends on the viewport (Agenda on phones, Month on
+// the desktop/tablet shell) when nothing is saved. These suites exercise Month
+// behaviour, so they run as a desktop viewport unless a test says otherwise.
+function setViewport(desktop: boolean) {
+  window.matchMedia = ((query: string) => ({
+    matches: desktop && query.includes("min-width: 760px"),
+    media: query,
+    onchange: null,
+    addListener: () => {},
+    removeListener: () => {},
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    dispatchEvent: () => false,
+  })) as unknown as typeof window.matchMedia;
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
+  setViewport(true);
   (api.me as ReturnType<typeof vi.fn>).mockResolvedValue({ id: "u1", display_name: "Megan" });
   (api.featureMatrix as ReturnType<typeof vi.fn>).mockResolvedValue({
     features: [{ feature: "calendar", enabled: true }],
@@ -1726,5 +1743,62 @@ describe("Calendar — Recurring event scope chooser", () => {
 
     resolveDelete();
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Delete recurring event" })).toBeNull());
+  });
+});
+
+describe("Calendar — initial view", () => {
+  const VIEW_KEY = "mykhaya.calendar.view";
+  beforeEach(() => {
+    window.localStorage.clear();
+  });
+
+  it("opens a new phone user in Agenda without rendering the month grid first", async () => {
+    setViewport(false);
+    render(<CalendarPage />);
+    expect(await screen.findByRole("region", { name: "Upcoming events" })).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Month view" })).not.toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: "Calendar view" })).toHaveValue("agenda");
+    // Resolving the default does not save it: only an explicit choice persists.
+    expect(window.localStorage.getItem(VIEW_KEY)).toBeNull();
+  });
+
+  it("keeps Month as the desktop default for a new user", async () => {
+    setViewport(true);
+    render(<CalendarPage />);
+    expect(await screen.findByRole("region", { name: "Month view" })).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Upcoming events" })).not.toBeInTheDocument();
+  });
+
+  it("honours a returning phone user's saved Month choice", async () => {
+    setViewport(false);
+    window.localStorage.setItem(VIEW_KEY, "month");
+    render(<CalendarPage />);
+    expect(await screen.findByRole("region", { name: "Month view" })).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Upcoming events" })).not.toBeInTheDocument();
+  });
+
+  it("honours a returning desktop user's saved Agenda choice", async () => {
+    setViewport(true);
+    window.localStorage.setItem(VIEW_KEY, "agenda");
+    render(<CalendarPage />);
+    expect(await screen.findByRole("region", { name: "Upcoming events" })).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Month view" })).not.toBeInTheDocument();
+  });
+
+  it("keeps an explicit choice made on a phone", async () => {
+    setViewport(false);
+    render(<CalendarPage />);
+    const select = await screen.findByRole("combobox", { name: "Calendar view" });
+    await screen.findByRole("region", { name: "Upcoming events" });
+    fireEvent.change(select, { target: { value: "week" } });
+    expect(await screen.findByRole("region", { name: "Week view" })).toBeInTheDocument();
+    expect(window.localStorage.getItem(VIEW_KEY)).toBe("week");
+  });
+
+  it("treats an unrecognised saved value as no preference", async () => {
+    setViewport(false);
+    window.localStorage.setItem(VIEW_KEY, "timeline");
+    render(<CalendarPage />);
+    expect(await screen.findByRole("region", { name: "Upcoming events" })).toBeInTheDocument();
   });
 });

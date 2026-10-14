@@ -442,6 +442,16 @@ async def test_budget_periods_and_transactions_are_consistent(
     ]
     assert "paid" in statuses and "not_paid" in statuses
     assert all(row["received_amount"] == 0 for row in current["income"])
+    # The early-month savings standing order is paid and counted in the
+    # category's actual; the end-of-month transfers are still to come.
+    savings = {row["category_name"]: row for row in current["categories"]}["Savings"]
+    assert savings["actual_amount"] == 200
+    savings_items = {item["name"]: item["payment_status"] for item in savings["items"]}
+    assert savings_items == {
+        "Rainy-day savings": "not_paid",
+        "Junior ISAs": "paid",
+        "Pension top-up": "not_paid",
+    }
 
     # Next month: planned, nothing spent or paid yet.
     assert all(row["actual_amount"] == 0 for row in upcoming["categories"])
