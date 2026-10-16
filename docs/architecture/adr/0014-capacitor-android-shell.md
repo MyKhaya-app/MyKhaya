@@ -88,7 +88,7 @@ non-iOS native shell.
 
 ## Explicit non-decisions
 
-This ADR does not introduce, and this phase does not implement:
+This original shell phase did not introduce, and did not implement:
 
 - A separate Android UI or layout. The shared responsive frontend and its
   existing `.native-shell` / `.native-shell-app` CSS model (which already
@@ -98,17 +98,16 @@ This ADR does not introduce, and this phase does not implement:
   remains exclusively in `apps/web`/`apps/api`.
 - A bundled frontend. Exactly as with iOS, `webDir: "www"` holds only a
   brief "Connecting to MyKhaya…" fallback, never the real UI.
-- Firebase Cloud Messaging (FCM) / push notifications. No Firebase
-  dependency, no `google-services.json` (the android shell's `.gitignore`
-  explicitly excludes it), no notification channels or permissions.
-- Biometric unlock / `BiometricPrompt` configuration.
-- Android App Links / `assetlinks.json`.
+- Firebase project credentials or a committed `google-services.json`.
+- Android App Links domain verification, which requires environment-specific
+  signing certificate fingerprints.
 - Google Play Billing.
 - Android home-screen widgets.
 
-Each of the above is real, scoped, later-phase work — not omitted by
-oversight, and not blocked by anything decided here. They belong to later
-implementation phases identified in the prior Android-readiness audit.
+The later Android capability work has since wired FCM, biometric unlock,
+notification channels, Android permission handling, and the App Links manifest
+intent filter. Live Firebase delivery and domain verification remain external
+validation/setup work; see `docs/mobile/android-firebase-and-links.md`.
 
 ## What was and wasn't verified in this phase
 

@@ -17,8 +17,24 @@ os.environ.setdefault(
 
 
 from collections.abc import AsyncIterator  # noqa: E402
+from pathlib import Path  # noqa: E402
 
 import pytest  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def isolated_image_storage(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Root the uploaded-image storage seams in a per-test directory.
+
+    Requests that store images (avatars, meal images, vehicle photos — and
+    the showcase Demo Homes that seed all three) then never depend on the
+    deployment's /data volumes existing in the test container, and never
+    leave files behind between tests."""
+    from mykhaya.config import get_settings
+
+    settings = get_settings()
+    for name in ("avatar_storage_dir", "meal_image_storage_dir", "vehicle_photo_storage_dir"):
+        monkeypatch.setattr(settings, name, str(tmp_path / name))
 
 
 @pytest.fixture(autouse=True)

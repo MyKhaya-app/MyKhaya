@@ -1,5 +1,12 @@
 apply plugin: 'com.android.application'
 
+def developmentFirebaseConfig = file('src/development/google-services.json')
+def productionFirebaseConfig = file('src/production/google-services.json')
+def rootFirebaseConfig = file('google-services.json')
+def requestedGradleTasks = gradle.startParameter.taskNames.collect { it.toLowerCase() }
+def developmentBuildRequested = requestedGradleTasks.any { it.contains('development') }
+def productionBuildRequested = requestedGradleTasks.any { it.contains('production') }
+
 android {
     namespace = "app.mykhaya.mobile"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -7,13 +14,29 @@ android {
         applicationId "app.mykhaya.mobile"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0"
+        versionCode 30
+        versionName "0.1.30"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
              // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
+        }
+    }
+    flavorDimensions "environment"
+    productFlavors {
+        development {
+            dimension "environment"
+            applicationId "app.mykhaya.mobile"
+            versionNameSuffix "-dev"
+            resValue "string", "app_name", "MyKhaya-Dev"
+            manifestPlaceholders = [appLinkHost: "dev.mykhaya.app"]
+        }
+        production {
+            dimension "environment"
+            applicationId "app.mykhaya.mobile.prod"
+            resValue "string", "app_name", "MyKhaya"
+            manifestPlaceholders = [appLinkHost: "mykhaya.app"]
         }
     }
     buildTypes {
@@ -45,10 +68,44 @@ dependencies {
 apply from: 'capacitor.build.gradle'
 
 try {
-    def servicesJSON = file('google-services.json')
-    if (servicesJSON.text) {
+    def firebaseConfigForRequestedVariant = rootFirebaseConfig.isFile() ||
+        (developmentBuildRequested && developmentFirebaseConfig.isFile()) ||
+        (productionBuildRequested && productionFirebaseConfig.isFile())
+    if (firebaseConfigForRequestedVariant) {
         apply plugin: 'com.google.gms.google-services'
     }
 } catch(Exception e) {
-    logger.info("google-services.json not found, google-services plugin not applied. Push Notifications won't work")
+    logger.info("Firebase configuration could not be inspected; google-services plugin not applied. Push Notifications won't work")
+}
+
+tasks.register('verifyDevelopmentFirebaseConfiguration') {
+    doLast {
+        if (!developmentFirebaseConfig.isFile()) {
+            throw new GradleException(
+                "Missing DEV Firebase configuration at ${developmentFirebaseConfig}. " +
+                "Download the DEV Firebase google-services.json for package app.mykhaya.mobile to this path."
+            )
+        }
+
+        def config = new groovy.json.JsonSlurper().parse(developmentFirebaseConfig)
+        def projectId = config.project_info?.project_id
+        def matchingClient = (config.client ?: []).find { client ->
+            client.client_info?.android_client_info?.package_name == 'app.mykhaya.mobile'
+        }
+
+        if (!(projectId instanceof String) || projectId.trim().isEmpty()) {
+            throw new GradleException("DEV Firebase configuration has no project_info.project_id: ${developmentFirebaseConfig}")
+        }
+        if (matchingClient == null) {
+            throw new GradleException(
+                "DEV Firebase configuration does not contain an Android client for app.mykhaya.mobile: ${developmentFirebaseConfig}"
+            )
+        }
+
+        logger.lifecycle("DEV Firebase configuration verified for app.mykhaya.mobile (project ${projectId})")
+    }
+}
+
+tasks.matching { it.name in ['preDevelopmentDebugBuild', 'preDevelopmentReleaseBuild'] }.configureEach {
+    dependsOn tasks.named('verifyDevelopmentFirebaseConfiguration')
 }

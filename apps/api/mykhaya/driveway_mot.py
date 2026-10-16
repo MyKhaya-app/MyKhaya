@@ -52,6 +52,7 @@ from mykhaya.driveway_mot_provider import (
 from mykhaya.driveway_reminders import DrivewayReminderEventType, upsert_driveway_reminder
 from mykhaya.driveway_sensitive import registration_for_provider
 from mykhaya.models import PlatformSetting, Vehicle, VehicleMotDefect, VehicleMotTest
+from mykhaya.showcase.guards import is_showcase_home
 
 log = structlog.get_logger("driveway_mot")
 
@@ -329,6 +330,10 @@ async def refresh_vehicle_mot(
     so the caller can respond with the cached view plus a safe message."""
     if not is_mot_eligible(vehicle):
         raise MotRefreshRefused("unsupported_country")
+    if await is_showcase_home(db, home_id):
+        # Showcase Demo Homes hold fictional registrations: never send them
+        # to DVSA, whatever the UI asks for.
+        raise MotRefreshRefused("provider_unavailable")
     registration = registration_for_provider(vehicle, settings)
     if not registration:
         raise MotRefreshRefused("no_registration")
@@ -457,7 +462,11 @@ async def mot_view(
         )
     ).all()
     eligible = is_mot_eligible(vehicle)
-    available = eligible and await mot_provider_available(db, settings)
+    available = (
+        eligible
+        and not await is_showcase_home(db, home_id)
+        and await mot_provider_available(db, settings)
+    )
     has_registration = bool(registration_for_provider(vehicle, settings)) if eligible else False
     refreshed_at = vehicle.mot_refreshed_at
     stale = refreshed_at is None or datetime.now(UTC) - refreshed_at >= timedelta(

@@ -67,6 +67,7 @@ captures/
 # line is not the fix if this file is ever genuinely needed — that decision
 # belongs to the phase that actually adds FCM.
 app/google-services.json
+app/src/**/google-services.json
 
 # Freeline
 freeline.py

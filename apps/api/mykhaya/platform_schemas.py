@@ -252,21 +252,59 @@ class NoteRequest(StrictModel):
     body: str = Field(min_length=2, max_length=1000)
 
 
+ManagedDemoTypeLiteral = Literal["apple_review", "demo", "qa_test", "free_demo", "ultimate_demo"]
+SHOWCASE_FIXTURE_TYPE_VALUES = frozenset({"demo", "ultimate_demo"})
+
+
 class ManagedDemoHomeCreate(StrictModel):
     fixture_key: str = Field(min_length=3, max_length=80, pattern=r"^[a-z0-9][a-z0-9-]+$")
     display_name: str = Field(min_length=2, max_length=100)
-    fixture_type: Literal["apple_review", "demo", "qa_test", "free_demo"]
+    fixture_type: ManagedDemoTypeLiteral
     email: EmailStr
     password: str = Field(min_length=12, max_length=128)
     expires_at: datetime | None = None
     enabled: bool = True
+    # Family/Ultimate Demo only. None means the default: populated with the
+    # Parker family showcase. False provisions a clean Home on the same plan.
+    populate_showcase: bool | None = None
+    # Family/Ultimate Demo only: pin showcase dates to this day (screenshot
+    # mode). None rolls dates from the provisioning day.
+    showcase_reference_date: date | None = None
+
+    @model_validator(mode="after")
+    def _showcase_options_only_for_showcase(self) -> "ManagedDemoHomeCreate":
+        if self.fixture_type not in SHOWCASE_FIXTURE_TYPE_VALUES and (
+            self.populate_showcase is not None or self.showcase_reference_date is not None
+        ):
+            raise ValueError("Showcase options apply only to Family Demo and Ultimate Demo")
+        return self
+
+
+class ManagedDemoShowcaseReset(SensitiveActionRequest):
+    # None = rolling mode (dates relative to today); a date pins the content
+    # for consistent screenshot sessions.
+    reference_date: date | None = None
+
+
+class ManagedDemoTemplateModule(BaseModel):
+    key: str
+    name: str
+
+
+class ManagedDemoTemplateResponse(BaseModel):
+    fixture_type: ManagedDemoTypeLiteral
+    label: str
+    access: Literal["free", "family", "ultimate"]
+    showcase: bool
+    # Derived from the plan's real entitlements (mykhaya.showcase.registry).
+    showcase_modules: list[ManagedDemoTemplateModule]
 
 
 class ManagedDemoHomeResponse(BaseModel):
     id: uuid.UUID
     fixture_key: str
     display_name: str
-    fixture_type: Literal["apple_review", "demo", "qa_test", "free_demo"]
+    fixture_type: ManagedDemoTypeLiteral
     home_id: uuid.UUID
     owner_user_id: uuid.UUID
     status: Literal["enabled", "disabled", "expired"]
@@ -281,7 +319,13 @@ class ManagedDemoHomeResponse(BaseModel):
     # Reflects the Home's actual resolved subscription plan (see
     # mykhaya.routers.platform._managed_demo_response) — never a hardcoded
     # default, since Free Plan Demo must show "free" here, not "family".
-    access: Literal["family", "free"]
+    access: Literal["family", "free", "ultimate"]
+    showcase: bool = False
+    showcase_populated: bool = False
+    showcase_date_mode: Literal["rolling", "pinned"] | None = None
+    showcase_reference_date: date | None = None
+    # Live content volumes per module; showcase Homes only.
+    showcase_counts: dict[str, int] | None = None
 
 
 class ManagedDemoPasswordReset(StrictModel):

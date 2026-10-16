@@ -497,11 +497,17 @@ export function layoutWeekEvents(
     return a.event.occurrence_id.localeCompare(b.event.occurrence_id);
   });
 
-  // Unchanged from the pre-existing single sort: start date, then title.
+  // Start date, then the same chronological order the Day List shows
+  // (compareDayEvents: all-day first, then start time, then title). Ordering
+  // by time rather than title keeps a recurring event — a weekday 08:30
+  // school run — in the same lane each day instead of jumping between lanes
+  // depending on what else that day's titles happen to sort before. Only
+  // the order within a day changes: first-fit still takes the lowest free
+  // lane, so no lane is added and nothing more collapses into "+N more".
   singleDay.sort((a, b) => {
     const boundsA = bounds.get(a.occurrence_id)!;
     const boundsB = bounds.get(b.occurrence_id)!;
-    return boundsA.startKey.localeCompare(boundsB.startKey) || a.title.localeCompare(b.title);
+    return boundsA.startKey.localeCompare(boundsB.startKey) || compareDayEvents(a, b);
   });
 
   const rowIntervals: { start: number; end: number }[][] = [];
@@ -554,13 +560,14 @@ export function eventsForDay(
       const { startKey, endKey } = eventDateBounds(event, timeZone);
       return startKey <= target && endKey >= target;
     })
-    .sort((left, right) => {
-      if (left.is_all_day !== right.is_all_day) return left.is_all_day ? -1 : 1;
-      return (
-        left.start_at.localeCompare(right.start_at) ||
-        left.title.localeCompare(right.title)
-      );
-    });
+    .sort(compareDayEvents);
+}
+
+/** Chronological order within one day: all-day events first, then by start
+ *  time, then title. Shared by the Day List and the Month grid's lanes. */
+export function compareDayEvents(left: EventOccurrence, right: EventOccurrence): number {
+  if (left.is_all_day !== right.is_all_day) return left.is_all_day ? -1 : 1;
+  return left.start_at.localeCompare(right.start_at) || left.title.localeCompare(right.title);
 }
 
 // Two independent, composable filters, applied in the same order and the same
@@ -962,4 +969,18 @@ export function resolveMultiDaySegmentDay(
   const fraction = Math.min(Math.max((clientX - targetRect.left) / width, 0), 0.999);
   const offset = Math.floor(fraction * (end - start + 1));
   return days[Math.min(start + offset, end)]!;
+}
+
+export type CalendarViewMode = "month" | "week" | "day" | "agenda";
+const CALENDAR_VIEW_MODES: readonly CalendarViewMode[] = ["month", "week", "day", "agenda"];
+
+/** The view Calendar opens in: the user's saved choice when there is one;
+ *  otherwise Agenda on phones, where a month grid is cramped
+ *  (docs/design/layout-and-navigation.md), and Month on the desktop/tablet
+ *  shell. An unrecognised saved value counts as no preference. */
+export function initialCalendarView(stored: string | null, desktopShell: boolean): CalendarViewMode {
+  if (stored && (CALENDAR_VIEW_MODES as readonly string[]).includes(stored)) {
+    return stored as CalendarViewMode;
+  }
+  return desktopShell ? "month" : "agenda";
 }

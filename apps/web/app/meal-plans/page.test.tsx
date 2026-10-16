@@ -691,6 +691,35 @@ describe("Meal Plans — Meals library", () => {
     };
   }
 
+  it("labels recently used meals by whether their plan is past, today or upcoming", async () => {
+    function localIso(offsetDays: number): string {
+      const day = new Date();
+      day.setDate(day.getDate() + offsetDays);
+      return `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, "0")}-${String(day.getDate()).padStart(2, "0")}`;
+    }
+    (api.meals as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [meal()],
+    });
+    (api.recentMeals as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [
+        { meal: meal({ id: "m-next", name: "Beef Tacos" }), last_planned: localIso(6) },
+        { meal: meal({ id: "m-today", name: "Fish Pie" }), last_planned: localIso(0) },
+        { meal: meal({ id: "m-past", name: "Cottage Pie" }), last_planned: localIso(-3) },
+      ],
+    });
+
+    render(<MealPlansPage />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("tab", { name: "Meals" }));
+
+    const row = async (name: string) =>
+      (await screen.findByText(name)).closest(".meal-recent-row") as HTMLElement;
+    expect(within(await row("Beef Tacos")).getByText("Planned in 6 days")).toBeInTheDocument();
+    expect(within(await row("Fish Pie")).getByText("Planned for today")).toBeInTheDocument();
+    expect(within(await row("Cottage Pie")).getByText("Last planned 3 days ago")).toBeInTheDocument();
+    expect(screen.queryByText(/Last planned Today/)).not.toBeInTheDocument();
+  });
+
   it("shows the empty state with a call to action when there are no saved meals", async () => {
     (api.meals as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [] });
 

@@ -198,12 +198,16 @@ async def _create_month_snapshot(
     profile: BudgetProfile,
     year: int,
     month: int,
-    request: Request,
+    request: Request | None,
     user_id: uuid.UUID,
     *,
     copy_income: bool = True,
 ) -> BudgetMonth:
-    """Create one independent month snapshot seeded from current masters."""
+    """Create one independent month snapshot seeded from current masters.
+
+    ``request`` is None only for non-HTTP callers (PCC showcase seeding —
+    see mykhaya.showcase.ultimate), which record their own platform audit
+    event instead of a per-user Budget audit row."""
     if not 1 <= month <= 12:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "Month must be between 1 and 12")
     row = BudgetMonth(profile_id=profile.id, year=year, month=month)
@@ -268,9 +272,15 @@ async def _create_month_snapshot(
                     recurring=source.recurring,
                 )
             )
-    audit(
-        db, request, "budget.month.created", user_id, target_type="budget_month", target_id=row.id
-    )
+    if request is not None:
+        audit(
+            db,
+            request,
+            "budget.month.created",
+            user_id,
+            target_type="budget_month",
+            target_id=row.id,
+        )
     return row
 
 

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   allowedNavigationHosts,
+  ANDROID_APP_ENVIRONMENTS,
   androidShellConfiguration,
   liveFrontendOrigin,
   nativeApiBaseUrl,
@@ -47,6 +48,9 @@ describe("androidShellConfiguration", () => {
       environment: "development",
       frontend: "https://dev.mykhaya.app",
       api: "https://dev.mykhaya.app/api/v1",
+      applicationId: "app.mykhaya.mobile",
+      displayName: "MyKhaya-Dev",
+      gradleFlavor: "development",
     });
     expect(nativeApiBaseUrl("development")).toBe("https://dev.mykhaya.app/api/v1");
   });
@@ -56,6 +60,9 @@ describe("androidShellConfiguration", () => {
       environment: "production",
       frontend: "https://mykhaya.app",
       api: "https://mykhaya.app/api/v1",
+      applicationId: "app.mykhaya.mobile.prod",
+      displayName: "MyKhaya",
+      gradleFlavor: "production",
     });
     expect(nativeApiBaseUrl("production")).toBe("https://mykhaya.app/api/v1");
   });
@@ -88,5 +95,17 @@ describe("allowedNavigationHosts", () => {
     for (const environment of ["development", "production"] as const) {
       expect(allowedNavigationHosts(environment).join(",")).not.toMatch(/localhost|127\.0\.0\.1/i);
     }
+  });
+});
+
+describe("Android application identity matrix", () => {
+  it("keeps DEV and PROD installable side by side", () => {
+    expect(ANDROID_APP_ENVIRONMENTS.development.applicationId).toBe("app.mykhaya.mobile");
+    expect(ANDROID_APP_ENVIRONMENTS.production.applicationId).toBe("app.mykhaya.mobile.prod");
+    expect(ANDROID_APP_ENVIRONMENTS.development.applicationId).not.toBe(
+      ANDROID_APP_ENVIRONMENTS.production.applicationId,
+    );
+    expect(ANDROID_APP_ENVIRONMENTS.development.displayName).toBe("MyKhaya-Dev");
+    expect(ANDROID_APP_ENVIRONMENTS.production.displayName).toBe("MyKhaya");
   });
 });

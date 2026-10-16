@@ -1,6 +1,6 @@
 "use client";
 
-import { Fragment, FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, FormEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
@@ -38,6 +38,7 @@ import { Avatar } from "@/components/avatar";
 import { AvatarStack } from "@/components/avatar";
 import { participantsForEvent } from "@/components/avatar-stack-logic";
 import { BottomSheet } from "@/components/bottom-sheet";
+import { desktopShellViewport } from "@/components/use-desktop-shell";
 import { useActiveHome } from "@/components/use-active-home";
 import { syncWidgetSnapshot } from "@/components/widget-bridge";
 import { MonthSwipeView } from "./month-view";
@@ -62,6 +63,7 @@ import {
   filterByVisibleCalendars,
   filterVisibleEvents,
   groupEventsByDay,
+  initialCalendarView,
   isCalendarLockedForSelection,
   monthCells,
   monthRange,
@@ -1207,6 +1209,10 @@ export default function CalendarPage() {
   const [featureEnabled, setFeatureEnabled] = useState(false);
   const [featureChecked, setFeatureChecked] = useState(false);
   const [view, setView] = useState<ViewMode>("month");
+  // False until the initial view is resolved (saved choice, else by screen
+  // size). No view renders or loads before then, so a phone opening Agenda
+  // never flashes the month grid first.
+  const [viewReady, setViewReady] = useState(false);
   const [focusDate, setFocusDate] = useState(() => zonedToday(FALLBACK_TIMEZONE));
   // True once the user has actually navigated (prev/next, tapping a day, or
   // jumping to today) — until then, focusDate keeps re-anchoring to "today"
@@ -1410,11 +1416,10 @@ export default function CalendarPage() {
     if (resolved !== memberFilter) chooseMember(resolved);
   }, [members, memberFilter, activeHomeId]);
 
-  useEffect(() => {
-    const stored = window.localStorage.getItem(VIEW_STORAGE) as ViewMode | null;
-    if (stored && ["month", "week", "day", "agenda"].includes(stored))
-      setView(stored);
-    else setView("month");
+  // Layout effect: resolved before the first paint, never after it.
+  useLayoutEffect(() => {
+    setView(initialCalendarView(window.localStorage.getItem(VIEW_STORAGE), desktopShellViewport()));
+    setViewReady(true);
   }, []);
 
   function chooseView(next: ViewMode) {
@@ -1451,7 +1456,7 @@ export default function CalendarPage() {
   }, [view, range, cells]);
 
   const load = useCallback(async ({ syncWidget = false }: { syncWidget?: boolean } = {}) => {
-    if (!activeHomeId || !featureEnabled) return;
+    if (!activeHomeId || !featureEnabled || !viewReady) return;
     calendarDebugLog(debugEnabled, "calendar loader fired", {
       activeHomeId,
       featureEnabled,
@@ -1516,7 +1521,7 @@ export default function CalendarPage() {
     // that background fan-out can overlap a view/edit transition and look like
     // the Calendar page has reloaded, even though selectedEvent is unchanged.
     if (syncWidget) void syncWidgetSnapshot();
-  }, [activeHomeId, debugEnabled, featureEnabled, fetchRange.end, fetchRange.start, focusDate, view]);
+  }, [activeHomeId, debugEnabled, featureEnabled, fetchRange.end, fetchRange.start, focusDate, view, viewReady]);
 
   useEffect(() => {
     if (!activeHomeId) return;
@@ -1964,7 +1969,10 @@ export default function CalendarPage() {
               </select>
               <ChevronDown size={14} aria-hidden="true" />
             </label>
-            <label className="calendar-selector calendar-view-selector">
+            <label
+              className="calendar-selector calendar-view-selector"
+              style={viewReady ? undefined : { visibility: "hidden" }}
+            >
               <span className="sr-only">Calendar view</span>
               <select
                 value={view}
@@ -2029,7 +2037,7 @@ export default function CalendarPage() {
           </p>
         )}
 
-        {view === "month" && (
+        {viewReady && view === "month" && (
           <MonthSwipeView
             cells={cells}
             events={visibleEvents}
@@ -2041,7 +2049,7 @@ export default function CalendarPage() {
           />
         )}
 
-        {view === "week" && (
+        {viewReady && view === "week" && (
           <section className="week-grid" aria-label="Week view">
             {Array.from({ length: 7 }, (_, index) => {
               const day = new Date(range.start);
@@ -2079,7 +2087,7 @@ export default function CalendarPage() {
           </section>
         )}
 
-        {view === "day" && (
+        {viewReady && view === "day" && (
           <section className="day-view card" aria-label="Day view">
             <CalendarHighlightSummary items={calendarHighlights.filter((item) => item.date === dateKey(focusDate))} />
             <EventList
@@ -2092,7 +2100,7 @@ export default function CalendarPage() {
           </section>
         )}
 
-        {view === "agenda" && (
+        {viewReady && view === "agenda" && (
           <section className="agenda-view" aria-label="Upcoming events">
             {visibleEvents.length === 0 ? (
               <p className="card hint">{scheduleEmptyMessage}</p>

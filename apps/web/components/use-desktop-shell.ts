@@ -14,6 +14,16 @@ import { isNativeShell } from "./native-runtime";
 const DESKTOP_SHELL_MIN_WIDTH = 760;
 
 /**
+ * Synchronous read of the same condition useDesktopShellActive tracks, for a
+ * one-off decision made before first paint (e.g. Calendar's initial view).
+ * False on the server and inside the native shell.
+ */
+export function desktopShellViewport(): boolean {
+  if (typeof window === "undefined" || isNativeShell()) return false;
+  return window.matchMedia(`(min-width: ${DESKTOP_SHELL_MIN_WIDTH}px)`).matches;
+}
+
+/**
  * True exactly when the browser desktop/tablet shell — left rail, persistent
  * Around the House dock, wide-screen composition — is the active
  * presentation. Always false inside the native shell (matching

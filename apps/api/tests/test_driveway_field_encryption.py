@@ -442,8 +442,9 @@ async def test_unchanged_identifiers_need_no_keyring_even_with_flag_on(
 def test_every_vehicle_identifier_write_goes_through_the_central_module() -> None:
     """Static guard: outside mykhaya.driveway_sensitive, nothing assigns a
     registration/VIN (or their ciphertext) on a row, and the only Vehicle(...)
-    construction is the router's create, which takes its ciphertext from the
-    central helper. A new write path must be added through that module."""
+    constructions are the router's create and the PCC showcase seeder, both of
+    which take their ciphertext from the central helper. A new write path must
+    be added through that module."""
     assignment = re.compile(r"\.(registration|vin|registration_ciphertext|vin_ciphertext)\s*=(?!=)")
     offenders: list[str] = []
     constructions: list[str] = []
@@ -455,9 +456,11 @@ def test_every_vehicle_identifier_write_goes_through_the_central_module() -> Non
         if re.search(r"\bVehicle\(", source) and relative != "models.py":
             constructions.append(relative)
     assert offenders == []
-    assert constructions == ["routers/driveway.py"]
-    router = (API_ROOT / "routers/driveway.py").read_text(encoding="utf-8")
-    assert "**ciphertexts" in router
+    assert sorted(constructions) == ["routers/driveway.py", "showcase/ultimate.py"]
+    for writer in constructions:
+        source = (API_ROOT / writer).read_text(encoding="utf-8")
+        assert "vehicle_sensitive_ciphertexts(" in source
+        assert "**ciphertexts" in source
 
 
 @pytest.mark.asyncio

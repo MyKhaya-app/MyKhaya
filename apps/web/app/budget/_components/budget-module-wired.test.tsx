@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { ApiError } from "@mykhaya/api-client";
-import { BudgetModule } from "./budget-module-wired";
+import { BudgetModule, BudgetOverviewWithAdd } from "./budget-module-wired";
+import { BudgetModuleSheets } from "./budget-module-sheets";
 
 const push = vi.fn();
 const pathname = vi.hoisted(() => ({ value: "/budget" }));
@@ -36,6 +37,15 @@ vi.mock("next/navigation", () => ({
   useSearchParams: () => new URLSearchParams(),
   usePathname: () => pathname.value,
 }));
+type Access = { billing: { budget_enabled: boolean }; features: { features: { feature: string; enabled: boolean }[] } };
+const homeAccess = vi.hoisted(() => ({ value: null as null | { state: "ready"; value: Access } | { state: "loading" } }));
+function planAccess(budgetEnabled: boolean, released = true) {
+  homeAccess.value = { state: "ready", value: { billing: { budget_enabled: budgetEnabled }, features: { features: [{ feature: "budget", enabled: released }] } } };
+}
+vi.mock("@/components/home-access", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/components/home-access")>()),
+  useHomeAccess: () => ({ access: homeAccess.value, refresh: vi.fn() }),
+}));
 vi.mock("@/components/use-active-home", () => ({
   useActiveHome: () => ({ activeHomeId: "home-1" }),
 }));
@@ -47,6 +57,7 @@ const month = { id: "month-1", year: 2026, month: 9, categories: [{ id: "month-c
 
 beforeEach(() => {
   vi.clearAllMocks();
+  planAccess(true);
   apiMock.budgetProfile.mockResolvedValue({ id: "profile-1", owner_user_id: "user-1", currency: "GBP", month_start_day: 1, archived: false });
   apiMock.incomingBudgetShares.mockResolvedValue([]);
   apiMock.budgetShares.mockResolvedValue([]);
@@ -161,5 +172,52 @@ describe("Budget consumer API wiring", () => {
     render(<BudgetModule screen="overview" />);
     expect(await screen.findByText("Budget isn’t available here")).toBeInTheDocument();
     expect(apiMock.budgetCategories).not.toHaveBeenCalled();
+  });
+
+  it("offers the Ultimate upgrade, like Driveway, when the plan does not include Budget", async () => {
+    planAccess(false);
+    apiMock.budgetProfile.mockRejectedValue(new ApiError(403, "Budget is included with Ultimate.", "plan_feature_unavailable"));
+    render(<BudgetModule screen="overview" />);
+    expect(await screen.findByText("Included with MyKhaya Ultimate.")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "View plans" })).toHaveAttribute("href", "/settings/billing");
+    expect(screen.queryByText(/has not enabled Budget/)).not.toBeInTheDocument();
+    expect(apiMock.budgetCategories).not.toHaveBeenCalled();
+  });
+
+  it("says Budget is not available yet when the module is not released", async () => {
+    planAccess(true, false);
+    apiMock.budgetProfile.mockRejectedValue(new Error("not released"));
+    render(<BudgetModule screen="overview" />);
+    expect(await screen.findByText(/isn't available for this Home yet/)).toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: "View plans" })).not.toBeInTheDocument();
+  });
+
+  it("never reveals Budget content from plan state alone: the API stays the gate", async () => {
+    planAccess(true);
+    apiMock.budgetProfile.mockRejectedValue(new ApiError(403, "Budget is included with Ultimate.", "plan_feature_unavailable"));
+    render(<BudgetModule screen="overview" />);
+    expect(await screen.findByText("Budget isn’t available here")).toBeInTheDocument();
+    expect(apiMock.budgetMonth).not.toHaveBeenCalled();
+  });
+
+  it("does not offer the Add action on the upgrade screen, like Driveway", async () => {
+    planAccess(false);
+    apiMock.budgetProfile.mockRejectedValue(new ApiError(403, "Budget is included with Ultimate.", "plan_feature_unavailable"));
+    render(<BudgetOverviewWithAdd />);
+    expect(await screen.findByText("Included with MyKhaya Ultimate.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Add Budget item" })).not.toBeInTheDocument();
+  });
+
+  it("keeps the Add action once Budget is available", async () => {
+    render(<BudgetOverviewWithAdd />);
+    expect(await screen.findByRole("button", { name: "Add Budget item" })).toBeInTheDocument();
+  });
+
+  it("uses the same upgrade message on the sheet-based Budget screens", async () => {
+    planAccess(false);
+    apiMock.budgetProfile.mockRejectedValue(new ApiError(403, "Budget is included with Ultimate.", "plan_feature_unavailable"));
+    render(<BudgetModuleSheets screen="spending" />);
+    expect(await screen.findByText("Included with MyKhaya Ultimate.")).toBeInTheDocument();
+    expect(apiMock.budgetEntries).not.toHaveBeenCalled();
   });
 });

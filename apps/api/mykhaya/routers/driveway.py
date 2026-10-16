@@ -108,6 +108,7 @@ from mykhaya.models import (
 from mykhaya.rate_limit import enforce_rate_limit
 from mykhaya.routers.reminders import _to_response as _reminder_response
 from mykhaya.schemas import ReminderListResponse, ReminderResponse
+from mykhaya.showcase.guards import is_showcase_home
 from mykhaya.vehicle_photo_storage import get_vehicle_photo_storage, vehicle_photo_filename
 
 
@@ -310,6 +311,14 @@ async def lookup_vehicle(
         300,
     )
     country = body.country_code.upper()
+    if await is_showcase_home(db, home_id):
+        # Showcase Demo Homes never contact government services.
+        return VehicleLookupResult(
+            found=False,
+            manual_entry_required=True,
+            message="Vehicle lookup isn't available in demo Homes. You can add the vehicle"
+            " manually.",
+        )
     if country != "GB":
         return VehicleLookupResult(
             found=False,

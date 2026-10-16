@@ -448,6 +448,11 @@ export default function HomePage() {
   const showNotificationPrompt =
     notificationsSupported() && notifPermission === "default" && isStandalone();
   const emptyState = todayEmptyState();
+  const thisMonthBirthdays = birthdays.filter((entry) => isBirthdayThisMonthAndUpcoming(entry));
+  // Only the first card tucks up into the hero (home-section-overlap). When
+  // the Birthdays banner leads, it takes the overlap; otherwise the Today
+  // card would be pulled up over the banner.
+  const birthdaysLead = thisMonthBirthdays.length > 0;
   // Each of routines/reminders is already in its own Home priority order
   // (overdue, due today, upcoming, then completed today) — see
   // household_routines.list_routines and routers.reminders.list_reminders,
@@ -504,10 +509,9 @@ export default function HomePage() {
         {error && <p className="notice error">{error}</p>}
 
         {(() => {
-          const thisMonthBirthdays = birthdays.filter((entry) => isBirthdayThisMonthAndUpcoming(entry));
-          if (!thisMonthBirthdays.length) return null;
+          if (!birthdaysLead) return null;
           return (
-            <section className="card home-section birthday-banner">
+            <section className="card home-section home-section-overlap birthday-banner">
               <div className="section-heading">
                 <h2>
                   <Gift size={18} aria-hidden="true" /> Birthdays this month
@@ -539,7 +543,9 @@ export default function HomePage() {
         })()}
 
         {calendarEnabled && (
-          <section className="card home-section home-section-overlap home-summary-card home-today-card">
+          <section
+            className={`card home-section${birthdaysLead ? "" : " home-section-overlap"} home-summary-card home-today-card`}
+          >
             <div className="section-heading">
               <img className="home-card-image" src="/images/home-today.svg" alt="" aria-hidden="true" />
               <h2>Today</h2>

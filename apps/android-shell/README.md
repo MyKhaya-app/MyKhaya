@@ -12,11 +12,9 @@ equivalent iOS decision) and
 [ADR 0011](../../docs/architecture/adr/0011-single-pwa-retire-mobile-app.md)
 for why this is a thin shell and not a second frontend implementation.
 
-**Phase 1 only.** This package currently establishes the shell and a
-development build. It intentionally does **not** yet implement push
-notifications (FCM), notification channels/permissions, biometric unlock,
-Android App Links, Play Billing, or widgets — see "What's intentionally not
-implemented yet" below.
+The shell and shared Android native capability path are implemented. The
+remaining first milestone is live Firebase/device validation; credentials and
+signing material remain external and local.
 
 ## What lives here vs. what doesn't
 
@@ -72,7 +70,7 @@ the Android SDK/a JDK.
 
 ```sh
 npx cap open android    # opens Android Studio
-cd android && ./gradlew assembleDebug   # builds a debug APK from the command line
+cd android && ./gradlew assembleDevelopmentDebug   # builds the DEV debug APK
 ```
 
 `cap sync android` needs re-running only when `capacitor.config.ts`, `www/`,
@@ -85,6 +83,19 @@ Gradle build itself has not been executed here — only statically verified
 `capacitor.config.json` were inspected and are structurally correct). Real
 runtime/device verification is still required before this ships — see the
 Phase 1 completion report for exactly what was and wasn't verified.
+
+The development and production debug variants have been built successfully
+with the locally installed JDK and Android SDK. Run them in separate Gradle
+invocations so the DEV-only Firebase configuration is not applied to PROD:
+
+```powershell
+cd android
+.\gradlew.bat assembleDevelopmentDebug --offline --no-daemon
+.\gradlew.bat assembleProductionDebug --offline --no-daemon
+```
+
+Outputs are `app/build/outputs/apk/development/debug/app-development-debug.apk`
+and `app/build/outputs/apk/production/debug/app-production-debug.apk`.
 
 ## Environment selection
 
@@ -100,9 +111,15 @@ throughout the backend and by `apps/ios-shell`'s `MYKHAYA_IOS_ENV`.
 MYKHAYA_ANDROID_ENV=production npx cap sync android
 ```
 
+The matching production debug variant is `android/gradlew.bat
+assembleProductionDebug`. DEV and PROD use separate application IDs so both
+can be installed side by side; release signing is intentionally not configured
+until a real keystore is supplied.
+
 ## Application identity
 
-`app.mykhaya.mobile` — reused from the retired `apps/mobile` Expo app's own
+DEV uses `app.mykhaya.mobile` and PROD uses `app.mykhaya.mobile.prod` — DEV is
+reused from the retired `apps/mobile` Expo app's own
 `android.package` configuration (its final `app.config.ts`, before ADR 0011
 retired it, set `android: { package: "app.mykhaya.mobile" }` — the exact
 same identifier already reused for iOS's `appId` in ADR 0012). Using the
@@ -134,14 +151,14 @@ Deferred to later Android phases (see the audit/phased plan referenced in
 ADR 0014) — present in the shared web app already but inert or unreachable
 on this platform until each phase lands:
 
-- **Push notifications (FCM)** — no Firebase dependency, no
-  `google-services.json` (never commit one — see `android/.gitignore`), no
-  notification channels/permissions. `apps/web/components/native-push.ts`'s
-  native push functions remain gated to iOS only.
-- **Biometric unlock** — no `BiometricPrompt` configuration.
-- **Android App Links** — no `assetlinks.json`, no manifest intent-filter
-  for `https://` MyKhaya links; tapping one currently opens the browser, not
-  the app (the same gap iOS has today, per ADR 0012).
+- **Firebase project registration and physical FCM delivery** — repository
+  code and the Capacitor plugin are wired, but `google-services.json` must be
+  supplied locally for the selected flavor. See
+  `docs/mobile/android-firebase-and-links.md`.
+- **Android App Links verification** — the environment-specific manifest
+  intent-filter is wired. Domain verification remains blocked until signing
+  certificate fingerprints are supplied and published as
+  `/.well-known/assetlinks.json`.
 - **Google Play Billing** — no purchase flow; `SubscriptionProvider.google`
   is a reserved-but-unimplemented enum value in the backend.
 - **Widgets** — no Android App Widgets / Glance equivalent of the iOS
