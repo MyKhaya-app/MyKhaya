@@ -37,6 +37,6 @@ export function LegalPrivacyDocument({ documentKey }: { documentKey: string }) {
   return <>
     {error && <p className="notice error" role="alert">{error}</p>}
     {!content && !error && <p role="status" className="muted">Loading…</p>}
-    {content && <section className="card"><p className="legal-meta">Version {content.version}{legalReadableDate(content.effective_date) && ` · Effective ${legalReadableDate(content.effective_date)}`}</p><div className="legal-reader-status"><span className={`legal-status-pill ${presentation?.tone ?? "neutral"}`}>{presentation?.label ?? "Current version"}</span>{presentation?.dateLabel && <span className="legal-status-date">{presentation.dateLabel}</span>}</div><LegalMarkdown content={content.content_markdown} className="legal-prose" /></section>}
+    {content && <section className="card legal-document-card"><p className="legal-meta">Version {content.version}{legalReadableDate(content.effective_date) && ` · Effective ${legalReadableDate(content.effective_date)}`}</p><div className="legal-reader-status"><span className={`legal-status-pill ${presentation?.tone ?? "neutral"}`}>{presentation?.label ?? "Current version"}</span>{presentation?.dateLabel && <span className="legal-status-date">{presentation.dateLabel}</span>}</div><LegalMarkdown content={content.content_markdown} className="legal-prose" /></section>}
   </>;
 }
