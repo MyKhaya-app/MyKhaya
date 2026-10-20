@@ -1,2 +1,7 @@
 /build/*
 !/build/.npmkeep
+
+# Local release upload signing material — never commit private keys or passwords
+keystore.properties
+*.jks
+*.keystore
