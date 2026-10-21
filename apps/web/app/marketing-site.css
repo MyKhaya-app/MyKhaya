@@ -352,12 +352,29 @@ html:has(.mks-home){scroll-behavior:smooth}
 .mks .nav{top:0;padding-top:var(--safe-top)}
 .mks .nav .wrap,.mks .mobile-menu{padding-left:max(clamp(16px,4vw,32px),var(--safe-left));padding-right:max(clamp(16px,4vw,32px),var(--safe-right))}
 
-/* Public placeholder pages ("Coming soon") inside MarketingChrome. */
-.mks-coming-soon{display:grid;place-items:center;padding:clamp(48px,10vw,112px) 20px}
-.mks-coming-soon section{display:grid;gap:14px;max-width:560px;text-align:center}
-.mks-coming-soon h1{font-size:clamp(2rem,6vw,3rem);font-weight:800;margin:0}
-.mks-coming-soon p{margin:0;color:var(--colour-muted)}
-.mks-coming-soon a{color:var(--colour-forest);font-weight:700;text-decoration:underline}
+/* Public Support page (/support, MarketingChrome theme="system"). Built from
+   the homepage pieces: centred .section-head intro, cards matching .plan
+   (surface, line, 24px radius, full-width bottom-aligned .btn), .pillar-style
+   icon tiles and the .note text style. Page-scoped; nothing shared changes. */
+.mks .mks-support .wrap{padding-left:max(clamp(16px,4vw,32px),var(--safe-left));padding-right:max(clamp(16px,4vw,32px),var(--safe-right))}
+.mks .support-intro{position:relative;overflow:hidden;padding-block:clamp(48px,7vw,88px) clamp(32px,4vw,48px)}
+.mks .support-intro::before{content:"";position:absolute;inset:-40% 10% 0;background:radial-gradient(closest-side,color-mix(in srgb,var(--sage) 22%,transparent),transparent);pointer-events:none}
+.mks .support-intro .section-head{position:relative;margin-bottom:0}
+.mks .support-intro h1{font-size:clamp(2.4rem,6vw,4rem);font-weight:800;letter-spacing:-.035em}
+.mks .support-options{padding-top:0}
+.mks .support-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:20px;max-width:980px;margin-inline:auto}
+.mks .support-card{background:var(--surface);border:1px solid var(--line);border-radius:24px;padding:clamp(22px,3.5vw,32px);display:flex;flex-direction:column;gap:16px;min-width:0;container-type:inline-size}
+.mks .support-card .ic{width:48px;height:48px;border-radius:14px;display:grid;place-items:center;color:var(--accent-text);flex:none}
+.mks .support-card h2{font-size:clamp(1.5rem,3vw,1.9rem);font-weight:800}
+.mks .support-card p{color:var(--muted)}
+.mks .support-card .btn{margin-top:auto;justify-content:center;text-align:center}
+.mks .support-card .support-email{color:var(--ink);background:var(--tint);border-radius:14px;padding:14px 16px;font-family:var(--display);font-weight:700;font-size:clamp(1.05rem,6.2cqi,1.6rem);letter-spacing:-.01em;line-height:1.2;overflow-wrap:anywhere}
+.mks .support-privacy{display:flex;align-items:flex-start;justify-content:center;gap:8px;max-width:640px;margin:24px auto 0;text-align:center}
+.mks .support-privacy svg{flex:none;margin-top:3px}
+@media (max-width:760px){
+  .mks .support-grid{grid-template-columns:minmax(0,1fr);max-width:560px}
+  .mks .support-privacy{justify-content:flex-start;text-align:left;max-width:560px}
+}
 
 /* The mobile menu shares the nav's `.wrap` class, whose flex display would
    otherwise override the `hidden` attribute: keep it a stacked list, hidden
