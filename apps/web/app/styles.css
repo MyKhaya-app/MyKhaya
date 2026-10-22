@@ -4258,6 +4258,13 @@ html.native-shell .home-section-overlap {
 .week-grid > article.today {
   border-color: var(--colour-terracotta);
 }
+/* Native shell on a wide viewport (iPad, iPhone landscape): the page keeps
+   the 640px native content width at every viewport size (the 1320px Calendar
+   canvas is browser-only, see .app-shell:not(.native-shell-app)), so the
+   seven-column week grid that viewports above 800px get would squeeze each
+   day to ~60px and wrap event titles one letter per line. Keep the stacked
+   week composition that native phones already use (the max-width: 800px
+   block below). Viewports up to 800px are untouched. */
 @media (min-width: 801px) {
   .native-shell-app .week-grid {
     grid-template-columns: 1fr;
@@ -4275,6 +4282,11 @@ html.native-shell .home-section-overlap {
     min-height: 44px;
   }
 }
+/* Native shell on a tablet (iPad): use the screen for Calendar instead of the
+   640px phone column, mirroring the browser wide-shell Calendar canvas
+   (.app-shell:not(.native-shell-app) .standard-page.calendar-page). Month
+   rows grow to fill the available height. The min-height condition keeps
+   phones in landscape (≤ 440px tall) on the protected phone layout. */
 @media (min-width: 801px) and (min-height: 700px) {
   .native-shell-app .standard-page.calendar-page {
     max-width: 1320px;
@@ -4284,6 +4296,7 @@ html.native-shell .home-section-overlap {
     --month-event-row-h: 28px;
   }
   .native-shell-app .calendar-week {
+    /* ~330px covers the app header, Calendar toolbar and bottom navigation. */
     min-height: max(112px, calc((100dvh - 330px) / var(--calendar-week-count)));
   }
   .native-shell-app .calendar-week .month-event {
@@ -5211,6 +5224,9 @@ select.icon-row-control {
     gap: 0.65rem;
     grid-template-columns: 58px minmax(0, 1fr);
   }
+  /* A day with a highlight (e.g. a birthday) has a third child; keep the
+     highlight and the events in the content column instead of letting the
+     event list wrap into the 58px date column on a new row. */
   .week-grid > article > :not(.week-day-heading) {
     grid-column: 2;
   }
