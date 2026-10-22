@@ -4275,8 +4275,34 @@ html.native-shell .home-section-overlap {
     gap: 0.65rem;
     grid-template-columns: 58px minmax(0, 1fr);
   }
+  .native-shell-app .week-grid > article > :not(.week-day-heading) {
+    grid-column: 2;
+  }
   .native-shell-app .week-grid .event-list.compact .event-row {
     min-height: 44px;
+  }
+}
+/* Native shell on a tablet (iPad): use the screen for Calendar instead of the
+   640px phone column, mirroring the browser wide-shell Calendar canvas
+   (.app-shell:not(.native-shell-app) .standard-page.calendar-page). Month
+   rows grow to fill the available height. The min-height condition keeps
+   phones in landscape (≤ 440px tall) on the protected phone layout. */
+@media (min-width: 801px) and (min-height: 700px) {
+  .native-shell-app .standard-page.calendar-page {
+    max-width: 1320px;
+  }
+  .native-shell-app .calendar-weeks {
+    --month-day-number-h: 32px;
+    --month-event-row-h: 28px;
+  }
+  .native-shell-app .calendar-week {
+    /* ~330px covers the app header, Calendar toolbar and bottom navigation. */
+    min-height: max(112px, calc((100dvh - 330px) / var(--calendar-week-count)));
+  }
+  .native-shell-app .calendar-week .month-event {
+    font-size: 0.75rem;
+    min-height: 24px;
+    padding-inline: 0.45rem;
   }
 }
 .week-day-heading {
@@ -5197,6 +5223,12 @@ select.icon-row-control {
     display: grid;
     gap: 0.65rem;
     grid-template-columns: 58px minmax(0, 1fr);
+  }
+  /* A day with a highlight (e.g. a birthday) has a third child; keep the
+     highlight and the events in the content column instead of letting the
+     event list wrap into the 58px date column on a new row. */
+  .week-grid > article > :not(.week-day-heading) {
+    grid-column: 2;
   }
   .event-list.compact .event-row {
     min-height: 44px;
