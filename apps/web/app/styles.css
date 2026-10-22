@@ -4258,6 +4258,40 @@ html.native-shell .home-section-overlap {
 .week-grid > article.today {
   border-color: var(--colour-terracotta);
 }
+@media (min-width: 801px) {
+  .native-shell-app .week-grid {
+    grid-template-columns: 1fr;
+  }
+  .native-shell-app .week-grid > article {
+    align-items: start;
+    display: grid;
+    gap: 0.65rem;
+    grid-template-columns: 58px minmax(0, 1fr);
+  }
+  .native-shell-app .week-grid > article > :not(.week-day-heading) {
+    grid-column: 2;
+  }
+  .native-shell-app .week-grid .event-list.compact .event-row {
+    min-height: 44px;
+  }
+}
+@media (min-width: 801px) and (min-height: 700px) {
+  .native-shell-app .standard-page.calendar-page {
+    max-width: 1320px;
+  }
+  .native-shell-app .calendar-weeks {
+    --month-day-number-h: 32px;
+    --month-event-row-h: 28px;
+  }
+  .native-shell-app .calendar-week {
+    min-height: max(112px, calc((100dvh - 330px) / var(--calendar-week-count)));
+  }
+  .native-shell-app .calendar-week .month-event {
+    font-size: 0.75rem;
+    min-height: 24px;
+    padding-inline: 0.45rem;
+  }
+}
 .week-day-heading {
   display: grid;
   justify-items: center;
@@ -5176,6 +5210,9 @@ select.icon-row-control {
     display: grid;
     gap: 0.65rem;
     grid-template-columns: 58px minmax(0, 1fr);
+  }
+  .week-grid > article > :not(.week-day-heading) {
+    grid-column: 2;
   }
   .event-list.compact .event-row {
     min-height: 44px;

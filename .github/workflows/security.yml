@@ -73,6 +73,35 @@ jobs:
         with: { name: mykhaya-sbom, path: mykhaya-sbom.cdx.json, retention-days: 30 }
   security-gate:
     runs-on: ubuntu-24.04
+    if: ${{ always() }}
     needs: [secrets, python-dependencies, filesystem, semgrep, checkov, sbom]
     steps:
-      - run: echo "All security scans passed."
+      - name: Require every security scanner to pass
+        env:
+          SECRETS_RESULT: ${{ needs.secrets.result }}
+          PYTHON_DEPENDENCIES_RESULT: ${{ needs.python-dependencies.result }}
+          FILESYSTEM_RESULT: ${{ needs.filesystem.result }}
+          SEMGREP_RESULT: ${{ needs.semgrep.result }}
+          CHECKOV_RESULT: ${{ needs.checkov.result }}
+          SBOM_RESULT: ${{ needs.sbom.result }}
+        run: |
+          set -eu
+          failed=0
+          for result in \
+            "secrets=${SECRETS_RESULT}" \
+            "python-dependencies=${PYTHON_DEPENDENCIES_RESULT}" \
+            "filesystem=${FILESYSTEM_RESULT}" \
+            "semgrep=${SEMGREP_RESULT}" \
+            "checkov=${CHECKOV_RESULT}" \
+            "sbom=${SBOM_RESULT}"; do
+            name="${result%%=*}"
+            status="${result#*=}"
+            if [ "$status" != "success" ]; then
+              echo "Security scanner $name finished with status: $status"
+              failed=1
+            fi
+          done
+          if [ "$failed" -ne 0 ]; then
+            exit 1
+          fi
+          echo "All security scans passed."
