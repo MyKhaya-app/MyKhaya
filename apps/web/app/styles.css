@@ -4258,6 +4258,27 @@ html.native-shell .home-section-overlap {
 .week-grid > article.today {
   border-color: var(--colour-terracotta);
 }
+/* Native shell on a wide viewport (iPad, iPhone landscape): the page keeps
+   the 640px native content width at every viewport size (the 1320px Calendar
+   canvas is browser-only, see .app-shell:not(.native-shell-app)), so the
+   seven-column week grid that viewports above 800px get would squeeze each
+   day to ~60px and wrap event titles one letter per line. Keep the stacked
+   week composition that native phones already use (the max-width: 800px
+   block below). Viewports up to 800px are untouched. */
+@media (min-width: 801px) {
+  .native-shell-app .week-grid {
+    grid-template-columns: 1fr;
+  }
+  .native-shell-app .week-grid > article {
+    align-items: start;
+    display: grid;
+    gap: 0.65rem;
+    grid-template-columns: 58px minmax(0, 1fr);
+  }
+  .native-shell-app .week-grid .event-list.compact .event-row {
+    min-height: 44px;
+  }
+}
 .week-day-heading {
   display: grid;
   justify-items: center;
