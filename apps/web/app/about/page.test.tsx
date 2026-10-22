@@ -281,13 +281,15 @@ describe("About — native Notifications diagnostics", () => {
 });
 
 describe("About — Service Status link", () => {
-  it("links to the existing Service Status page", async () => {
+  it("no longer shows a Service Status card, but keeps the version diagnostics", async () => {
     mockBuild({ version: "0.1.0", commit: "abc", build_time: "now", environment: "production", channel: "stable" });
 
     render(<About />);
 
-    const heading = await screen.findByRole("heading", { name: "Service Status" });
-    expect(heading.closest("a")).toHaveAttribute("href", "/service-status");
+    expect(await screen.findByText("0.1.0 (Web)")).toBeInTheDocument();
+    expect(screen.getByText("Production")).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Service Status" })).not.toBeInTheDocument();
+    expect(document.querySelector('a[href="/service-status"]')).toBeNull();
   });
 });
 

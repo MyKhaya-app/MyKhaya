@@ -114,7 +114,8 @@ MYKHAYA_ANDROID_ENV=production npx cap sync android
 The matching production debug variant is `android/gradlew.bat
 assembleProductionDebug`. DEV and PROD use separate application IDs so both
 can be installed side by side; release signing is intentionally not configured
-until a real keystore is supplied.
+until a real keystore is supplied. For the first Play Internal Testing bundle,
+follow [the Android Play release runbook](../../docs/mobile/android-play-release.md).
 
 ## Application identity
 

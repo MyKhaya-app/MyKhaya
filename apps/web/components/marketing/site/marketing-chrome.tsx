@@ -16,15 +16,31 @@ export function MarketingChrome({
   children,
   signupState,
   ownSignupState = false,
+  theme = "light",
 }: {
   children: React.ReactNode;
   /** The page's own signup state, when `ownSignupState` is set (the page
    *  already loads it); otherwise the chrome loads it itself. */
   signupState?: SignupStateValue;
   ownSignupState?: boolean;
+  /** "system": the page's own content is built from the scoped `.mks`
+   *  marketing styles (like the homepage), so the whole page, nav and footer
+   *  included, sits in one `.mks` scope and follows the system light/dark
+   *  setting exactly as the homepage does. Default "light" keeps the pinned
+   *  behaviour above for pages whose content uses the app styling. */
+  theme?: "light" | "system";
 }) {
   const fetched = useSignupState(!ownSignupState);
   const state = ownSignupState ? signupState : fetched;
+  if (theme === "system") {
+    return (
+      <div className="mks mks-page">
+        <SiteNav signupState={state} onHome={false} />
+        {children}
+        <SiteFooter onHome={false} />
+      </div>
+    );
+  }
   return (
     <div className="mks-page">
       <div className="mks mks-scope" data-theme="light">

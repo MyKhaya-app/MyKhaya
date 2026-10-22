@@ -4258,6 +4258,53 @@ html.native-shell .home-section-overlap {
 .week-grid > article.today {
   border-color: var(--colour-terracotta);
 }
+/* Native shell on a wide viewport (iPad, iPhone landscape): the page keeps
+   the 640px native content width at every viewport size (the 1320px Calendar
+   canvas is browser-only, see .app-shell:not(.native-shell-app)), so the
+   seven-column week grid that viewports above 800px get would squeeze each
+   day to ~60px and wrap event titles one letter per line. Keep the stacked
+   week composition that native phones already use (the max-width: 800px
+   block below). Viewports up to 800px are untouched. */
+@media (min-width: 801px) {
+  .native-shell-app .week-grid {
+    grid-template-columns: 1fr;
+  }
+  .native-shell-app .week-grid > article {
+    align-items: start;
+    display: grid;
+    gap: 0.65rem;
+    grid-template-columns: 58px minmax(0, 1fr);
+  }
+  .native-shell-app .week-grid > article > :not(.week-day-heading) {
+    grid-column: 2;
+  }
+  .native-shell-app .week-grid .event-list.compact .event-row {
+    min-height: 44px;
+  }
+}
+/* Native shell on a tablet (iPad): use the screen for Calendar instead of the
+   640px phone column, mirroring the browser wide-shell Calendar canvas
+   (.app-shell:not(.native-shell-app) .standard-page.calendar-page). Month
+   rows grow to fill the available height. The min-height condition keeps
+   phones in landscape (≤ 440px tall) on the protected phone layout. */
+@media (min-width: 801px) and (min-height: 700px) {
+  .native-shell-app .standard-page.calendar-page {
+    max-width: 1320px;
+  }
+  .native-shell-app .calendar-weeks {
+    --month-day-number-h: 32px;
+    --month-event-row-h: 28px;
+  }
+  .native-shell-app .calendar-week {
+    /* ~330px covers the app header, Calendar toolbar and bottom navigation. */
+    min-height: max(112px, calc((100dvh - 330px) / var(--calendar-week-count)));
+  }
+  .native-shell-app .calendar-week .month-event {
+    font-size: 0.75rem;
+    min-height: 24px;
+    padding-inline: 0.45rem;
+  }
+}
 .week-day-heading {
   display: grid;
   justify-items: center;
@@ -5176,6 +5223,12 @@ select.icon-row-control {
     display: grid;
     gap: 0.65rem;
     grid-template-columns: 58px minmax(0, 1fr);
+  }
+  /* A day with a highlight (e.g. a birthday) has a third child; keep the
+     highlight and the events in the content column instead of letting the
+     event list wrap into the 58px date column on a new row. */
+  .week-grid > article > :not(.week-day-heading) {
+    grid-column: 2;
   }
   .event-list.compact .event-row {
     min-height: 44px;
@@ -11548,6 +11601,13 @@ a.family-feed-row {
   font-size: 0.98rem;
   line-height: 1.7;
   max-width: 68ch;
+  min-width: 0;
+  /* Long words, URLs and email addresses in legal copy wrap inside the
+     available width instead of pushing the card (and page) sideways. */
+  overflow-wrap: anywhere;
+}
+.legal-prose > :last-child {
+  margin-bottom: 0;
 }
 .legal-prose h1,
 .legal-prose h2,
@@ -11574,12 +11634,38 @@ a.family-feed-row {
 .legal-prose a {
   color: var(--colour-sage-dark, #566b58);
 }
+.legal-prose blockquote {
+  border-left: 3px solid #efe9dd;
+  margin: 0 0 1em;
+  padding-left: 1em;
+}
+.legal-prose pre {
+  white-space: pre-wrap;
+}
+/* GFM tables can't wrap a row, so they scroll within the prose column
+   rather than widening the page. */
+.legal-prose table {
+  border-collapse: collapse;
+  display: block;
+  margin: 0 0 1em;
+  max-width: 100%;
+  overflow-x: auto;
+}
+.legal-prose th,
+.legal-prose td {
+  border: 1px solid #efe9dd;
+  overflow-wrap: normal;
+  padding: 0.4em 0.6em;
+  text-align: left;
+  vertical-align: top;
+}
 
 .legal-meta {
   color: var(--colour-slate, #233028);
   font-size: 0.85rem;
   opacity: 0.7;
   margin: 0 0 1.25rem;
+  overflow-wrap: anywhere;
 }
 
 .legal-gate {
@@ -11711,7 +11797,14 @@ a.family-feed-row {
 .legal-compliance-heading {
   align-items: flex-start;
   gap: 0.85rem;
+  /* .section-heading's space-between would push a short title/description
+     block away from its icon on wider cards. */
+  justify-content: flex-start;
   margin-bottom: 1.1rem;
+}
+.legal-compliance-heading > div {
+  flex: 1;
+  min-width: 0;
 }
 .legal-compliance-heading .more-icon-tile {
   flex: none;
@@ -11728,7 +11821,13 @@ a.family-feed-row {
   margin-bottom: 1.1rem;
   overflow: hidden;
 }
-.legal-privacy-card {
+/* The shared .card deliberately carries no padding of its own; both the
+   Legal & Privacy overview and every in-app legal document reader
+   (components/legal-privacy-document.tsx, app/about/legal/[key]) get the
+   same inset from here, so document text never sits on the card edge. */
+.legal-privacy-card,
+.legal-document-card {
+  min-width: 0;
   padding: clamp(1rem, 3vw, 1.5rem);
 }
 .legal-document-row {
@@ -11738,7 +11837,9 @@ a.family-feed-row {
   display: grid;
   gap: 0.75rem;
   grid-template-columns: auto minmax(0, 1fr) auto auto;
-  padding: 0.9rem 0;
+  /* Inset from the bordered .legal-document-rows container so icon tiles
+     and chevrons don't touch its edges. */
+  padding: 0.9rem 1rem;
   text-decoration: none;
 }
 .legal-document-row:first-child {
@@ -11752,6 +11853,7 @@ a.family-feed-row {
 }
 .legal-document-row-copy strong {
   font-size: var(--font-body);
+  overflow-wrap: anywhere;
 }
 .legal-document-row-copy span,
 .legal-document-row-copy small,
@@ -11875,6 +11977,7 @@ a.family-feed-row {
 .legal-reader-status {
   align-items: center;
   display: flex;
+  flex-wrap: wrap;
   gap: 0.5rem;
   margin: 0.5rem 0 1.25rem;
 }
@@ -11886,13 +11989,23 @@ a.family-feed-row {
 @media (max-width: 420px) {
   .legal-document-row {
     align-items: start;
+    column-gap: 0.65rem;
     grid-template-columns: auto minmax(0, 1fr) auto;
+    padding: 0.85rem 0.75rem;
     row-gap: 0.35rem;
   }
   .legal-document-row-status {
     align-items: flex-start;
     grid-column: 2 / 3;
+    grid-row: 2;
     text-align: left;
+  }
+  /* Keep the chevron beside the title block, vertically centred across
+     both rows, rather than auto-placing into the status row. */
+  .legal-document-row > svg {
+    align-self: center;
+    grid-column: 3;
+    grid-row: 1 / span 2;
   }
   .more-row-with-status {
     grid-template-columns: auto minmax(0, 1fr) auto;

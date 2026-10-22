@@ -360,16 +360,6 @@ export default function About() {
             </div>
           </div>
         </section>}
-
-        <div className="settings-list">
-          <Link className="card" href="/service-status">
-            <div>
-              <h2>Service Status</h2>
-              <p>Check whether MyKhaya is running normally</p>
-            </div>
-            <span>›</span>
-          </Link>
-        </div>
       </div>
     </SettingsPage>
   );

@@ -79,6 +79,13 @@ describe("About legal document reader", () => {
     expect(screen.getByText("Be kind.")).toBeInTheDocument();
   });
 
+  it("renders the content inside the padded legal document card", async () => {
+    await renderPage();
+    const prose = (await screen.findByText("Be kind.")).closest(".legal-prose");
+    expect(prose?.closest("section")).toHaveClass("card", "legal-document-card");
+    expect(screen.getByText(/Version 1.0/).closest("section")).toHaveClass("legal-document-card");
+  });
+
   it("shows the account's recorded acceptance status and date", async () => {
     await renderPage();
     expect(await screen.findByText(/Accepted$/)).toBeInTheDocument();

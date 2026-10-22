@@ -81,7 +81,7 @@ export default function AboutLegalDocumentPage({ params }: { params: Promise<{ k
         </p>
       )}
       {content && (
-        <section className="card">
+        <section className="card legal-document-card">
           <p className="legal-meta">
             Version {content.version}
             {legalReadableDate(content.effective_date) &&
