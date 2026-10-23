@@ -20,10 +20,14 @@ describe("native expanded Home presentation (iPhone Duo mockup page 3)", () => {
   });
 
   it("puts notifications/profile and the rail in a right-hand column that clears the safe area", () => {
-    expect(rule(R)).toMatch(/--native-rail-column:\s*max\(4\.75rem, calc\(var\(--safe-right\) \+ 0\.75rem\)\)/);
+    expect(rule(R)).toContain("--native-rail-column: 4.75rem;");
+    // Header and hero rows sit beside the status column and clear the full inset.
+    expect(rule(R)).toContain("--native-status-inset: max(var(--native-rail-column), var(--safe-right));");
+    expect(rule(`${R} .app-header`)).toContain("var(--native-status-inset)");
     // The previous version positioned the pill at top: 100% of the shell,
     // which put notifications and profile off-screen.
-    expect(rule(`${R} .app-header-actions`)).toMatch(/position:\s*fixed;[\s\S]*top:\s*calc\(var\(--safe-top\) \+ 4\.25rem\)/);
+    // Below the clock/Wi-Fi/battery column (~106pt on the unfolded Duo, measured).
+    expect(rule(`${R} .app-header-actions`)).toMatch(/position:\s*fixed;[\s\S]*top:\s*calc\(var\(--safe-top\) \+ 8rem\)/);
     expect(rule(`${R} .bottom-nav`)).toContain("position: fixed;");
     expect(rule(`${R} .bottom-nav`)).toContain("bottom: calc(var(--safe-bottom) + 0.75rem);");
     // Content is padded on .app-main, not the scroll region (whose green
@@ -38,13 +42,12 @@ describe("native expanded Home presentation (iPhone Duo mockup page 3)", () => {
     expect(rule(`${W}:has(.home-hero) .app-header`)).toContain("height: 0");
   });
 
-  it("places Today and Nudges left, Meals, Coming up and Around the House right", () => {
-    expect(rule(`${W} .home-page`)).toContain("grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr)");
-    expect(rule(`${W} .home-page > .home-today-card`)).toContain("grid-column: 1");
-    expect(rule(`${W} .home-page > .home-todo-section`)).toContain("grid-column: 1");
-    expect(rule(`${W} .home-page > .home-meals-card`)).toContain("grid-column: 2");
-    expect(rule(`${W} .home-page > .home-coming-up-card`)).toContain("grid-column: 2");
-    expect(rule(`${W} .home-page > .home-around-house-card`)).toContain("grid-column: 2");
+  it("places Today, Nudges and Meals left, Coming up and Around the House right", () => {
+    // Two independent stacks in page order, breaking before Coming up.
+    expect(rule(`${W} .home-page`)).toContain("columns: 2;");
+    expect(css).toMatch(/native-wide-viewport \.home-page > \.home-coming-up-card,[\s\S]*?\{\s*break-before: column;/);
+    const order = ["home-today-card", "home-todo-section", "<MealPlansTodayCard", "home-coming-up-card", "home-around-house-card"].map((m) => home.indexOf(m));
+    expect(order.every((index, i) => index > -1 && (i === 0 || index > order[i - 1]!))).toBe(true);
   });
 });
 
