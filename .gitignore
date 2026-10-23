@@ -37,3 +37,6 @@ firebase-service-account*.json
 
 # Design source/handoff files (the built marketing site lives in apps/web).
 /design/
+
+# Local release artefacts (App Store screenshots, metadata drafts, reports).
+/artifacts/
