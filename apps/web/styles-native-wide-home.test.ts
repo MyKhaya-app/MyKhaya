@@ -75,3 +75,18 @@ describe("iPhone Duo outer screen (mockup pages 1-2)", () => {
     expect(rule(`${C} .calendar-fab`)).toContain("display: none;");
   });
 });
+
+describe("notifications/profile pill overlays", () => {
+  it("keeps the tray and profile sheet (rendered inside the header) when the Home header collapses", () => {
+    expect(css).toContain(
+      ".app-shell.native-shell-app.native-wide-viewport:has(.home-hero) .app-header > :is(.app-header-logo, .app-header-home, .app-header-botanical) {",
+    );
+    expect(css).not.toContain(".app-header > :not(.app-header-actions)");
+  });
+
+  it("stacks the header (and the sheets inside it) above the fixed rail", () => {
+    const R = ".app-shell.native-shell-app:is(.native-wide-viewport, .native-compact-rail)";
+    expect(rule(`${R} .app-header`)).toContain("z-index: 25;");
+    expect(rule(`${R} .bottom-nav`)).toContain("z-index: 19;");
+  });
+});
