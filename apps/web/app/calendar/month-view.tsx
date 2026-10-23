@@ -34,6 +34,8 @@ export function MonthSwipeView({
   onDay,
   onNavigate,
   highlights,
+  selectedKey,
+  visibleRowCap,
 }: {
   cells: Date[];
   events: EventOccurrence[];
@@ -43,6 +45,9 @@ export function MonthSwipeView({
   onDay: (day: Date) => void;
   onNavigate: (direction: -1 | 1) => void;
   highlights?: CalendarHighlight[];
+  /** Date key of the day shown beside the grid (expanded layout), if any. */
+  selectedKey?: string;
+  visibleRowCap?: number;
 }) {
   const reducedMotion = usePrefersReducedMotion();
   const { trackRef, containerHandlers } = useMonthSwipe({
@@ -72,6 +77,7 @@ export function MonthSwipeView({
             weekStartsOn={weekStartsOn}
             onDay={onDay}
             highlights={highlights}
+            visibleRowCap={visibleRowCap}
           />
         </div>
         <div className="calendar-month-swipe-panel">
@@ -83,6 +89,8 @@ export function MonthSwipeView({
             weekStartsOn={weekStartsOn}
             onDay={onDay}
             highlights={highlights}
+            selectedKey={selectedKey}
+            visibleRowCap={visibleRowCap}
           />
         </div>
         <div className="calendar-month-swipe-panel" aria-hidden="true">
@@ -94,6 +102,7 @@ export function MonthSwipeView({
             weekStartsOn={weekStartsOn}
             onDay={onDay}
             highlights={highlights}
+            visibleRowCap={visibleRowCap}
           />
         </div>
       </div>
@@ -108,6 +117,9 @@ export function MonthSwipeView({
 // of a busy day's events before collapsing, matching a traditional compact family
 // calendar rather than needing to open the day sheet for every third event.
 const MONTH_VISIBLE_ROW_CAP = 5;
+// The expanded native layout's shorter rows fit three lanes (mockup page 4);
+// the rest of a busy day still shows as "+N more" and in the day panel.
+export const EXPANDED_MONTH_VISIBLE_ROW_CAP = 3;
 
 export function MonthView({
   cells,
@@ -117,6 +129,8 @@ export function MonthView({
   weekStartsOn,
   onDay,
   highlights,
+  selectedKey,
+  visibleRowCap = MONTH_VISIBLE_ROW_CAP,
 }: {
   cells: Date[];
   events: EventOccurrence[];
@@ -125,6 +139,8 @@ export function MonthView({
   weekStartsOn?: "monday" | "sunday";
   onDay: (day: Date) => void;
   highlights?: CalendarHighlight[];
+  selectedKey?: string;
+  visibleRowCap?: number;
 }) {
   highlights = highlights ?? [];
   const weekdayLabels = weekStartsOn === "sunday"
@@ -167,15 +183,22 @@ export function MonthView({
           // visible-row cap) just consumes whatever lanes it returned.
           const rows = layoutWeekEvents(events, days, bounds);
           const rowCount = rows.reduce((max, item) => Math.max(max, item.row + 1), 0);
-          const hiddenByDay = days.map((day) => rows.filter((item) => item.row >= MONTH_VISIBLE_ROW_CAP && item.start <= days.indexOf(day) && item.end >= days.indexOf(day)).length);
+          const hiddenByDay = days.map((day) => rows.filter((item) => item.row >= visibleRowCap && item.start <= days.indexOf(day) && item.end >= days.indexOf(day)).length);
           // The whole point: a week with 0-1 events only reserves 0-1 event-row
           // tracks, not a fixed 4-row block every week gets regardless of content.
-          const visibleRowCount = Math.min(rowCount, MONTH_VISIBLE_ROW_CAP);
+          const visibleRowCount = Math.min(rowCount, visibleRowCap);
           return (
             <div
               className="calendar-week"
               key={weekStart}
-              style={{ gridTemplateRows: `var(--month-day-number-h) repeat(${visibleRowCount}, var(--month-event-row-h))` }}
+              // A week with a "+N more" chip gets one more track for it, so
+              // the chip (pinned to the bottom of the day) never covers the
+              // last visible event where rows are short.
+              style={{
+                gridTemplateRows: `var(--month-day-number-h) repeat(${visibleRowCount}, var(--month-event-row-h))${
+                  hiddenByDay.some((count) => count > 0) ? " var(--month-overflow-row-h, 0px)" : ""
+                }`,
+              }}
             >
               {days.map((day, index) => {
                 const key = dateKey(day);
@@ -200,7 +223,7 @@ export function MonthView({
                 // and no risk of a bubbled click firing onDay twice.
                 return (
                   <article
-                    className={`calendar-day${dayHighlights.length ? " has-calendar-highlight" : ""}${key === todayKey ? " today" : ""}${day.getUTCMonth() !== focusDate.getUTCMonth() ? " outside" : ""}${(weekStartsOn === "sunday" ? index === 0 : index === 6) ? " sunday" : ""}`}
+                    className={`calendar-day${dayHighlights.length ? " has-calendar-highlight" : ""}${key === todayKey ? " today" : ""}${key === selectedKey ? " selected" : ""}${day.getUTCMonth() !== focusDate.getUTCMonth() ? " outside" : ""}${(weekStartsOn === "sunday" ? index === 0 : index === 6) ? " sunday" : ""}`}
                     key={key}
                     style={{ gridColumn: index + 1, gridRow: "1 / -1" }}
                     role="button"
@@ -212,7 +235,7 @@ export function MonthView({
                         onDay(day);
                       }
                     }}
-                    aria-label={`${displayDate(day, { weekday: "long", day: "numeric", month: "long", year: "numeric" }, "UTC")}, ${count} events${dayHighlights.length ? `, ${dayHighlights.map((item) => item.label).join(", ")}` : ""}`}
+                    aria-label={`${displayDate(day, { weekday: "long", day: "numeric", month: "long", year: "numeric" }, "UTC")}${key === selectedKey ? ", selected" : ""}, ${count} events${dayHighlights.length ? `, ${dayHighlights.map((item) => item.label).join(", ")}` : ""}`}
                   >
                     <span className="day-number" aria-hidden="true">
                       {decoration && <span className="calendar-highlight-decoration">{decoration}</span>}
@@ -230,7 +253,7 @@ export function MonthView({
                   </article>
                 );
               })}
-              {rows.filter((item) => item.row < MONTH_VISIBLE_ROW_CAP).map(({ event, start, end, row }) => {
+              {rows.filter((item) => item.row < visibleRowCap).map(({ event, start, end, row }) => {
                 // A multi-day event keeps its "spanning bar" treatment (see
                 // .month-event-span) on every week segment it touches, even a segment
                 // that only covers one day of that week (e.g. an event ending on a
@@ -305,7 +328,10 @@ export function MonthView({
                             aria-hidden="true"
                           />
                         )}
-                        {event.title}
+                        {/* Its own box so a long title ellipsises: the
+                            chip is a flex container, and text-overflow
+                            never applies to a flex container's bare text. */}
+                        <span className="month-event-title">{event.title}</span>
                       </>
                     ) : (
                       ""

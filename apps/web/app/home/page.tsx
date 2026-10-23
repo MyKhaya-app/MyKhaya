@@ -45,6 +45,7 @@ import {
 } from "./birthday-utils";
 import { dueCountdownSuffix, nudgeCardDateLabel } from "./routine-utils";
 import { HomeHeroDate } from "./home-hero-date";
+import { Logo } from "@/components/logo";
 import {
   FALLBACK_TIMEZONE,
   calendarDateAfter,
@@ -482,11 +483,17 @@ export default function HomePage() {
   return (
     <AppShellContent>
         <div className="home-hero">
+          {/* Expanded native layout only (hidden elsewhere by CSS): the
+              shallow one-row hero carries the Home icon and the Home name
+              itself, since AppHeader collapses there. */}
+          <Link className="app-header-logo home-hero-logo" href="/home" aria-label="Go to Home">
+            <Logo compact />
+          </Link>
           <p className="home-hero-eyebrow">🌿 {greeting()},</p>
           <h1>{user?.display_name?.split(" ")[0] ?? "there"}</h1>
-          <p>
+          <p className="home-hero-date">
             {activeHome
-              ? <HomeHeroDate />
+              ? <><HomeHeroDate /><span className="home-hero-home-name"> · {activeHome.name}</span></>
               : "Select a Home to continue"}
           </p>
           {members.length > 0 && (

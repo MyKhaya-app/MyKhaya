@@ -399,3 +399,60 @@ describe("MonthView — solid Calendar Tag colouring", () => {
     expect(container.querySelector(".month-event")?.textContent).toContain("Christmas lunch");
   });
 });
+
+describe("MonthView — expanded native layout (iPhone Duo unfolded)", () => {
+  const focusDate = new Date(Date.UTC(2026, 0, 15));
+  const busyDay = Array.from({ length: 5 }, (_, index) =>
+    occurrence({
+      occurrence_id: `busy-${index}`,
+      title: `A rather long event title number ${index}`,
+      start_at: `2026-01-05T0${index}:00:00Z`,
+      end_at: `2026-01-05T0${index}:30:00Z`,
+    }),
+  );
+
+  it("caps a busy day at the expanded lane count without dropping any event from the count", () => {
+    const { container } = render(
+      <MonthView
+        cells={monthCells(focusDate)}
+        events={busyDay}
+        focusDate={focusDate}
+        timeZone="UTC"
+        onDay={noop}
+        visibleRowCap={3}
+      />,
+    );
+    expect(container.querySelectorAll(".month-event")).toHaveLength(3);
+    expect(container.querySelector(".overflow-events")!.textContent).toBe("+2 more");
+    const day = container.querySelector('[aria-label^="Monday, 5 January 2026"]')!;
+    expect(day.getAttribute("aria-label")).toContain("5 events");
+    // The overflowing week reserves its own track for the "+N more" chip.
+    const week = day.closest(".calendar-week") as HTMLElement;
+    expect(week.style.gridTemplateRows).toContain("var(--month-overflow-row-h, 0px)");
+  });
+
+  it("marks the day shown beside the grid as selected", () => {
+    const { container } = render(
+      <MonthView
+        cells={monthCells(focusDate)}
+        events={[]}
+        focusDate={focusDate}
+        timeZone="UTC"
+        onDay={noop}
+        selectedKey="2026-01-15"
+      />,
+    );
+    const selected = container.querySelectorAll(".calendar-day.selected");
+    expect(selected).toHaveLength(1);
+    expect(selected[0]!.getAttribute("aria-label")).toContain("15 January 2026, selected");
+  });
+
+  it("puts each title in its own box so long titles ellipsise", () => {
+    const { container } = render(
+      <MonthView cells={monthCells(focusDate)} events={busyDay.slice(0, 1)} focusDate={focusDate} timeZone="UTC" onDay={noop} />,
+    );
+    expect(container.querySelector(".month-event .month-event-title")!.textContent).toBe(
+      "A rather long event title number 0",
+    );
+  });
+});

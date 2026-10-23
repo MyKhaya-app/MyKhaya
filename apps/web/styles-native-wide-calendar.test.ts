@@ -13,9 +13,16 @@ describe("native expanded Calendar presentation", () => {
     expect(page).toContain('className="calendar-expanded-agenda"');
     expect(page).toMatch(/nativeWideViewport \? null : day/);
     expect(page).toContain("<BottomSheet");
+    // The layout wrapper dissolves into the page grid (month left, day
+    // right) so the day panel can sit level with the month toolbar.
     expect(css).toMatch(
-      /\.app-shell\.native-shell-app\.native-wide-viewport \.calendar-expanded-layout\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0, 1\.12fr\) minmax\(280px, 0\.88fr\);/,
+      /\.app-shell\.native-shell-app\.native-wide-viewport \.calendar-page:has\(> \.calendar-expanded-layout\)\s*\{[\s\S]*?grid-template-columns:\s*minmax\(0, 1\.15fr\) minmax\(0, 1fr\);/,
     );
+    expect(css).toMatch(/\.app-shell\.native-shell-app\.native-wide-viewport \.calendar-expanded-layout\s*\{\s*display:\s*contents;/);
+    expect(page).toContain("selectedKey={focusedDateKey}");
+    expect(page).toContain("visibleRowCap={nativeWideShort ? EXPANDED_MONTH_VISIBLE_ROW_CAP : undefined}");
+    // The floating add button would sit on the rail; Add moves into the toolbar.
+    expect(css).toMatch(/\.app-shell\.native-shell-app\.native-wide-viewport \.calendar-fab\s*\{\s*display:\s*none;/);
   });
 
   it("derives selected-day and upcoming content from existing filtered calendar state", () => {
