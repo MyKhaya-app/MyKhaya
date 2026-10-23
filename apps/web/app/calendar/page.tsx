@@ -38,6 +38,7 @@ import { Avatar } from "@/components/avatar";
 import { AvatarStack } from "@/components/avatar";
 import { participantsForEvent } from "@/components/avatar-stack-logic";
 import { BottomSheet } from "@/components/bottom-sheet";
+import { isNativeShell } from "@/components/native-runtime";
 import { desktopShellViewport } from "@/components/use-desktop-shell";
 import { useActiveHome } from "@/components/use-active-home";
 import { syncWidgetSnapshot } from "@/components/widget-bridge";
@@ -1225,6 +1226,7 @@ export default function CalendarPage() {
   const [members, setMembers] = useState<Member[]>([]);
   const [sharedEventsEnabled, setSharedEventsEnabled] = useState(false);
   const [selectedDay, setSelectedDay] = useState<Date | null>(null);
+  const [nativeWideViewport, setNativeWideViewport] = useState(false);
   const [editorDay, setEditorDay] = useState<Date | null>(null);
   const [selectedEvent, setSelectedEvent] = useState<EventOccurrence | null>(
     null,
@@ -1276,6 +1278,15 @@ export default function CalendarPage() {
   const agendaAnchorRef = useRef<HTMLElement | null>(null);
   const agendaEntryToken = useRef(0);
   const positionedAgendaToken = useRef(-1);
+
+  useEffect(() => {
+    if (!isNativeShell()) return;
+    const query = window.matchMedia("(min-width: 760px)");
+    const update = () => setNativeWideViewport(query.matches);
+    update();
+    query.addEventListener("change", update);
+    return () => query.removeEventListener("change", update);
+  }, []);
 
   useEffect(() => {
     api.notificationPreferences().then((preferences) => setWeekStartsOn(preferences.week_starts_on)).catch(() => undefined);
@@ -1864,7 +1875,7 @@ export default function CalendarPage() {
   function openDay(day: Date) {
     hasNavigated.current = true;
     setFocusDate(day);
-    setSelectedDay(day);
+    setSelectedDay(nativeWideViewport ? null : day);
   }
 
   if (!featureChecked || !featureEnabled) {
@@ -1878,6 +1889,10 @@ export default function CalendarPage() {
   }
 
   const focusedEvents = eventsForDay(visibleEvents, focusDate, calendarTimezone);
+  const focusedDateKey = dateKey(focusDate);
+  const upcomingEntry = Array.from(byDay.entries())
+    .sort(([a], [b]) => a.localeCompare(b))
+    .find(([key]) => key > focusedDateKey);
   return (
     <AppShellContent>
       <main className="standard-page calendar-page">
@@ -2038,15 +2053,69 @@ export default function CalendarPage() {
         )}
 
         {viewReady && view === "month" && (
-          <MonthSwipeView
-            cells={cells}
-            events={visibleEvents}
-            focusDate={focusDate}
-            timeZone={calendarTimezone}
-            onDay={openDay}
-            onNavigate={move}
-            highlights={calendarHighlights}
-          />
+          nativeWideViewport ? (
+            <div className="calendar-expanded-layout">
+              <MonthSwipeView
+                cells={cells}
+                events={visibleEvents}
+                focusDate={focusDate}
+                timeZone={calendarTimezone}
+                weekStartsOn={weekStartsOn}
+                onDay={openDay}
+                onNavigate={move}
+                highlights={calendarHighlights}
+              />
+              <aside className="calendar-expanded-agenda" aria-label="Selected day agenda">
+                <header className="calendar-expanded-agenda-header">
+                  <p className="eyebrow">Selected day</p>
+                  <h2>{displayDate(focusDate, { weekday: "long", day: "numeric", month: "long" }, "UTC")}</h2>
+                </header>
+                {calendarHighlights.filter((item) => item.date === focusedDateKey).length > 0 && (
+                  <CalendarHighlightSummary items={calendarHighlights.filter((item) => item.date === focusedDateKey)} />
+                )}
+                <section className="calendar-expanded-agenda-section" aria-labelledby="calendar-expanded-events-title">
+                  <h3 id="calendar-expanded-events-title">Events</h3>
+                  {focusedEvents.length > 0 ? (
+                    <EventList
+                      events={focusedEvents}
+                      members={members}
+                      memberNames={memberNames}
+                      timeZone={calendarTimezone}
+                      onSelect={openEvent}
+                    />
+                  ) : (
+                    <p className="hint">No events on this day.</p>
+                  )}
+                </section>
+                <section className="calendar-expanded-agenda-section" aria-labelledby="calendar-expanded-upcoming-title">
+                  <h3 id="calendar-expanded-upcoming-title">Upcoming</h3>
+                  {upcomingEntry ? (
+                    <button
+                      className="calendar-expanded-upcoming"
+                      type="button"
+                      onClick={() => openDay(new Date(`${upcomingEntry[0]}T00:00:00Z`))}
+                    >
+                      <span>{relativeDayHeading(upcomingEntry[0], calendarTimezone)}</span>
+                      <strong>{upcomingEntry[1][0]?.title ?? "Upcoming events"}</strong>
+                    </button>
+                  ) : (
+                    <p className="hint">No upcoming events in this view.</p>
+                  )}
+                </section>
+              </aside>
+            </div>
+          ) : (
+            <MonthSwipeView
+              cells={cells}
+              events={visibleEvents}
+              focusDate={focusDate}
+              timeZone={calendarTimezone}
+              weekStartsOn={weekStartsOn}
+              onDay={openDay}
+              onNavigate={move}
+              highlights={calendarHighlights}
+            />
+          )
         )}
 
         {viewReady && view === "week" && (

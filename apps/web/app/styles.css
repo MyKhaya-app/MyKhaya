@@ -4405,6 +4405,76 @@ html.native-shell .home-section-overlap {
   width: 52px;
   z-index: 8;
 }
+
+/* Expanded native Calendar: the month grid and selected-day agenda share the
+   same loaded, filtered event state. This is intentionally scoped to the
+   native-wide presentation so compact iPhone geometry and browser Calendar
+   layout remain unchanged. */
+.app-shell.native-shell-app.native-wide-viewport .calendar-page {
+  max-width: 1320px;
+}
+.app-shell.native-shell-app.native-wide-viewport .calendar-expanded-layout {
+  align-items: start;
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: minmax(0, 1.12fr) minmax(280px, 0.88fr);
+  min-width: 0;
+}
+.app-shell.native-shell-app.native-wide-viewport .calendar-expanded-layout > * {
+  min-width: 0;
+}
+.app-shell.native-shell-app.native-wide-viewport .calendar-expanded-agenda {
+  background: var(--colour-white);
+  border: 1px solid #ebe6dd;
+  border-radius: var(--radius-card);
+  display: grid;
+  gap: 1rem;
+  padding: 1rem;
+}
+.app-shell.native-shell-app.native-wide-viewport .calendar-expanded-agenda-header {
+  border-bottom: 1px solid #ebe6dd;
+  padding-bottom: 0.75rem;
+}
+.app-shell.native-shell-app.native-wide-viewport .calendar-expanded-agenda-header h2 {
+  font-size: clamp(1.15rem, 2vw, 1.6rem);
+  margin: 0.2rem 0 0;
+}
+.app-shell.native-shell-app.native-wide-viewport .calendar-expanded-agenda-section {
+  display: grid;
+  gap: 0.55rem;
+}
+.app-shell.native-shell-app.native-wide-viewport .calendar-expanded-agenda-section h3 {
+  color: var(--colour-sage-dark);
+  font-size: 0.9rem;
+  margin: 0;
+}
+.app-shell.native-shell-app.native-wide-viewport .calendar-expanded-agenda .event-list {
+  gap: 0.55rem;
+}
+.app-shell.native-shell-app.native-wide-viewport .calendar-expanded-agenda .event-row {
+  min-height: 58px;
+  padding: 0.6rem 0.7rem;
+}
+.app-shell.native-shell-app.native-wide-viewport .calendar-expanded-upcoming {
+  align-items: start;
+  background: var(--colour-cream);
+  border: 1px solid #ebe4da;
+  border-radius: 0.85rem;
+  color: var(--colour-slate);
+  display: grid;
+  gap: 0.25rem;
+  padding: 0.7rem;
+  text-align: left;
+  width: 100%;
+}
+.app-shell.native-shell-app.native-wide-viewport .calendar-expanded-upcoming span {
+  color: var(--colour-muted);
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+.app-shell.native-shell-app.native-wide-viewport .calendar-expanded-upcoming strong {
+  font-size: 0.95rem;
+}
 body.sheet-open {
   overflow: hidden;
 }
@@ -6238,6 +6308,119 @@ button.danger,
   }
   .app-shell:not(.native-shell-app) .mealplan-entry-title {
     font-size: var(--font-body);
+  }
+}
+
+/* --- Native expanded presentation -----------------------------------------
+   A wide native viewport is still the same Capacitor app, but it has enough
+   room for the Duo's expanded composition. Keep the compact native baseline
+   intact and turn the existing entitlement-aware BottomNav into the mockup's
+   right rail; the browser-only DesktopNav remains a separate presentation. */
+@media (min-width: 760px) {
+  .app-shell.native-shell-app.native-wide-viewport {
+    position: relative;
+  }
+  .app-shell.native-shell-app.native-wide-viewport .app-content-scroll-region {
+    padding-right: 7.5rem;
+  }
+  .app-shell.native-shell-app.native-wide-viewport .app-header-actions {
+    align-items: center;
+    background: var(--colour-white);
+    border: 1px solid #e8e2d8;
+    border-radius: 999px;
+    box-shadow: var(--shadow-card);
+    flex-direction: column;
+    gap: 0.35rem;
+    padding: 0.45rem 0.4rem;
+    position: absolute;
+    right: 1rem;
+    top: calc(100% + 0.75rem);
+    z-index: 20;
+  }
+  .app-shell.native-shell-app.native-wide-viewport .app-header-notifications,
+  .app-shell.native-shell-app.native-wide-viewport .app-header-avatar {
+    color: var(--colour-forest-dark);
+    min-height: 48px;
+    width: 48px;
+  }
+  .app-shell.native-shell-app.native-wide-viewport .app-header-avatar .avatar {
+    box-shadow: none;
+  }
+  .app-shell.native-shell-app.native-wide-viewport .bottom-nav {
+    align-items: stretch;
+    background: var(--colour-white);
+    border: 1px solid #e8e2d8;
+    border-radius: 999px;
+    box-shadow: var(--shadow-card);
+    flex-direction: column;
+    gap: 0.25rem;
+    justify-content: center;
+    min-height: 0;
+    padding: 0.75rem 0.4rem;
+    position: absolute;
+    right: 1rem;
+    top: 16rem;
+    width: 5rem;
+    z-index: 19;
+  }
+  .app-shell.native-shell-app.native-wide-viewport .bottom-nav a {
+    flex: none;
+    max-width: none;
+    min-height: 60px;
+    width: 100%;
+  }
+  .app-shell.native-shell-app.native-wide-viewport .bottom-nav a::after {
+    display: none;
+  }
+  .app-shell.native-shell-app.native-wide-viewport .bottom-nav a.active {
+    background: var(--colour-sage-soft);
+    border-radius: 999px;
+  }
+  .app-shell.native-shell-app.native-wide-viewport .home-hero {
+    margin: 0;
+    max-width: none;
+    padding: 1.5rem clamp(2rem, 5vw, 5rem) 3.25rem;
+  }
+  .app-shell.native-shell-app.native-wide-viewport .home-page {
+    display: grid;
+    gap: 1rem;
+    grid-template-columns: minmax(0, 1.15fr) minmax(240px, 0.85fr);
+    max-width: none;
+    padding: 1rem clamp(1.25rem, 4vw, 4rem) 3rem;
+  }
+  .app-shell.native-shell-app.native-wide-viewport .home-page > .notice,
+  .app-shell.native-shell-app.native-wide-viewport .home-page > .birthday-banner,
+  .app-shell.native-shell-app.native-wide-viewport .home-page > .notify-panel {
+    grid-column: 1 / -1;
+  }
+  .app-shell.native-shell-app.native-wide-viewport .home-page > .home-section-overlap {
+    margin-top: -3rem;
+  }
+  .app-shell.native-shell-app.native-wide-viewport .home-page > .home-summary-card {
+    margin: 0;
+  }
+  .app-shell.native-shell-app.native-wide-viewport .home-page > .birthday-banner.home-section-overlap {
+    margin-top: 0;
+  }
+  .app-shell.native-shell-app.native-wide-viewport .home-page > .home-today-card {
+    grid-column: 1;
+    grid-row: 1;
+  }
+  .app-shell.native-shell-app.native-wide-viewport .home-page > .home-todo-section {
+    grid-column: 1;
+    grid-row: 2;
+  }
+  .app-shell.native-shell-app.native-wide-viewport .home-page > .home-meals-card {
+    grid-column: 2;
+    grid-row: 1;
+  }
+  .app-shell.native-shell-app.native-wide-viewport .home-page > .home-coming-up-card {
+    grid-column: 2;
+    grid-row: 2;
+  }
+  .app-shell.native-shell-app.native-wide-viewport .home-page > .home-around-house-card {
+    grid-column: 2;
+    grid-row: 3;
   }
 }
 
