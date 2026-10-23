@@ -41,17 +41,20 @@ describe("Calendar month view in the native shell on tablets", () => {
     const block = css.match(
       /@media\s*\(min-width:\s*801px\) and \(min-height:\s*700px\)\s*\{([\s\S]*?)\n\}/,
     );
-    expect(block).not.toBeNull();
-    const body = block![1];
+    if (block === null) throw new Error("Expected the native tablet calendar media block");
+    const body = block[1];
+    if (body === undefined) throw new Error("Expected the native tablet calendar media body");
     expect(body).toMatch(
       /\.native-shell-app \.standard-page\.calendar-page\s*\{\s*max-width:\s*1320px;/,
     );
     expect(body).toMatch(
       /\.native-shell-app \.calendar-week\s*\{[^}]*min-height:\s*max\(112px, calc\(\(100dvh - 330px\) \/ var\(--calendar-week-count\)\)\)/,
     );
-    const selectors = [...body.matchAll(/^\s*([^{}\n/][^{}\n]*?)\s*\{/gm)].map(
-      (m) => m[1],
-    );
+    const selectors = [...body.matchAll(/^\s*([^{}\n/][^{}\n]*?)\s*\{/gm)].map((match) => {
+      const selector = match[1];
+      if (selector === undefined) throw new Error("Expected a CSS selector capture");
+      return selector;
+    });
     expect(selectors.length).toBeGreaterThan(0);
     for (const selector of selectors)
       expect(selector.startsWith(".native-shell-app ")).toBe(true);
