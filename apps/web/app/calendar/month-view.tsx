@@ -30,6 +30,7 @@ export function MonthSwipeView({
   events,
   focusDate,
   timeZone,
+  weekStartsOn,
   onDay,
   onNavigate,
   highlights,
@@ -38,6 +39,7 @@ export function MonthSwipeView({
   events: EventOccurrence[];
   focusDate: Date;
   timeZone: string;
+  weekStartsOn?: "monday" | "sunday";
   onDay: (day: Date) => void;
   onNavigate: (direction: -1 | 1) => void;
   highlights?: CalendarHighlight[];
@@ -55,8 +57,8 @@ export function MonthSwipeView({
   // shows whatever overlap already loaded, rather than firing new API calls.
   const previousDate = useMemo(() => addMonths(focusDate, -1), [focusDate]);
   const nextDate = useMemo(() => addMonths(focusDate, 1), [focusDate]);
-  const previousCells = useMemo(() => monthCells(previousDate), [previousDate]);
-  const nextCells = useMemo(() => monthCells(nextDate), [nextDate]);
+  const previousCells = useMemo(() => monthCells(previousDate, weekStartsOn), [previousDate, weekStartsOn]);
+  const nextCells = useMemo(() => monthCells(nextDate, weekStartsOn), [nextDate, weekStartsOn]);
 
   return (
     <div className="calendar-month-swipe" {...containerHandlers}>
@@ -67,6 +69,7 @@ export function MonthSwipeView({
             events={events}
             focusDate={previousDate}
             timeZone={timeZone}
+            weekStartsOn={weekStartsOn}
             onDay={onDay}
             highlights={highlights}
           />
@@ -77,6 +80,7 @@ export function MonthSwipeView({
             events={events}
             focusDate={focusDate}
             timeZone={timeZone}
+            weekStartsOn={weekStartsOn}
             onDay={onDay}
             highlights={highlights}
           />
@@ -87,6 +91,7 @@ export function MonthSwipeView({
             events={events}
             focusDate={nextDate}
             timeZone={timeZone}
+            weekStartsOn={weekStartsOn}
             onDay={onDay}
             highlights={highlights}
           />
@@ -109,6 +114,7 @@ export function MonthView({
   events,
   focusDate,
   timeZone,
+  weekStartsOn,
   onDay,
   highlights,
 }: {
@@ -116,10 +122,14 @@ export function MonthView({
   events: EventOccurrence[];
   focusDate: Date;
   timeZone: string;
+  weekStartsOn?: "monday" | "sunday";
   onDay: (day: Date) => void;
   highlights?: CalendarHighlight[];
 }) {
   highlights = highlights ?? [];
+  const weekdayLabels = weekStartsOn === "sunday"
+    ? ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"]
+    : ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
   const todayKey = zonedDateKey(new Date(), timeZone);
   const bounds = useMemo(
     () => new Map(events.map((event) => [event.occurrence_id, eventDateBounds(event, timeZone)])),
@@ -141,7 +151,7 @@ export function MonthView({
   return (
     <section className="calendar-month" aria-label="Month view">
       <div className="calendar-weekdays" aria-hidden="true">
-        {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((label) => <span key={label}>{label}</span>)}
+        {weekdayLabels.map((label) => <span key={label}>{label}</span>)}
       </div>
       <div
         className="calendar-weeks"
@@ -190,7 +200,7 @@ export function MonthView({
                 // and no risk of a bubbled click firing onDay twice.
                 return (
                   <article
-                    className={`calendar-day${dayHighlights.length ? " has-calendar-highlight" : ""}${key === todayKey ? " today" : ""}${day.getUTCMonth() !== focusDate.getUTCMonth() ? " outside" : ""}${index === 6 ? " sunday" : ""}`}
+                    className={`calendar-day${dayHighlights.length ? " has-calendar-highlight" : ""}${key === todayKey ? " today" : ""}${day.getUTCMonth() !== focusDate.getUTCMonth() ? " outside" : ""}${(weekStartsOn === "sunday" ? index === 0 : index === 6) ? " sunday" : ""}`}
                     key={key}
                     style={{ gridColumn: index + 1, gridRow: "1 / -1" }}
                     role="button"

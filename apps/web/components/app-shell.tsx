@@ -46,6 +46,7 @@ export function AppShell({
   // shown-and-resolved, or determined it had nothing to show. See
   // NativeBiometricOffer's onSettled doc comment.
   const [biometricSettled, setBiometricSettled] = useState(false);
+  const [nativeWideViewport, setNativeWideViewport] = useState(false);
   const keyboardOpen = useNativeKeyboardOpen();
   useActivityHeartbeat(status === "ready");
   useProductAnalytics(status === "ready", path, activeHome?.id);
@@ -87,6 +88,15 @@ export function AppShell({
     if (!isNativeShell()) return;
     document.documentElement.classList.add("native-shell");
     return () => document.documentElement.classList.remove("native-shell");
+  }, []);
+
+  useEffect(() => {
+    if (!isNativeShell()) return;
+    const query = window.matchMedia("(min-width: 760px)");
+    const update = () => setNativeWideViewport(query.matches);
+    update();
+    query.addEventListener("change", update);
+    return () => query.removeEventListener("change", update);
   }, []);
 
   useEffect(() => {
@@ -132,7 +142,7 @@ export function AppShell({
 
   return (
     <NotificationProvider>
-      <div className={`app-shell${isNativeShell() ? " native-shell-app" : ""}${keyboardOpen ? " native-keyboard-open" : ""}`}>
+      <div className={`app-shell${isNativeShell() ? " native-shell-app" : ""}${nativeWideViewport ? " native-wide-viewport" : ""}${keyboardOpen ? " native-keyboard-open" : ""}`}>
       <AppHeader
         user={user}
         homes={homes}
