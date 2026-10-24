@@ -1,4 +1,4 @@
-FROM node:22.17.0-alpine3.22 AS builder
+FROM node:22.23.4-alpine3.24 AS builder
 ARG MYKHAYA_VERSION=unknown
 ARG MYKHAYA_COMMIT_SHA=unknown
 ARG MYKHAYA_BUILD_TIME=unknown
@@ -25,7 +25,7 @@ WORKDIR /workspace/apps/web
 USER pwuser
 CMD ["./node_modules/.bin/playwright", "test"]
 
-FROM node:22.17.0-alpine3.22 AS runtime
+FROM node:22.23.4-alpine3.24 AS runtime
 ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 HOSTNAME=0.0.0.0 PORT=3000
 ARG MYKHAYA_VERSION=unknown
 ARG MYKHAYA_COMMIT_SHA=unknown

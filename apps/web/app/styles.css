@@ -937,7 +937,10 @@ textarea {
      contents, so the name stays centred exactly as before. */
   grid-template-columns: minmax(max-content, 1fr) minmax(0, auto) minmax(max-content, 1fr);
   overflow: hidden;
-  padding: calc(var(--safe-top) + 13px) 20px 13px;
+  /* Side insets clear a device's left/right safe areas — zero on an
+     ordinary iPhone in portrait, but the iPhone Duo's compact screen keeps
+     its camera and clock in a column on the right edge. */
+  padding: calc(var(--safe-top) + 13px) max(20px, var(--safe-right)) 13px max(20px, var(--safe-left));
   position: sticky;
   top: 0;
   z-index: 15;
@@ -1051,7 +1054,8 @@ textarea {
 }
 .notification-badge {
   align-items: center;
-  background: var(--colour-coral);
+  /* --colour-coral never existed, so the badge had no background at all. */
+  background: var(--colour-terracotta);
   border: 2px solid var(--colour-forest);
   border-radius: 999px;
   color: var(--colour-white);
@@ -1081,6 +1085,8 @@ textarea {
   align-items: center;
   border-radius: 50%;
   display: inline-flex;
+  height: var(--avatar-size);
+  width: var(--avatar-size);
   font-family: var(--font-family);
   font-weight: 700;
   justify-content: center;
@@ -4186,6 +4192,12 @@ html.native-shell .home-section-overlap {
    continuation prefix and title-visibility rules off it) but, now that
    every event is a solid Calendar Tag colour, there is no longer a
    background/colour difference from a single-day chip to declare here. */
+.month-event-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .month-event-shared-icon {
   flex-shrink: 0;
   margin-right: 0.2rem;
@@ -4404,6 +4416,213 @@ html.native-shell .home-section-overlap {
   right: 1rem;
   width: 52px;
   z-index: 8;
+}
+
+/* Expanded native Calendar (mockup page 4): month grid on the left, the
+   selected day on the right, both from the same loaded, filtered event
+   state. Scoped to the native-wide presentation and to Month view (the page
+   only renders .calendar-expanded-layout there), so compact iPhone geometry,
+   the other views and the browser Calendar are unchanged. The layout wrapper
+   dissolves into the page grid so the day panel can sit level with the
+   month toolbar. Below 900px the toolbar needs the full width and spans both
+   columns instead. */
+.app-shell.native-shell-app.native-wide-viewport .calendar-page:has(> .calendar-expanded-layout) {
+  align-items: start;
+  column-gap: 0.875rem;
+  display: grid;
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 1fr);
+  max-width: none;
+  padding: 0.85rem 0 1rem var(--native-content-left);
+}
+.app-shell.native-shell-app.native-wide-viewport .calendar-page:has(> .calendar-expanded-layout) > * {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
+.app-shell.native-shell-app.native-wide-viewport .calendar-expanded-layout {
+  display: contents;
+}
+.app-shell.native-shell-app.native-wide-viewport .calendar-expanded-layout > .calendar-month-swipe {
+  grid-column: 1;
+}
+.app-shell.native-shell-app.native-wide-viewport .calendar-expanded-agenda {
+  align-content: start;
+  display: grid;
+  gap: 0.85rem;
+  grid-column: 2;
+  min-width: 0;
+}
+@media (min-width: 900px) {
+  .app-shell.native-shell-app.native-wide-viewport .calendar-page:has(> .calendar-expanded-layout) > .calendar-toolbar-compact {
+    grid-column: 1;
+    grid-row: 1;
+  }
+  .app-shell.native-shell-app.native-wide-viewport .calendar-expanded-agenda {
+    grid-row: 1 / span 3;
+  }
+}
+/* Toolbar: compact, mockup-weight month title. */
+.app-shell.native-shell-app.native-wide-viewport .calendar-page .calendar-toolbar-compact {
+  gap: 0.45rem;
+  margin-bottom: 0.45rem;
+}
+.app-shell.native-shell-app.native-wide-viewport .calendar-page .calendar-month-row {
+  gap: 0.35rem;
+}
+.app-shell.native-shell-app.native-wide-viewport .calendar-page .calendar-month-label {
+  flex: 0 1 auto;
+  font-size: 1.3rem;
+  padding-inline: 0.35rem;
+}
+.app-shell.native-shell-app.native-wide-viewport .calendar-page .calendar-month-row .icon-button {
+  min-height: 38px;
+  min-width: 38px;
+  padding: 0;
+}
+.app-shell.native-shell-app.native-wide-viewport .calendar-page .calendar-month-row-actions {
+  gap: 0.25rem;
+}
+.app-shell.native-shell-app.native-wide-viewport .calendar-page .calendar-month-row-actions .icon-button {
+  min-width: 36px;
+}
+/* Add is the mockup's round green "+" here (its text stays as the accessible
+   name), and replaces the floating button, which would sit on top of the
+   navigation rail. */
+.app-shell.native-shell-app.native-wide-viewport .calendar-page .calendar-add-desktop {
+  border-radius: 50%;
+  display: inline-flex;
+  font-size: 0;
+  justify-content: center;
+  min-height: 38px;
+  padding: 0;
+  width: 38px;
+}
+.app-shell.native-shell-app.native-wide-viewport .calendar-page .calendar-add-desktop svg {
+  height: 20px;
+  width: 20px;
+}
+.app-shell.native-shell-app.native-wide-viewport .calendar-fab {
+  display: none;
+}
+/* Month grid: rows share the height left under the toolbar so a whole month
+   is visible at once; three event lanes per week, then "+N more". Tall
+   screens (iPad) keep the tablet month rules further up. */
+@media (max-height: 799px) {
+  .app-shell.native-shell-app.native-wide-viewport .calendar-weekdays {
+    margin-bottom: 0.25rem;
+  }
+  .app-shell.native-shell-app.native-wide-viewport .calendar-weeks {
+    --month-day-number-h: 26px;
+    --month-event-row-h: 19px;
+    --month-overflow-row-h: 21px;
+    border-radius: 1rem;
+  }
+  .app-shell.native-shell-app.native-wide-viewport .calendar-week {
+    /* ~196px is the header, toolbar, weekday row and bottom spacing above
+       and below the grid at this size. */
+    min-height: max(
+      64px,
+      calc((100dvh - 196px - var(--safe-top) - var(--safe-bottom)) / var(--calendar-week-count, 6))
+    );
+  }
+  .app-shell.native-shell-app.native-wide-viewport .calendar-week .day-number span {
+    font-size: 0.875rem;
+    height: 24px;
+    width: 24px;
+  }
+  .app-shell.native-shell-app.native-wide-viewport .calendar-week .month-event {
+    font-size: 0.6875rem;
+    font-weight: 600;
+    min-height: 17px;
+    padding: 0.05rem 0.3rem;
+  }
+}
+.app-shell.native-shell-app.native-wide-viewport .calendar-week .calendar-day.selected {
+  border-radius: 0.4rem;
+  box-shadow: inset 0 0 0 2px var(--colour-terracotta);
+}
+/* Selected-day panel: title row with a Today marker, the day's events in
+   one card, then the next day with events. */
+.app-shell.native-shell-app.native-wide-viewport .calendar-expanded-agenda-header {
+  align-items: center;
+  display: flex;
+  gap: 0.75rem;
+  justify-content: space-between;
+  min-height: 38px;
+}
+.app-shell.native-shell-app.native-wide-viewport .calendar-expanded-agenda-header h2 {
+  font-size: 1.3rem;
+  margin: 0;
+}
+.app-shell.native-shell-app.native-wide-viewport .calendar-expanded-today {
+  background: color-mix(in srgb, var(--colour-terracotta) 14%, var(--colour-white));
+  border-radius: 999px;
+  color: var(--colour-terracotta-ink);
+  flex: none;
+  font-size: 0.8125rem;
+  font-weight: 700;
+  padding: 0.25rem 0.7rem;
+}
+.app-shell.native-shell-app.native-wide-viewport .calendar-expanded-agenda-section {
+  display: grid;
+  gap: 0.4rem;
+}
+.app-shell.native-shell-app.native-wide-viewport .calendar-expanded-agenda-section h3 {
+  color: var(--colour-muted);
+  font-size: 0.9375rem;
+  margin: 0;
+}
+.app-shell.native-shell-app.native-wide-viewport .calendar-expanded-agenda .event-list {
+  background: var(--colour-white);
+  border: 1px solid #ebe6dd;
+  border-radius: 1.25rem;
+  box-shadow: var(--shadow-card);
+  gap: 0;
+  padding: 0.25rem 0.9rem;
+}
+.app-shell.native-shell-app.native-wide-viewport .calendar-expanded-agenda .event-row {
+  background: none;
+  border: 0;
+  border-radius: 0;
+  grid-template-columns: 4px 3.25rem minmax(0, 1fr) auto;
+  min-height: 60px;
+  padding: 0.6rem 0;
+}
+.app-shell.native-shell-app.native-wide-viewport .calendar-expanded-agenda .event-row + .event-row {
+  border-top: 1px solid #f1ece1;
+}
+.app-shell.native-shell-app.native-wide-viewport .calendar-expanded-agenda .event-time {
+  font-size: 0.875rem;
+  font-weight: 700;
+}
+.app-shell.native-shell-app.native-wide-viewport .calendar-expanded-agenda .event-copy strong {
+  font-size: 1rem;
+}
+.app-shell.native-shell-app.native-wide-viewport .calendar-expanded-upcoming {
+  align-items: center;
+  background: none;
+  border: 0;
+  border-left: 3px solid var(--colour-slate);
+  border-radius: 0;
+  box-shadow: none;
+  color: var(--colour-slate);
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: 3.5rem minmax(0, 1fr);
+  min-height: 40px;
+  padding: 0.25rem 0 0.25rem 0.85rem;
+  text-align: left;
+  width: 100%;
+}
+.app-shell.native-shell-app.native-wide-viewport .calendar-expanded-upcoming span {
+  font-size: 0.875rem;
+  font-weight: 700;
+}
+.app-shell.native-shell-app.native-wide-viewport .calendar-expanded-upcoming strong {
+  font-size: 1rem;
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 body.sheet-open {
   overflow: hidden;
@@ -6238,6 +6457,597 @@ button.danger,
   }
   .app-shell:not(.native-shell-app) .mealplan-entry-title {
     font-size: var(--font-body);
+  }
+}
+
+/* Expanded-only parts of the Home hero (see the native expanded block
+   below); never shown in the compact or browser presentations. */
+.home-hero .home-hero-logo,
+.home-hero .home-hero-home-name {
+  display: none;
+}
+
+/* --- Native rail presentations --------------------------------------------
+   Two native layouts swap the bottom bar for the iPhone Duo mockups' right-
+   hand column (docs: mykhaya-iphone-duo-mockups.pdf):
+   - .native-wide-viewport: the expanded layout (Duo unfolded, iPad), pages
+     3-4;
+   - .native-compact-rail: the Duo's outer screen, pages 1-2 — wider than any
+     phone in portrait, smaller than any iPad (NATIVE_COMPACT_RAIL_QUERY in
+     components/native-layout.ts).
+   AppShell sets at most one of these classes, only inside the native shell,
+   so ordinary iPhones keep the compact baseline and the browser shell is
+   untouched. Rules for both use :is(...); the rest are wide-only.
+
+   The right-hand column. The Duo draws its clock/battery in a column on the
+   right edge rather than a top status bar, and the mockups put the
+   notifications/profile pill directly beneath it and the navigation rail at
+   the bottom of that same column. --native-rail-column is that column's
+   width; page content is padded by it and the green header/hero fields run
+   underneath it, as in the mockups. The rail
+   is the existing entitlement-aware BottomNav, restyled. */
+.app-shell.native-shell-app:is(.native-wide-viewport, .native-compact-rail) {
+  --native-rail-width: 3.75rem;
+  /* The rail column is a fixed width: below the status column the screen
+     there is free, and the mockups run the cards up to the rail. Only the
+     header and hero rows, which sit beside the status column, clear the
+     full right safe-area inset (~93pt on the Duo's outer screen). */
+  --native-rail-column: 4.75rem;
+  --native-status-inset: max(var(--native-rail-column), var(--safe-right));
+  --native-rail-inset: calc((var(--native-rail-column) - var(--native-rail-width)) / 2);
+  --native-content-left: max(1rem, var(--safe-left));
+  position: relative;
+}
+/* Shallow header bar: Home icon and Home name on the left, nothing centred,
+   no controls under the status column. */
+.app-shell.native-shell-app:is(.native-wide-viewport, .native-compact-rail) .app-header {
+  border-radius: 0 0 var(--radius-shell) var(--radius-shell);
+  gap: 0.85rem;
+  grid-template-columns: auto minmax(0, 1fr);
+  padding: calc(var(--safe-top) + 0.7rem) var(--native-status-inset) 0.7rem var(--native-content-left);
+  /* The header is its own stacking context (a flex item with a z-index),
+     and it hosts the notifications tray and profile sheet, so it sits above
+     the fixed rail for those overlays to cover it. */
+  z-index: 25;
+}
+.app-shell.native-shell-app:is(.native-wide-viewport, .native-compact-rail) .app-header.app-header-flush {
+  border-radius: 0;
+  box-shadow: none;
+}
+.app-shell.native-shell-app:is(.native-wide-viewport, .native-compact-rail) .app-header-home {
+  font-size: 1.125rem;
+  justify-content: flex-start;
+  justify-self: start;
+  max-width: 100%;
+  padding-left: 0;
+}
+/* Notifications and profile: a white pill in the right column, below the
+   status column. Fixed (the native shell never scrolls the document), so it
+   stays put while the content region scrolls. */
+.app-shell.native-shell-app:is(.native-wide-viewport, .native-compact-rail) .app-header-actions {
+  align-items: center;
+  background: var(--colour-white);
+  border: 1px solid #e8e2d8;
+  border-radius: 999px;
+  box-shadow: var(--shadow-card);
+  flex-direction: column;
+  gap: 0.35rem;
+  padding: 0.4rem 0;
+  position: fixed;
+  right: var(--native-rail-inset);
+  /* Below the Duo's clock/Wi-Fi/battery column, which reaches ~106pt
+     down on the unfolded screen (measured on device). */
+  top: calc(var(--safe-top) + 8rem);
+  width: var(--native-rail-width);
+  z-index: 30;
+}
+.app-shell.native-shell-app:is(.native-wide-viewport, .native-compact-rail) .app-header-notifications,
+.app-shell.native-shell-app:is(.native-wide-viewport, .native-compact-rail) .app-header-avatar {
+  color: var(--colour-forest-dark);
+  min-height: 44px;
+  width: 44px;
+}
+.app-shell.native-shell-app:is(.native-wide-viewport, .native-compact-rail) .app-header-avatar .avatar {
+  box-shadow: none;
+}
+.app-shell.native-shell-app:is(.native-wide-viewport, .native-compact-rail) .notification-badge {
+  border-color: var(--colour-white);
+}
+/* Navigation rail: the same BottomNav links, as a compact white rounded
+   rail anchored to the bottom of the right column. */
+.app-shell.native-shell-app:is(.native-wide-viewport, .native-compact-rail) .bottom-nav {
+  backdrop-filter: none;
+  background: var(--colour-white);
+  border: 1px solid #e8e2d8;
+  border-radius: 999px;
+  bottom: calc(var(--safe-bottom) + 0.75rem);
+  box-shadow: var(--shadow-card);
+  flex-direction: column;
+  gap: 0.2rem;
+  justify-content: center;
+  left: auto;
+  min-height: 0;
+  padding: 0.4rem 0;
+  position: fixed;
+  right: var(--native-rail-inset);
+  top: auto;
+  width: var(--native-rail-width);
+  z-index: 19;
+}
+.app-shell.native-shell-app:is(.native-wide-viewport, .native-compact-rail) .bottom-nav a {
+  flex: none;
+  font-size: 0.6875rem;
+  gap: 0.2rem;
+  margin: 0 auto;
+  max-width: none;
+  min-height: 56px;
+  width: calc(var(--native-rail-width) - 0.4rem);
+}
+.app-shell.native-shell-app:is(.native-wide-viewport, .native-compact-rail) .bottom-nav a svg {
+  height: 22px;
+  width: 22px;
+}
+.app-shell.native-shell-app:is(.native-wide-viewport, .native-compact-rail) .bottom-nav a::after {
+  display: none;
+}
+.app-shell.native-shell-app:is(.native-wide-viewport, .native-compact-rail) .bottom-nav a.active {
+  background: var(--colour-sage-soft);
+  border-radius: 1.4rem;
+}
+/* Page content clears the right column; the scroll region itself stays full
+   width so the green hero runs edge to edge (the earlier version padded the
+   scroll region, which showed its green bounce background as a strip down
+   the right-hand side of every page). */
+.app-shell.native-shell-app:is(.native-wide-viewport, .native-compact-rail) .app-main {
+  padding-right: var(--native-rail-column);
+}
+
+/* Home: one shallow hero row — icon, greeting with name, date and Home name,
+   household avatars — replacing the compact portrait hero. AppHeader
+   collapses to nothing but its fixed notifications/profile pill. */
+.app-shell.native-shell-app.native-wide-viewport:has(.home-hero) .app-header {
+  background: none;
+  border-radius: 0;
+  box-shadow: none;
+  height: 0;
+  overflow: visible;
+  padding: 0;
+}
+/* Only the bar's own visible pieces: the notifications tray and the profile
+   sheet are also rendered inside .app-header and must keep working. */
+.app-shell.native-shell-app.native-wide-viewport:has(.home-hero) .app-header > :is(.app-header-logo, .app-header-home, .app-header-botanical) {
+  display: none;
+}
+.app-shell.native-shell-app.native-wide-viewport .home-hero {
+  align-items: center;
+  border-radius: 0 0 var(--radius-shell) var(--radius-shell);
+  column-gap: 1rem;
+  display: grid;
+  grid-template-areas:
+    "logo eyebrow eyebrow strip"
+    "logo name date strip";
+  grid-template-columns: auto auto minmax(0, 1fr) auto;
+  /* Pages render their hero inside .app-main; pull it back across the
+     column padding so the green field reaches the screen edge. */
+  margin: 0 calc(-1 * var(--native-rail-column)) 0 0;
+  max-width: none;
+  padding: calc(var(--safe-top) + 1rem) max(calc(var(--native-rail-column) + 1.75rem), var(--native-status-inset))
+    1.15rem var(--native-content-left);
+}
+.app-shell.native-shell-app.native-wide-viewport .home-hero .home-hero-logo {
+  border-radius: 0.8rem;
+  display: inline-flex;
+  grid-area: logo;
+  height: 46px;
+  width: 46px;
+}
+.app-shell.native-shell-app.native-wide-viewport .home-hero .home-hero-logo .brand-mark {
+  height: 28px;
+  width: 28px;
+}
+.app-shell.native-shell-app.native-wide-viewport .home-hero-eyebrow {
+  align-self: end;
+  font-size: 0.75rem;
+  grid-area: eyebrow;
+  letter-spacing: 0.08em;
+}
+.app-shell.native-shell-app.native-wide-viewport .home-hero h1 {
+  align-self: baseline;
+  font-size: 2rem;
+  grid-area: name;
+  margin: 0;
+}
+.app-shell.native-shell-app.native-wide-viewport .home-hero-date {
+  align-self: baseline;
+  font-size: 1rem;
+  grid-area: date;
+}
+.app-shell.native-shell-app.native-wide-viewport .home-hero .home-hero-home-name {
+  display: inline;
+}
+.app-shell.native-shell-app.native-wide-viewport .home-family-strip {
+  gap: 0;
+  grid-area: strip;
+  margin: 0;
+}
+.app-shell.native-shell-app.native-wide-viewport .home-family-strip .avatar + .avatar {
+  margin-left: -0.55rem;
+}
+
+/* Home cards: Today, Nudges and Meals on the left; Coming up and Around the
+   House on the right. That is already the cards' order on the page, so a
+   two-column layout with a break before Coming up gives two independent
+   stacks: neither column stretches to match the other, whatever the cards'
+   heights. Notices span both columns. */
+.app-shell.native-shell-app.native-wide-viewport .home-page {
+  column-gap: 0.875rem;
+  columns: 2;
+  max-width: none;
+  padding: 1rem 0 1.5rem var(--native-content-left);
+}
+.app-shell.native-shell-app.native-wide-viewport .home-page > * {
+  break-inside: avoid;
+}
+.app-shell.native-shell-app.native-wide-viewport .home-page > .notice,
+.app-shell.native-shell-app.native-wide-viewport .home-page > .birthday-banner,
+.app-shell.native-shell-app.native-wide-viewport .home-page > .notify-panel {
+  column-span: all;
+}
+.app-shell.native-shell-app.native-wide-viewport .home-page > .home-section,
+.app-shell.native-shell-app.native-wide-viewport .home-page > .home-section-overlap {
+  margin: 0 0 0.875rem;
+}
+.app-shell.native-shell-app.native-wide-viewport .home-page > .home-coming-up-card,
+.app-shell.native-shell-app.native-wide-viewport .home-page:not(:has(> .home-coming-up-card)) > .home-around-house-card {
+  break-before: column;
+}
+/* Card density: mockup-sized headings, shorter rows. */
+.app-shell.native-shell-app:is(.native-wide-viewport, .native-compact-rail) .home-summary-card {
+  border-radius: 1.25rem;
+  padding: 0.75rem 1rem 0.8rem;
+}
+.app-shell.native-shell-app:is(.native-wide-viewport, .native-compact-rail) .home-summary-card .section-heading {
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  margin-bottom: 0.4rem;
+}
+.app-shell.native-shell-app:is(.native-wide-viewport, .native-compact-rail) .home-summary-card .section-heading h2 {
+  font-size: 1.0625rem;
+}
+.app-shell.native-shell-app:is(.native-wide-viewport, .native-compact-rail) .home-card-image {
+  height: 34px;
+  width: 34px;
+}
+.app-shell.native-shell-app:is(.native-wide-viewport, .native-compact-rail) .home-card-action {
+  color: var(--colour-muted);
+  font-size: 0.9375rem;
+  font-weight: 500;
+}
+.app-shell.native-shell-app:is(.native-wide-viewport, .native-compact-rail) .home-event-row {
+  gap: 0.65rem;
+  min-height: 46px;
+  padding: 0.4rem 0;
+}
+.app-shell.native-shell-app:is(.native-wide-viewport, .native-compact-rail) .home-event-copy strong {
+  font-size: 1rem;
+}
+.app-shell.native-shell-app:is(.native-wide-viewport, .native-compact-rail) .home-today-card .home-event-row {
+  border-bottom: 0;
+}
+.app-shell.native-shell-app:is(.native-wide-viewport, .native-compact-rail) .home-today-card .home-event-leading {
+  background: var(--colour-cream);
+  border-radius: 0.5rem;
+  color: var(--colour-slate);
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  justify-self: start;
+  padding: 0.2rem 0.45rem;
+}
+.app-shell.native-shell-app:is(.native-wide-viewport, .native-compact-rail) .home-routine-row {
+  min-height: 48px;
+  padding: 0.45rem 0;
+}
+/* Meals: one line per meal (slot, dish), the dinner line highlighted. */
+.app-shell.native-shell-app:is(.native-wide-viewport, .native-compact-rail) .meal-today-list {
+  gap: 0.15rem;
+}
+.app-shell.native-shell-app:is(.native-wide-viewport, .native-compact-rail) .meal-today-summary {
+  border-radius: 0.75rem;
+  padding: 0.3rem 0.4rem;
+}
+.app-shell.native-shell-app:is(.native-wide-viewport, .native-compact-rail) .meal-today-copy {
+  align-items: baseline;
+  column-gap: 0.75rem;
+  grid-template-columns: 5.5rem minmax(0, 1fr) auto;
+}
+.app-shell.native-shell-app:is(.native-wide-viewport, .native-compact-rail) .meal-today-copy small {
+  white-space: nowrap;
+}
+.app-shell.native-shell-app:is(.native-wide-viewport, .native-compact-rail) .meal-today-summary .avatar-stack {
+  border-left: 0;
+  padding-left: 0;
+}
+/* Where the people eating are shown as avatars, they replace the
+   "N eating" count rather than repeating it. */
+.app-shell.native-shell-app:is(.native-wide-viewport, .native-compact-rail) .meal-today-summary:has(.avatar-stack .avatar) .meal-today-copy small {
+  display: none;
+}
+.app-shell.native-shell-app:is(.native-wide-viewport, .native-compact-rail) .meal-today-copy > span,
+.app-shell.native-shell-app:is(.native-wide-viewport, .native-compact-rail) .meal-today-copy strong {
+  font-size: 0.9375rem;
+}
+.app-shell.native-shell-app:is(.native-wide-viewport, .native-compact-rail) .meal-today-copy strong {
+  font-weight: 500;
+  overflow-wrap: normal;
+}
+.app-shell.native-shell-app:is(.native-wide-viewport, .native-compact-rail) .meal-today-dinner {
+  background: var(--colour-cream);
+  margin-top: 0.25rem;
+  padding-block: 0.55rem;
+}
+.app-shell.native-shell-app:is(.native-wide-viewport, .native-compact-rail) .meal-today-dinner .meal-today-copy > span {
+  color: var(--colour-terracotta-ink);
+  font-weight: 600;
+}
+.app-shell.native-shell-app:is(.native-wide-viewport, .native-compact-rail) .meal-today-dinner .meal-today-copy strong {
+  font-size: 1.0625rem;
+  font-weight: 700;
+}
+/* Around the House: one three-across grid of horizontal shortcut buttons
+   (the row wrappers only exist to size the compact rows). */
+.app-shell.native-shell-app:is(.native-wide-viewport, .native-compact-rail) .home-around-house-card .quick-actions {
+  gap: 0.5rem;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+.app-shell.native-shell-app:is(.native-wide-viewport, .native-compact-rail) .home-around-house-card .quick-actions-row {
+  display: contents;
+}
+@media (min-width: 760px) and (max-width: 899px) {
+  .app-shell.native-shell-app.native-wide-viewport .home-around-house-card .quick-actions {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+.app-shell.native-shell-app:is(.native-wide-viewport, .native-compact-rail) .home-around-house-card .quick-action {
+  flex-direction: row;
+  font-size: 0.875rem;
+  gap: 0.45rem;
+  min-height: 48px;
+  padding: 0.5rem;
+}
+.app-shell.native-shell-app:is(.native-wide-viewport, .native-compact-rail) .home-around-house-card .quick-action svg {
+  flex: none;
+  height: 18px;
+  width: 18px;
+}
+
+/* More (and other flush-hero pages): a shallow hero under the header bar,
+   and the groups using the width in two columns. */
+.app-shell.native-shell-app:is(.native-wide-viewport, .native-compact-rail) .more-hero {
+  border-radius: 0 0 var(--radius-shell) var(--radius-shell);
+  margin-right: calc(-1 * var(--native-rail-column));
+  padding: 0.25rem var(--native-status-inset) 1rem var(--native-content-left);
+}
+.app-shell.native-shell-app:is(.native-wide-viewport, .native-compact-rail) .more-hero .hero-flower {
+  height: 64px;
+  right: calc(var(--native-rail-column) + 0.5rem);
+  width: 76px;
+}
+.app-shell.native-shell-app:is(.native-wide-viewport, .native-compact-rail) .app-main > .standard-page {
+  max-width: none;
+  padding-left: var(--native-content-left);
+  padding-right: 0;
+}
+.app-shell.native-shell-app.native-wide-viewport .more-groups {
+  align-items: start;
+  gap: 0.875rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+.app-shell.native-shell-app:is(.native-wide-viewport, .native-compact-rail) .more-row {
+  min-height: 60px;
+}
+
+/* iPhone Duo outer screen (mockup pages 1-2): the shared header bar, pill
+   and rail above, plus a single column of cards and a taller hero. */
+.app-shell.native-shell-app.native-compact-rail {
+  --native-rail-width: 3.5rem;
+}
+.app-shell.native-shell-app.native-compact-rail .app-header-actions {
+  /* The outer screen's status column reaches ~165pt (measured on
+     device); this is ~184pt. */
+  top: calc(var(--safe-top) + 12.25rem);
+}
+.app-shell.native-shell-app.native-compact-rail .bottom-nav a {
+  min-height: 52px;
+}
+.app-shell.native-shell-app.native-compact-rail .home-hero {
+  align-items: end;
+  border-radius: 0 0 1.75rem 1.75rem;
+  column-gap: 0.75rem;
+  display: grid;
+  grid-template-areas:
+    "eyebrow eyebrow"
+    "name name"
+    "date strip";
+  grid-template-columns: minmax(0, 1fr) auto;
+  margin: 0 calc(-1 * var(--native-rail-column)) 0 0;
+  padding: 0.5rem var(--native-status-inset) 1.6rem calc(var(--native-content-left) + 0.25rem);
+}
+.app-shell.native-shell-app.native-compact-rail .home-hero-eyebrow {
+  grid-area: eyebrow;
+  letter-spacing: 0.08em;
+}
+.app-shell.native-shell-app.native-compact-rail .home-hero h1 {
+  font-size: 2.5rem;
+  grid-area: name;
+  margin: 0.15rem 0 0.4rem;
+}
+.app-shell.native-shell-app.native-compact-rail .home-hero-date {
+  align-self: center;
+  grid-area: date;
+}
+.app-shell.native-shell-app.native-compact-rail .home-family-strip {
+  gap: 0;
+  grid-area: strip;
+  margin: 0;
+}
+.app-shell.native-shell-app.native-compact-rail .home-family-strip .avatar {
+  font-size: 0.875rem;
+  height: 34px;
+  width: 34px;
+}
+.app-shell.native-shell-app.native-compact-rail .home-family-strip .avatar + .avatar {
+  margin-left: -0.5rem;
+}
+.app-shell.native-shell-app.native-compact-rail .home-page {
+  padding: 0.95rem 0 1rem var(--native-content-left);
+}
+/* The outer screen's cards are a step smaller than the expanded ones. */
+.app-shell.native-shell-app.native-compact-rail .home-summary-card .section-heading {
+  grid-template-columns: 30px minmax(0, 1fr) auto;
+}
+.app-shell.native-shell-app.native-compact-rail .home-summary-card .section-heading h2 {
+  font-size: 0.9375rem;
+}
+.app-shell.native-shell-app.native-compact-rail .home-card-image {
+  height: 30px;
+  width: 30px;
+}
+.app-shell.native-shell-app.native-compact-rail .home-card-action {
+  font-size: 0.875rem;
+}
+.app-shell.native-shell-app.native-compact-rail .home-event-copy strong {
+  font-size: 0.9375rem;
+}
+.app-shell.native-shell-app.native-compact-rail .app-header-notifications,
+.app-shell.native-shell-app.native-compact-rail .app-header-avatar {
+  min-height: 40px;
+  width: 40px;
+}
+.app-shell.native-shell-app.native-compact-rail .app-header-avatar .avatar {
+  font-size: 0.875rem;
+  height: 34px;
+  width: 34px;
+}
+.app-shell.native-shell-app.native-compact-rail .home-page > .home-section,
+.app-shell.native-shell-app.native-compact-rail .home-page > .home-section-overlap {
+  margin: 0 0 0.85rem;
+}
+
+/* Calendar on the outer screen: Previous / month / Next across the top, the
+   tools (Add first) as a pill in the right-hand column with the
+   notifications/profile pill under it, and the month grid using the height
+   the bottom bar used to take. Heights here keep the three right-hand
+   pills clear of each other on the 678pt-tall screen. */
+.app-shell.native-shell-app.native-compact-rail .calendar-page .calendar-month-row {
+  gap: 0.5rem;
+}
+.app-shell.native-shell-app.native-compact-rail .calendar-page .calendar-month-label {
+  font-size: 1.35rem;
+  min-width: 0;
+  text-align: center;
+}
+.app-shell.native-shell-app.native-compact-rail .calendar-page .calendar-month-row > .icon-button {
+  background: var(--colour-white);
+  min-height: 44px;
+  min-width: 44px;
+}
+.app-shell.native-shell-app.native-compact-rail .calendar-page .calendar-month-row-actions {
+  align-items: center;
+  background: var(--colour-white);
+  border: 1px solid #e8e2d8;
+  border-radius: 999px;
+  box-shadow: var(--shadow-card);
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0.375rem 0;
+  position: fixed;
+  right: var(--native-rail-inset);
+  top: calc(var(--safe-top) + 12.25rem);
+  width: var(--native-rail-width);
+  /* Below the header (25), so header-hosted sheets cover it. */
+  z-index: 20;
+}
+.app-shell.native-shell-app.native-compact-rail .calendar-page .calendar-month-row-actions .icon-button {
+  background: none;
+  border: 0;
+  box-shadow: none;
+  min-height: 40px;
+  min-width: 40px;
+  padding: 0;
+  width: 40px;
+}
+.app-shell.native-shell-app.native-compact-rail .calendar-page .calendar-month-row-actions .icon-button svg {
+  height: 20px;
+  width: 20px;
+}
+.app-shell.native-shell-app.native-compact-rail .calendar-page .calendar-add-desktop {
+  border-radius: 50%;
+  display: inline-flex;
+  font-size: 0;
+  justify-content: center;
+  min-height: 40px;
+  order: -1;
+  padding: 0;
+  width: 40px;
+}
+.app-shell.native-shell-app.native-compact-rail .calendar-page .calendar-add-desktop svg {
+  height: 20px;
+  width: 20px;
+}
+.app-shell.native-shell-app.native-compact-rail .calendar-fab {
+  display: none;
+}
+/* With the tools pill taking the column, notifications and profile sit in
+   the header bar on this page: there is no room for a second pill between
+   the status column and the rail. */
+.app-shell.native-shell-app.native-compact-rail:has(.calendar-page .calendar-month-row-actions) .app-header {
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+.app-shell.native-shell-app.native-compact-rail:has(.calendar-page .calendar-month-row-actions) .app-header-actions {
+  background: none;
+  border: 0;
+  box-shadow: none;
+  flex-direction: row;
+  padding: 0;
+  position: static;
+  width: auto;
+}
+.app-shell.native-shell-app.native-compact-rail:has(.calendar-page .calendar-month-row-actions) .app-header-notifications {
+  color: var(--colour-white);
+}
+.app-shell.native-shell-app.native-compact-rail:has(.calendar-page .calendar-month-row-actions) .notification-badge {
+  border-color: var(--colour-forest);
+}
+.app-shell.native-shell-app.native-compact-rail .calendar-week {
+  /* ~205px is the header, toolbar, weekday row and bottom spacing. */
+  min-height: clamp(
+    80px,
+    calc((100dvh - 205px - var(--safe-top) - var(--safe-bottom)) / var(--calendar-week-count, 6)),
+    140px
+  );
+}
+
+/* Short expanded screens (an iPhone in landscape is wide enough for the
+   expanded layout but only ~430pt tall): the pill moves up and the rail
+   drops its visible labels (they stay as the links' accessible names) so
+   the two never overlap in the right-hand column. */
+@media (min-width: 760px) and (max-height: 520px) {
+  .app-shell.native-shell-app.native-wide-viewport .app-header-actions {
+    top: calc(var(--safe-top) + 0.75rem);
+  }
+  .app-shell.native-shell-app.native-wide-viewport .bottom-nav {
+    bottom: calc(var(--safe-bottom) + 0.5rem);
+  }
+  .app-shell.native-shell-app.native-wide-viewport .bottom-nav a {
+    min-height: 44px;
+  }
+  .app-shell.native-shell-app.native-wide-viewport .bottom-nav a span {
+    clip: rect(0 0 0 0);
+    height: 1px;
+    overflow: hidden;
+    position: absolute;
+    white-space: nowrap;
+    width: 1px;
   }
 }
 
