@@ -77,7 +77,7 @@ export function MealPlansTodayCard({ homeId, members = [] }: { homeId: string; m
       </div>
       <div className="meal-today-list">
         {mealsBySlot.map(({ slot, entry }) => (
-          <div className="meal-today-summary" key={slot.key}>
+          <div className={`meal-today-summary meal-today-${slot.key}`} key={slot.key}>
             <div className="meal-today-copy">
               <span>{slot.label}</span>
               <strong>{entryTitle(entry)}</strong>

@@ -100,7 +100,9 @@ export function Avatar({
   return (
     <span
       className={`avatar avatar-${size}`}
-      style={{ width: px, height: px, background: bg, color: text }}
+      // Sized through a custom property (see .avatar in styles.css) so a
+      // layout can resize avatars in CSS, which inline width/height prevent.
+      style={{ "--avatar-size": `${px}px`, background: bg, color: text } as React.CSSProperties}
       aria-hidden="true"
     >
       {showImage && imageSrc ? (

@@ -7,6 +7,7 @@ import { AppHeader } from "./app-header";
 import { BottomNav } from "./bottom-nav";
 import { DesktopNav } from "./desktop-nav";
 import { isNativeShell, isPlatformControlCentre } from "./native-runtime";
+import { NATIVE_COMPACT_RAIL_QUERY, NATIVE_WIDE_QUERY } from "./native-layout";
 import { ActiveHomeProvider, useActiveHome } from "./use-active-home";
 import { HomeAccessProvider, useHomeAccess } from "./home-access";
 import type { FamilyAccessState } from "./primary-nav-destinations";
@@ -46,6 +47,8 @@ export function AppShell({
   // shown-and-resolved, or determined it had nothing to show. See
   // NativeBiometricOffer's onSettled doc comment.
   const [biometricSettled, setBiometricSettled] = useState(false);
+  const [nativeWideViewport, setNativeWideViewport] = useState(false);
+  const [nativeCompactRail, setNativeCompactRail] = useState(false);
   const keyboardOpen = useNativeKeyboardOpen();
   useActivityHeartbeat(status === "ready");
   useProductAnalytics(status === "ready", path, activeHome?.id);
@@ -87,6 +90,23 @@ export function AppShell({
     if (!isNativeShell()) return;
     document.documentElement.classList.add("native-shell");
     return () => document.documentElement.classList.remove("native-shell");
+  }, []);
+
+  useEffect(() => {
+    if (!isNativeShell()) return;
+    const wide = window.matchMedia(NATIVE_WIDE_QUERY);
+    const compactRail = window.matchMedia(NATIVE_COMPACT_RAIL_QUERY);
+    const update = () => {
+      setNativeWideViewport(wide.matches);
+      setNativeCompactRail(!wide.matches && compactRail.matches);
+    };
+    update();
+    wide.addEventListener("change", update);
+    compactRail.addEventListener("change", update);
+    return () => {
+      wide.removeEventListener("change", update);
+      compactRail.removeEventListener("change", update);
+    };
   }, []);
 
   useEffect(() => {
@@ -132,7 +152,7 @@ export function AppShell({
 
   return (
     <NotificationProvider>
-      <div className={`app-shell${isNativeShell() ? " native-shell-app" : ""}${keyboardOpen ? " native-keyboard-open" : ""}`}>
+      <div className={`app-shell${isNativeShell() ? " native-shell-app" : ""}${nativeWideViewport ? " native-wide-viewport" : ""}${nativeCompactRail ? " native-compact-rail" : ""}${keyboardOpen ? " native-keyboard-open" : ""}`}>
       <AppHeader
         user={user}
         homes={homes}
