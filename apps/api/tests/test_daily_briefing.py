@@ -7,7 +7,7 @@ scan tests set `briefing_time` to the current real local time.
 import asyncio
 import uuid
 from collections.abc import AsyncIterator
-from datetime import UTC, date, datetime, time, timedelta
+from datetime import UTC, date, datetime, time, timedelta, tzinfo
 from zoneinfo import ZoneInfo
 
 import pytest
@@ -319,12 +319,22 @@ async def test_concurrent_scans_share_one_durable_occurrence(client: AsyncClient
 
 
 @pytest.mark.asyncio
-async def test_scan_skips_when_briefing_time_not_yet_reached(client: AsyncClient) -> None:
+async def test_scan_skips_when_briefing_time_not_yet_reached(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
     user_id = await create_verified_user(client, unique_email("notyet"), "Not Yet Owner")
-    # Keep the future time on the same local date; a time-only preference cannot
-    # represent tomorrow, and adding six hours can wrap past midnight.
-    far_future_time = (datetime.now(UTC).astimezone(TZ) + timedelta(minutes=30)).time()
-    await enable_briefing(user_id, briefing_time=far_future_time)
+    # Pin the scan to local midday. A time-only preference cannot represent
+    # tomorrow, so a real clock near midnight wraps "30 minutes from now" to an
+    # earlier time today, which the scan treats as due.
+    midday = datetime.combine(datetime.now(UTC).astimezone(TZ).date(), time(12, 0), tzinfo=TZ)
+
+    class _MiddayDatetime(datetime):
+        @classmethod
+        def now(cls, tz: tzinfo | None = None) -> datetime:
+            return midday.astimezone(tz)
+
+    monkeypatch.setattr("mykhaya.notifications.briefing.datetime", _MiddayDatetime)
+    await enable_briefing(user_id, briefing_time=time(12, 30))
 
     async with SessionFactory() as db:
         await scan_due_briefings(db, get_settings())
