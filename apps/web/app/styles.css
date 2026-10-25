@@ -1469,11 +1469,6 @@ html.native-shell .bottom-nav {
   color: var(--colour-white);
   padding: 20px 24px 72px;
 }
-/* The unfolded Duo's slot for the notifications/profile pill (see "iPhone
-   Duo Home" below); empty and out of the layout everywhere else. */
-.home-hero-actions {
-  display: none;
-}
 .home-hero-eyebrow {
   color: rgb(255 254 251 / 72%);
   font-size: var(--font-small);
@@ -6610,7 +6605,7 @@ button.danger,
 /* Home: one shallow hero row — icon, greeting with name, date and Home name,
    household avatars — replacing the compact portrait hero. AppHeader
    collapses to nothing but its fixed notifications/profile pill. */
-.app-shell.native-shell-app.native-wide-viewport:has(.home-hero) .app-header {
+.app-shell.native-shell-app.native-wide-viewport:not(.native-status-column):has(.home-hero) .app-header {
   background: none;
   border-radius: 0;
   box-shadow: none;
@@ -6620,7 +6615,7 @@ button.danger,
 }
 /* Only the bar's own visible pieces: the notifications tray and the profile
    sheet are also rendered inside .app-header and must keep working. */
-.app-shell.native-shell-app.native-wide-viewport:has(.home-hero) .app-header > :is(.app-header-logo, .app-header-home, .app-header-botanical) {
+.app-shell.native-shell-app.native-wide-viewport:not(.native-status-column):has(.home-hero) .app-header > :is(.app-header-logo, .app-header-home, .app-header-botanical) {
   display: none;
 }
 .app-shell.native-shell-app.native-wide-viewport .home-hero {
@@ -6995,10 +6990,10 @@ button.danger,
 /* With the tools pill taking the column, notifications and profile sit in
    the header bar on this page: there is no room for a second pill between
    the status column and the rail. */
-.app-shell.native-shell-app.native-compact-rail:has(.calendar-page .calendar-month-row-actions) .app-header {
+.app-shell.native-shell-app.native-compact-rail:not(.native-status-column):has(.calendar-page .calendar-month-row-actions) .app-header {
   grid-template-columns: auto minmax(0, 1fr) auto;
 }
-.app-shell.native-shell-app.native-compact-rail:has(.calendar-page .calendar-month-row-actions) .app-header-actions {
+.app-shell.native-shell-app.native-compact-rail:not(.native-status-column):has(.calendar-page .calendar-month-row-actions) .app-header-actions {
   background: none;
   border: 0;
   box-shadow: none;
@@ -7007,10 +7002,10 @@ button.danger,
   position: static;
   width: auto;
 }
-.app-shell.native-shell-app.native-compact-rail:has(.calendar-page .calendar-month-row-actions) .app-header-notifications {
+.app-shell.native-shell-app.native-compact-rail:not(.native-status-column):has(.calendar-page .calendar-month-row-actions) .app-header-notifications {
   color: var(--colour-white);
 }
-.app-shell.native-shell-app.native-compact-rail:has(.calendar-page .calendar-month-row-actions) .notification-badge {
+.app-shell.native-shell-app.native-compact-rail:not(.native-status-column):has(.calendar-page .calendar-month-row-actions) .notification-badge {
   border-color: var(--colour-forest);
 }
 .app-shell.native-shell-app.native-compact-rail .calendar-week {
@@ -7137,49 +7132,45 @@ button.danger,
   width: 1px;
 }
 
-/* --- iPhone Duo Home: the pill in the top row ------------------------------
+/* --- iPhone Duo: the notifications/profile pill in the header bar --------
    On both Duo screens (.native-status-column: the right-hand column beside
-   the status indicator column; never an iPad or an iPhone) Home's
-   notifications/profile pill leaves the right-hand column for the top row,
-   as a horizontal pill whose right edge is the content's right edge (the
-   status inset), clear of the status indicator. The same white pill,
-   buttons, badge and profile image. */
-.app-shell.native-shell-app.native-status-column:has(.home-hero) .app-header-actions {
-  flex-direction: row;
-  max-height: none;
-  padding: 0 0.25rem;
-  width: auto;
-}
-/* Outer screen: in the header bar, level with the Home icon and name and
-   above the hero's avatar row (whose right edge it shares). The pill is
-   46px against the 38px icon; the negative margin keeps the bar, and so
-   the hero and the Today card, where they were. */
-.app-shell.native-shell-app.native-status-column.native-compact-rail:has(.home-hero) .app-header {
+   the status indicator column; never an iPad or an iPhone) the pill sits at
+   the right-hand end of the shell's header bar on every route: a
+   horizontal pill whose right edge is the content's right edge (the status
+   inset), clear of the status indicator. The header bar is always rendered
+   and sits outside the scrolling content region, so the pill is in the same
+   place on every page, stays put while content scrolls, and content never
+   passes under it. It never moves between parents, so its state and the
+   tray and profile sheet it opens are untouched by navigation. The right-
+   hand column below the status indicator is left to page tools (Calendar),
+   floating Add buttons and the rail. */
+.app-shell.native-shell-app.native-status-column .app-header {
   grid-template-columns: auto minmax(0, 1fr) auto;
 }
-.app-shell.native-shell-app.native-status-column.native-compact-rail:has(.home-hero) .app-header-actions {
+/* The same white pill, buttons, badge and profile image; 46px against the
+   bar's 38px Home icon, so the negative margin keeps the bar's height. */
+.app-shell.native-shell-app.native-status-column .app-header-actions {
+  flex-direction: row;
   margin-block: -4px;
+  max-height: none;
+  padding: 0 0.25rem;
   position: static;
+  width: auto;
 }
-/* Unfolded: Home's header bar is collapsed into the one-row hero, so the
-   pill takes that row's right-hand end, rendered into the hero
-   (.home-hero-actions, via AppHeader's actionsTarget) so it scrolls away
-   with the hero instead of staying fixed over the cards. 46px tall like
-   the Home icon, and centred on the row with it; the avatars sit a column
-   gap to its left. */
+/* Unfolded Home keeps the header bar too (elsewhere its one-row hero takes
+   the bar's place), so the bar carries the Home icon and name and the hero
+   drops its copies: greeting, name and date on the left, the household
+   avatars at the right-hand end under the pill, sharing its right edge, as
+   on the outer screen. */
 .app-shell.native-shell-app.native-status-column.native-wide-viewport .home-hero {
   grid-template-areas:
-    "logo eyebrow eyebrow strip actions"
-    "logo name date strip actions";
-  grid-template-columns: auto auto minmax(0, 1fr) auto auto;
-  padding-right: var(--native-status-inset);
+    "eyebrow eyebrow strip"
+    "name date strip";
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  padding: 0.5rem var(--native-status-inset) 1.15rem var(--native-content-left);
 }
-.app-shell.native-shell-app.native-status-column.native-wide-viewport .home-hero-actions {
-  display: flex;
-  grid-area: actions;
-}
-.app-shell.native-shell-app.native-status-column.native-wide-viewport .home-hero-actions .app-header-actions {
-  position: static;
+.app-shell.native-shell-app.native-status-column.native-wide-viewport .home-hero :is(.home-hero-logo, .home-hero-home-name) {
+  display: none;
 }
 
 .budget-view-selector {

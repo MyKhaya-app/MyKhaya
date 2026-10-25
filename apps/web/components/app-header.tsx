@@ -1,7 +1,6 @@
 "use client";
 
 import { useRef, useState } from "react";
-import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { ChevronDown, LogOut, Settings, Shield, User as UserIcon } from "lucide-react";
@@ -24,16 +23,12 @@ export function AppHeader({
   activeHome,
   onSwitchHome,
   flush = false,
-  actionsTarget = null,
 }: {
   user: User | null;
   homes: Home[];
   activeHome: Home | null;
   onSwitchHome: (homeId: string) => void;
   flush?: boolean;
-  /** Renders the notifications/profile pill there instead (see
-   *  header-actions-slot.tsx); its tray and sheets stay in the header. */
-  actionsTarget?: HTMLElement | null;
 }) {
   const router = useRouter();
   const { clearSession } = useAuth();
@@ -73,28 +68,6 @@ export function AppHeader({
     }
   }
 
-  const actions = (
-    <div className="app-header-actions">
-      {user ? <NotificationBell onOpen={() => setNotificationsOpen(true)} /> : null}
-      <button
-        ref={avatarRef}
-        type="button"
-        className="app-header-avatar"
-        onClick={() => setMenuOpen((open) => !open)}
-        aria-label="Open profile menu"
-        aria-haspopup="true"
-        aria-expanded={menuOpen}
-      >
-        <Avatar
-          id={user?.id ?? "?"}
-          name={user?.display_name ?? "?"}
-          avatarVersion={user?.avatar_version}
-          size="md"
-        />
-      </button>
-    </div>
-  );
-
   return (
     <header className={`app-header${flush ? " app-header-flush" : ""}`}>
       <HeaderBotanical />
@@ -110,7 +83,25 @@ export function AppHeader({
         <span>{activeHome?.name ?? "Your Home"}</span>
         {homes.length > 1 && <ChevronDown size={17} aria-hidden="true" />}
       </button>
-      {actionsTarget ? createPortal(actions, actionsTarget) : actions}
+      <div className="app-header-actions">
+        {user ? <NotificationBell onOpen={() => setNotificationsOpen(true)} /> : null}
+        <button
+          ref={avatarRef}
+          type="button"
+          className="app-header-avatar"
+          onClick={() => setMenuOpen((open) => !open)}
+          aria-label="Open profile menu"
+          aria-haspopup="true"
+          aria-expanded={menuOpen}
+        >
+          <Avatar
+            id={user?.id ?? "?"}
+            name={user?.display_name ?? "?"}
+            avatarVersion={user?.avatar_version}
+            size="md"
+          />
+        </button>
+      </div>
 
       {notificationsOpen && <NotificationTray onDismiss={() => setNotificationsOpen(false)} />}
 

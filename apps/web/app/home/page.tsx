@@ -45,7 +45,6 @@ import {
 } from "./birthday-utils";
 import { dueCountdownSuffix, nudgeCardDateLabel } from "./routine-utils";
 import { HomeHeroDate } from "./home-hero-date";
-import { HeaderActionsSlot } from "@/components/header-actions-slot";
 import { Logo } from "@/components/logo";
 import {
   FALLBACK_TIMEZONE,
@@ -511,9 +510,6 @@ export default function HomePage() {
               ))}
             </div>
           )}
-          {/* Unfolded iPhone Duo only: AppHeader's notifications/profile
-              pill, so it scrolls with this row (header-actions-slot.tsx). */}
-          <HeaderActionsSlot className="home-hero-actions" />
         </div>
 
       <main className="home-page">

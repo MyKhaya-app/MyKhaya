@@ -19,7 +19,6 @@ import { NotificationPermissionPrompt } from "./notification-permission-prompt";
 import { AroundHouseDock } from "./around-house-dock";
 import { useNativeKeyboardOpen } from "./use-native-keyboard";
 import { NotificationProvider } from "./notification-state";
-import { HeaderActionsSlotProvider } from "./header-actions-slot";
 import { useActivityHeartbeat } from "./use-activity-heartbeat";
 import { useProductAnalytics } from "./use-product-analytics";
 
@@ -53,7 +52,6 @@ export function AppShell({
   const [nativeRightColumn, setNativeRightColumn] = useState(false);
   const [nativeStatusColumn, setNativeStatusColumn] = useState(false);
   const [shellElement, setShellElement] = useState<HTMLDivElement | null>(null);
-  const [headerActionsSlot, setHeaderActionsSlot] = useState<HTMLElement | null>(null);
   const keyboardOpen = useNativeKeyboardOpen();
   useActivityHeartbeat(status === "ready");
   useProductAnalytics(status === "ready", path, activeHome?.id);
@@ -196,9 +194,6 @@ export function AppShell({
         activeHome={activeHome}
         onSwitchHome={setActiveHomeId}
         flush={Boolean(hero) || path === "/home" || path === "/settings"}
-        // Unfolded iPhone Duo: the pill sits in Home's hero row and scrolls
-        // with it rather than staying fixed over the cards.
-        actionsTarget={nativeStatusColumn && nativeWideViewport ? headerActionsSlot : null}
       />
       {!isNativeShell() && (
         <DesktopNav principalType={user?.principal_type} familyAccess={familyAccess} />
@@ -208,7 +203,7 @@ export function AppShell({
         <main className="app-main">
           <NativeBiometricOffer onSettled={() => setBiometricSettled(true)} />
           {biometricSettled && <NotificationPermissionPrompt />}
-          <HeaderActionsSlotProvider value={setHeaderActionsSlot}>{children}</HeaderActionsSlotProvider>
+          {children}
         </main>
       </div>
       {!keyboardOpen && <BottomNav principalType={user?.principal_type} familyAccess={familyAccess} />}

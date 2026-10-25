@@ -39,7 +39,8 @@ describe("native expanded Home presentation (iPhone Duo mockup page 3)", () => {
   it("uses a shallow one-row hero with real Home data", () => {
     expect(rule(`${W} .home-hero`)).toMatch(/grid-template-areas:\s*"logo eyebrow eyebrow strip"\s*"logo name date strip"/);
     expect(home).toContain('<span className="home-hero-home-name"> · {activeHome.name}</span>');
-    expect(rule(`${W}:has(.home-hero) .app-header`)).toContain("height: 0");
+    // Elsewhere than the Duo (an iPad): the Duo keeps its header bar.
+    expect(rule(`${W}:not(.native-status-column):has(.home-hero) .app-header`)).toContain("height: 0");
   });
 
   it("places Today, Nudges and Meals left, Coming up and Around the House right", () => {
@@ -83,7 +84,7 @@ describe("iPhone Duo outer screen (mockup pages 1-2)", () => {
 describe("notifications/profile pill overlays", () => {
   it("keeps the tray and profile sheet (rendered inside the header) when the Home header collapses", () => {
     expect(css).toContain(
-      ".app-shell.native-shell-app.native-wide-viewport:has(.home-hero) .app-header > :is(.app-header-logo, .app-header-home, .app-header-botanical) {",
+      ".app-shell.native-shell-app.native-wide-viewport:not(.native-status-column):has(.home-hero) .app-header > :is(.app-header-logo, .app-header-home, .app-header-botanical) {",
     );
     expect(css).not.toContain(".app-header > :not(.app-header-actions)");
   });
@@ -150,30 +151,32 @@ describe("native right-hand column system (Duo outer and unfolded, iPad)", () =>
     expect(shell).toContain('shellElement.style.setProperty("--native-dock-height"');
   });
 
-  it("moves the Home pill to the top row on both Duo screens only", () => {
+  it("puts the pill in the shell's header bar on every Duo route, and only on the Duo", () => {
     const D = ".app-shell.native-shell-app.native-status-column";
     // Set only with the right-hand column and a right safe-area inset: never
     // an iPad (no inset) or an iPhone (no right-hand column).
     expect(shell).toContain("setNativeStatusColumn(column && hasRightSafeAreaInset());");
     expect(shell).toContain('${nativeStatusColumn ? " native-status-column" : ""}');
     expect(layout).toContain("padding-right: var(--safe-right);");
-    expect(rule(`${D}:has(.home-hero) .app-header-actions`)).toContain("flex-direction: row;");
-    // Closed: in the header bar, above the avatars, without moving the hero.
-    expect(rule(`${D}.native-compact-rail:has(.home-hero) .app-header-actions`)).toContain("position: static;");
-    expect(rule(`${D}.native-compact-rail:has(.home-hero) .app-header-actions`)).toContain("margin-block: -4px;");
-    // Open: a column at the hero row's right-hand end, the avatars left of
-    // it, rendered into the hero so it scrolls with it (never fixed over
-    // the cards).
-    const hero = rule(`${D}.native-wide-viewport .home-hero`);
-    expect(hero).toMatch(/"logo eyebrow eyebrow strip actions"\s*"logo name date strip actions"/);
-    expect(hero).toContain("padding-right: var(--native-status-inset);");
-    expect(rule(`${D}.native-wide-viewport .home-hero-actions .app-header-actions`)).toContain("position: static;");
-    expect(rule(".home-hero-actions")).toContain("display: none;");
-    expect(home).toContain('<HeaderActionsSlot className="home-hero-actions" />');
-    expect(shell).toContain("actionsTarget={nativeStatusColumn && nativeWideViewport ? headerActionsSlot : null}");
-    expect(css).not.toMatch(/native-status-column[^{]*\.app-header-actions \{[^}]*position: fixed/);
-    // Nothing else reads the state.
-    expect(css.match(/\.native-status-column[^{]*\{/g)?.every((s) => s.includes("home-hero"))).toBe(true);
+    // One placement, not keyed to any page: a static row at the header bar's
+    // right-hand end (the bar sits outside the scroll region, so it stays
+    // put while content scrolls and content never passes under it).
+    const pill = rule(`${D} .app-header-actions`);
+    expect(pill).toContain("position: static;");
+    expect(pill).toContain("flex-direction: row;");
+    expect(pill).toContain("margin-block: -4px;");
+    expect(rule(`${D} .app-header`)).toContain("grid-template-columns: auto minmax(0, 1fr) auto;");
+    // No Duo rule is keyed to a page.
+    expect(css).not.toMatch(/\.native-status-column(?!\))[^{]*:has\(/);
+    // Unfolded Home keeps the bar; its hero drops the copied icon and name.
+    expect(css).toContain(".app-shell.native-shell-app.native-wide-viewport:not(.native-status-column):has(.home-hero) .app-header {");
+    expect(rule(`${D}.native-wide-viewport .home-hero`)).toMatch(/"eyebrow eyebrow strip"\s*"name date strip"/);
+    expect(rule(`${D}.native-wide-viewport .home-hero :is(.home-hero-logo, .home-hero-home-name)`)).toContain("display: none;");
+    // Calendar's transparent in-bar variant is for other compact screens.
+    expect(css).toContain(".app-shell.native-shell-app.native-compact-rail:not(.native-status-column):has(.calendar-page .calendar-month-row-actions) .app-header-actions {");
+    // The pill is never moved out of the header or duplicated.
+    expect(shell).not.toContain("actionsTarget");
+    expect(home).not.toContain("HeaderActionsSlot");
   });
 
   it("gives every rail label room and never lets it overflow", () => {
