@@ -61,7 +61,8 @@ describe("iPhone Duo outer screen (mockup pages 1-2)", () => {
       '"(min-width: 450px) and (max-width: 759px) and (min-height: 450px) and (max-height: 800px)"',
     );
     // Set only inside the native shell, and never together with the wide class.
-    expect(shell).toContain("setNativeCompactRail(!wide.matches && compactRail.matches)");
+    expect(shell).toContain("const compact = !wide.matches && compactRail.matches;");
+    expect(shell).toContain("setNativeCompactRail(compact);");
     expect(shell).toMatch(/if \(!isNativeShell\(\)\) return;\s*const wide = window\.matchMedia\(NATIVE_WIDE_QUERY\)/);
   });
 
@@ -94,62 +95,63 @@ describe("notifications/profile pill overlays", () => {
   });
 });
 
-describe("tall expanded right-hand column (Duo unfolded, iPad)", () => {
-  const TALL = "@media (min-width: 760px) and (min-height: 521px) {";
-  const W = ".app-shell.native-shell-app.native-wide-viewport";
-  const block = () => {
-    const start = css.indexOf(TALL);
-    expect(start).toBeGreaterThan(-1);
-    return css.slice(start, css.indexOf("\n}\n", start));
-  };
+describe("native right-hand column system (Duo outer and unfolded, iPad)", () => {
+  const S = ".app-shell.native-shell-app.native-right-column";
+  const C = `${S}.native-compact-rail`;
+  const layout = readFileSync(join(process.cwd(), "components", "native-layout.ts"), "utf8");
   const shell = readFileSync(join(process.cwd(), "components", "app-shell.tsx"), "utf8");
 
-  it("is gated on height so an iPhone in landscape keeps the short-screen rules", () => {
-    // The complement of the existing short-screen block; iPhones in landscape
-    // are at most ~440pt tall, so they never match.
-    expect(css).toContain("@media (min-width: 760px) and (max-height: 520px) {");
-    expect(css.split(TALL)).toHaveLength(2);
-    // Only the native expanded class: never the compact rail, browser or PCC.
-    const selectors = block().match(/^\s*\.[^{]+\{/gm) ?? [];
-    expect(selectors.length).toBeGreaterThan(0);
-    for (const selector of selectors) expect(selector.trim().startsWith(W)).toBe(true);
-    expect(block()).not.toContain("native-compact-rail");
+  it("is an explicit layout state no iPhone gets", () => {
+    // iPhones in landscape are at most ~440pt tall; the compact rail's own
+    // query already excludes every iPhone.
+    expect(layout).toContain('export const NATIVE_RIGHT_COLUMN_QUERY = "(min-height: 521px)";');
+    expect(shell).toContain("setNativeRightColumn(compact || (wide.matches && rightColumn.matches));");
+    expect(shell).toContain('${nativeRightColumn ? " native-right-column" : ""}');
+    expect(shell).toMatch(/if \(!isNativeShell\(\)\) return;\s*const wide = window\.matchMedia\(NATIVE_WIDE_QUERY\)/);
+    // The phone-landscape rules are untouched and never see the system.
+    const short = css.slice(css.indexOf("@media (min-width: 760px) and (max-height: 520px) {"));
+    expect(short.slice(0, short.indexOf("\n}\n"))).not.toContain("native-right-column");
   });
 
-  it("centres the rail, pill and column on the status inset", () => {
-    expect(block()).toContain(
-      "--native-rail-centre: max(calc(var(--native-rail-width) / 2 + 0.5rem), calc(var(--safe-right) / 2));",
+  it("derives every column position from one set of variables", () => {
+    const vars = rule(S);
+    expect(vars).toContain("--native-status-centre: calc(var(--safe-right) / 2);");
+    expect(vars).toContain(
+      "--native-rail-centre: max(calc(var(--native-rail-width) / 2 + 0.5rem), var(--native-status-centre));",
     );
-    expect(block()).toContain("--native-rail-inset: calc(var(--native-rail-centre) - var(--native-rail-width) / 2);");
-    // The pill and the rail both use --native-rail-inset.
-    expect(rule(`${R} .app-header-actions`)).toContain("right: var(--native-rail-inset);");
-    expect(rule(`${R} .bottom-nav`)).toContain("right: var(--native-rail-inset);");
-    // The base column stays fixed for the compact rail.
-    expect(rule(R)).toContain("--native-rail-column: 4.75rem;");
+    expect(vars).toContain("--native-rail-inset: calc(var(--native-rail-centre) - var(--native-rail-width) / 2);");
+    expect(vars).toContain("--native-rail-gap: 12px;");
+    expect(vars).toMatch(/--native-rail-column: max\(4\.75rem, calc\(var\(--native-rail-centre\) \+ var\(--native-rail-width\) \/ 2 \+ var\(--native-rail-gap\)\)\);/);
+    expect(vars).toMatch(/--native-upper-max: calc\(100dvh - var\(--native-rail-top\) - var\(--native-dock-top\) - var\(--native-rail-gap\)\);/);
+    // The compact rail no longer carries its own offsets.
+    expect(css).not.toMatch(/native-compact-rail \.app-header-actions \{\s*[^}]*top:/);
+    expect(rule(`.app-shell.native-shell-app.native-compact-rail .calendar-page .calendar-month-row-actions`)).not.toContain("top:");
+    expect(rule(C)).toContain("--native-status-clearance: 12.25rem;");
   });
 
-  it("gives every rail label room and never lets it overflow", () => {
-    expect(block()).toContain("--native-rail-width: 4.25rem;");
-    expect(block()).toMatch(/\.bottom-nav a span \{[^}]*text-overflow: ellipsis;/);
+  it("keeps the upper group, Calendar tools included, a gap above the rail", () => {
+    expect(rule(`${S} .app-header-actions`)).toContain("top: var(--native-rail-top);");
+    expect(rule(`${S} .app-header-actions`)).toContain("max-height: var(--native-upper-max);");
+    const tools = rule(`${C} .calendar-page .calendar-month-row-actions`);
+    expect(tools).toContain("max-height: var(--native-upper-max);");
+    expect(tools).toContain("right: var(--native-rail-inset);");
+    expect(rule(C)).toContain("--native-tool-size: clamp(36px,");
   });
 
-  it("puts floating Add buttons just above the rail, centred on it", () => {
-    expect(block()).toMatch(
-      /\.rr-fab \{\s*bottom: calc\(var\(--safe-bottom\) \+ 0\.75rem \+ var\(--native-dock-height, [^;]+\) \+ 12px\);\s*right: calc\(var\(--native-rail-centre\) - 30px\);/,
-    );
-    expect(block()).toMatch(/\.rr-fab\.drv-fab \{[^}]*width: 60px;/);
-    // Measured only in the native expanded layout.
-    expect(shell).toContain("if (!nativeWideViewport || keyboardOpen || !shellElement) return;");
+  it("puts floating Add buttons in the column, the gap above the rail", () => {
+    const fab = rule(`${S} .rr-fab`);
+    expect(fab).toContain("bottom: calc(var(--native-dock-top) + var(--native-rail-gap));");
+    expect(fab).toContain("right: var(--native-rail-inset);");
+    expect(fab).toContain("width: var(--native-rail-width);");
+    expect(rule(`${S} .rr-fab.drv-fab span`)).toContain("clip: rect(0 0 0 0);");
+    // The rail is measured wherever the system applies.
+    expect(shell).toContain("if (!nativeRightColumn || keyboardOpen || !shellElement) return;");
     expect(shell).toContain('shellElement.style.setProperty("--native-dock-height"');
   });
 
-  it("moves the pill clear of the FAB and rail in short iPad windows only", () => {
-    const SHORT = "@media (min-width: 760px) and (min-height: 521px) and (max-height: 639px) {";
-    const start = css.indexOf(SHORT);
-    expect(start).toBeGreaterThan(-1);
-    const short = css.slice(start, css.indexOf("\n}\n", start));
-    // Top of the column with no right inset; below the status column with one.
-    expect(short).toContain(`${W} .app-header-actions {`);
-    expect(short).toContain("top: calc(var(--safe-top) + 0.75rem + min(7.25rem, var(--safe-right) * 1000));");
+  it("gives every rail label room and never lets it overflow", () => {
+    expect(rule(S)).toContain("--native-rail-width: 4.25rem;");
+    expect(rule(C)).toContain("--native-rail-width: 4rem;");
+    expect(rule(`${S} .bottom-nav a span`)).toContain("text-overflow: ellipsis;");
   });
 });

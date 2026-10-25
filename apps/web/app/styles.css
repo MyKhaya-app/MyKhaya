@@ -6846,15 +6846,8 @@ button.danger,
 }
 
 /* iPhone Duo outer screen (mockup pages 1-2): the shared header bar, pill
-   and rail above, plus a single column of cards and a taller hero. */
-.app-shell.native-shell-app.native-compact-rail {
-  --native-rail-width: 3.5rem;
-}
-.app-shell.native-shell-app.native-compact-rail .app-header-actions {
-  /* The outer screen's status column reaches ~165pt (measured on
-     device); this is ~184pt. */
-  top: calc(var(--safe-top) + 12.25rem);
-}
+   and rail above, plus a single column of cards and a taller hero. The
+   column's geometry is the right-hand column system's (further down). */
 .app-shell.native-shell-app.native-compact-rail .bottom-nav a {
   min-height: 52px;
 }
@@ -6961,9 +6954,6 @@ button.danger,
   margin: 0;
   padding: 0.375rem 0;
   position: fixed;
-  right: var(--native-rail-inset);
-  top: calc(var(--safe-top) + 12.25rem);
-  width: var(--native-rail-width);
   /* Below the header (25), so header-hosted sheets cover it. */
   z-index: 20;
 }
@@ -6971,10 +6961,10 @@ button.danger,
   background: none;
   border: 0;
   box-shadow: none;
-  min-height: 40px;
-  min-width: 40px;
+  min-height: var(--native-tool-size, 40px);
+  min-width: var(--native-tool-size, 40px);
   padding: 0;
-  width: 40px;
+  width: var(--native-tool-size, 40px);
 }
 .app-shell.native-shell-app.native-compact-rail .calendar-page .calendar-month-row-actions .icon-button svg {
   height: 20px;
@@ -6985,10 +6975,10 @@ button.danger,
   display: inline-flex;
   font-size: 0;
   justify-content: center;
-  min-height: 40px;
+  min-height: var(--native-tool-size, 40px);
   order: -1;
   padding: 0;
-  width: 40px;
+  width: var(--native-tool-size, 40px);
 }
 .app-shell.native-shell-app.native-compact-rail .calendar-page .calendar-add-desktop svg {
   height: 20px;
@@ -7051,68 +7041,95 @@ button.danger,
   }
 }
 
-/* Tall expanded screens (the Duo unfolded, an iPad): one centreline for the
-   right-hand column. The Duo's clock/Wi-Fi/battery bubble sits in the right
-   safe-area inset, so the column is centred on that inset when it is wider
-   than the default column, and the rail, the notifications/profile pill and
-   any floating Add button all share that centre. Gated on height as well as
-   width: an iPhone in landscape is wide enough for .native-wide-viewport but
-   at most ~440pt tall, and keeps the short-screen rules above unchanged. */
-@media (min-width: 760px) and (min-height: 521px) {
-  .app-shell.native-shell-app.native-wide-viewport {
-    /* Room for the Calendar label (the widest, in SF Pro on device) and its
-       active background without either touching the rail's rounded edge;
-       the 3.75rem rail left it about a point either side. */
-    --native-rail-width: 4.25rem;
-    /* The middle of the status inset, or the rail half a rem off the edge
-       where there is no inset (an iPad). */
-    --native-rail-centre: max(calc(var(--native-rail-width) / 2 + 0.5rem), calc(var(--safe-right) / 2));
-    --native-rail-inset: calc(var(--native-rail-centre) - var(--native-rail-width) / 2);
-    /* Content clears the rail plus a gap. */
-    --native-rail-column: max(4.75rem, calc(var(--native-rail-centre) + var(--native-rail-width) / 2 + 0.375rem));
-  }
-  .app-shell.native-shell-app.native-wide-viewport .bottom-nav a {
-    width: calc(var(--native-rail-width) - 0.5rem);
-  }
-  .app-shell.native-shell-app.native-wide-viewport .bottom-nav a span {
-    max-width: 100%;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  /* Floating Add buttons sit 12px above the rail, centred on it.
-     --native-dock-height is the rail's measured height (AppShell); the
-     fallback is the four-destination rail (links, gaps, padding, border). */
-  .app-shell.native-shell-app.native-wide-viewport .rr-fab {
-    bottom: calc(var(--safe-bottom) + 0.75rem + var(--native-dock-height, calc(4 * 56px + 1.4rem + 2px)) + 12px);
-    right: calc(var(--native-rail-centre) - 30px);
-  }
-  /* Driveway's extended "Add vehicle" pill would reach into the content
-     beside the column: it becomes the same 60px circle, its label kept as
-     the link's accessible name. */
-  .app-shell.native-shell-app.native-wide-viewport .rr-fab.drv-fab {
-    border-radius: 30px;
-    height: 60px;
-    padding: 0;
-    width: 60px;
-  }
-  .app-shell.native-shell-app.native-wide-viewport .rr-fab.drv-fab span {
-    clip: rect(0 0 0 0);
-    height: 1px;
-    overflow: hidden;
-    position: absolute;
-    white-space: nowrap;
-    width: 1px;
-  }
+/* --- Native right-hand column ---------------------------------------------
+   One layout system for everything the app puts in the right-hand column on
+   the Duo (outer screen and unfolded) and on an iPad. AppShell sets
+   .native-right-column for the compact rail, and for the expanded layout on
+   screens at least 521pt tall (NATIVE_RIGHT_COLUMN_QUERY), so an iPhone in
+   landscape never gets it and keeps the short-screen rules above.
+
+   Top to bottom: the system status indicator (iOS draws it; the column only
+   clears it), one upper group (the notifications/profile pill, or the
+   page's tools: Calendar on the outer screen), floating Add buttons, and the
+   navigation rail anchored to the bottom. Every element shares
+   --native-rail-centre and is positioned only from these variables; the
+   upper group is capped so it always keeps --native-rail-gap above the
+   rail. Page content clears the column by the same gap. */
+.app-shell.native-shell-app.native-right-column {
+  /* Room for the Calendar label (the widest, in SF Pro) and its active
+     background without either touching the rail's rounded edge. */
+  --native-rail-width: 4.25rem;
+  --native-rail-gap: 12px;
+  /* How far down the status indicator reaches: ~106pt on the unfolded Duo
+     (measured on device). */
+  --native-status-clearance: 8rem;
+  /* The status indicator's centre, taken as the middle of the right
+     safe-area inset (the only native signal for where iOS draws it). The
+     one value to correct if device screenshots show otherwise. */
+  --native-status-centre: calc(var(--safe-right) / 2);
+  --native-rail-centre: max(calc(var(--native-rail-width) / 2 + 0.5rem), var(--native-status-centre));
+  --native-rail-inset: calc(var(--native-rail-centre) - var(--native-rail-width) / 2);
+  --native-rail-column: max(4.75rem, calc(var(--native-rail-centre) + var(--native-rail-width) / 2 + var(--native-rail-gap)));
+  /* Below the status indicator; at the top of the column when there is no
+     right inset (an iPad), where min() is 0. */
+  --native-rail-top: calc(var(--safe-top) + 0.75rem + min(calc(var(--native-status-clearance) - 0.75rem), var(--safe-right) * 1000));
+  --native-dock-bottom: calc(var(--safe-bottom) + 0.75rem);
+  /* The rail's top edge, from the bottom of the screen. --native-dock-height
+     is the rail's measured height (AppShell); the fallback is four 56px
+     destinations, gaps, padding and border. */
+  --native-dock-top: calc(var(--native-dock-bottom) + var(--native-dock-height, calc(4 * 56px + 1.4rem + 2px)));
+  /* The most the upper group may take. */
+  --native-upper-max: calc(100dvh - var(--native-rail-top) - var(--native-dock-top) - var(--native-rail-gap));
 }
-/* Short iPad windows (Stage Manager, Split View): below ~640pt the pill at
-   8rem leaves no room for a floating Add button above the rail, and at the
-   bottom of this range it meets the rail itself. With no status column on
-   the right (no inset) the pill moves to the top of the column; with one
-   (the Duo) min() keeps it below that column. */
-@media (min-width: 760px) and (min-height: 521px) and (max-height: 639px) {
-  .app-shell.native-shell-app.native-wide-viewport .app-header-actions {
-    top: calc(var(--safe-top) + 0.75rem + min(7.25rem, var(--safe-right) * 1000));
-  }
+.app-shell.native-shell-app.native-right-column.native-compact-rail {
+  --native-rail-width: 4rem;
+  /* The outer screen's status indicator reaches ~165pt (measured on
+     device); this is ~184pt. */
+  --native-status-clearance: 12.25rem;
+  /* Calendar's five tools share what the upper group may take, between
+     36px and their usual 40px (pill padding, border and gaps aside). */
+  --native-tool-size: clamp(36px, calc((var(--native-upper-max) - 0.75rem - 2px - 8px) / 5), 40px);
+}
+.app-shell.native-shell-app.native-right-column .app-header-actions {
+  max-height: var(--native-upper-max);
+  top: var(--native-rail-top);
+}
+.app-shell.native-shell-app.native-right-column.native-compact-rail .calendar-page .calendar-month-row-actions {
+  max-height: var(--native-upper-max);
+  overflow-y: auto;
+  right: var(--native-rail-inset);
+  top: var(--native-rail-top);
+  width: var(--native-rail-width);
+}
+.app-shell.native-shell-app.native-right-column .bottom-nav {
+  bottom: var(--native-dock-bottom);
+}
+.app-shell.native-shell-app.native-right-column .bottom-nav a {
+  width: calc(var(--native-rail-width) - 0.5rem);
+}
+.app-shell.native-shell-app.native-right-column .bottom-nav a span {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* Floating Add buttons: a circle the rail's width, the gap above it. Also
+   Driveway's extended "Add vehicle" pill, which would otherwise reach into
+   the content; its label stays as the link's accessible name. */
+.app-shell.native-shell-app.native-right-column .rr-fab {
+  border-radius: 50%;
+  bottom: calc(var(--native-dock-top) + var(--native-rail-gap));
+  height: var(--native-rail-width);
+  padding: 0;
+  right: var(--native-rail-inset);
+  width: var(--native-rail-width);
+}
+.app-shell.native-shell-app.native-right-column .rr-fab.drv-fab span {
+  clip: rect(0 0 0 0);
+  height: 1px;
+  overflow: hidden;
+  position: absolute;
+  white-space: nowrap;
+  width: 1px;
 }
 
 .budget-view-selector {
