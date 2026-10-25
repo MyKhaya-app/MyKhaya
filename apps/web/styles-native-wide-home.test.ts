@@ -122,7 +122,7 @@ describe("native right-hand column system (Duo outer and unfolded, iPad)", () =>
     expect(vars).toContain("--native-rail-inset: calc(var(--native-rail-centre) - var(--native-rail-width) / 2);");
     expect(vars).toContain("--native-rail-gap: 12px;");
     expect(vars).toMatch(/--native-rail-column: max\(4\.75rem, calc\(var\(--native-rail-centre\) \+ var\(--native-rail-width\) \/ 2 \+ var\(--native-rail-gap\)\)\);/);
-    expect(vars).toMatch(/--native-upper-max: calc\(100dvh - var\(--native-rail-top\) - var\(--native-dock-top\) - var\(--native-rail-gap\)\);/);
+    expect(vars).toMatch(/--native-upper-max: calc\(100dvh - var\(--native-upper-top\) - var\(--native-dock-top\) - var\(--native-rail-gap\)\);/);
     // The compact rail no longer carries its own offsets.
     expect(css).not.toMatch(/native-compact-rail \.app-header-actions \{\s*[^}]*top:/);
     expect(rule(`.app-shell.native-shell-app.native-compact-rail .calendar-page .calendar-month-row-actions`)).not.toContain("top:");
@@ -130,7 +130,7 @@ describe("native right-hand column system (Duo outer and unfolded, iPad)", () =>
   });
 
   it("keeps the upper group, Calendar tools included, a gap above the rail", () => {
-    expect(rule(`${S} .app-header-actions`)).toContain("top: var(--native-rail-top);");
+    expect(rule(`${S} .app-header-actions`)).toContain("top: var(--native-upper-top);");
     expect(rule(`${S} .app-header-actions`)).toContain("max-height: var(--native-upper-max);");
     const tools = rule(`${C} .calendar-page .calendar-month-row-actions`);
     expect(tools).toContain("max-height: var(--native-upper-max);");
@@ -147,6 +147,22 @@ describe("native right-hand column system (Duo outer and unfolded, iPad)", () =>
     // The rail is measured wherever the system applies.
     expect(shell).toContain("if (!nativeRightColumn || keyboardOpen || !shellElement) return;");
     expect(shell).toContain('shellElement.style.setProperty("--native-dock-height"');
+  });
+
+  it("lines the outer-screen Home pill up with the first card, below the status column and clear of the rail", () => {
+    expect(rule(S)).toContain("--native-upper-top: var(--native-rail-top);");
+    expect(rule(S)).toContain("--native-upper-max: calc(100dvh - var(--native-upper-top)");
+    expect(rule(`${S} .app-header-actions`)).toContain("top: var(--native-upper-top);");
+    // Only the compact rail reads the anchor; the expanded layout keeps the column top.
+    expect(rule(C)).toMatch(
+      /--native-upper-top: max\(\s*var\(--native-rail-top\),\s*min\(\s*var\(--native-column-anchor-top, 0px\),\s*calc\(100dvh - var\(--native-dock-top\) - var\(--native-rail-gap\) - var\(--native-upper-height, 0px\)\)/,
+    );
+    expect(css.match(/--native-column-anchor-top/g)).toHaveLength(1);
+    expect(shell).toContain("if (!nativeCompactRail || !shellElement) return;");
+    expect(shell).toContain("anchor.getBoundingClientRect().top + region.scrollTop");
+    // Today, or the birthday banner when it leads the page.
+    expect(home.match(/data-native-column-anchor/g)).toHaveLength(2);
+    expect(home).toContain("data-native-column-anchor={birthdaysLead ? undefined : true}");
   });
 
   it("gives every rail label room and never lets it overflow", () => {

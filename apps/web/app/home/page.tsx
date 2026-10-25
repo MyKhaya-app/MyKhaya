@@ -518,7 +518,7 @@ export default function HomePage() {
         {(() => {
           if (!birthdaysLead) return null;
           return (
-            <section className="card home-section home-section-overlap birthday-banner">
+            <section className="card home-section home-section-overlap birthday-banner" data-native-column-anchor>
               <div className="section-heading">
                 <h2>
                   <Gift size={18} aria-hidden="true" /> Birthdays this month
@@ -552,6 +552,7 @@ export default function HomePage() {
         {calendarEnabled && (
           <section
             className={`card home-section${birthdaysLead ? "" : " home-section-overlap"} home-summary-card home-today-card`}
+            data-native-column-anchor={birthdaysLead ? undefined : true}
           >
             <div className="section-heading">
               <img className="home-card-image" src="/images/home-today.svg" alt="" aria-hidden="true" />

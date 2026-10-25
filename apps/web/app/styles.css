@@ -7073,13 +7073,16 @@ button.danger,
   /* Below the status indicator; at the top of the column when there is no
      right inset (an iPad), where min() is 0. */
   --native-rail-top: calc(var(--safe-top) + 0.75rem + min(calc(var(--native-status-clearance) - 0.75rem), var(--safe-right) * 1000));
+  /* Where the upper group starts: the top of the column, unless a page
+     lines it up with its content (Home on the outer screen, below). */
+  --native-upper-top: var(--native-rail-top);
   --native-dock-bottom: calc(var(--safe-bottom) + 0.75rem);
   /* The rail's top edge, from the bottom of the screen. --native-dock-height
      is the rail's measured height (AppShell); the fallback is four 56px
      destinations, gaps, padding and border. */
   --native-dock-top: calc(var(--native-dock-bottom) + var(--native-dock-height, calc(4 * 56px + 1.4rem + 2px)));
   /* The most the upper group may take. */
-  --native-upper-max: calc(100dvh - var(--native-rail-top) - var(--native-dock-top) - var(--native-rail-gap));
+  --native-upper-max: calc(100dvh - var(--native-upper-top) - var(--native-dock-top) - var(--native-rail-gap));
 }
 .app-shell.native-shell-app.native-right-column.native-compact-rail {
   --native-rail-width: 4rem;
@@ -7089,10 +7092,22 @@ button.danger,
   /* Calendar's five tools share what the upper group may take, between
      36px and their usual 40px (pill padding, border and gaps aside). */
   --native-tool-size: clamp(36px, calc((var(--native-upper-max) - 0.75rem - 2px - 8px) / 5), 40px);
+  /* Home: the pill's top level with the first card's (Today's) top edge, as
+     AppShell measures it with the content unscrolled, so it follows the
+     greeting's height and the safe areas. Never higher than the status
+     clearance, and never lower than leaves the pill the gap above the rail.
+     Pages without an anchor keep the column top. */
+  --native-upper-top: max(
+    var(--native-rail-top),
+    min(
+      var(--native-column-anchor-top, 0px),
+      calc(100dvh - var(--native-dock-top) - var(--native-rail-gap) - var(--native-upper-height, 0px))
+    )
+  );
 }
 .app-shell.native-shell-app.native-right-column .app-header-actions {
   max-height: var(--native-upper-max);
-  top: var(--native-rail-top);
+  top: var(--native-upper-top);
 }
 .app-shell.native-shell-app.native-right-column.native-compact-rail .calendar-page .calendar-month-row-actions {
   max-height: var(--native-upper-max);

@@ -136,6 +136,44 @@ export function AppShell({
     };
   }, [nativeRightColumn, keyboardOpen, shellElement]);
 
+  // Outer screen only: where the page's column anchor (Home's first card,
+  // marked data-native-column-anchor) sits with the content unscrolled, and
+  // the pill's height, so styles.css can line the pill's top up with it and
+  // still keep it clear of the rail. Re-measured as the page loads, reflows
+  // or changes route.
+  useEffect(() => {
+    if (!nativeCompactRail || !shellElement) return;
+    const region = shellElement.querySelector<HTMLElement>(":scope > .app-content-scroll-region");
+    if (!region) return;
+    const update = () => {
+      const anchor = region.querySelector<HTMLElement>("[data-native-column-anchor]");
+      const pill = shellElement.querySelector<HTMLElement>(".app-header-actions");
+      if (!anchor || !pill) {
+        shellElement.style.removeProperty("--native-column-anchor-top");
+        return;
+      }
+      // The pill's natural height: its max-height depends on where it sits,
+      // which depends on this measurement.
+      pill.style.maxHeight = "none";
+      const pillHeight = pill.offsetHeight;
+      pill.style.maxHeight = "";
+      shellElement.style.setProperty("--native-column-anchor-top", `${anchor.getBoundingClientRect().top + region.scrollTop}px`);
+      shellElement.style.setProperty("--native-upper-height", `${pillHeight}px`);
+    };
+    update();
+    const mutations = new MutationObserver(update);
+    mutations.observe(region, { childList: true, subtree: true });
+    const resizes = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(update);
+    resizes?.observe(region);
+    for (const child of region.children) resizes?.observe(child);
+    return () => {
+      mutations.disconnect();
+      resizes?.disconnect();
+      shellElement.style.removeProperty("--native-column-anchor-top");
+      shellElement.style.removeProperty("--native-upper-height");
+    };
+  }, [nativeCompactRail, shellElement]);
+
   useEffect(() => {
     console.info("[BIOMETRIC DEBUG]", "app_shell_branch", { path, status, initialSessionLoading });
   }, [path, status, initialSessionLoading]);
