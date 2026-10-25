@@ -7,7 +7,7 @@ import { AppHeader } from "./app-header";
 import { BottomNav } from "./bottom-nav";
 import { DesktopNav } from "./desktop-nav";
 import { isNativeShell, isPlatformControlCentre } from "./native-runtime";
-import { NATIVE_COMPACT_RAIL_QUERY, NATIVE_RIGHT_COLUMN_QUERY, NATIVE_WIDE_QUERY } from "./native-layout";
+import { hasRightSafeAreaInset, NATIVE_COMPACT_RAIL_QUERY, NATIVE_RIGHT_COLUMN_QUERY, NATIVE_WIDE_QUERY } from "./native-layout";
 import { ActiveHomeProvider, useActiveHome } from "./use-active-home";
 import { HomeAccessProvider, useHomeAccess } from "./home-access";
 import type { FamilyAccessState } from "./primary-nav-destinations";
@@ -19,6 +19,7 @@ import { NotificationPermissionPrompt } from "./notification-permission-prompt";
 import { AroundHouseDock } from "./around-house-dock";
 import { useNativeKeyboardOpen } from "./use-native-keyboard";
 import { NotificationProvider } from "./notification-state";
+import { HeaderActionsSlotProvider } from "./header-actions-slot";
 import { useActivityHeartbeat } from "./use-activity-heartbeat";
 import { useProductAnalytics } from "./use-product-analytics";
 
@@ -50,7 +51,9 @@ export function AppShell({
   const [nativeWideViewport, setNativeWideViewport] = useState(false);
   const [nativeCompactRail, setNativeCompactRail] = useState(false);
   const [nativeRightColumn, setNativeRightColumn] = useState(false);
+  const [nativeStatusColumn, setNativeStatusColumn] = useState(false);
   const [shellElement, setShellElement] = useState<HTMLDivElement | null>(null);
+  const [headerActionsSlot, setHeaderActionsSlot] = useState<HTMLElement | null>(null);
   const keyboardOpen = useNativeKeyboardOpen();
   useActivityHeartbeat(status === "ready");
   useProductAnalytics(status === "ready", path, activeHome?.id);
@@ -107,12 +110,19 @@ export function AppShell({
       // The outer screen always qualifies (its query already requires 450pt+
       // of height); the expanded layout only when it is not a phone in
       // landscape.
-      setNativeRightColumn(compact || (wide.matches && rightColumn.matches));
+      const column = compact || (wide.matches && rightColumn.matches);
+      setNativeRightColumn(column);
+      // The iPhone Duo's screens: the right-hand column beside a status
+      // indicator column (a right safe-area inset). Never an iPad.
+      setNativeStatusColumn(column && hasRightSafeAreaInset());
     };
     update();
     for (const query of queries) query.addEventListener("change", update);
+    // The safe area can settle after the media queries on a rotation or fold.
+    window.addEventListener("resize", update);
     return () => {
       for (const query of queries) query.removeEventListener("change", update);
+      window.removeEventListener("resize", update);
     };
   }, []);
 
@@ -135,44 +145,6 @@ export function AppShell({
       shellElement.style.removeProperty("--native-dock-height");
     };
   }, [nativeRightColumn, keyboardOpen, shellElement]);
-
-  // Outer screen only: where the page's column anchor (Home's first card,
-  // marked data-native-column-anchor) sits with the content unscrolled, and
-  // the pill's height, so styles.css can line the pill's top up with it and
-  // still keep it clear of the rail. Re-measured as the page loads, reflows
-  // or changes route.
-  useEffect(() => {
-    if (!nativeCompactRail || !shellElement) return;
-    const region = shellElement.querySelector<HTMLElement>(":scope > .app-content-scroll-region");
-    if (!region) return;
-    const update = () => {
-      const anchor = region.querySelector<HTMLElement>("[data-native-column-anchor]");
-      const pill = shellElement.querySelector<HTMLElement>(".app-header-actions");
-      if (!anchor || !pill) {
-        shellElement.style.removeProperty("--native-column-anchor-top");
-        return;
-      }
-      // The pill's natural height: its max-height depends on where it sits,
-      // which depends on this measurement.
-      pill.style.maxHeight = "none";
-      const pillHeight = pill.offsetHeight;
-      pill.style.maxHeight = "";
-      shellElement.style.setProperty("--native-column-anchor-top", `${anchor.getBoundingClientRect().top + region.scrollTop}px`);
-      shellElement.style.setProperty("--native-upper-height", `${pillHeight}px`);
-    };
-    update();
-    const mutations = new MutationObserver(update);
-    mutations.observe(region, { childList: true, subtree: true });
-    const resizes = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(update);
-    resizes?.observe(region);
-    for (const child of region.children) resizes?.observe(child);
-    return () => {
-      mutations.disconnect();
-      resizes?.disconnect();
-      shellElement.style.removeProperty("--native-column-anchor-top");
-      shellElement.style.removeProperty("--native-upper-height");
-    };
-  }, [nativeCompactRail, shellElement]);
 
   useEffect(() => {
     console.info("[BIOMETRIC DEBUG]", "app_shell_branch", { path, status, initialSessionLoading });
@@ -217,13 +189,16 @@ export function AppShell({
 
   return (
     <NotificationProvider>
-      <div ref={setShellElement} className={`app-shell${isNativeShell() ? " native-shell-app" : ""}${nativeWideViewport ? " native-wide-viewport" : ""}${nativeCompactRail ? " native-compact-rail" : ""}${nativeRightColumn ? " native-right-column" : ""}${keyboardOpen ? " native-keyboard-open" : ""}`}>
+      <div ref={setShellElement} className={`app-shell${isNativeShell() ? " native-shell-app" : ""}${nativeWideViewport ? " native-wide-viewport" : ""}${nativeCompactRail ? " native-compact-rail" : ""}${nativeRightColumn ? " native-right-column" : ""}${nativeStatusColumn ? " native-status-column" : ""}${keyboardOpen ? " native-keyboard-open" : ""}`}>
       <AppHeader
         user={user}
         homes={homes}
         activeHome={activeHome}
         onSwitchHome={setActiveHomeId}
         flush={Boolean(hero) || path === "/home" || path === "/settings"}
+        // Unfolded iPhone Duo: the pill sits in Home's hero row and scrolls
+        // with it rather than staying fixed over the cards.
+        actionsTarget={nativeStatusColumn && nativeWideViewport ? headerActionsSlot : null}
       />
       {!isNativeShell() && (
         <DesktopNav principalType={user?.principal_type} familyAccess={familyAccess} />
@@ -233,7 +208,7 @@ export function AppShell({
         <main className="app-main">
           <NativeBiometricOffer onSettled={() => setBiometricSettled(true)} />
           {biometricSettled && <NotificationPermissionPrompt />}
-          {children}
+          <HeaderActionsSlotProvider value={setHeaderActionsSlot}>{children}</HeaderActionsSlotProvider>
         </main>
       </div>
       {!keyboardOpen && <BottomNav principalType={user?.principal_type} familyAccess={familyAccess} />}

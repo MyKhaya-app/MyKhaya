@@ -22,3 +22,18 @@ export const NATIVE_COMPACT_RAIL_QUERY =
  * short-screen rules.
  */
 export const NATIVE_RIGHT_COLUMN_QUERY = "(min-height: 521px)";
+
+/**
+ * Whether the screen has a right safe-area inset: with the right-hand column,
+ * that is where iOS draws the status indicator as a column (both iPhone Duo
+ * screens). An iPad, split-view windows included, has none. Read from the
+ * shared --safe-right through a probe, since env() is not readable directly.
+ */
+export function hasRightSafeAreaInset(): boolean {
+  const probe = document.createElement("div");
+  probe.style.cssText = "position: fixed; visibility: hidden; pointer-events: none; padding-right: var(--safe-right);";
+  document.body.appendChild(probe);
+  const inset = parseFloat(getComputedStyle(probe).paddingRight) > 0;
+  probe.remove();
+  return inset;
+}

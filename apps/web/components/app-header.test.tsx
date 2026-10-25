@@ -278,3 +278,26 @@ describe("AppHeader — botanical decoration", () => {
     expect(screen.getByRole("button", { name: /open profile menu/i })).toBeInTheDocument();
   });
 });
+
+describe("AppHeader — pill rendered into a page slot (unfolded iPhone Duo Home)", () => {
+  it("renders the same notifications/profile pill in the target, with the profile sheet still working", async () => {
+    nativeShell = true;
+    const slot = document.createElement("div");
+    document.body.appendChild(slot);
+    const { container } = render(
+      <AppHeader user={user} homes={[]} activeHome={null} onSwitchHome={vi.fn()} actionsTarget={slot} />,
+    );
+
+    expect(container.querySelector("header .app-header-actions")).toBeNull();
+    expect(within(slot).getByRole("button", { name: /open profile menu/i })).toBeInTheDocument();
+    expect(within(slot).getByRole("button", { name: /notifications/i })).toBeInTheDocument();
+    await openMenu();
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    slot.remove();
+  });
+
+  it("keeps the pill in the header without a target", async () => {
+    const { container } = await renderHeader();
+    expect(container.querySelector("header .app-header-actions")).not.toBeNull();
+  });
+});

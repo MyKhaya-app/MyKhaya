@@ -105,7 +105,8 @@ describe("native right-hand column system (Duo outer and unfolded, iPad)", () =>
     // iPhones in landscape are at most ~440pt tall; the compact rail's own
     // query already excludes every iPhone.
     expect(layout).toContain('export const NATIVE_RIGHT_COLUMN_QUERY = "(min-height: 521px)";');
-    expect(shell).toContain("setNativeRightColumn(compact || (wide.matches && rightColumn.matches));");
+    expect(shell).toContain("const column = compact || (wide.matches && rightColumn.matches);");
+    expect(shell).toContain("setNativeRightColumn(column);");
     expect(shell).toContain('${nativeRightColumn ? " native-right-column" : ""}');
     expect(shell).toMatch(/if \(!isNativeShell\(\)\) return;\s*const wide = window\.matchMedia\(NATIVE_WIDE_QUERY\)/);
     // The phone-landscape rules are untouched and never see the system.
@@ -122,7 +123,7 @@ describe("native right-hand column system (Duo outer and unfolded, iPad)", () =>
     expect(vars).toContain("--native-rail-inset: calc(var(--native-rail-centre) - var(--native-rail-width) / 2);");
     expect(vars).toContain("--native-rail-gap: 12px;");
     expect(vars).toMatch(/--native-rail-column: max\(4\.75rem, calc\(var\(--native-rail-centre\) \+ var\(--native-rail-width\) \/ 2 \+ var\(--native-rail-gap\)\)\);/);
-    expect(vars).toMatch(/--native-upper-max: calc\(100dvh - var\(--native-upper-top\) - var\(--native-dock-top\) - var\(--native-rail-gap\)\);/);
+    expect(vars).toMatch(/--native-upper-max: calc\(100dvh - var\(--native-rail-top\) - var\(--native-dock-top\) - var\(--native-rail-gap\)\);/);
     // The compact rail no longer carries its own offsets.
     expect(css).not.toMatch(/native-compact-rail \.app-header-actions \{\s*[^}]*top:/);
     expect(rule(`.app-shell.native-shell-app.native-compact-rail .calendar-page .calendar-month-row-actions`)).not.toContain("top:");
@@ -130,7 +131,7 @@ describe("native right-hand column system (Duo outer and unfolded, iPad)", () =>
   });
 
   it("keeps the upper group, Calendar tools included, a gap above the rail", () => {
-    expect(rule(`${S} .app-header-actions`)).toContain("top: var(--native-upper-top);");
+    expect(rule(`${S} .app-header-actions`)).toContain("top: var(--native-rail-top);");
     expect(rule(`${S} .app-header-actions`)).toContain("max-height: var(--native-upper-max);");
     const tools = rule(`${C} .calendar-page .calendar-month-row-actions`);
     expect(tools).toContain("max-height: var(--native-upper-max);");
@@ -149,20 +150,30 @@ describe("native right-hand column system (Duo outer and unfolded, iPad)", () =>
     expect(shell).toContain('shellElement.style.setProperty("--native-dock-height"');
   });
 
-  it("lines the outer-screen Home pill up with the first card, below the status column and clear of the rail", () => {
-    expect(rule(S)).toContain("--native-upper-top: var(--native-rail-top);");
-    expect(rule(S)).toContain("--native-upper-max: calc(100dvh - var(--native-upper-top)");
-    expect(rule(`${S} .app-header-actions`)).toContain("top: var(--native-upper-top);");
-    // Only the compact rail reads the anchor; the expanded layout keeps the column top.
-    expect(rule(C)).toMatch(
-      /--native-upper-top: max\(\s*var\(--native-rail-top\),\s*min\(\s*var\(--native-column-anchor-top, 0px\),\s*calc\(100dvh - var\(--native-dock-top\) - var\(--native-rail-gap\) - var\(--native-upper-height, 0px\)\)/,
-    );
-    expect(css.match(/--native-column-anchor-top/g)).toHaveLength(1);
-    expect(shell).toContain("if (!nativeCompactRail || !shellElement) return;");
-    expect(shell).toContain("anchor.getBoundingClientRect().top + region.scrollTop");
-    // Today, or the birthday banner when it leads the page.
-    expect(home.match(/data-native-column-anchor/g)).toHaveLength(2);
-    expect(home).toContain("data-native-column-anchor={birthdaysLead ? undefined : true}");
+  it("moves the Home pill to the top row on both Duo screens only", () => {
+    const D = ".app-shell.native-shell-app.native-status-column";
+    // Set only with the right-hand column and a right safe-area inset: never
+    // an iPad (no inset) or an iPhone (no right-hand column).
+    expect(shell).toContain("setNativeStatusColumn(column && hasRightSafeAreaInset());");
+    expect(shell).toContain('${nativeStatusColumn ? " native-status-column" : ""}');
+    expect(layout).toContain("padding-right: var(--safe-right);");
+    expect(rule(`${D}:has(.home-hero) .app-header-actions`)).toContain("flex-direction: row;");
+    // Closed: in the header bar, above the avatars, without moving the hero.
+    expect(rule(`${D}.native-compact-rail:has(.home-hero) .app-header-actions`)).toContain("position: static;");
+    expect(rule(`${D}.native-compact-rail:has(.home-hero) .app-header-actions`)).toContain("margin-block: -4px;");
+    // Open: a column at the hero row's right-hand end, the avatars left of
+    // it, rendered into the hero so it scrolls with it (never fixed over
+    // the cards).
+    const hero = rule(`${D}.native-wide-viewport .home-hero`);
+    expect(hero).toMatch(/"logo eyebrow eyebrow strip actions"\s*"logo name date strip actions"/);
+    expect(hero).toContain("padding-right: var(--native-status-inset);");
+    expect(rule(`${D}.native-wide-viewport .home-hero-actions .app-header-actions`)).toContain("position: static;");
+    expect(rule(".home-hero-actions")).toContain("display: none;");
+    expect(home).toContain('<HeaderActionsSlot className="home-hero-actions" />');
+    expect(shell).toContain("actionsTarget={nativeStatusColumn && nativeWideViewport ? headerActionsSlot : null}");
+    expect(css).not.toMatch(/native-status-column[^{]*\.app-header-actions \{[^}]*position: fixed/);
+    // Nothing else reads the state.
+    expect(css.match(/\.native-status-column[^{]*\{/g)?.every((s) => s.includes("home-hero"))).toBe(true);
   });
 
   it("gives every rail label room and never lets it overflow", () => {

@@ -45,6 +45,7 @@ import {
 } from "./birthday-utils";
 import { dueCountdownSuffix, nudgeCardDateLabel } from "./routine-utils";
 import { HomeHeroDate } from "./home-hero-date";
+import { HeaderActionsSlot } from "@/components/header-actions-slot";
 import { Logo } from "@/components/logo";
 import {
   FALLBACK_TIMEZONE,
@@ -510,6 +511,9 @@ export default function HomePage() {
               ))}
             </div>
           )}
+          {/* Unfolded iPhone Duo only: AppHeader's notifications/profile
+              pill, so it scrolls with this row (header-actions-slot.tsx). */}
+          <HeaderActionsSlot className="home-hero-actions" />
         </div>
 
       <main className="home-page">
@@ -518,7 +522,7 @@ export default function HomePage() {
         {(() => {
           if (!birthdaysLead) return null;
           return (
-            <section className="card home-section home-section-overlap birthday-banner" data-native-column-anchor>
+            <section className="card home-section home-section-overlap birthday-banner">
               <div className="section-heading">
                 <h2>
                   <Gift size={18} aria-hidden="true" /> Birthdays this month
@@ -552,7 +556,6 @@ export default function HomePage() {
         {calendarEnabled && (
           <section
             className={`card home-section${birthdaysLead ? "" : " home-section-overlap"} home-summary-card home-today-card`}
-            data-native-column-anchor={birthdaysLead ? undefined : true}
           >
             <div className="section-heading">
               <img className="home-card-image" src="/images/home-today.svg" alt="" aria-hidden="true" />
