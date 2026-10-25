@@ -49,6 +49,7 @@ export function AppShell({
   const [biometricSettled, setBiometricSettled] = useState(false);
   const [nativeWideViewport, setNativeWideViewport] = useState(false);
   const [nativeCompactRail, setNativeCompactRail] = useState(false);
+  const [shellElement, setShellElement] = useState<HTMLDivElement | null>(null);
   const keyboardOpen = useNativeKeyboardOpen();
   useActivityHeartbeat(status === "ready");
   useProductAnalytics(status === "ready", path, activeHome?.id);
@@ -109,6 +110,26 @@ export function AppShell({
     };
   }, []);
 
+  // The expanded rail's height, for the floating Add buttons that sit just
+  // above it (styles.css, "Tall expanded screens"). The rail's length
+  // depends on the entitled destinations, so it is measured rather than
+  // assumed. Expanded native layout only; the rail is unmounted while the
+  // keyboard is open, so this re-attaches when it returns.
+  useEffect(() => {
+    if (!nativeWideViewport || keyboardOpen || !shellElement) return;
+    const nav = shellElement.querySelector<HTMLElement>(":scope > .bottom-nav");
+    if (!nav) return;
+    const update = () => shellElement.style.setProperty("--native-dock-height", `${nav.offsetHeight}px`);
+    update();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(update);
+    observer.observe(nav);
+    return () => {
+      observer.disconnect();
+      shellElement.style.removeProperty("--native-dock-height");
+    };
+  }, [nativeWideViewport, keyboardOpen, shellElement]);
+
   useEffect(() => {
     console.info("[BIOMETRIC DEBUG]", "app_shell_branch", { path, status, initialSessionLoading });
   }, [path, status, initialSessionLoading]);
@@ -152,7 +173,7 @@ export function AppShell({
 
   return (
     <NotificationProvider>
-      <div className={`app-shell${isNativeShell() ? " native-shell-app" : ""}${nativeWideViewport ? " native-wide-viewport" : ""}${nativeCompactRail ? " native-compact-rail" : ""}${keyboardOpen ? " native-keyboard-open" : ""}`}>
+      <div ref={setShellElement} className={`app-shell${isNativeShell() ? " native-shell-app" : ""}${nativeWideViewport ? " native-wide-viewport" : ""}${nativeCompactRail ? " native-compact-rail" : ""}${keyboardOpen ? " native-keyboard-open" : ""}`}>
       <AppHeader
         user={user}
         homes={homes}

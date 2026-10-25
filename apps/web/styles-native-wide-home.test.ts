@@ -93,3 +93,63 @@ describe("notifications/profile pill overlays", () => {
     expect(rule(`${R} .bottom-nav`)).toContain("z-index: 19;");
   });
 });
+
+describe("tall expanded right-hand column (Duo unfolded, iPad)", () => {
+  const TALL = "@media (min-width: 760px) and (min-height: 521px) {";
+  const W = ".app-shell.native-shell-app.native-wide-viewport";
+  const block = () => {
+    const start = css.indexOf(TALL);
+    expect(start).toBeGreaterThan(-1);
+    return css.slice(start, css.indexOf("\n}\n", start));
+  };
+  const shell = readFileSync(join(process.cwd(), "components", "app-shell.tsx"), "utf8");
+
+  it("is gated on height so an iPhone in landscape keeps the short-screen rules", () => {
+    // The complement of the existing short-screen block; iPhones in landscape
+    // are at most ~440pt tall, so they never match.
+    expect(css).toContain("@media (min-width: 760px) and (max-height: 520px) {");
+    expect(css.split(TALL)).toHaveLength(2);
+    // Only the native expanded class: never the compact rail, browser or PCC.
+    const selectors = block().match(/^\s*\.[^{]+\{/gm) ?? [];
+    expect(selectors.length).toBeGreaterThan(0);
+    for (const selector of selectors) expect(selector.trim().startsWith(W)).toBe(true);
+    expect(block()).not.toContain("native-compact-rail");
+  });
+
+  it("centres the rail, pill and column on the status inset", () => {
+    expect(block()).toContain(
+      "--native-rail-centre: max(calc(var(--native-rail-width) / 2 + 0.5rem), calc(var(--safe-right) / 2));",
+    );
+    expect(block()).toContain("--native-rail-inset: calc(var(--native-rail-centre) - var(--native-rail-width) / 2);");
+    // The pill and the rail both use --native-rail-inset.
+    expect(rule(`${R} .app-header-actions`)).toContain("right: var(--native-rail-inset);");
+    expect(rule(`${R} .bottom-nav`)).toContain("right: var(--native-rail-inset);");
+    // The base column stays fixed for the compact rail.
+    expect(rule(R)).toContain("--native-rail-column: 4.75rem;");
+  });
+
+  it("gives every rail label room and never lets it overflow", () => {
+    expect(block()).toContain("--native-rail-width: 4.25rem;");
+    expect(block()).toMatch(/\.bottom-nav a span \{[^}]*text-overflow: ellipsis;/);
+  });
+
+  it("puts floating Add buttons just above the rail, centred on it", () => {
+    expect(block()).toMatch(
+      /\.rr-fab \{\s*bottom: calc\(var\(--safe-bottom\) \+ 0\.75rem \+ var\(--native-dock-height, [^;]+\) \+ 12px\);\s*right: calc\(var\(--native-rail-centre\) - 30px\);/,
+    );
+    expect(block()).toMatch(/\.rr-fab\.drv-fab \{[^}]*width: 60px;/);
+    // Measured only in the native expanded layout.
+    expect(shell).toContain("if (!nativeWideViewport || keyboardOpen || !shellElement) return;");
+    expect(shell).toContain('shellElement.style.setProperty("--native-dock-height"');
+  });
+
+  it("moves the pill clear of the FAB and rail in short iPad windows only", () => {
+    const SHORT = "@media (min-width: 760px) and (min-height: 521px) and (max-height: 639px) {";
+    const start = css.indexOf(SHORT);
+    expect(start).toBeGreaterThan(-1);
+    const short = css.slice(start, css.indexOf("\n}\n", start));
+    // Top of the column with no right inset; below the status column with one.
+    expect(short).toContain(`${W} .app-header-actions {`);
+    expect(short).toContain("top: calc(var(--safe-top) + 0.75rem + min(7.25rem, var(--safe-right) * 1000));");
+  });
+});
