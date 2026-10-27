@@ -7,6 +7,7 @@ start time is a few minutes in the future relative to real `datetime.now(UTC)`.
 import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -510,10 +511,12 @@ async def test_recurring_weekly_event_reminder_uses_future_occurrence(
     home_id = await create_home_with_calendar(client)
     # Base occurrence is far in the past; the scan must find the *next future*
     # occurrence's reminder, not miss the series because the base row is stale.
-    # Exact weekly alignment: base_start is precisely 6 whole weeks before the target
-    # occurrence, so expanding a weekly series from it lands exactly on next_occurrence.
+    # Exact weekly alignment: base_start is 6 weeks before the target occurrence
+    # at the same London wall-clock time, so expanding the weekly series (which
+    # steps in the event's local time) lands exactly on next_occurrence even
+    # when a clock change falls between the two.
     next_occurrence = datetime.now(UTC) + timedelta(minutes=5, seconds=30)
-    base_start = next_occurrence - timedelta(weeks=6)
+    base_start = next_occurrence.astimezone(ZoneInfo("Europe/London")) - timedelta(weeks=6)
     created = await unsafe(
         client,
         "POST",
