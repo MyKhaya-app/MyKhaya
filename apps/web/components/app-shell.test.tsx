@@ -91,6 +91,14 @@ vi.mock("./native-runtime", () => ({
   nativePlatform: () => nativePlatform,
 }));
 
+// The iPhone Duo's status-indicator column (a right safe-area inset), which
+// jsdom cannot report.
+let rightSafeAreaInset = false;
+vi.mock("./native-layout", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./native-layout")>()),
+  hasRightSafeAreaInset: () => rightSafeAreaInset,
+}));
+
 const bootstrapNativeSession = vi.fn<() => Promise<unknown>>();
 vi.mock("./native-auth", () => ({
   bootstrapNativeSession: () => bootstrapNativeSession(),
@@ -105,6 +113,7 @@ beforeEach(() => {
   nativeShell = false;
   platformControlCentre = false;
   nativePlatform = "ios";
+  rightSafeAreaInset = false;
   pathname = "/home";
   authState.status = "ready";
   biometricOnSettled = undefined;
@@ -392,5 +401,54 @@ describe("AppShell — locked-state unlock copy is platform-aware", () => {
 
     await screen.findByRole("heading", { name: /unlock mykhaya/i });
     expect(screen.queryByText(/face id|touch id/i)).not.toBeInTheDocument();
+  });
+});
+
+describe("AppShell — iPhone Duo notifications/profile pill", () => {
+  // Media queries as a given viewport answers them (native-layout.ts).
+  function viewport(width: number, height: number) {
+    const matches = (query: string) =>
+      [...query.matchAll(/\((min|max)-(width|height): (\d+)px\)/g)].every(([, bound, axis, value]) => {
+        const size = axis === "width" ? width : height;
+        return bound === "min" ? size >= Number(value) : size <= Number(value);
+      });
+    vi.stubGlobal("matchMedia", (query: string) => ({
+      matches: matches(query),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+    }));
+  }
+
+  it("keeps the one pill in the shell's header bar on every route of both Duo screens", async () => {
+    nativeShell = true;
+    rightSafeAreaInset = true;
+    for (const [width, height] of [[600, 678], [900, 700]] as const) {
+      viewport(width, height);
+      const view = render(<PersistentAppShell><div className="home-hero">Home</div></PersistentAppShell>);
+      await waitFor(() => expect(document.querySelector(".app-shell")).toHaveClass("native-status-column"));
+      const pill = document.querySelector(".app-header > .app-header-actions");
+      expect(pill).not.toBeNull();
+      for (const page of ["Calendar", "More", "Nudges"]) {
+        view.rerender(<PersistentAppShell><div>{page}</div></PersistentAppShell>);
+        expect(document.querySelectorAll(".app-header-actions")).toHaveLength(1);
+        // The same element in the same place: never moved or remounted.
+        expect(document.querySelector(".app-header > .app-header-actions")).toBe(pill);
+      }
+      view.unmount();
+    }
+    vi.unstubAllGlobals();
+  });
+
+  it("never applies to a standard iPhone, in portrait or landscape, or to an iPad", async () => {
+    nativeShell = true;
+    for (const [width, height, inset] of [[393, 852, false], [932, 430, true], [1133, 744, false]] as const) {
+      viewport(width, height);
+      rightSafeAreaInset = inset;
+      const view = render(<PersistentAppShell><div>Page content</div></PersistentAppShell>);
+      expect(await screen.findByText("Page content")).toBeInTheDocument();
+      expect(document.querySelector(".app-shell")).not.toHaveClass("native-status-column");
+      view.unmount();
+    }
+    vi.unstubAllGlobals();
   });
 });

@@ -39,7 +39,8 @@ describe("native expanded Home presentation (iPhone Duo mockup page 3)", () => {
   it("uses a shallow one-row hero with real Home data", () => {
     expect(rule(`${W} .home-hero`)).toMatch(/grid-template-areas:\s*"logo eyebrow eyebrow strip"\s*"logo name date strip"/);
     expect(home).toContain('<span className="home-hero-home-name"> · {activeHome.name}</span>');
-    expect(rule(`${W}:has(.home-hero) .app-header`)).toContain("height: 0");
+    // Elsewhere than the Duo (an iPad): the Duo keeps its header bar.
+    expect(rule(`${W}:not(.native-status-column):has(.home-hero) .app-header`)).toContain("height: 0");
   });
 
   it("places Today, Nudges and Meals left, Coming up and Around the House right", () => {
@@ -61,7 +62,8 @@ describe("iPhone Duo outer screen (mockup pages 1-2)", () => {
       '"(min-width: 450px) and (max-width: 759px) and (min-height: 450px) and (max-height: 800px)"',
     );
     // Set only inside the native shell, and never together with the wide class.
-    expect(shell).toContain("setNativeCompactRail(!wide.matches && compactRail.matches)");
+    expect(shell).toContain("const compact = !wide.matches && compactRail.matches;");
+    expect(shell).toContain("setNativeCompactRail(compact);");
     expect(shell).toMatch(/if \(!isNativeShell\(\)\) return;\s*const wide = window\.matchMedia\(NATIVE_WIDE_QUERY\)/);
   });
 
@@ -82,7 +84,7 @@ describe("iPhone Duo outer screen (mockup pages 1-2)", () => {
 describe("notifications/profile pill overlays", () => {
   it("keeps the tray and profile sheet (rendered inside the header) when the Home header collapses", () => {
     expect(css).toContain(
-      ".app-shell.native-shell-app.native-wide-viewport:has(.home-hero) .app-header > :is(.app-header-logo, .app-header-home, .app-header-botanical) {",
+      ".app-shell.native-shell-app.native-wide-viewport:not(.native-status-column):has(.home-hero) .app-header > :is(.app-header-logo, .app-header-home, .app-header-botanical) {",
     );
     expect(css).not.toContain(".app-header > :not(.app-header-actions)");
   });
@@ -91,5 +93,95 @@ describe("notifications/profile pill overlays", () => {
     const R = ".app-shell.native-shell-app:is(.native-wide-viewport, .native-compact-rail)";
     expect(rule(`${R} .app-header`)).toContain("z-index: 25;");
     expect(rule(`${R} .bottom-nav`)).toContain("z-index: 19;");
+  });
+});
+
+describe("native right-hand column system (Duo outer and unfolded, iPad)", () => {
+  const S = ".app-shell.native-shell-app.native-right-column";
+  const C = `${S}.native-compact-rail`;
+  const layout = readFileSync(join(process.cwd(), "components", "native-layout.ts"), "utf8");
+  const shell = readFileSync(join(process.cwd(), "components", "app-shell.tsx"), "utf8");
+
+  it("is an explicit layout state no iPhone gets", () => {
+    // iPhones in landscape are at most ~440pt tall; the compact rail's own
+    // query already excludes every iPhone.
+    expect(layout).toContain('export const NATIVE_RIGHT_COLUMN_QUERY = "(min-height: 521px)";');
+    expect(shell).toContain("const column = compact || (wide.matches && rightColumn.matches);");
+    expect(shell).toContain("setNativeRightColumn(column);");
+    expect(shell).toContain('${nativeRightColumn ? " native-right-column" : ""}');
+    expect(shell).toMatch(/if \(!isNativeShell\(\)\) return;\s*const wide = window\.matchMedia\(NATIVE_WIDE_QUERY\)/);
+    // The phone-landscape rules are untouched and never see the system.
+    const short = css.slice(css.indexOf("@media (min-width: 760px) and (max-height: 520px) {"));
+    expect(short.slice(0, short.indexOf("\n}\n"))).not.toContain("native-right-column");
+  });
+
+  it("derives every column position from one set of variables", () => {
+    const vars = rule(S);
+    expect(vars).toContain("--native-status-centre: calc(var(--safe-right) / 2);");
+    expect(vars).toContain(
+      "--native-rail-centre: max(calc(var(--native-rail-width) / 2 + 0.5rem), var(--native-status-centre));",
+    );
+    expect(vars).toContain("--native-rail-inset: calc(var(--native-rail-centre) - var(--native-rail-width) / 2);");
+    expect(vars).toContain("--native-rail-gap: 12px;");
+    expect(vars).toMatch(/--native-rail-column: max\(4\.75rem, calc\(var\(--native-rail-centre\) \+ var\(--native-rail-width\) \/ 2 \+ var\(--native-rail-gap\)\)\);/);
+    expect(vars).toMatch(/--native-upper-max: calc\(100dvh - var\(--native-rail-top\) - var\(--native-dock-top\) - var\(--native-rail-gap\)\);/);
+    // The compact rail no longer carries its own offsets.
+    expect(css).not.toMatch(/native-compact-rail \.app-header-actions \{\s*[^}]*top:/);
+    expect(rule(`.app-shell.native-shell-app.native-compact-rail .calendar-page .calendar-month-row-actions`)).not.toContain("top:");
+    expect(rule(C)).toContain("--native-status-clearance: 12.25rem;");
+  });
+
+  it("keeps the upper group, Calendar tools included, a gap above the rail", () => {
+    expect(rule(`${S} .app-header-actions`)).toContain("top: var(--native-rail-top);");
+    expect(rule(`${S} .app-header-actions`)).toContain("max-height: var(--native-upper-max);");
+    const tools = rule(`${C} .calendar-page .calendar-month-row-actions`);
+    expect(tools).toContain("max-height: var(--native-upper-max);");
+    expect(tools).toContain("right: var(--native-rail-inset);");
+    expect(rule(C)).toContain("--native-tool-size: clamp(36px,");
+  });
+
+  it("puts floating Add buttons in the column, the gap above the rail", () => {
+    const fab = rule(`${S} .rr-fab`);
+    expect(fab).toContain("bottom: calc(var(--native-dock-top) + var(--native-rail-gap));");
+    expect(fab).toContain("right: var(--native-rail-inset);");
+    expect(fab).toContain("width: var(--native-rail-width);");
+    expect(rule(`${S} .rr-fab.drv-fab span`)).toContain("clip: rect(0 0 0 0);");
+    // The rail is measured wherever the system applies.
+    expect(shell).toContain("if (!nativeRightColumn || keyboardOpen || !shellElement) return;");
+    expect(shell).toContain('shellElement.style.setProperty("--native-dock-height"');
+  });
+
+  it("puts the pill in the shell's header bar on every Duo route, and only on the Duo", () => {
+    const D = ".app-shell.native-shell-app.native-status-column";
+    // Set only with the right-hand column and a right safe-area inset: never
+    // an iPad (no inset) or an iPhone (no right-hand column).
+    expect(shell).toContain("setNativeStatusColumn(column && hasRightSafeAreaInset());");
+    expect(shell).toContain('${nativeStatusColumn ? " native-status-column" : ""}');
+    expect(layout).toContain("padding-right: var(--safe-right);");
+    // One placement, not keyed to any page: a static row at the header bar's
+    // right-hand end (the bar sits outside the scroll region, so it stays
+    // put while content scrolls and content never passes under it).
+    const pill = rule(`${D} .app-header-actions`);
+    expect(pill).toContain("position: static;");
+    expect(pill).toContain("flex-direction: row;");
+    expect(pill).toContain("margin-block: -4px;");
+    expect(rule(`${D} .app-header`)).toContain("grid-template-columns: auto minmax(0, 1fr) auto;");
+    // No Duo rule is keyed to a page.
+    expect(css).not.toMatch(/\.native-status-column(?!\))[^{]*:has\(/);
+    // Unfolded Home keeps the bar; its hero drops the copied icon and name.
+    expect(css).toContain(".app-shell.native-shell-app.native-wide-viewport:not(.native-status-column):has(.home-hero) .app-header {");
+    expect(rule(`${D}.native-wide-viewport .home-hero`)).toMatch(/"eyebrow eyebrow strip"\s*"name date strip"/);
+    expect(rule(`${D}.native-wide-viewport .home-hero :is(.home-hero-logo, .home-hero-home-name)`)).toContain("display: none;");
+    // Calendar's transparent in-bar variant is for other compact screens.
+    expect(css).toContain(".app-shell.native-shell-app.native-compact-rail:not(.native-status-column):has(.calendar-page .calendar-month-row-actions) .app-header-actions {");
+    // The pill is never moved out of the header or duplicated.
+    expect(shell).not.toContain("actionsTarget");
+    expect(home).not.toContain("HeaderActionsSlot");
+  });
+
+  it("gives every rail label room and never lets it overflow", () => {
+    expect(rule(S)).toContain("--native-rail-width: 4.25rem;");
+    expect(rule(C)).toContain("--native-rail-width: 4rem;");
+    expect(rule(`${S} .bottom-nav a span`)).toContain("text-overflow: ellipsis;");
   });
 });

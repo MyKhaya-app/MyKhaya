@@ -7,7 +7,7 @@ import { AppHeader } from "./app-header";
 import { BottomNav } from "./bottom-nav";
 import { DesktopNav } from "./desktop-nav";
 import { isNativeShell, isPlatformControlCentre } from "./native-runtime";
-import { NATIVE_COMPACT_RAIL_QUERY, NATIVE_WIDE_QUERY } from "./native-layout";
+import { hasRightSafeAreaInset, NATIVE_COMPACT_RAIL_QUERY, NATIVE_RIGHT_COLUMN_QUERY, NATIVE_WIDE_QUERY } from "./native-layout";
 import { ActiveHomeProvider, useActiveHome } from "./use-active-home";
 import { HomeAccessProvider, useHomeAccess } from "./home-access";
 import type { FamilyAccessState } from "./primary-nav-destinations";
@@ -49,6 +49,9 @@ export function AppShell({
   const [biometricSettled, setBiometricSettled] = useState(false);
   const [nativeWideViewport, setNativeWideViewport] = useState(false);
   const [nativeCompactRail, setNativeCompactRail] = useState(false);
+  const [nativeRightColumn, setNativeRightColumn] = useState(false);
+  const [nativeStatusColumn, setNativeStatusColumn] = useState(false);
+  const [shellElement, setShellElement] = useState<HTMLDivElement | null>(null);
   const keyboardOpen = useNativeKeyboardOpen();
   useActivityHeartbeat(status === "ready");
   useProductAnalytics(status === "ready", path, activeHome?.id);
@@ -96,18 +99,50 @@ export function AppShell({
     if (!isNativeShell()) return;
     const wide = window.matchMedia(NATIVE_WIDE_QUERY);
     const compactRail = window.matchMedia(NATIVE_COMPACT_RAIL_QUERY);
+    const rightColumn = window.matchMedia(NATIVE_RIGHT_COLUMN_QUERY);
+    const queries = [wide, compactRail, rightColumn];
     const update = () => {
+      const compact = !wide.matches && compactRail.matches;
       setNativeWideViewport(wide.matches);
-      setNativeCompactRail(!wide.matches && compactRail.matches);
+      setNativeCompactRail(compact);
+      // The outer screen always qualifies (its query already requires 450pt+
+      // of height); the expanded layout only when it is not a phone in
+      // landscape.
+      const column = compact || (wide.matches && rightColumn.matches);
+      setNativeRightColumn(column);
+      // The iPhone Duo's screens: the right-hand column beside a status
+      // indicator column (a right safe-area inset). Never an iPad.
+      setNativeStatusColumn(column && hasRightSafeAreaInset());
     };
     update();
-    wide.addEventListener("change", update);
-    compactRail.addEventListener("change", update);
+    for (const query of queries) query.addEventListener("change", update);
+    // The safe area can settle after the media queries on a rotation or fold.
+    window.addEventListener("resize", update);
     return () => {
-      wide.removeEventListener("change", update);
-      compactRail.removeEventListener("change", update);
+      for (const query of queries) query.removeEventListener("change", update);
+      window.removeEventListener("resize", update);
     };
   }, []);
+
+  // The rail's rendered height, which the right-hand column system
+  // (styles.css, "Native right-hand column") stacks the floating Add buttons
+  // and Calendar tools above. Its length depends on the entitled
+  // destinations, so it is measured rather than assumed. The rail is
+  // unmounted while the keyboard is open, so this re-attaches when it returns.
+  useEffect(() => {
+    if (!nativeRightColumn || keyboardOpen || !shellElement) return;
+    const nav = shellElement.querySelector<HTMLElement>(":scope > .bottom-nav");
+    if (!nav) return;
+    const update = () => shellElement.style.setProperty("--native-dock-height", `${nav.offsetHeight}px`);
+    update();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(update);
+    observer.observe(nav);
+    return () => {
+      observer.disconnect();
+      shellElement.style.removeProperty("--native-dock-height");
+    };
+  }, [nativeRightColumn, keyboardOpen, shellElement]);
 
   useEffect(() => {
     console.info("[BIOMETRIC DEBUG]", "app_shell_branch", { path, status, initialSessionLoading });
@@ -152,7 +187,7 @@ export function AppShell({
 
   return (
     <NotificationProvider>
-      <div className={`app-shell${isNativeShell() ? " native-shell-app" : ""}${nativeWideViewport ? " native-wide-viewport" : ""}${nativeCompactRail ? " native-compact-rail" : ""}${keyboardOpen ? " native-keyboard-open" : ""}`}>
+      <div ref={setShellElement} className={`app-shell${isNativeShell() ? " native-shell-app" : ""}${nativeWideViewport ? " native-wide-viewport" : ""}${nativeCompactRail ? " native-compact-rail" : ""}${nativeRightColumn ? " native-right-column" : ""}${nativeStatusColumn ? " native-status-column" : ""}${keyboardOpen ? " native-keyboard-open" : ""}`}>
       <AppHeader
         user={user}
         homes={homes}
