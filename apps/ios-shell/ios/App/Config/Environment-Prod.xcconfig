@@ -14,5 +14,13 @@ MYKHAYA_URL_SCHEME = mykhaya-prod
 // Host only (an xcconfig treats "//" as a comment): the app loads https://$(MYKHAYA_SERVER_HOST).
 MYKHAYA_SERVER_HOST = mykhaya.app
 
+// Version and build of the PROD app and its widget (they must match). PROD is
+// the released version, never ahead of DEV; the build restarts at 1 for each
+// new version. Set them here, not in Xcode's General tab (that writes a
+// target-level override, which the build-phase check rejects). See
+// docs/engineering/versioning-and-releases.md.
+MARKETING_VERSION = 0.1.34
+CURRENT_PROJECT_VERSION = 1
+
 DEVELOPMENT_TEAM = M86392YDLQ
 CODE_SIGN_STYLE = Automatic

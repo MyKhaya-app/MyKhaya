@@ -30,7 +30,9 @@ Every environment value is version-controlled, and set in exactly one place:
 
 - `apps/ios-shell/ios/App/Config/Environment-Dev.xcconfig` and
   `Environment-Prod.xcconfig`: the `MYKHAYA_*` settings (bundle ID, App
-  Group, URL scheme, server host, display name), team and signing style.
+  Group, URL scheme, server host, display name), team and signing style,
+  and the app's version and build number (`MARKETING_VERSION`,
+  `CURRENT_PROJECT_VERSION`), shared by the app and its widget.
 - `Debug-Dev`, `Release-Dev`, `Debug-Prod`, `Release-Prod.xcconfig`: include
   one environment file and set the APNs environment. They are the base
   configurations of the project's four build configurations, which both
@@ -112,9 +114,20 @@ PROD in the simulator instead of DEV; it changes nothing else.
   checks the real values and the schemes. `mac-bootstrap.sh` runs it.
 - The **Validate MyKhaya environment** build phase on both targets fails any
   build whose settings mix environments (for example a bundle ID typed into
-  Xcode's Signing pane).
+  Xcode's Signing pane), whose version or build differs from its environment
+  file, or where PROD's version is ahead of DEV's.
 - `swift test` in `native/WidgetCore`: environment parsing and widget-tap
   routing for both apps.
+
+## Bumping the version or build
+
+Edit `MARKETING_VERSION` and `CURRENT_PROJECT_VERSION` in
+`Environment-Dev.xcconfig` (DEV) or `Environment-Prod.xcconfig` (PROD); the
+numbering rule is in
+[Versioning and Releases](../engineering/versioning-and-releases.md#ios-app-version-and-build-numbers).
+Do not use the Version and Build fields in Xcode's General tab: they write a
+target-level override that the build-phase check and the tests reject, and
+they can leave the widget on a different number from its app.
 
 ## Changing signing or identifiers
 

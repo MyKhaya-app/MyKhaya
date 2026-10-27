@@ -206,6 +206,26 @@ describe("Xcode build configurations", () => {
     }
   });
 
+  it("only the environment xcconfigs set the version and build (no project or target override)", () => {
+    const lists = [project, target("App"), target("MyKhayaWidgets")].map((o) => o.buildConfigurationList as string);
+    for (const config of lists.flatMap(configurations)) {
+      const settings = settingsOf(config);
+      expect(settings.MARKETING_VERSION, `${config.name as string} sets MARKETING_VERSION`).toBeUndefined();
+      expect(settings.CURRENT_PROJECT_VERSION, `${config.name as string} sets CURRENT_PROJECT_VERSION`).toBeUndefined();
+    }
+  });
+
+  it("numbers each app MAJOR.MINOR.PATCH (build from 1), with DEV never behind PROD", () => {
+    const [dev, prod] = (["Dev", "Prod"] as const).map((suffix) => {
+      const settings = xcconfig(`ios/App/Config/Environment-${suffix}.xcconfig`);
+      expect(settings.MARKETING_VERSION, suffix).toMatch(/^\d+\.\d+\.\d+$/);
+      expect(settings.CURRENT_PROJECT_VERSION, suffix).toMatch(/^[1-9]\d*$/);
+      return settings.MARKETING_VERSION!.split(".").map(Number);
+    });
+    const order = dev!.map((part, i) => part - prod![i]!).find((difference) => difference !== 0) ?? 0;
+    expect(order, `DEV ${dev!.join(".")} vs PROD ${prod!.join(".")}`).toBeGreaterThanOrEqual(0);
+  });
+
   it.each(CONFIGURATIONS)("$name resolves to the $app.environment identity", ({ name, flavour, app }) => {
     const appSettings = resolved("App", name);
     const widgetSettings = resolved("MyKhayaWidgets", name);
@@ -222,6 +242,11 @@ describe("Xcode build configurations", () => {
       expect(settings.MYKHAYA_APNS_BUILD_ENVIRONMENT).toBe(flavour === "Debug" ? "development" : "production");
     }
     expect(expand(appSettings.INFOPLIST_KEY_CFBundleDisplayName!, appSettings)).toBe(app.displayName);
+    const environment = xcconfig(`ios/App/Config/Environment-${app.configurationSuffix}.xcconfig`);
+    for (const key of ["MARKETING_VERSION", "CURRENT_PROJECT_VERSION"]) {
+      expect(appSettings[key], `App ${key}`).toBe(environment[key]);
+      expect(widgetSettings[key], `MyKhayaWidgets ${key}`).toBe(environment[key]);
+    }
     expect(appSettings.CODE_SIGN_ENTITLEMENTS).toBe(`App/App${flavour}.entitlements`);
     if (flavour === "Debug") expect(appSettings.CAPACITOR_DEBUG).toBe("true");
   });
@@ -383,6 +408,7 @@ describe("scripts/validate-ios-environments.sh", () => {
     const settings = resolved(kind === "app" ? "App" : "MyKhayaWidgets", configuration);
     const env = {
       ...process.env,
+      SRCROOT: join(ROOT, "ios/App"),
       CONFIGURATION: configuration,
       WRAPPER_EXTENSION: kind,
       TARGET_NAME: kind === "app" ? "App" : "MyKhayaWidgets",
@@ -394,6 +420,8 @@ describe("scripts/validate-ios-environments.sh", () => {
       MYKHAYA_DISPLAY_NAME: settings.MYKHAYA_DISPLAY_NAME,
       MYKHAYA_APNS_BUILD_ENVIRONMENT: settings.MYKHAYA_APNS_BUILD_ENVIRONMENT,
       PRODUCT_BUNDLE_IDENTIFIER: expand(settings.PRODUCT_BUNDLE_IDENTIFIER!, settings),
+      MARKETING_VERSION: settings.MARKETING_VERSION,
+      CURRENT_PROJECT_VERSION: settings.CURRENT_PROJECT_VERSION,
       ...overrides,
     };
     expect(app).toBeTruthy();
@@ -416,6 +444,9 @@ describe("scripts/validate-ios-environments.sh", () => {
       ["Debug-Prod", { MYKHAYA_APP_GROUP: dev.appGroup }],
       ["Release-Prod", { MYKHAYA_SERVER_HOST: dev.serverHost }],
       ["Release-Prod", { MYKHAYA_APNS_BUILD_ENVIRONMENT: "development" }],
+      // A version typed into Xcode's General tab (a target-level override).
+      ["Release-Prod", { MARKETING_VERSION: "0.0.1" }],
+      ["Release-Dev", { CURRENT_PROJECT_VERSION: "999" }],
       ["Debug", {}],
     ];
     for (const [configuration, overrides] of crossed) {
