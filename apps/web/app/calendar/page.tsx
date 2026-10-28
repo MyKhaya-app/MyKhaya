@@ -10,6 +10,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Clock,
+  Copy,
   Layers,
   MapPin,
   Plus,
@@ -999,6 +1000,8 @@ function EventDetails({
   homeName,
   canDelete,
   onDelete,
+  onCopy,
+  canCopy,
   busy = false,
 }: {
   event: EventOccurrence;
@@ -1013,6 +1016,8 @@ function EventDetails({
   homeName: string;
   canDelete: boolean;
   onDelete: () => Promise<void>;
+  onCopy: () => void;
+  canCopy: boolean;
   busy?: boolean;
 }) {
   const { dateLine, timeLine } = eventWhenSummary(event, timeZone);
@@ -1125,15 +1130,74 @@ function EventDetails({
         </div>
       )}
 
-      {canDelete && (
+      {(canCopy || canDelete) && (
         <div className="event-view-actions">
+          {canCopy && (
+            <button className="secondary" type="button" disabled={busy} onClick={onCopy}>
+              <Copy size={16} aria-hidden="true" />
+              Copy event
+            </button>
+          )}
+          {canDelete && (
           <button className="danger-link" type="button" disabled={busy} onClick={onDelete}>
             <Trash2 size={16} aria-hidden="true" />
             Delete event
           </button>
+          )}
         </div>
       )}
     </div>
+  );
+}
+
+function CopyEventSheet({
+  event,
+  timeZone,
+  busy,
+  error,
+  onCopy,
+  onCancel,
+}: {
+  event: EventOccurrence;
+  timeZone: string;
+  busy: boolean;
+  error: string;
+  onCopy: (dates: string[], startTime: string | null, endTime: string | null) => void;
+  onCancel: () => void;
+}) {
+  const eventZone = event.timezone || timeZone;
+  const sourceDate = event.is_all_day ? dateKey(event.start_at) : zonedDateKey(event.start_at, eventZone);
+  const defaultDestination = (() => {
+    const next = new Date(`${sourceDate}T00:00:00Z`);
+    next.setUTCDate(next.getUTCDate() + 1);
+    return dateKey(next);
+  })();
+  const [date, setDate] = useState(defaultDestination);
+  const [dates, setDates] = useState<string[]>([defaultDestination]);
+  const [startTime, setStartTime] = useState(() => displayDate(event.start_at, { hour: "2-digit", minute: "2-digit", hour12: false }, eventZone));
+  const [endTime, setEndTime] = useState(() => displayDate(event.end_at, { hour: "2-digit", minute: "2-digit", hour12: false }, eventZone));
+
+  function addDate() {
+    if (date && !dates.includes(date)) setDates((current) => [...current, date].sort());
+  }
+  function submit() {
+    if (date && !dates.includes(date)) setDates((current) => [...current, date].sort());
+    onCopy(Array.from(new Set(date && !dates.includes(date) ? [...dates, date] : dates)), event.is_all_day ? null : startTime, event.is_all_day ? null : endTime);
+  }
+  return (
+    <BottomSheet title="Copy event" onDismiss={busy ? () => {} : onCancel}>
+      <div className="copy-event-form">
+        <p className="quiet-state"><strong>{event.title}</strong><br />{eventWhenSummary(event, timeZone).dateLine}</p>
+        <label>Destination date<input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></label>
+        <button className="secondary" type="button" onClick={addDate} disabled={!date || dates.includes(date)}>Add another date</button>
+        <div className="copy-event-dates" aria-label="Selected destination dates">
+          {dates.map((item) => <button key={item} type="button" className="chip" onClick={() => setDates((current) => current.filter((value) => value !== item))}>{item} ×</button>)}
+        </div>
+        {!event.is_all_day && <div className="copy-event-times"><label>Start time<input type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} /></label><label>End time<input type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} /></label></div>}
+        {error && <p className="notice error" role="alert">{error}</p>}
+        <button type="button" onClick={submit} disabled={busy || dates.length === 0}>{busy ? "Copying…" : `Copy event${dates.length > 1 ? ` (${dates.length})` : ""}`}</button>
+      </div>
+    </BottomSheet>
   );
 }
 
@@ -1249,6 +1313,7 @@ export default function CalendarPage() {
   // no request has been sent yet at the point this is set.
   const [pendingEditPayload, setPendingEditPayload] = useState<EventPayload | null>(null);
   const [pendingDelete, setPendingDelete] = useState(false);
+  const [copyingEvent, setCopyingEvent] = useState(false);
   const [scopeBusy, setScopeBusy] = useState(false);
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [error, setError] = useState("");
@@ -1616,6 +1681,7 @@ export default function CalendarPage() {
     setEditingSelected(false);
     setPendingEditPayload(null);
     setPendingDelete(false);
+    setCopyingEvent(false);
   }
 
   useEffect(() => {
@@ -1789,6 +1855,27 @@ export default function CalendarPage() {
           ? cause.message
           : "This event changed. Reload and try again.",
       );
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function copySelectedEvent(dates: string[], startTime: string | null, endTime: string | null) {
+    if (!activeHomeId || !selectedEvent) return;
+    setError("");
+    setBusy(true);
+    try {
+      await api.copyEvent(activeHomeId, selectedEvent.event_id, {
+        destination_dates: dates,
+        start_time: startTime,
+        end_time: endTime,
+      });
+      const count = dates.length;
+      closeEventSheet();
+      setError(`${count} event${count === 1 ? "" : "s"} copied`);
+      await load({ syncWidget: true });
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : "We could not copy that event.");
     } finally {
       setBusy(false);
     }
@@ -2463,6 +2550,7 @@ export default function CalendarPage() {
           const canDelete = selectedEvent.share_id
             ? canDeleteSharedEvent(selectedEvent)
             : canDeleteEvent(activeHome?.capabilities ?? []);
+          const canCopy = !selectedEvent.share_id && selectedEvent.recurrence === "none" && canEdit;
           return (
             <BottomSheet
               title={editingSelected ? "Edit event" : selectedEvent.title}
@@ -2550,12 +2638,25 @@ export default function CalendarPage() {
                   homeName={activeHome?.name ?? "Home calendar"}
                   canDelete={canDelete}
                   onDelete={remove}
+                  onCopy={() => setCopyingEvent(true)}
+                  canCopy={canCopy}
                   busy={busy}
                 />
               )}
             </BottomSheet>
           );
         })()}
+
+        {selectedEvent && copyingEvent && (
+          <CopyEventSheet
+            event={selectedEvent}
+            timeZone={calendarTimezone}
+            busy={busy}
+            error={error}
+            onCancel={() => { setCopyingEvent(false); setError(""); }}
+            onCopy={copySelectedEvent}
+          />
+        )}
 
         {selectedEvent && pendingEditPayload && (
           <RecurrenceScopeSheet

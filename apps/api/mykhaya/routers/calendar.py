@@ -63,6 +63,8 @@ from mykhaya.schemas import (
     CalendarListResponse,
     EventActivityResponse,
     EventAttendanceUpdate,
+    EventCopyRequest,
+    EventCopyResponse,
     EventCreate,
     EventDetailResponse,
     EventLabelCreate,
@@ -1551,6 +1553,149 @@ async def create_event(
 
     label = await db.get(CalendarEventLabel, event.label_id) if event.label_id else None
     return _occurrence(event, _own_occurrence(event), label, requested_members, calendar_row.color)
+
+
+@router.post("/{home_id}/events/{event_id}/copy", response_model=EventCopyResponse, status_code=201)
+async def copy_event(
+    home_id: uuid.UUID,
+    event_id: uuid.UUID,
+    body: EventCopyRequest,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> EventCopyResponse:
+    """Create independent, non-recurring copies of an event occurrence."""
+    membership = await require_capability(home_id, Capability.calendar_create, auth, db)
+    capabilities = await capabilities_for(db, membership)
+    source = await db.scalar(
+        select(CalendarEvent).where(
+            CalendarEvent.id == event_id,
+            CalendarEvent.group_id == home_id,
+            CalendarEvent.deleted_at.is_(None),
+            _personal_calendar_visibility_filter(home_id, auth.user.id),
+            or_(
+                CalendarEvent.created_by == auth.user.id,
+                CalendarEvent.id.in_(
+                    select(CalendarEventMember.event_id).where(
+                        CalendarEventMember.user_id == auth.user.id
+                    )
+                ),
+                Capability.calendar_view_all in capabilities,
+            ),
+        )
+    )
+    if source is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That event could not be found")
+    if source.recurrence != RecurrencePattern.none:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY,
+            "Copy a specific occurrence of a recurring event",
+        )
+
+    calendar_row = await db.get(HomeCalendar, source.calendar_id)
+    if calendar_row is None or calendar_row.group_id != home_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That calendar could not be found")
+    if calendar_row.owner_user_id is not None:
+        if calendar_row.owner_user_id != auth.user.id:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "That calendar could not be found")
+        await _require_personal_calendar_writable(db, home_id, auth.user.id)
+    else:
+        _require_calendar_writable(await _calendar_access(db, home_id), calendar_row.id)
+
+    member_ids = sorted(set((await db.scalars(
+        select(CalendarEventMember.user_id).where(CalendarEventMember.event_id == source.id)
+    )).all()))
+    label = await db.get(CalendarEventLabel, source.label_id) if source.label_id else None
+    if len(member_ids) > 1:
+        await require_entitlement(db, home_id, "events.shared.enabled")
+    tz = ZoneInfo(source.timezone)
+    local_start = source.start_at.astimezone(tz)
+    local_end = source.end_at.astimezone(tz)
+    day_span = (local_end.date() - local_start.date()).days
+    copied: list[EventOccurrence] = []
+    for destination in body.destination_dates:
+        if source.is_all_day:
+            start_at = datetime.combine(destination, datetime.min.time(), tzinfo=UTC)
+            end_at = datetime.combine(
+                destination + timedelta(days=day_span), datetime.min.time(), tzinfo=UTC
+            )
+        else:
+            start_clock = body.start_time or local_start.timetz().replace(tzinfo=None)
+            end_clock = body.end_time or local_end.timetz().replace(tzinfo=None)
+            start_at = datetime.combine(destination, start_clock, tzinfo=tz)
+            end_at = datetime.combine(destination + timedelta(days=day_span), end_clock, tzinfo=tz)
+            if end_at <= start_at:
+                raise HTTPException(
+                    status.HTTP_422_UNPROCESSABLE_ENTITY,
+                    "Copy times must produce a valid event",
+                )
+        # A retry of the same copy request must not fan out another identical
+        # event. This deliberately scopes the guard to the actor and copied
+        # event's complete persisted shape; unrelated user-created duplicates
+        # remain valid.
+        existing = await db.scalar(
+            select(CalendarEvent).where(
+                CalendarEvent.group_id == home_id,
+                CalendarEvent.calendar_id == source.calendar_id,
+                CalendarEvent.created_by == auth.user.id,
+                CalendarEvent.deleted_at.is_(None),
+                CalendarEvent.title == source.title,
+                CalendarEvent.start_at == start_at,
+                CalendarEvent.end_at == end_at,
+                CalendarEvent.description == source.description,
+                CalendarEvent.location_text == source.location_text,
+            )
+        )
+        if existing is not None:
+            existing_members = sorted(set((await db.scalars(
+                select(CalendarEventMember.user_id).where(
+                    CalendarEventMember.event_id == existing.id
+                )
+            )).all()))
+            copied.append(
+                _occurrence(
+                    existing, _own_occurrence(existing), label, existing_members, calendar_row.color
+                )
+            )
+            continue
+        event = CalendarEvent(
+            group_id=home_id, calendar_id=source.calendar_id, label_id=source.label_id,
+            title=source.title, description=source.description, start_at=start_at, end_at=end_at,
+            is_all_day=source.is_all_day,
+            timezone=source.timezone,
+            location_text=source.location_text,
+            reminder_minutes=source.reminder_minutes, recurrence=RecurrencePattern.none,
+            recurrence_interval=1, created_by=auth.user.id, last_edited_by=auth.user.id,
+        )
+        db.add(event)
+        await db.flush()
+        for user_id in member_ids:
+            db.add(CalendarEventMember(group_id=home_id, event_id=event.id, user_id=user_id))
+        await _record_activity(db, event, auth.user.id, "event.copied", "copied this event")
+        audit(db, request, "calendar.event.copied", auth.user.id, home_id, "event", event.id)
+        await _notify_members_added(
+            db,
+            settings,
+            event,
+            auth.user.id,
+            auth.user.display_name,
+            set(member_ids),
+            event.version,
+        )
+        await _notify_visible_members_event_created(
+            db, settings, event, auth.user.id, auth.user.display_name,
+            await home_viewer_ids_for_event(db, event) - set(member_ids),
+        )
+        await notify_calendar_share_recipients(
+            db, settings, event, actor_user_id=auth.user.id, actor_name=auth.user.display_name,
+            action="created", version_marker=event.version,
+        )
+        copied.append(
+            _occurrence(event, _own_occurrence(event), label, member_ids, calendar_row.color)
+        )
+    await db.commit()
+    return EventCopyResponse(items=copied)
 
 
 @router.put("/{home_id}/events/{event_id}/attendance")

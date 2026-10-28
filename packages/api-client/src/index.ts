@@ -1153,6 +1153,15 @@ export class MyKhayaClient {
       `/homes/${encodeURIComponent(homeId)}/events`,
       { method: "POST", body: JSON.stringify(body) },
     );
+  copyEvent = (
+    homeId: string,
+    eventId: string,
+    body: import("@mykhaya/shared-types").EventCopyPayload,
+  ) =>
+    this.request<import("@mykhaya/shared-types").EventCopyResponse>(
+      `/homes/${encodeURIComponent(homeId)}/events/${encodeURIComponent(eventId)}/copy`,
+      { method: "POST", body: JSON.stringify(body) },
+    );
   updateEvent = (
     homeId: string,
     eventId: string,

@@ -165,6 +165,16 @@ export interface EventPayload {
   recurrence_count?: number | null;
 }
 
+export interface EventCopyPayload {
+  destination_dates: string[];
+  start_time?: string | null;
+  end_time?: string | null;
+}
+
+export interface EventCopyResponse {
+  items: EventOccurrence[];
+}
+
 export type CalendarCommercialAccess = "normal" | "read_only_due_to_plan";
 
 export interface HomeCalendar {
