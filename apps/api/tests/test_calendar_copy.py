@@ -29,3 +29,25 @@ def test_copy_request_accepts_multiple_dates_and_times() -> None:
         end_time=time(19, 0),
     )
     assert len(request.destination_dates) == 2
+
+
+def test_copy_request_accepts_independent_destination_times() -> None:
+    request = EventCopyRequest(
+        destinations=[
+            {"date": date(2026, 11, 5), "start_time": time(15, 0), "end_time": time(23, 0)},
+            {"date": date(2026, 11, 7), "start_time": time(16, 0), "end_time": time(22, 0)},
+        ]
+    )
+    assert request.destinations is not None
+    assert request.destinations[0].start_time == time(15, 0)
+    assert request.destinations[1].end_time == time(22, 0)
+
+
+def test_copy_request_rejects_duplicate_independent_destination_dates() -> None:
+    with pytest.raises(ValidationError, match="unique"):
+        EventCopyRequest(
+            destinations=[
+                {"date": date(2026, 11, 5)},
+                {"date": date(2026, 11, 5)},
+            ]
+        )

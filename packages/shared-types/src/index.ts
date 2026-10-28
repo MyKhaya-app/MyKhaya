@@ -165,8 +165,17 @@ export interface EventPayload {
   recurrence_count?: number | null;
 }
 
+export interface EventCopyDestination {
+  date: string;
+  start_time?: string | null;
+  end_time?: string | null;
+}
+
 export interface EventCopyPayload {
-  destination_dates: string[];
+  /** Preferred row-based payload; each destination can use its own times. */
+  destinations?: EventCopyDestination[];
+  /** Legacy shared-time shape retained for older clients. */
+  destination_dates?: string[];
   start_time?: string | null;
   end_time?: string | null;
 }

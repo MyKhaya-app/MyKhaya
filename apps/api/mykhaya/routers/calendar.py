@@ -1614,15 +1614,24 @@ async def copy_event(
     local_end = source.end_at.astimezone(tz)
     day_span = (local_end.date() - local_start.date()).days
     copied: list[EventOccurrence] = []
-    for destination in body.destination_dates:
+    destinations = body.destinations or [
+        EventCopyDestination(
+            date=destination,
+            start_time=body.start_time,
+            end_time=body.end_time,
+        )
+        for destination in body.destination_dates
+    ]
+    for destination_row in destinations:
+        destination = destination_row.date
         if source.is_all_day:
             start_at = datetime.combine(destination, datetime.min.time(), tzinfo=UTC)
             end_at = datetime.combine(
                 destination + timedelta(days=day_span), datetime.min.time(), tzinfo=UTC
             )
         else:
-            start_clock = body.start_time or local_start.timetz().replace(tzinfo=None)
-            end_clock = body.end_time or local_end.timetz().replace(tzinfo=None)
+            start_clock = destination_row.start_time or local_start.timetz().replace(tzinfo=None)
+            end_clock = destination_row.end_time or local_end.timetz().replace(tzinfo=None)
             start_at = datetime.combine(destination, start_clock, tzinfo=tz)
             end_at = datetime.combine(destination + timedelta(days=day_span), end_clock, tzinfo=tz)
             if end_at <= start_at:

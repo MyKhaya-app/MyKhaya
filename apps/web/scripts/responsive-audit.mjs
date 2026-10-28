@@ -105,6 +105,7 @@ const consumerRoutes = [
 ];
 const viewports = [
   { name: "320x568", width: 320, height: 568 },
+  { name: "375x667", width: 375, height: 667 },
   { name: "393x852", width: 393, height: 852 },
   { name: "430x932", width: 430, height: 932 },
   { name: "768x1024", width: 768, height: 1024 },
@@ -269,7 +270,7 @@ async function auditRoute(page, route, viewport, authenticated) {
 
 async function auditCopyEvent(page) {
   const copyResults = [];
-  for (const viewport of viewports.filter(({ width }) => [320, 393, 430].includes(width))) {
+  for (const viewport of viewports.filter(({ width }) => [320, 375, 393, 430].includes(width))) {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await page.goto(`${BASE}/calendar`, { waitUntil: "domcontentloaded", timeout: 30000 });
     await page.waitForTimeout(700);
@@ -300,25 +301,49 @@ async function auditCopyEvent(page) {
     await copyButton.click();
     await page.waitForTimeout(250);
     const copySheet = page.locator(".bottom-sheet").last();
-    const dateInput = copySheet.locator('input[type="date"]');
+    const dateInputs = copySheet.locator('input[type="date"]');
     const addDate = copySheet.getByRole("button", { name: /Add another date/i });
     const issues = [];
-    if (!(await dateInput.count())) issues.push("Destination date input missing");
-    if (await dateInput.count() && await addDate.count()) {
-      await dateInput.fill("2030-11-05");
+    if (await dateInputs.count() !== 1) issues.push("Expected one empty initial destination row");
+    if (await dateInputs.count() && await dateInputs.nth(0).inputValue()) issues.push("Initial destination date was preselected");
+    const initialCopyButton = copySheet.getByRole("button", { name: "Copy event", exact: true });
+    if (await initialCopyButton.count() && !(await initialCopyButton.isDisabled())) issues.push("Copy action was enabled before a destination date was selected");
+    if (await dateInputs.count() && await addDate.count()) {
+      await dateInputs.nth(0).fill("2030-11-07");
+      if (await dateInputs.nth(0).inputValue() !== "2030-11-07") issues.push("Changing the primary destination date did not replace its value");
+      await dateInputs.nth(0).fill("2030-11-05");
+      const firstTimes = copySheet.locator('input[type="time"]');
+      if (await firstTimes.count() === 2) {
+        await firstTimes.nth(0).fill("15:00");
+        await firstTimes.nth(1).fill("23:00");
+      }
       await addDate.click();
-      await dateInput.fill("2030-11-07");
-      await addDate.click();
+      await page.waitForTimeout(100);
+      const rowsAfterAdd = copySheet.locator('input[type="date"]');
+      if (await rowsAfterAdd.count() !== 2) issues.push("Add another date did not create an independent row");
+      if (await rowsAfterAdd.count() >= 2) await rowsAfterAdd.nth(1).fill("2030-11-07");
+      const secondTimes = copySheet.locator('input[type="time"]');
+      if (await secondTimes.count() === 4) {
+        await secondTimes.nth(2).fill("16:00");
+        await secondTimes.nth(3).fill("22:00");
+      }
+      const remove = copySheet.getByRole("button", { name: /Remove destination/i });
+      if (await remove.count()) {
+        await remove.last().click();
+        await page.waitForTimeout(100);
+        if (await copySheet.locator('input[type="date"]').count() !== 1) issues.push("Removing a destination did not preserve the primary row");
+        await addDate.click();
+        await copySheet.locator('input[type="date"]').nth(1).fill("2030-11-07");
+        const restoredTimes = copySheet.locator('input[type="time"]');
+        if (await restoredTimes.count() === 4) {
+          await restoredTimes.nth(2).fill("16:00");
+          await restoredTimes.nth(3).fill("22:00");
+        }
+      }
     }
     const timeInputs = copySheet.locator('input[type="time"]');
-    if (await timeInputs.count() === 2) {
-      await timeInputs.nth(0).fill("09:15");
-      await timeInputs.nth(1).fill("10:45");
-    } else if (await timeInputs.count() !== 0) {
-      issues.push("Expected both start and end time inputs for a timed event");
-    }
-    const chipCount = await copySheet.locator(".copy-event-dates .chip").count();
-    if (chipCount < 2) issues.push("Multiple selected dates were not rendered");
+    if (await timeInputs.count() !== 4) issues.push("Expected independent start/end inputs for both destination rows");
+    if (!(await copySheet.getByRole("button", { name: /Copy event \(2\)/i }).count())) issues.push("Multiple destination action was not enabled");
     const layout = await inspectLayout(page, true);
     issues.push(...layout.issues.map((issue) => issue.message));
     const screenshot = await capture(page, `calendar-copy-event-${viewport.name}`, viewport, "calendar-copy-event");

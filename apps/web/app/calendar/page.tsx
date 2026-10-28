@@ -1162,48 +1162,71 @@ function CopyEventSheet({
   timeZone: string;
   busy: boolean;
   error: string;
-  onCopy: (dates: string[], startTime: string | null, endTime: string | null) => void;
+  onCopy: (destinations: { date: string; startTime: string; endTime: string }[]) => void;
   onCancel: () => void;
 }) {
   const eventZone = event.timezone || timeZone;
-  const sourceDate = event.is_all_day ? dateKey(event.start_at) : zonedDateKey(event.start_at, eventZone);
-  const defaultDestination = (() => {
-    const next = new Date(`${sourceDate}T00:00:00Z`);
-    next.setUTCDate(next.getUTCDate() + 1);
-    return dateKey(next);
-  })();
-  const [date, setDate] = useState(defaultDestination);
-  const [dates, setDates] = useState<string[]>([defaultDestination]);
-  const [startTime, setStartTime] = useState(() => displayDate(event.start_at, { hour: "2-digit", minute: "2-digit", hour12: false }, eventZone));
-  const [endTime, setEndTime] = useState(() => displayDate(event.end_at, { hour: "2-digit", minute: "2-digit", hour12: false }, eventZone));
+  const sourceSummary = eventWhenSummary(event, timeZone);
+  const sourceStartTime = displayDate(event.start_at, { hour: "2-digit", minute: "2-digit", hour12: false }, eventZone);
+  const sourceEndTime = displayDate(event.end_at, { hour: "2-digit", minute: "2-digit", hour12: false }, eventZone);
+  type DestinationDraft = { id: number; date: string; startTime: string; endTime: string };
+  const nextId = useRef(2);
+  const [destinations, setDestinations] = useState<DestinationDraft[]>([
+    { id: 1, date: "", startTime: sourceStartTime, endTime: sourceEndTime },
+  ]);
 
-  function addDate() {
-    if (date && !dates.includes(date)) setDates((current) => [...current, date].sort());
+  function updateDestination(id: number, field: "date" | "startTime" | "endTime", value: string) {
+    setDestinations((current) => current.map((destination) => destination.id === id ? { ...destination, [field]: value } : destination));
   }
-  function submit() {
-    if (date && !dates.includes(date)) setDates((current) => [...current, date].sort());
-    onCopy(Array.from(new Set(date && !dates.includes(date) ? [...dates, date] : dates)), event.is_all_day ? null : startTime, event.is_all_day ? null : endTime);
+  function addDestination() {
+    setDestinations((current) => [
+      ...current,
+      { id: nextId.current++, date: "", startTime: sourceStartTime, endTime: sourceEndTime },
+    ]);
   }
-  const displayDestination = (value: string) =>
-    displayDate(`${value}T00:00:00Z`, { weekday: "short", day: "numeric", month: "short", year: "numeric" }, "UTC");
+  function removeDestination(id: number) {
+    setDestinations((current) => current.filter((destination) => destination.id !== id));
+  }
+  const dates = destinations.map((destination) => destination.date).filter(Boolean);
+  const hasDuplicateDates = new Set(dates).size !== dates.length;
+  const hasInvalidTimes = !event.is_all_day && destinations.some((destination) =>
+    !destination.startTime || !destination.endTime || destination.endTime <= destination.startTime,
+  );
+  const canSubmit = destinations.length > 0 && destinations.every((destination) => destination.date) && !hasDuplicateDates && !hasInvalidTimes;
+
   return (
     <BottomSheet
       title="Copy event"
       onDismiss={busy ? () => {} : onCancel}
       footer={
-        <button type="button" className="sheet-primary" onClick={submit} disabled={busy || dates.length === 0}>
-          {busy ? "Copying…" : `Copy event${dates.length > 1 ? ` (${dates.length})` : ""}`}
+        <button type="button" className="sheet-primary" onClick={() => canSubmit && onCopy(destinations)} disabled={busy || !canSubmit}>
+          {busy ? "Copying…" : `Copy event${destinations.length > 1 ? ` (${destinations.length})` : ""}`}
         </button>
       }
     >
       <div className="copy-event-form">
-        <p className="quiet-state"><strong>{event.title}</strong><br />{eventWhenSummary(event, timeZone).dateLine}</p>
-        <label>Destination date<input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></label>
-        <button className="secondary" type="button" onClick={addDate} disabled={!date || dates.includes(date)}>Add another date</button>
-        <div className="copy-event-dates" aria-label="Selected destination dates">
-          {dates.map((item) => <button key={item} type="button" className="chip" onClick={() => setDates((current) => current.filter((value) => value !== item))}>{displayDestination(item)} ×</button>)}
+        <div className="copy-event-source" aria-label="Original event">
+          <span className="eyebrow">Original event</span>
+          <strong>{event.title}</strong>
+          <span>{sourceSummary.dateLine}</span>
+          <span>{sourceSummary.timeLine}</span>
         </div>
-        {!event.is_all_day && <div className="copy-event-times"><label>Start time<input type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} /></label><label>End time<input type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} /></label></div>}
+        <div className="copy-event-destinations" aria-label="Copy destinations">
+          {destinations.map((destination, index) => (
+            <fieldset className="copy-event-destination" key={destination.id}>
+              <legend>Destination {index + 1}</legend>
+              <label>Choose a date<input type="date" placeholder="Choose a date" value={destination.date} onChange={(e) => updateDestination(destination.id, "date", e.target.value)} aria-label={`Destination ${index + 1} date`} /></label>
+              {!event.is_all_day && <div className="copy-event-times">
+                <label>Start time<input type="time" value={destination.startTime} onChange={(e) => updateDestination(destination.id, "startTime", e.target.value)} aria-label={`Destination ${index + 1} start time`} /></label>
+                <label>End time<input type="time" value={destination.endTime} onChange={(e) => updateDestination(destination.id, "endTime", e.target.value)} aria-label={`Destination ${index + 1} end time`} /></label>
+              </div>}
+              {index > 0 && <button className="secondary copy-event-remove" type="button" onClick={() => removeDestination(destination.id)}>Remove destination</button>}
+            </fieldset>
+          ))}
+        </div>
+        <button className="secondary" type="button" onClick={addDestination}>Add another date</button>
+        {hasDuplicateDates && <p className="notice error" role="alert">Choose a different date for each destination.</p>}
+        {hasInvalidTimes && <p className="notice error" role="alert">Each destination needs an end time after its start time.</p>}
         {error && <p className="notice error" role="alert">{error}</p>}
       </div>
     </BottomSheet>
@@ -1869,17 +1892,19 @@ export default function CalendarPage() {
     }
   }
 
-  async function copySelectedEvent(dates: string[], startTime: string | null, endTime: string | null) {
+  async function copySelectedEvent(destinations: { date: string; startTime: string; endTime: string }[]) {
     if (!activeHomeId || !selectedEvent) return;
     setError("");
     setBusy(true);
     try {
       await api.copyEvent(activeHomeId, selectedEvent.event_id, {
-        destination_dates: dates,
-        start_time: startTime,
-        end_time: endTime,
+        destinations: destinations.map((destination) => ({
+          date: destination.date,
+          start_time: selectedEvent.is_all_day ? null : destination.startTime,
+          end_time: selectedEvent.is_all_day ? null : destination.endTime,
+        })),
       });
-      const count = dates.length;
+      const count = destinations.length;
       closeEventSheet();
       setError(`${count} event${count === 1 ? "" : "s"} copied`);
       await load({ syncWidget: true });
