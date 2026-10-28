@@ -8,6 +8,8 @@ coverage/
 !.env.example
 !.env.dev.example
 !.env.production.example
+.env.responsive-audit.local
+!.env.responsive-audit.local.example
 compose.override.yml
 __pycache__/
 *.py[cod]

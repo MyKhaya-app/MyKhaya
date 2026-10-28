@@ -5326,14 +5326,18 @@ select.icon-row-control {
 .copy-event-times label {
   display: grid;
   gap: 0.4rem;
+  min-width: 0;
 }
 .copy-event-form input {
+  box-sizing: border-box;
   min-height: 44px;
+  min-width: 0;
+  width: 100%;
 }
 .copy-event-times {
   display: grid;
   gap: 0.75rem;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
 }
 .copy-event-dates {
   display: flex;
@@ -12358,7 +12362,10 @@ a.family-feed-row {
    range where the taller wrapped dock is actually possible. */
 @media (min-width: 760px) and (max-width: 1099px) {
   .app-shell:not(.native-shell-app) .rr-fab {
-    bottom: calc(var(--safe-bottom) + 13rem);
+    bottom: calc(var(--safe-bottom) + 16rem);
+  }
+  .app-shell:not(.native-shell-app) .calendar-fab {
+    bottom: calc(var(--safe-bottom) + 16rem);
   }
 }
 

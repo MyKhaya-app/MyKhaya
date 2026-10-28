@@ -1184,18 +1184,27 @@ function CopyEventSheet({
     if (date && !dates.includes(date)) setDates((current) => [...current, date].sort());
     onCopy(Array.from(new Set(date && !dates.includes(date) ? [...dates, date] : dates)), event.is_all_day ? null : startTime, event.is_all_day ? null : endTime);
   }
+  const displayDestination = (value: string) =>
+    displayDate(`${value}T00:00:00Z`, { weekday: "short", day: "numeric", month: "short", year: "numeric" }, "UTC");
   return (
-    <BottomSheet title="Copy event" onDismiss={busy ? () => {} : onCancel}>
+    <BottomSheet
+      title="Copy event"
+      onDismiss={busy ? () => {} : onCancel}
+      footer={
+        <button type="button" className="sheet-primary" onClick={submit} disabled={busy || dates.length === 0}>
+          {busy ? "Copying…" : `Copy event${dates.length > 1 ? ` (${dates.length})` : ""}`}
+        </button>
+      }
+    >
       <div className="copy-event-form">
         <p className="quiet-state"><strong>{event.title}</strong><br />{eventWhenSummary(event, timeZone).dateLine}</p>
         <label>Destination date<input type="date" value={date} onChange={(e) => setDate(e.target.value)} /></label>
         <button className="secondary" type="button" onClick={addDate} disabled={!date || dates.includes(date)}>Add another date</button>
         <div className="copy-event-dates" aria-label="Selected destination dates">
-          {dates.map((item) => <button key={item} type="button" className="chip" onClick={() => setDates((current) => current.filter((value) => value !== item))}>{item} ×</button>)}
+          {dates.map((item) => <button key={item} type="button" className="chip" onClick={() => setDates((current) => current.filter((value) => value !== item))}>{displayDestination(item)} ×</button>)}
         </div>
         {!event.is_all_day && <div className="copy-event-times"><label>Start time<input type="time" value={startTime} onChange={(e) => setStartTime(e.target.value)} /></label><label>End time<input type="time" value={endTime} onChange={(e) => setEndTime(e.target.value)} /></label></div>}
         {error && <p className="notice error" role="alert">{error}</p>}
-        <button type="button" onClick={submit} disabled={busy || dates.length === 0}>{busy ? "Copying…" : `Copy event${dates.length > 1 ? ` (${dates.length})` : ""}`}</button>
       </div>
     </BottomSheet>
   );
