@@ -289,9 +289,10 @@ navigation, no obscured content and an accessibility review. Do not claim iOS
 validation when only Windows or Chromium tests ran. Keep private family and
 child data out of screenshots shared in issues or PRs.
 
-`pnpm --filter @mykhaya/ios-shell test` is **not** run by CI today: the
-`quality` workflow only tests `@mykhaya/web`. Run it locally for any change under
-`apps/ios-shell` until CI covers it.
+The `quality` workflow's `ios-shell` job runs `pnpm --filter @mykhaya/ios-shell
+typecheck` and `test` on every push and PR to `dev` and `main`. It needs no Mac.
+Xcode builds, `validate-ios-environments.sh` (with real `xcodebuild` output) and
+`swift test` still run only on the Mac.
 
 ## 7. Mac and Xcode workflow
 
@@ -372,7 +373,6 @@ Verified from repository contents on 28 October 2026. Re-check before acting.
 - **Biometric binding.** Keychain items are not bound to the enrolled biometry
   set ([§5](#5-native-security-and-integration)).
 - **Widget Lock Screen redaction** is not implemented.
-- **CI** does not run the ios-shell tests ([§6](#6-physical-validation-and-acceptance)).
 - **Native copy drift.** No test checks that `ios/App/App/*.swift` matches
   `native/plugin/` ([§2](#2-native-source-ownership)).
 - **Product-quality follow-ups to reproduce, not yet confirmed defects:**

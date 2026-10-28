@@ -71,3 +71,18 @@ jobs:
       - name: Shut down
         if: always()
         run: docker compose --profile tools down -v
+  # The iOS shell's tests check the committed Xcode project, entitlements and
+  # Info.plists against the DEV/PROD matrix and run the build-phase validator
+  # (docs/mobile/ios-environments.md). They need no Mac, so they run here on
+  # every change; Xcode builds and `swift test` remain Mac-only.
+  ios-shell:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: iOS shell type check and tests
+        run: |
+          docker run --rm -v "$PWD:/workspace" -w /workspace node:22.23.4-alpine3.24 sh -c '
+            corepack enable && corepack prepare pnpm@10.14.0 --activate &&
+            pnpm install --frozen-lockfile --filter "@mykhaya/ios-shell..." &&
+            pnpm --filter @mykhaya/ios-shell typecheck &&
+            pnpm --filter @mykhaya/ios-shell test'
