@@ -11,6 +11,8 @@ PWA or native-shell change, read:
 - `docs/engineering/definition-of-done.md`
 - `docs/architecture/adr/0012-capacitor-ios-shell.md`
 - `docs/architecture/adr/0013-hybrid-web-and-native-presentation.md`
+- `docs/engineering/ios-engineering-standards.md` (when the iOS app can be
+  affected)
 
 The current native/mobile UI is the protected baseline unless the prompt
 explicitly requests a mobile change. Desktop/tablet changes must not alter

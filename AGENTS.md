@@ -14,6 +14,9 @@ PWA or native-shell change, read the relevant standards and architecture records
 9. `docs/architecture/adr/0012-capacitor-ios-shell.md`
 10. `docs/architecture/adr/0013-hybrid-web-and-native-presentation.md`
 11. `docs/architecture/adr/0014-capacitor-android-shell.md`
+12. `docs/engineering/ios-engineering-standards.md` (for any change that can
+    affect the iOS app: `apps/ios-shell`, native layout states, Keychain,
+    biometrics, push, widgets or DEV/PROD identity)
 
 The current native/mobile UI is the protected baseline. Desktop and tablet work
 must not alter mobile geometry, safe areas, fixed navigation, sheets, viewport

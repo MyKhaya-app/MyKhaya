@@ -6,6 +6,8 @@ This document and the linked architecture, security and design standards are the
 
 Where implementation and documentation conflict, stop, identify the correct intended behaviour and update both. Do not allow silent divergence.
 
+Platform-specific standards: [Mobile Standards](mobile-standards.md), [UI Platform Standards](ui-platform-standards.md) and, for the native iOS app, [iOS Engineering Standards](ios-engineering-standards.md).
+
 ## Core rules inherited from Kaya
 
 - Inspect before changing.
