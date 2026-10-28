@@ -2,6 +2,21 @@
 
 **Status:** Accepted (Phase 3 of the native-client track; builds on [ADR 0010](./0010-mobile-bearer-session-tokens.md) and [ADR 0011](./0011-single-pwa-retire-mobile-app.md)).
 
+> **Updated 28 October 2026.** The decision stands; some details below
+> describe the Phase 3 state and have since changed. Current behaviour is in
+> [iOS DEV and PROD apps](../../mobile/ios-environments.md) and
+> [iOS Engineering Standards](../../engineering/ios-engineering-standards.md):
+>
+> - The installed apps take their live host from the Xcode build configuration
+>   (`MainViewController.instanceDescriptor()`), and that host is the **only**
+>   allowed navigation host. `api.dev.mykhaya.app` and `api.mykhaya.app` are no
+>   longer allowed: native API calls use the frontend origin's `/api/v1`.
+> - `MYKHAYA_IOS_ENV` defaults to `development`, and only feeds Capacitor CLI
+>   fields; it does not select the installed app's backend.
+> - The `ios/` Xcode project is committed, and Keychain-backed persistent login
+>   ships (Phase 4). The "Consequences" items about both are historical.
+> - The Stripe billing navigation finding is still open.
+
 ## Decision
 
 MyKhaya's first real iOS packaging is a thin Capacitor shell, `apps/ios-shell`, that loads the live, deployed `apps/web` frontend inside a WKWebView (`server.url` in `capacitor.config.ts`) rather than bundling a static copy of the app. Ordinary web/PWA feature work continues to happen exclusively in `apps/web` and reaches the shell automatically on next app launch, with **no new iOS release required**. The shell adds native iOS capabilities incrementally, on top of the same web app, not a parallel one.
