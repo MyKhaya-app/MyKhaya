@@ -79,9 +79,11 @@ difference and update both once the intended behaviour is decided
 | Environment identity, version, build, signing team | `ios/App/Config/Environment-{Dev,Prod}.xcconfig` | both targets via the four build configurations | Xcode |
 
 - Always change the canonical file and re-run the installer, then commit the
-  canonical file **and** the regenerated tracked copy together. The tracked
-  copies were byte-identical on 28 October 2026, but no automated test enforces
-  this.
+  canonical file **and** the regenerated tracked copy together.
+  `src/native-source-copies.test.ts` fails if a tracked copy differs from its
+  `native/plugin` source, or if the installer does not copy a `native/plugin`
+  file. The untracked widget copy (`MyKhayaWidgets/`) can only be checked on
+  the Mac (`diff -r native/widgets MyKhayaWidgets`).
 - Repo-local plugins are not auto-discovered: each is registered in
   `MainViewController.capacitorDidLoad()`. A new repo-local plugin needs the same.
 - npm Capacitor plugin versions in `apps/ios-shell/package.json` must match
@@ -373,8 +375,6 @@ Verified from repository contents on 28 October 2026. Re-check before acting.
 - **Biometric binding.** Keychain items are not bound to the enrolled biometry
   set ([§5](#5-native-security-and-integration)).
 - **Widget Lock Screen redaction** is not implemented.
-- **Native copy drift.** No test checks that `ios/App/App/*.swift` matches
-  `native/plugin/` ([§2](#2-native-source-ownership)).
 - **Product-quality follow-ups to reproduce, not yet confirmed defects:**
   standard iPhone landscape FAB overlap reported during the Duo work, rail/FAB
   collisions in very short windows, real Dynamic Type behaviour, notification
