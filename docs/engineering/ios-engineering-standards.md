@@ -395,7 +395,8 @@ Apple certificates and accounts, archives and App Store Connect state,
 deployed DEV/PROD frontend SHAs, live backend environment values, Xcode build
 success, physical-device behaviour, Dynamic Type coverage, and the status
 indicator's actual position. These need a follow-up audit on the Mac, the
-devices and the accounts.
+devices and the accounts: see the
+[iOS Mac and device audit checklist](../mobile/ios-mac-audit-checklist.md).
 
 ## 11. Required iOS engineering handoff
 
