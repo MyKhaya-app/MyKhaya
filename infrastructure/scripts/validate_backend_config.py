@@ -28,6 +28,11 @@ COMPOSE_FILES = (
     "compose.production.yml" if os.environ.get("MYKHAYA_PRODUCTION") == "1" else "compose.dev.yml",
 )
 SERVICES = ("api", "worker", "scheduler", "migrate")
+# The APNs topic must be the bundle ID of the app the backend serves. Each
+# backend serves one iOS app, and production serves the PROD app
+# (docs/mobile/ios-environments.md). A topic for the wrong app is rejected by
+# APNs, and the worker then disables that device's registration.
+PRODUCTION_APNS_BUNDLE_ID = "app.mykhaya.mobile.prod"
 MARKER = "MYKHAYA_RUNTIME_CONFIG="
 PROBE_PROJECT_PREFIX = "mykhaya-config-probe"
 
@@ -45,6 +50,8 @@ class RuntimeConfig:
     smtp_host: str
     smtp_port: int
     apns_delivery_configured: bool
+    environment: str = ""
+    apns_bundle_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -125,6 +132,8 @@ def parse_config(service: str, output: str) -> RuntimeConfig:
         smtp_host=data["smtp_host"],
         smtp_port=data["smtp_port"],
         apns_delivery_configured=data["apns_delivery_configured"],
+        environment=data.get("environment", ""),
+        apns_bundle_id=data.get("apns_bundle_id", ""),
     )
 
 
@@ -223,7 +232,9 @@ def container_probe(service: str, context: ProbeContext) -> RuntimeConfig:
         "'redis_hash':h(redis)['hash'], 'redis_length':h(redis)['length'], "
         "'secret_hash':h(secret)['hash'], 'secret_length':h(secret)['length'], "
         "'smtp_host':s.smtp_host, 'smtp_port':s.smtp_port, "
-        "'apns_delivery_configured':s.apns_delivery_configured}))"
+        "'apns_delivery_configured':s.apns_delivery_configured, "
+        "'environment':s.environment, "
+        "'apns_bundle_id':getattr(s, 'apns_bundle_id', '')}))"
     )
     result = subprocess.run(
         [
@@ -254,6 +265,17 @@ def validate(configs: list[RuntimeConfig]) -> list[str]:
     for service in ("api", "scheduler", "migrate"):
         if by_service[service].apns_delivery_configured:
             errors.append(f"{service} APNs delivery must be disabled")
+
+    worker = by_service["worker"]
+    if (
+        worker.environment == "production"
+        and worker.apns_delivery_configured
+        and worker.apns_bundle_id != PRODUCTION_APNS_BUNDLE_ID
+    ):
+        errors.append(
+            f"worker APNs topic (MYKHAYA_APNS_BUNDLE_ID) is '{worker.apns_bundle_id}', "
+            f"expected '{PRODUCTION_APNS_BUNDLE_ID}' for the production app"
+        )
 
     for service in ("worker", "scheduler"):
         item = by_service[service]

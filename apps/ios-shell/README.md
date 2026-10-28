@@ -113,9 +113,17 @@ secrets for real iOS delivery:
 MYKHAYA_APNS_DELIVERY_CONFIGURED=true
 MYKHAYA_APNS_TEAM_ID=...
 MYKHAYA_APNS_KEY_ID=...
-MYKHAYA_APNS_BUNDLE_ID=app.mykhaya.mobile
+MYKHAYA_APNS_BUNDLE_ID=app.mykhaya.mobile.prod   # production backend; DEV backend: app.mykhaya.mobile
 MYKHAYA_APNS_PRIVATE_KEY="-----BEGIN PRIVATE KEY----- ..."
 ```
+
+`MYKHAYA_APNS_BUNDLE_ID` is the APNs topic, so it must be the bundle ID of the
+app that backend serves: `app.mykhaya.mobile.prod` (MyKhaya) on the production
+backend, `app.mykhaya.mobile` (MyKhaya-Dev) on the DEV backend. APNs rejects a
+topic for the wrong app, and the worker then disables that device's
+registration. `infrastructure/scripts/validate_backend_config.py` (run by
+`prod-deploy.sh` before anything is built or restarted) fails a production
+deployment whose worker has APNs delivery on with any other topic.
 
 Never commit the `.p8` key or expose these values to the web bundle. TestFlight
 uses Apple's production APNs endpoint. The Mac-generated Xcode project must

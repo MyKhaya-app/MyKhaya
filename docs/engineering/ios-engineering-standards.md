@@ -364,11 +364,12 @@ physical-device push or App Store submission works.
 
 Verified from repository contents on 28 October 2026. Re-check before acting.
 
-- **PROD APNs topic.** `.env.production.example`, `apps/ios-shell/README.md`,
-  `compose.yml` and the `apns_bundle_id` default all give
-  `app.mykhaya.mobile` (the DEV bundle). If the live PROD backend uses it, every
-  push to the PROD app is rejected and its registrations are disabled. Whether
-  the live PROD server sets it correctly is unverified.
+- **PROD APNs topic.** `.env.production.example` and the ios-shell README now
+  give `app.mykhaya.mobile.prod`, and the production deploy validator
+  (`validate_backend_config.py`) rejects any other topic when APNs delivery is
+  on. The `compose.yml` worker fallback and the `apns_bundle_id` code default
+  are still the DEV bundle, so production must set the value explicitly.
+  Whether the live PROD server sets it correctly is unverified.
 - **Stripe billing in the shell.** `settings/billing` still navigates the
   WebView to Stripe with `window.location.href`, which the single-host
   allow-list blocks (ADR 0012's open decision).
