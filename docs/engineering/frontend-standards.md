@@ -30,6 +30,14 @@ media queries for layout. Both modes must be verified, including phone,
 tablet and desktop widths; physical iPhone review remains required where the
 native shell can be affected. PCC remains separate and desktop-first.
 
+## Shared form layout
+
+Build forms from the shared primitives in `components/form-layout.tsx`
+(`FormSheet`, `FormLayout`, `FormSection`, `FormRow`, `FormField`,
+`FormActions`) rather than bespoke grids. They contain every control within
+its parent at every width, including WebKit's native date/time controls. See
+[forms](../design/forms.md) for usage, anti-patterns and the layout harness.
+
 ## Shared module controls
 
 Reuse established MyKhaya interaction patterns across modules. Segmented

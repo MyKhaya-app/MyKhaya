@@ -99,6 +99,23 @@ describe("AroundHouseDock", () => {
     expect(screen.queryByRole("link", { name: "Nudges" })).not.toBeInTheDocument();
   });
 
+  it("publishes its rendered height to the shell for the page's bottom reserve", async () => {
+    const offsetHeight = vi.spyOn(HTMLElement.prototype, "offsetHeight", "get").mockReturnValue(124);
+    const { container, unmount } = render(
+      <div className="app-shell">
+        <AroundHouseDock />
+      </div>,
+    );
+    const shell = container.firstElementChild as HTMLElement;
+
+    await screen.findByRole("heading", { name: "Around the house" });
+    expect(shell.style.getPropertyValue("--around-house-dock-height")).toBe("124px");
+
+    unmount();
+    expect(shell.style.getPropertyValue("--around-house-dock-height")).toBe("");
+    offsetHeight.mockRestore();
+  });
+
   it("fails closed when there is no active Home", () => {
     activeHomeMock.mockReturnValue({ activeHomeId: null, activeHome: null });
     render(<AroundHouseDock />);

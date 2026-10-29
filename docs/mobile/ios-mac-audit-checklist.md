@@ -211,6 +211,41 @@ Also record:
 - Settings > Billing > Upgrade or Manage billing (on a test Home): record what
   happens. It is expected to be blocked (ADR 0012). Do not complete a payment.
 
+### G7. Forms and sheets (Copy Event reference)
+
+The DEV app loads `https://dev.mykhaya.app` live, so it only shows these
+changes once they are deployed there. Confirm the build first: on a Mac,
+`curl -s https://dev.mykhaya.app/login | grep -o '/_next/static/css/[^"]*\.css'`,
+then fetch each listed file and check that one contains
+`sheet-follows-visual-viewport`. Record the CSS file names. If none contains
+it, stop: the device is running a build without the fixes.
+
+Open Calendar, choose an event, then Copy event. Run each step on the Duo
+outer screen and inner screen, in portrait and landscape where the screen
+allows it.
+
+1. The sheet's header, title and close button are clear of the status
+   indicator, and the close button works.
+2. Cancel in the footer closes the sheet.
+3. Date: tap it. The native picker opens. Choose a date. The value shows
+   inside the field, and the field stays inside its card.
+4. Start time and End time: the same as step 3 with the time picker. The two
+   fields have a visible gap, or stack on narrow screens. Neither runs past
+   the card.
+5. One destination: Copy event is disabled until the date is valid, then
+   copies.
+6. Add another date twice (three destinations), each with different times.
+   Scroll to every field and to Add another date. Remove destination works.
+7. With a picker or the keyboard open, the footer (Copy event, Cancel) stays
+   visible above it and the focused field is not covered.
+8. Rotate, and fold or unfold, with the sheet open. Nothing moves under the
+   status indicator, and the page does not scroll sideways.
+9. Repeat steps 3 and 4 in one other module's date field (Budget or Driveway)
+   to confirm the shared date/time styling there.
+
+Record each step as passed, failed or not run, with a screenshot of any
+failure.
+
 ## H. Close-out
 
 1. Delete `build/audit`. Run `git status --short --untracked-files=all` and

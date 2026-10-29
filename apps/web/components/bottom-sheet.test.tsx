@@ -2,7 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, within } from "@testing-library/react";
 import { useState } from "react";
-import { BottomSheet } from "./bottom-sheet";
+import { BottomSheet, syncSheetToVisualViewport } from "./bottom-sheet";
 import { dismissTopmost } from "./dismissal-stack";
 
 let nativeShell = false;
@@ -223,5 +223,38 @@ describe("BottomSheet — focus handling on close (calendar-save zoom/jump regre
     const { unmount } = render(<BottomSheet title="Sheet" onDismiss={vi.fn()} children="x" />);
     expect(() => unmount()).not.toThrow();
     trigger.remove();
+  });
+});
+
+describe("BottomSheet — software keyboard and footer", () => {
+  const viewport = (height: number, scale = 1, offsetTop = 0) => ({ height, scale, offsetTop }) as VisualViewport;
+
+  it("follows the visual viewport only while a keyboard reduces it", () => {
+    const backdrop = document.createElement("div");
+    syncSheetToVisualViewport(backdrop, viewport(window.innerHeight - 300, 1, 12));
+    expect(backdrop).toHaveClass("sheet-follows-visual-viewport");
+    expect(backdrop.style.getPropertyValue("--sheet-viewport-height")).toBe(`${window.innerHeight - 300}px`);
+    expect(backdrop.style.getPropertyValue("--sheet-viewport-top")).toBe("12px");
+
+    syncSheetToVisualViewport(backdrop, viewport(window.innerHeight));
+    expect(backdrop).not.toHaveClass("sheet-follows-visual-viewport");
+    expect(backdrop.style.getPropertyValue("--sheet-viewport-height")).toBe("");
+  });
+
+  it("leaves the backdrop alone while pinch-zoomed or for small viewport changes", () => {
+    const backdrop = document.createElement("div");
+    syncSheetToVisualViewport(backdrop, viewport(window.innerHeight / 2, 2));
+    expect(backdrop).not.toHaveClass("sheet-follows-visual-viewport");
+    syncSheetToVisualViewport(backdrop, viewport(window.innerHeight - 60));
+    expect(backdrop).not.toHaveClass("sheet-follows-visual-viewport");
+    syncSheetToVisualViewport(backdrop, null);
+    expect(backdrop).not.toHaveClass("sheet-follows-visual-viewport");
+  });
+
+  it("marks sheets with a footer so the body does not repeat the home-indicator inset", () => {
+    const { container, rerender } = render(<BottomSheet title="Sheet" onDismiss={vi.fn()}>x</BottomSheet>);
+    expect(container.querySelector(".bottom-sheet")).not.toHaveClass("has-footer");
+    rerender(<BottomSheet title="Sheet" onDismiss={vi.fn()} footer={<button type="button">Save</button>}>x</BottomSheet>);
+    expect(container.querySelector(".bottom-sheet")).toHaveClass("has-footer");
   });
 });

@@ -17,6 +17,7 @@ PWA or native-shell change, read the relevant standards and architecture records
 12. `docs/engineering/ios-engineering-standards.md` (for any change that can
     affect the iOS app: `apps/ios-shell`, native layout states, Keychain,
     biometrics, push, widgets or DEV/PROD identity)
+13. `docs/design/forms.md` (for any form, field layout or form sheet)
 
 The current native/mobile UI is the protected baseline. Desktop and tablet work
 must not alter mobile geometry, safe areas, fixed navigation, sheets, viewport

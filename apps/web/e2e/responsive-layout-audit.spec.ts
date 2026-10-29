@@ -1,4 +1,6 @@
 import { expect, test } from "@playwright/test";
+// Shared with scripts/responsive-audit.mjs and scripts/form-layout-harness.mjs.
+import { ACCEPTED_CONTAINMENT_EXCEPTIONS, inspectLayoutInPage, INTENDED_HORIZONTAL_SCROLLERS } from "../scripts/layout-inspector.mjs";
 
 // This is deliberately opt-in: it uses only a dedicated E2E account supplied
 // by the test environment and never creates or mutates household data.
@@ -58,7 +60,10 @@ async function signIn(page: import("@playwright/test").Page, email: string) {
 }
 
 test.describe("consumer responsive layout audit", () => {
-  test("consumer routes have no document-level horizontal overflow", async ({ page }) => {
+  // Document scroll width alone missed overflow inside clipped, independently
+  // scrolling containers such as bottom sheets, so every route is measured
+  // element by element (scripts/layout-inspector.mjs).
+  test("consumer routes contain every element within its parent and the viewport", async ({ page }) => {
     const email = process.env.E2E_EMAIL;
     test.skip(!email, "E2E_EMAIL is required for the authenticated responsive audit");
     await signIn(page, email!);
@@ -68,19 +73,14 @@ test.describe("consumer responsive layout audit", () => {
         await page.goto(route);
         await page.waitForLoadState("domcontentloaded");
         await expect(page.locator("body")).toBeVisible();
-        const metrics = await page.evaluate(() => ({
-          width: document.documentElement.clientWidth,
-          scrollWidth: document.documentElement.scrollWidth,
-          bodyScrollWidth: document.body.scrollWidth,
-        }));
+        const report = await page.evaluate(inspectLayoutInPage, {
+          intendedScrollers: INTENDED_HORIZONTAL_SCROLLERS,
+          acceptedOverflow: ACCEPTED_CONTAINMENT_EXCEPTIONS,
+        });
         expect(
-          metrics.scrollWidth,
-          `${route} at ${viewport.name} has document overflow: ${JSON.stringify(metrics)}`,
-        ).toBeLessThanOrEqual(metrics.width + 1);
-        expect(
-          metrics.bodyScrollWidth,
-          `${route} at ${viewport.name} has body overflow: ${JSON.stringify(metrics)}`,
-        ).toBeLessThanOrEqual(metrics.width + 1);
+          report.issues.map((issue) => `${issue.kind}: ${issue.element}`),
+          `${route} at ${viewport.name} has layout defects`,
+        ).toEqual([]);
       }
     }
   });
@@ -91,22 +91,20 @@ test.describe("consumer responsive layout audit", () => {
     await signIn(page, email!);
     await page.setViewportSize({ width: 393, height: 852 });
     await page.goto("/calendar");
-    const add = page.getByRole("button", { name: /add event|new event/i }).first();
-    if (await add.count()) {
-      await add.click();
-      const sheet = page.locator(".bottom-sheet").last();
-      await expect(sheet).toBeVisible();
-      const content = sheet.locator(".sheet-content");
-      const bounds = await content.evaluate((node) => {
-        const element = node as HTMLElement;
-        return {
-          clientHeight: element.clientHeight,
-          scrollHeight: element.scrollHeight,
-          hasOverflow: element.scrollHeight > element.clientHeight,
-        };
-      });
-      expect(bounds.clientHeight).toBeGreaterThan(0);
-      expect(await sheet.getByRole("button", { name: /save|create|add event/i }).count()).toBeGreaterThan(0);
-    }
+    // The previous pattern (/add event|new event/) never matched the FAB's
+    // name, "Add calendar event", so this test passed without opening a
+    // sheet. A missing control is now a failure, not a skip.
+    const add = page.getByRole("button", { name: "Add calendar event" });
+    await expect(add).toBeVisible();
+    await add.click();
+    const sheet = page.locator(".bottom-sheet").last();
+    await expect(sheet).toBeVisible();
+    const report = await page.evaluate(inspectLayoutInPage, {
+      rootSelector: ".bottom-sheet",
+      checkReachability: true,
+      intendedScrollers: INTENDED_HORIZONTAL_SCROLLERS,
+    });
+    expect(report.issues.map((issue) => `${issue.kind}: ${issue.element}`)).toEqual([]);
+    await expect(sheet.getByRole("button", { name: /save event/i })).toBeVisible();
   });
 });

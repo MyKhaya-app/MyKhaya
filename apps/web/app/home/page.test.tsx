@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import HomePage from "./page";
@@ -544,6 +544,55 @@ describe("Home — first card hero overlap", () => {
 });
 
 describe("Home — Coming up", () => {
+  // Coming up starts at the next local midnight in the Home calendar's
+  // timezone (UTC here), so "later today" only means today when the test
+  // clock says so: against the real clock, minutesFromNow(90) lands on
+  // tomorrow after 22:30 and the event correctly appears. Only Date is
+  // faked, so Testing Library's own timers still run.
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-29T12:00:00Z"));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("starts at the next midnight late in the evening, excluding tonight but not just after midnight", async () => {
+    vi.setSystemTime(new Date("2026-10-29T23:30:00Z"));
+    enableCalendarOnly();
+    (api.listUpcomingEvents as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [
+        occurrence({ occurrence_id: "occ-tonight", title: "Late film", start_at: "2026-10-29T23:40:00Z", end_at: "2026-10-29T23:55:00Z" }),
+        occurrence({ occurrence_id: "occ-after-midnight", title: "Night ferry", start_at: "2026-10-30T00:10:00Z", end_at: "2026-10-30T01:00:00Z" }),
+      ],
+      next_page: null,
+    });
+
+    render(<HomePage />);
+
+    expect(await screen.findByText("Night ferry")).toBeInTheDocument();
+    expect(screen.queryByText("Late film")).not.toBeInTheDocument();
+    expect(api.listUpcomingEvents).toHaveBeenCalledWith("home-1", { after: "2026-10-30T00:00:00.000Z", limit: 8 });
+  });
+
+  it("treats the small hours as the new day once midnight has passed", async () => {
+    vi.setSystemTime(new Date("2026-10-30T00:05:00Z"));
+    enableCalendarOnly();
+    (api.listUpcomingEvents as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [
+        occurrence({ occurrence_id: "occ-early", title: "Early flight", start_at: "2026-10-30T00:30:00Z", end_at: "2026-10-30T02:00:00Z" }),
+        occurrence({ occurrence_id: "occ-next-day", title: "Saturday swim", start_at: "2026-10-31T09:00:00Z", end_at: "2026-10-31T10:00:00Z" }),
+      ],
+      next_page: null,
+    });
+
+    render(<HomePage />);
+
+    expect(await screen.findByText("Saturday swim")).toBeInTheDocument();
+    expect(screen.queryByText("Early flight")).not.toBeInTheDocument();
+    expect(api.listUpcomingEvents).toHaveBeenCalledWith("home-1", { after: "2026-10-31T00:00:00.000Z", limit: 8 });
+  });
+
   it("shows the empty-state copy when there are genuinely no future events", async () => {
     enableCalendarOnly();
 

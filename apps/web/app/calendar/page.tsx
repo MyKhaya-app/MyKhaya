@@ -45,6 +45,8 @@ import { NATIVE_COMPACT_RAIL_QUERY, NATIVE_WIDE_QUERY } from "@/components/nativ
 import { useActiveHome } from "@/components/use-active-home";
 import { syncWidgetSnapshot } from "@/components/widget-bridge";
 import { EXPANDED_MONTH_VISIBLE_ROW_CAP, MonthSwipeView } from "./month-view";
+import { CopyEventSheet, type CopyDestination } from "./copy-event-sheet";
+import { eventWhenSummary } from "./event-when-summary";
 import {
   addMonths,
   agendaRange,
@@ -182,48 +184,6 @@ const RECURRENCE_LABELS: Record<RecurrencePattern, string | null> = {
 };
 function recurrenceLabel(recurrence: RecurrencePattern): string | null {
   return RECURRENCE_LABELS[recurrence];
-}
-
-// The read-only View mode's date/time line — reuses the exact same
-// timezone-correct display utilities as every other calendar view (never a
-// separate UTC/browser-local/naive formatting path). All-day boundaries are
-// read as plain UTC calendar dates (never re-localized); timed instants are
-// read in the event's own governing timezone.
-function eventWhenSummary(
-  event: EventOccurrence,
-  timeZone: string,
-): { dateLine: string; timeLine: string | null } {
-  const tz = event.timezone || timeZone;
-  const dateOptions: Intl.DateTimeFormatOptions = {
-    weekday: "long",
-    day: "numeric",
-    month: "long",
-    year: "numeric",
-  };
-  if (event.is_all_day) {
-    const endInclusive = new Date(event.end_at);
-    endInclusive.setUTCDate(endInclusive.getUTCDate() - 1);
-    const startKey = dateKey(event.start_at);
-    const endKey = dateKey(endInclusive);
-    const dateLine =
-      startKey === endKey
-        ? displayDate(event.start_at, dateOptions, "UTC")
-        : `${displayDate(event.start_at, dateOptions, "UTC")} — ${displayDate(endInclusive, dateOptions, "UTC")}`;
-    return { dateLine, timeLine: "All day" };
-  }
-  const sameDay = zonedDateKey(event.start_at, tz) === zonedDateKey(event.end_at, tz);
-  const startTimeLabel = displayDate(event.start_at, { hour: "2-digit", minute: "2-digit" }, tz);
-  const endTimeLabel = displayDate(event.end_at, { hour: "2-digit", minute: "2-digit" }, tz);
-  if (sameDay) {
-    return {
-      dateLine: displayDate(event.start_at, dateOptions, tz),
-      timeLine: `${startTimeLabel} – ${endTimeLabel}`,
-    };
-  }
-  return {
-    dateLine: `${displayDate(event.start_at, dateOptions, tz)} ${startTimeLabel} → ${displayDate(event.end_at, dateOptions, tz)} ${endTimeLabel}`,
-    timeLine: null,
-  };
 }
 
 function combineZoned(date: string, time: string, timeZone: string): Date {
@@ -1150,89 +1110,6 @@ function EventDetails({
   );
 }
 
-function CopyEventSheet({
-  event,
-  timeZone,
-  busy,
-  error,
-  onCopy,
-  onCancel,
-}: {
-  event: EventOccurrence;
-  timeZone: string;
-  busy: boolean;
-  error: string;
-  onCopy: (destinations: { date: string; startTime: string; endTime: string }[]) => void;
-  onCancel: () => void;
-}) {
-  const eventZone = event.timezone || timeZone;
-  const sourceSummary = eventWhenSummary(event, timeZone);
-  const sourceStartTime = displayDate(event.start_at, { hour: "2-digit", minute: "2-digit", hour12: false }, eventZone);
-  const sourceEndTime = displayDate(event.end_at, { hour: "2-digit", minute: "2-digit", hour12: false }, eventZone);
-  type DestinationDraft = { id: number; date: string; startTime: string; endTime: string };
-  const nextId = useRef(2);
-  const [destinations, setDestinations] = useState<DestinationDraft[]>([
-    { id: 1, date: "", startTime: sourceStartTime, endTime: sourceEndTime },
-  ]);
-
-  function updateDestination(id: number, field: "date" | "startTime" | "endTime", value: string) {
-    setDestinations((current) => current.map((destination) => destination.id === id ? { ...destination, [field]: value } : destination));
-  }
-  function addDestination() {
-    setDestinations((current) => [
-      ...current,
-      { id: nextId.current++, date: "", startTime: sourceStartTime, endTime: sourceEndTime },
-    ]);
-  }
-  function removeDestination(id: number) {
-    setDestinations((current) => current.filter((destination) => destination.id !== id));
-  }
-  const dates = destinations.map((destination) => destination.date).filter(Boolean);
-  const hasDuplicateDates = new Set(dates).size !== dates.length;
-  const hasInvalidTimes = !event.is_all_day && destinations.some((destination) =>
-    !destination.startTime || !destination.endTime || destination.endTime <= destination.startTime,
-  );
-  const canSubmit = destinations.length > 0 && destinations.every((destination) => destination.date) && !hasDuplicateDates && !hasInvalidTimes;
-
-  return (
-    <BottomSheet
-      title="Copy event"
-      onDismiss={busy ? () => {} : onCancel}
-      footer={
-        <button type="button" className="sheet-primary" onClick={() => canSubmit && onCopy(destinations)} disabled={busy || !canSubmit}>
-          {busy ? "Copying…" : `Copy event${destinations.length > 1 ? ` (${destinations.length})` : ""}`}
-        </button>
-      }
-    >
-      <div className="copy-event-form">
-        <div className="copy-event-source" aria-label="Original event">
-          <span className="eyebrow">Original event</span>
-          <strong>{event.title}</strong>
-          <span>{sourceSummary.dateLine}</span>
-          <span>{sourceSummary.timeLine}</span>
-        </div>
-        <div className="copy-event-destinations" aria-label="Copy destinations">
-          {destinations.map((destination, index) => (
-            <fieldset className="copy-event-destination" key={destination.id}>
-              <legend>Destination {index + 1}</legend>
-              <label>Choose a date<input type="date" placeholder="Choose a date" value={destination.date} onChange={(e) => updateDestination(destination.id, "date", e.target.value)} aria-label={`Destination ${index + 1} date`} /></label>
-              {!event.is_all_day && <div className="copy-event-times">
-                <label>Start time<input type="time" value={destination.startTime} onChange={(e) => updateDestination(destination.id, "startTime", e.target.value)} aria-label={`Destination ${index + 1} start time`} /></label>
-                <label>End time<input type="time" value={destination.endTime} onChange={(e) => updateDestination(destination.id, "endTime", e.target.value)} aria-label={`Destination ${index + 1} end time`} /></label>
-              </div>}
-              {index > 0 && <button className="secondary copy-event-remove" type="button" onClick={() => removeDestination(destination.id)}>Remove destination</button>}
-            </fieldset>
-          ))}
-        </div>
-        <button className="secondary" type="button" onClick={addDestination}>Add another date</button>
-        {hasDuplicateDates && <p className="notice error" role="alert">Choose a different date for each destination.</p>}
-        {hasInvalidTimes && <p className="notice error" role="alert">Each destination needs an end time after its start time.</p>}
-        {error && <p className="notice error" role="alert">{error}</p>}
-      </div>
-    </BottomSheet>
-  );
-}
-
 // The recurring-event scope chooser shown before an edit or delete on a
 // series' own occurrence actually reaches the API — see isRecurringOwnEvent.
 // Deliberately worded without any of the backend's internal vocabulary
@@ -1892,7 +1769,7 @@ export default function CalendarPage() {
     }
   }
 
-  async function copySelectedEvent(destinations: { date: string; startTime: string; endTime: string }[]) {
+  async function copySelectedEvent(destinations: CopyDestination[]) {
     if (!activeHomeId || !selectedEvent) return;
     setError("");
     setBusy(true);

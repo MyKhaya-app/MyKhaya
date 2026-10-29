@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useEffect, useState } from "react";
 import {
   CalendarPlus,
   Car,
@@ -42,9 +43,27 @@ function QuickAction({
 }
 
 export function AroundHouseDock() {
+  const [dockElement, setDockElement] = useState<HTMLElement | null>(null);
   const { activeHome } = useActiveHome();
   const { access } = useHomeAccess();
   const canInviteFamily = activeHome?.capabilities.includes("members.invite") ?? false;
+
+  // The dock floats over the page, which reserves its rendered height
+  // (styles.css, .app-main) so the end of a page can scroll clear of it. Its
+  // height depends on the entitled shortcuts and how they wrap, so it is
+  // measured rather than assumed. Hidden (phone widths), it measures 0.
+  useEffect(() => {
+    const shell = dockElement?.parentElement;
+    if (!dockElement || !shell) return;
+    const update = () => shell.style.setProperty("--around-house-dock-height", `${dockElement.offsetHeight}px`);
+    update();
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(update);
+    observer?.observe(dockElement);
+    return () => {
+      observer?.disconnect();
+      shell.style.removeProperty("--around-house-dock-height");
+    };
+  }, [dockElement]);
 
   // Unresolved or failed Home/feature state renders nothing: the dock never
   // shows dead shortcuts while the current Home's access loads. (It floats
@@ -136,7 +155,7 @@ export function AroundHouseDock() {
   if (actions.length === 0) return null;
 
   return (
-    <aside className="around-house-dock" aria-label="Around the house">
+    <aside ref={setDockElement} className="around-house-dock" aria-label="Around the house">
       <div className="around-house-dock-heading">
         <span className="around-house-dock-icon" aria-hidden="true">
           <House size={18} />

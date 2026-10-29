@@ -4,7 +4,7 @@
 //
 // Usage:
 //   E2E_EMAIL=... E2E_PASSWORD=... node scripts/responsive-audit.mjs
-//   node scripts/responsive-audit.mjs http://127.0.0.1:8089
+//   node scripts/responsive-audit.mjs http://localhost:8089
 //
 // The output directory is test-results/responsive-audit/<timestamp>, which is
 // ignored by git. Missing credentials or an MFA hand-off are reported as
@@ -15,6 +15,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline/promises";
 import { chromium } from "@playwright/test";
+import { ACCEPTED_CONTAINMENT_EXCEPTIONS, inspectLayoutInPage, INTENDED_HORIZONTAL_SCROLLERS } from "./layout-inspector.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const localEnvPath = path.resolve(scriptDir, "..", ".env.responsive-audit.local");
@@ -43,7 +44,9 @@ const localEnv = await loadLocalEnv();
 const auditEnv = { ...localEnv, ...process.env };
 const cliBase = process.argv.slice(2).find((argument) => argument !== "--" && !argument.startsWith("-"));
 const checkConfig = process.argv.includes("--check-config");
-const BASE = cliBase ?? auditEnv.PLAYWRIGHT_BASE_URL ?? "http://127.0.0.1:8089";
+// localhost, not 127.0.0.1: the local API's trusted origins name localhost,
+// and sign-in from any other origin fails with "Request origin is not allowed".
+const BASE = cliBase ?? auditEnv.PLAYWRIGHT_BASE_URL ?? "http://localhost:8089";
 
 if (checkConfig) {
   const emailConfigured = Boolean(auditEnv.E2E_EMAIL?.trim());
@@ -88,6 +91,7 @@ const consumerRoutes = [
   "/lists",
   "/wish-lists",
   "/driveway",
+  "/driveway/add",
   "/budget",
   "/help-support",
   "/me/notifications",
@@ -103,16 +107,27 @@ const consumerRoutes = [
   "/settings/calendar",
   "/settings/calendar-tags",
 ];
+// Safe areas cannot be produced by Chromium (env() is always 0), so each
+// profile sets the shared --safe-* custom properties. The Duo insets and
+// status overlay zone are the physical measurements in
+// docs/engineering/ios-engineering-standards.md section 4; the Duo viewport
+// sizes are representative of its native-layout class ranges, not measured.
 const viewports = [
-  { name: "320x568", width: 320, height: 568 },
-  { name: "375x667", width: 375, height: 667 },
-  { name: "393x852", width: 393, height: 852 },
-  { name: "430x932", width: 430, height: 932 },
-  { name: "768x1024", width: 768, height: 1024 },
-  { name: "1440x900", width: 1440, height: 900 },
+  { name: "320x568", width: 320, height: 568, insets: { top: 20 } },
+  { name: "375x667", width: 375, height: 667, insets: { top: 20 } },
+  { name: "393x852", width: 393, height: 852, insets: { top: 59, bottom: 34 } },
+  { name: "430x932", width: 430, height: 932, insets: { top: 59, bottom: 34 } },
+  { name: "852x393-landscape", width: 852, height: 393, insets: { left: 59, right: 59, bottom: 21 } },
+  { name: "duo-outer-512x740", width: 512, height: 740, insets: { top: 20, right: 93 }, overlay: { right: 93, top: 165 } },
+  { name: "duo-inner-900x740", width: 900, height: 740, insets: { top: 20, right: 93 }, overlay: { right: 93, top: 106 } },
+  { name: "768x1024", width: 768, height: 1024, insets: {} },
+  { name: "1024x768", width: 1024, height: 768, insets: {} },
+  { name: "1280x800", width: 1280, height: 800, insets: {} },
+  { name: "1440x900", width: 1440, height: 900, insets: {} },
 ];
 
 const results = [];
+const sheetResults = [];
 const screenshots = [];
 
 function safeName(value) {
@@ -135,85 +150,28 @@ async function capture(page, route, viewport, label = route) {
   return filename;
 }
 
-async function inspectLayout(page, activeSheetOnly = false) {
-  return page.evaluate((activeSheetOnly) => {
-    const viewport = { width: window.innerWidth, height: window.innerHeight };
-    const issues = [];
-    const details = [];
-    const visible = (element) => {
-      const style = getComputedStyle(element);
-      const rect = element.getBoundingClientRect();
-      return style.display !== "none" && style.visibility !== "hidden" && rect.width > 0 && rect.height > 0;
-    };
-    const selector = (element) => {
-      const classes = typeof element.className === "string" ? element.className.trim().split(/\s+/).slice(0, 3) : [];
-      return `${element.tagName.toLowerCase()}${element.id ? `#${element.id}` : ""}${classes.map((item) => `.${item}`).join("")}`;
-    };
-    const add = (kind, element, message, extra = {}) => {
-      const rect = element.getBoundingClientRect();
-      const detail = { kind, selector: selector(element), message, left: Math.round(rect.left), top: Math.round(rect.top), right: Math.round(rect.right), bottom: Math.round(rect.bottom), ...extra };
-      issues.push(detail);
-      if (details.length < 40) details.push(detail);
-    };
-    const activeSheet = activeSheetOnly ? [...document.querySelectorAll(".bottom-sheet")].filter(visible).at(-1) : null;
-    const queryAll = (query) => activeSheet ? [...activeSheet.querySelectorAll(query)] : [...document.querySelectorAll(query)];
-
-    const documentWidth = Math.max(document.documentElement.scrollWidth, document.body.scrollWidth);
-    if (documentWidth > viewport.width + 1) {
-      add("document-overflow", document.documentElement, "Document scroll width exceeds the viewport", { scrollWidth: documentWidth });
-    }
-    if (document.body.scrollWidth > viewport.width + 1) {
-      add("body-overflow", document.body, "Body scroll width exceeds the viewport", { scrollWidth: document.body.scrollWidth });
-    }
-
-    const interactive = queryAll("button, a[href], input, select, textarea, [role=button]").filter(visible);
-    for (const element of interactive) {
-      const rect = element.getBoundingClientRect();
-      // The month grid intentionally renders adjacent-month cells outside its
-      // clipped viewport. Those hidden grid controls are not user-visible
-      // overflow and should not turn an otherwise usable calendar into a
-      // false failure.
-      const calendarCell = element.closest(".calendar-day, .month-event");
-      const clippedCalendarCell = calendarCell && (rect.right <= 0 || rect.left < -1 || rect.right > viewport.width + 1);
-      if (!clippedCalendarCell && (rect.right > viewport.width + 1 || rect.left < -1 || rect.bottom > viewport.height + 1 && getComputedStyle(element).position === "fixed")) {
-        add("interactive-out-of-bounds", element, "Interactive element extends outside the viewport");
-      }
-      const clipped = element.scrollWidth > element.clientWidth + 1 || element.scrollHeight > element.clientHeight + 1;
-      if (clipped && !["INPUT", "TEXTAREA"].includes(element.tagName)) {
-        add("interactive-clipped", element, "Interactive element has content clipped inside its box", { scrollWidth: element.scrollWidth, clientWidth: element.clientWidth });
-      }
-    }
-
-    const controls = queryAll("input, select, textarea").filter(visible);
-    for (let index = 0; index < controls.length; index += 1) {
-      for (let otherIndex = index + 1; otherIndex < controls.length; otherIndex += 1) {
-        const first = controls[index].getBoundingClientRect();
-        const second = controls[otherIndex].getBoundingClientRect();
-        const intersects = first.left < second.right - 1 && first.right > second.left + 1 && first.top < second.bottom - 1 && first.bottom > second.top + 1;
-        if (intersects) add("form-control-overlap", controls[index], "Adjacent form controls overlap", { other: selector(controls[otherIndex]) });
-      }
-    }
-
-    for (const sheet of (activeSheet ? [activeSheet] : [...document.querySelectorAll(".bottom-sheet")]).filter(visible)) {
-      const rect = sheet.getBoundingClientRect();
-      const content = sheet.querySelector(".sheet-content");
-      const footer = sheet.querySelector(".sheet-footer");
-      if (rect.bottom > viewport.height + 1 || rect.top < -1) add("sheet-out-of-bounds", sheet, "Bottom sheet exceeds the viewport");
-      if (content && content.scrollHeight > content.clientHeight + 1 && getComputedStyle(content).overflowY === "visible") add("sheet-not-scrollable", content, "Long sheet content has no scrollable container");
-      if (footer && footer.getBoundingClientRect().bottom > viewport.height + 1) add("sheet-footer-out-of-bounds", footer, "Sheet footer is outside the viewport");
-    }
-
-    for (const fixed of (activeSheet ? [activeSheet, ...activeSheet.querySelectorAll("*")] : [...document.querySelectorAll("body *")]).filter((element) => visible(element) && ["fixed", "sticky"].includes(getComputedStyle(element).position))) {
-      const fixedStyle = getComputedStyle(fixed);
-      if (fixedStyle.pointerEvents === "none" || Number.parseFloat(fixedStyle.opacity || "1") < 0.05) continue;
-      const rect = fixed.getBoundingClientRect();
-      if (rect.bottom < 0 || rect.top > viewport.height) continue;
-      const target = document.elementFromPoint(Math.min(viewport.width - 2, Math.max(1, rect.left + rect.width / 2)), Math.min(viewport.height - 2, Math.max(1, rect.bottom - 2)));
-      if (target && target !== fixed && !fixed.contains(target) && !target.closest(".sheet-backdrop")) add("fixed-obscures-content", fixed, "Fixed/sticky element may obscure content", { target: selector(target) });
-    }
-    return { viewport, issues, details, documentWidth, bodyWidth: document.body.scrollWidth };
-  }, activeSheetOnly);
+async function applyInsets(page, viewport) {
+  const value = (side) => `${viewport.insets?.[side] ?? 0}px`;
+  await page.addStyleTag({ content: `:root{--safe-top:${value("top")} !important;--safe-right:${value("right")} !important;--safe-bottom:${value("bottom")} !important;--safe-left:${value("left")} !important}` });
 }
+
+// Measures real bounding boxes with scripts/layout-inspector.mjs: children
+// against their parents, internal and clipped horizontal overflow, overlap,
+// native date/time appearance and, for an open sheet, scroll-to-reveal
+// reachability of every control and the header close button against the
+// simulated system overlay. Document scroll width alone missed overflow
+// inside the clipped, independently scrolling bottom sheet.
+async function inspectLayout(page, viewport, activeSheetOnly = false) {
+  return page.evaluate(inspectLayoutInPage, {
+    rootSelector: activeSheetOnly ? ".bottom-sheet" : null,
+    checkReachability: activeSheetOnly,
+    overlay: viewport.overlay ?? null,
+    intendedScrollers: INTENDED_HORIZONTAL_SCROLLERS,
+    acceptedOverflow: ACCEPTED_CONTAINMENT_EXCEPTIONS,
+  });
+}
+
+const issueText = (issue) => `${issue.kind}: ${issue.element} — ${issue.message}`;
 
 async function promptForMfaCode() {
   if (!process.stdin.isTTY || !process.stdout.isTTY) return null;
@@ -256,23 +214,44 @@ async function authenticate(page) {
 async function auditRoute(page, route, viewport, authenticated) {
   await page.setViewportSize({ width: viewport.width, height: viewport.height });
   const response = await page.goto(`${BASE}${route}`, { waitUntil: "domcontentloaded", timeout: 30000 });
+  await applyInsets(page, viewport);
   await page.waitForTimeout(500);
   const screenshot = await capture(page, route, viewport);
   if (!authenticated && !publicRoutes.includes(route)) {
     results.push({ route, viewport: viewport.name, result: "BLOCKED", issues: ["Authenticated route not tested"], details: [], screenshot, status: response?.status() ?? null });
     return;
   }
-  const layout = await inspectLayout(page);
+  const layout = await inspectLayout(page, viewport);
   const status = response?.status() ?? null;
   const statusIssues = status !== null && status >= 400 ? [`HTTP response ${status}`] : [];
-  results.push({ route, viewport: viewport.name, result: layout.issues.length || statusIssues.length ? "FAIL" : "PASS", issues: [...statusIssues, ...layout.issues.map((issue) => issue.message)], details: layout.details, screenshot, status });
+  results.push({ route, viewport: viewport.name, result: layout.issues.length || statusIssues.length ? "FAIL" : "PASS", issues: [...statusIssues, ...layout.issues.map(issueText)], details: layout.issues.slice(0, 40), screenshot, status });
+
+  // The route's primary create sheet, opened in this viewport and measured in
+  // its interactive state. Nothing is submitted.
+  if (!authenticated || publicRoutes.includes(route)) return;
+  const trigger = page.locator("button.rr-fab, button.calendar-fab").first();
+  if (!(await trigger.count()) || !(await trigger.isVisible())) return;
+  await trigger.click({ timeout: 3000 }).catch(() => {});
+  await page.waitForTimeout(350);
+  const sheet = page.locator(".bottom-sheet").last();
+  if (!(await sheet.count()) || !(await sheet.isVisible())) {
+    sheetResults.push({ route, viewport: viewport.name, result: "NOT TESTED", issues: ["Create action did not open a sheet"] });
+    return;
+  }
+  const sheetLayout = await inspectLayout(page, viewport, true);
+  const sheetScreenshot = await capture(page, route, viewport, `${route}-create-sheet`);
+  const title = (await sheet.locator("#sheet-title").textContent().catch(() => "")) ?? "";
+  sheetResults.push({ route, viewport: viewport.name, title, result: sheetLayout.issues.length ? "FAIL" : "PASS", issues: sheetLayout.issues.map(issueText), details: sheetLayout.issues.slice(0, 40), screenshot: sheetScreenshot });
+  await page.keyboard.press("Escape").catch(() => {});
+  await page.waitForTimeout(150);
 }
 
 async function auditCopyEvent(page) {
   const copyResults = [];
-  for (const viewport of viewports.filter(({ width }) => [320, 375, 393, 430].includes(width))) {
+  for (const viewport of viewports) {
     await page.setViewportSize({ width: viewport.width, height: viewport.height });
     await page.goto(`${BASE}/calendar`, { waitUntil: "domcontentloaded", timeout: 30000 });
+    await applyInsets(page, viewport);
     await page.waitForTimeout(700);
     const events = page.locator(".month-event, .event-row");
     if (!(await events.count())) {
@@ -282,17 +261,36 @@ async function auditCopyEvent(page) {
 
     // Recurring events deliberately cannot be copied. Try the populated
     // fixture events until the first event that supports Copy Event is found,
-    // rather than treating a recurring first row as missing coverage.
-    let detailSheet;
-    let copyButton;
-    for (let eventIndex = 0; eventIndex < await events.count(); eventIndex += 1) {
-      await events.nth(eventIndex).click();
+    // rather than treating a recurring first row as missing coverage. In the
+    // wide layout a month-grid event focuses its day, and the day's events
+    // are then opened from the side pane's event list.
+    let copyButton = page.locator(".bottom-sheet").last().getByRole("button", { name: "Copy event", exact: true });
+    const closeSheets = async () => {
+      for (let attempt = 0; attempt < 3 && await page.locator(".bottom-sheet").count(); attempt += 1) {
+        await page.keyboard.press("Escape").catch(() => {});
+        await page.waitForTimeout(100);
+      }
+    };
+    // A click may open the event itself, or (wide layouts) a day sheet or
+    // side pane listing that day's events, which are tried in turn.
+    const tryOpen = async (target, nested = false) => {
+      if (!(await target.isVisible())) return false;
+      await target.click({ timeout: 3000 }).catch(() => {});
       await page.waitForTimeout(250);
-      detailSheet = page.locator(".bottom-sheet").last();
-      copyButton = detailSheet.getByRole("button", { name: "Copy event", exact: true });
-      if (await copyButton.count()) break;
-      await page.keyboard.press("Escape").catch(() => {});
-      await page.waitForTimeout(100);
+      copyButton = page.locator(".bottom-sheet").last().getByRole("button", { name: "Copy event", exact: true });
+      if (await copyButton.count()) return true;
+      if (!nested) {
+        const dayRows = page.locator(".bottom-sheet .event-row, .calendar-expanded-agenda-section .event-row");
+        const rowCount = await dayRows.count();
+        for (let rowIndex = 0; rowIndex < rowCount; rowIndex += 1) {
+          if (await tryOpen(dayRows.nth(rowIndex), true)) return true;
+        }
+      }
+      if (!nested) await closeSheets();
+      return false;
+    };
+    for (let eventIndex = 0; eventIndex < await events.count(); eventIndex += 1) {
+      if (await tryOpen(events.nth(eventIndex))) break;
     }
     if (!(await copyButton.count())) {
       copyResults.push({ viewport: viewport.name, result: "NOT TESTED", issues: ["No populated non-recurring event exposed Copy event"] });
@@ -344,10 +342,12 @@ async function auditCopyEvent(page) {
     const timeInputs = copySheet.locator('input[type="time"]');
     if (await timeInputs.count() !== 4) issues.push("Expected independent start/end inputs for both destination rows");
     if (!(await copySheet.getByRole("button", { name: /Copy event \(2\)/i }).count())) issues.push("Multiple destination action was not enabled");
-    const layout = await inspectLayout(page, true);
-    issues.push(...layout.issues.map((issue) => issue.message));
+    // A third row exercises sheet scrolling and footer clearance.
+    if (await addDate.count()) await addDate.click();
+    const layout = await inspectLayout(page, viewport, true);
+    issues.push(...layout.issues.map(issueText));
     const screenshot = await capture(page, `calendar-copy-event-${viewport.name}`, viewport, "calendar-copy-event");
-    copyResults.push({ viewport: viewport.name, result: issues.length ? "FAIL" : "PASS", issues, screenshot, details: layout.details });
+    copyResults.push({ viewport: viewport.name, result: issues.length ? "FAIL" : "PASS", issues, screenshot, details: layout.issues.slice(0, 40) });
     await page.keyboard.press("Escape").catch(() => {});
   }
   return copyResults;
@@ -357,12 +357,13 @@ async function writeReport(auth, copyResults) {
   for (const entry of results) {
     if (entry.details?.length) entry.issues.push(`DOM details: ${JSON.stringify(entry.details)}`);
   }
-  for (const entry of copyResults) {
+  for (const entry of [...copyResults, ...sheetResults]) {
     if (entry.details?.length) entry.issues.push(`DOM details: ${JSON.stringify(entry.details)}`);
   }
   const rows = results.map((entry) => `<tr class="${entry.result.toLowerCase()}"><td>${escapeHtml(entry.route)}</td><td>${escapeHtml(entry.viewport)}</td><td>${entry.status ?? ""}</td><td>${escapeHtml(entry.result)}</td><td>${entry.issues.map(escapeHtml).join("<br>") || "—"}</td><td>${entry.screenshot ? `<img src="${escapeHtml(entry.screenshot)}" loading="lazy" alt="${escapeHtml(entry.route)} ${escapeHtml(entry.viewport)}">` : ""}</td></tr>`).join("\n");
   const copyRows = copyResults.map((entry) => `<tr class="${entry.result.toLowerCase().replaceAll(" ", "-")}"><td>${escapeHtml(entry.viewport)}</td><td>${escapeHtml(entry.result)}</td><td>${entry.issues.map(escapeHtml).join("<br>") || "—"}</td><td>${entry.screenshot ? `<img src="${escapeHtml(entry.screenshot)}" loading="lazy" alt="Copy Event ${escapeHtml(entry.viewport)}">` : ""}</td></tr>`).join("\n");
-  const html = `<!doctype html><meta charset="utf-8"><title>MyKhaya Responsive Audit</title><style>body{font:14px system-ui;margin:24px;color:#24312d}table{border-collapse:collapse;width:100%;margin:16px 0}th,td{border:1px solid #d8ded8;padding:8px;vertical-align:top;text-align:left}.pass{background:#edf7ed}.fail{background:#fff0ed}.blocked,.not-tested{background:#fff8df}img{display:block;max-width:320px;max-height:420px;border:1px solid #d8ded8}code{background:#f3f4f1;padding:2px 4px}summary{cursor:pointer}</style><h1>MyKhaya Responsive Audit</h1><p>Base URL: <code>${escapeHtml(BASE)}</code></p><p>Authentication: <strong>${auth.ok ? "PASS" : `BLOCKED — ${escapeHtml(auth.reason)}`}</strong></p><h2>Routes</h2><table><thead><tr><th>Route</th><th>Viewport</th><th>Status</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${rows}</tbody></table><h2>Calendar Copy Event</h2><table><thead><tr><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${copyRows || `<tr><td colspan="4">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Notes</h2><p>BLOCKED means authentication or required data was unavailable. NOT TESTED means the route rendered but the requested interactive component could not be opened. Screenshots are local artifacts under this audit directory.</p>`;
+  const sheetRows = sheetResults.map((entry) => `<tr class="${entry.result.toLowerCase().replaceAll(" ", "-")}"><td>${escapeHtml(entry.route)}</td><td>${escapeHtml(entry.title ?? "")}</td><td>${escapeHtml(entry.viewport)}</td><td>${escapeHtml(entry.result)}</td><td>${entry.issues.map(escapeHtml).join("<br>") || "—"}</td><td>${entry.screenshot ? `<img src="${escapeHtml(entry.screenshot)}" loading="lazy" alt="">` : ""}</td></tr>`).join("\n");
+  const html = `<!doctype html><meta charset="utf-8"><title>MyKhaya Responsive Audit</title><style>body{font:14px system-ui;margin:24px;color:#24312d}table{border-collapse:collapse;width:100%;margin:16px 0}th,td{border:1px solid #d8ded8;padding:8px;vertical-align:top;text-align:left}.pass{background:#edf7ed}.fail{background:#fff0ed}.blocked,.not-tested{background:#fff8df}img{display:block;max-width:320px;max-height:420px;border:1px solid #d8ded8}code{background:#f3f4f1;padding:2px 4px}summary{cursor:pointer}</style><h1>MyKhaya Responsive Audit</h1><p>Base URL: <code>${escapeHtml(BASE)}</code></p><p>Authentication: <strong>${auth.ok ? "PASS" : `BLOCKED — ${escapeHtml(auth.reason)}`}</strong></p><h2>Routes</h2><table><thead><tr><th>Route</th><th>Viewport</th><th>Status</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${rows}</tbody></table><h2>Create sheets</h2><table><thead><tr><th>Route</th><th>Sheet</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${sheetRows || `<tr><td colspan="6">No create sheets opened</td></tr>`}</tbody></table><h2>Calendar Copy Event</h2><table><thead><tr><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${copyRows || `<tr><td colspan="4">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Notes</h2><p>Chromium only. Safe areas are simulated through the --safe-* properties; this is not native WKWebView or physical-device evidence.</p><p>BLOCKED means authentication or required data was unavailable. NOT TESTED means the route rendered but the requested interactive component could not be opened. Screenshots are local artifacts under this audit directory.</p>`;
   await fs.writeFile(path.join(outputDir, "index.html"), html, "utf8");
 }
 
@@ -374,8 +375,13 @@ const auth = await authenticate(page).catch((error) => ({ ok: false, reason: `Au
 const routes = [...publicRoutes, ...consumerRoutes.filter((route) => !publicRoutes.includes(route))];
 for (const viewport of viewports) {
   for (const route of routes) await auditRoute(page, route, viewport, auth.ok);
+  // Kept current after every viewport, so an interrupted run still leaves
+  // its measurements behind.
+  await fs.writeFile(path.join(outputDir, "results.partial.json"), JSON.stringify({ results, sheetResults }, null, 2));
 }
 const copyResults = auth.ok ? await auditCopyEvent(page) : [];
 await writeReport(auth, copyResults);
 await browser.close();
-console.log(JSON.stringify({ baseUrl: BASE, outputDir, authenticated: auth.ok, authReason: auth.reason ?? null, routeResults: results.length, copyResults: copyResults.length }, null, 2));
+const tally = (entries) => entries.reduce((counts, entry) => ({ ...counts, [entry.result]: (counts[entry.result] ?? 0) + 1 }), {});
+console.log(JSON.stringify({ baseUrl: BASE, outputDir, authenticated: auth.ok, authReason: auth.reason ?? null, routes: tally(results), createSheets: tally(sheetResults), copyEvent: tally(copyResults) }, null, 2));
+process.exitCode = [...results, ...sheetResults, ...copyResults].some((entry) => entry.result === "FAIL") || !auth.ok ? 1 : 0;

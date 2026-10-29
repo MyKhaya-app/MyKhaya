@@ -504,15 +504,33 @@ textarea {
   color: var(--colour-slate);
   font: inherit;
   min-height: 47px;
+  /* A control is never allowed to force its container wider than it is:
+     without this, a grid or flex item floors at the control's intrinsic
+     min-content width (large for native date/time controls). */
+  min-width: 0;
   padding: 0.75rem 0.85rem;
   width: 100%;
+}
+/* iOS WebKit draws date/time inputs with its own platform appearance and
+   theme-adjusted intrinsic size, which ignores width: 100% + min-width: 0 and
+   pushes the control past its container (Copy Event on the iPhone Duo).
+   Chromium does not do this, which is why browser audits never saw it.
+   Zero specificity, so any module rule that styles these controls still wins;
+   the native picker itself is unaffected. Consumer surfaces only: the
+   Platform Control Centre (.pcc-root) owns its own control styling. */
+:where(input[type="date"], input[type="time"], input[type="datetime-local"], input[type="month"]):where(:not(.pcc-root *)) {
+  -webkit-appearance: none;
+  appearance: none;
 }
 
 /* Shared native date/time controls. WebKit gives these inputs a larger
    intrinsic line box than ordinary selects, especially inside bottom sheets.
    Keep the native picker and indicator, but give the control the same box
-   model, height, padding and text scale as the rest of consumer forms. */
-.consumer-date-time-control {
+   model, height, padding and text scale as the rest of consumer forms.
+   FormField (components/form-layout.tsx) applies it to every date/time
+   control it hosts. */
+.consumer-date-time-control,
+.form-field > :is(input[type="date"], input[type="time"], input[type="datetime-local"], input[type="month"]) {
   -webkit-appearance: none;
   appearance: none;
   box-sizing: border-box;
@@ -522,7 +540,8 @@ textarea {
   min-height: 47px;
   padding-block: 0.65rem;
 }
-.consumer-date-time-control::-webkit-calendar-picker-indicator {
+.consumer-date-time-control::-webkit-calendar-picker-indicator,
+.form-field > :is(input[type="date"], input[type="time"], input[type="datetime-local"], input[type="month"])::-webkit-calendar-picker-indicator {
   margin-left: 0.35rem;
   opacity: 0.65;
   width: 1rem;
@@ -3825,10 +3844,13 @@ html.native-shell .home-section-overlap {
     min-width: 40px;
     padding-inline: 0;
   }
+  /* The action group keeps its content width; only the month label gives
+     way (min-width at 380px and below), so a squeeze can never push the
+     last action outside the group. */
   .calendar-page .calendar-month-row-actions {
+    flex: none;
     gap: 0.2rem;
     margin-left: 0;
-    min-width: 0;
   }
   .calendar-page .calendar-month-row-actions .icon-button {
     min-height: 40px;
@@ -3903,8 +3925,11 @@ html.native-shell .home-section-overlap {
     height: 14px;
     width: 14px;
   }
+  /* At 320px the row has 99px left for the label: enough for the longest
+     ("September 2026", 97.5px), but not for the 7rem floor above. */
   .calendar-page .calendar-month-label {
     font-size: 0.84rem;
+    min-width: 0;
   }
 }
 .calendar-add-desktop {
@@ -4633,9 +4658,29 @@ body.sheet-open {
   display: flex;
   inset: 0;
   justify-content: center;
-  padding-top: max(1rem, var(--safe-top));
+  /* Side insets keep the sheet, and the close button in its header, out of
+     the left/right safe areas: on the iPhone Duo the status indicator is
+     drawn inside the right inset, and on a notched iPhone in landscape the
+     sensor housing sits inside one side. Both are 0 in portrait and in
+     browsers, so the portrait sheet is unchanged. */
+  padding: max(1rem, var(--safe-top)) var(--safe-right) 0 var(--safe-left);
   position: fixed;
   z-index: 30;
+}
+/* Set by BottomSheet only while the software keyboard reduces the visual
+   viewport (syncSheetToVisualViewport): the backdrop follows the visual
+   viewport, so the sheet and its footer stay above the keyboard. */
+.sheet-backdrop.sheet-follows-visual-viewport {
+  bottom: auto;
+  height: var(--sheet-viewport-height);
+  top: var(--sheet-viewport-top);
+}
+.sheet-backdrop.sheet-follows-visual-viewport > .bottom-sheet {
+  max-height: 100%;
+}
+/* The home indicator is under the keyboard, so the footer needs no inset. */
+.sheet-backdrop.sheet-follows-visual-viewport .sheet-footer {
+  padding-bottom: 0.75rem;
 }
 .bottom-sheet {
   background: var(--colour-white);
@@ -4687,6 +4732,13 @@ body.sheet-open {
   min-height: 34px;
   min-width: 34px;
   padding: 0;
+  position: relative;
+}
+/* A 44x44 hit area around the 34px visual circle. */
+.bottom-sheet-close::after {
+  content: "";
+  inset: -5px;
+  position: absolute;
 }
 .sheet-handle {
   background: #c9cbc7;
@@ -4713,6 +4765,11 @@ body.sheet-open {
   overscroll-behavior: contain;
   padding: 0.8rem 1.3125rem calc(1.5rem + var(--safe-bottom));
   width: 100%;
+}
+/* With a footer, the footer is what sits on the home indicator and already
+   pads for it (.sheet-footer), so the body needs no second inset. */
+.bottom-sheet.has-footer > .sheet-content {
+  padding-bottom: 1.5rem;
 }
 .sheet-primary {
   margin-top: 1rem;
@@ -5318,11 +5375,116 @@ select.icon-row-control {
   justify-content: center;
   min-height: 44px;
 }
-.copy-event-form {
+/* Shared form layout: components/form-layout.tsx, docs/design/forms.md.
+   Containment contract: every primitive is border-box (global * rule),
+   min-width: 0, and lays out on minmax(0, 1fr)/min(100%, ...) tracks, so no
+   control can be wider than the container it sits in. Spacing uses one
+   rhythm: 1rem between sections, 0.75rem between fields, 0.4rem between a
+   label and its control. Mobile/base rules only; no breakpoint is needed
+   because FormRow responds to its own container width. */
+.form-layout {
   display: grid;
   gap: 1rem;
+  grid-template-columns: minmax(0, 1fr);
+  margin: 0;
+  min-width: 0;
 }
+.form-section {
+  border: 0;
+  margin: 0;
+  /* Fieldsets default to min-inline-size: min-content, which lets the
+     widest control set the fieldset's width. */
+  min-inline-size: 0;
+  min-width: 0;
+  padding: 0;
+}
+.form-section-title {
+  color: var(--colour-forest);
+  font-weight: 700;
+  padding: 0;
+}
+/* A plain section's legend is taken out of the fieldset border so it lays
+   out as an ordinary heading. */
+.form-section:not(.form-section-framed) > .form-section-title {
+  float: left;
+  margin-bottom: 0.6rem;
+  width: 100%;
+}
+.form-section:not(.form-section-framed) > .form-section-title + .form-section-body {
+  clear: both;
+}
+.form-section-framed {
+  border: 1px solid var(--colour-line);
+  border-radius: 0.85rem;
+  padding: 0.85rem;
+}
+.form-section-framed > .form-section-title {
+  padding: 0 0.35rem;
+}
+.form-section-divider {
+  border-top: 1px solid var(--colour-line);
+  padding-top: 1rem;
+}
+/* The grid lives here rather than on the <fieldset>: WebKit has
+   historically ignored display: grid/flex on fieldsets. */
+.form-section-body {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+}
+.form-section-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+/* Up to --form-row-columns equal columns, each at least --form-row-min wide
+   (never wider than the row). When the row cannot fit that many, auto-fit
+   drops to fewer columns, down to one stacked column. */
+.form-row {
+  --form-row-gap: 0.75rem;
+  display: grid;
+  gap: var(--form-row-gap);
+  grid-template-columns: repeat(
+    auto-fit,
+    minmax(
+      min(100%, max(var(--form-row-min, 8.5rem), (100% - (var(--form-row-columns, 2) - 1) * var(--form-row-gap)) / var(--form-row-columns, 2))),
+      1fr
+    )
+  );
+  min-width: 0;
+}
+.form-row > .form-wide {
+  grid-column: 1 / -1;
+}
+.form-field {
+  align-content: start;
+  display: grid;
+  gap: 0.4rem;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+}
+.form-field > :is(input, select, textarea) {
+  /* Matches the rest of the app, where controls nested in a <label>
+     inherit its 700 weight. */
+  font-weight: 700;
+  max-width: 100%;
+  min-width: 0;
+  width: 100%;
+}
+.form-field-hint {
+  color: var(--colour-muted);
+  font-size: 0.82rem;
+  line-height: 1.45;
+  margin: 0;
+}
+/* Form actions outside a sheet footer sit after the fields. */
+.form-layout > .form-actions {
+  margin-top: 0.25rem;
+}
+
 .copy-event-source {
+
   background: var(--colour-sage-soft);
   border-radius: 0.75rem;
   display: grid;
@@ -5335,49 +5497,6 @@ select.icon-row-control {
   font-weight: 700;
   letter-spacing: 0.08em;
   text-transform: uppercase;
-}
-.copy-event-destinations {
-  display: grid;
-  gap: 0.9rem;
-}
-.copy-event-destination {
-  border: 1px solid var(--colour-line);
-  border-radius: 0.85rem;
-  display: grid;
-  gap: 0.75rem;
-  margin: 0;
-  min-width: 0;
-  padding: 0.85rem;
-}
-.copy-event-destination legend {
-  color: var(--colour-forest);
-  font-weight: 700;
-  padding: 0 0.35rem;
-}
-.copy-event-form label,
-.copy-event-times label {
-  display: grid;
-  gap: 0.4rem;
-  min-width: 0;
-}
-.copy-event-form input {
-  box-sizing: border-box;
-  min-height: 44px;
-  min-width: 0;
-  width: 100%;
-}
-.copy-event-times {
-  display: grid;
-  gap: 0.75rem;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-}
-.copy-event-remove {
-  justify-self: start;
-}
-@media (max-width: 359px) {
-  .copy-event-times {
-    grid-template-columns: 1fr;
-  }
 }
 .control-tabs {
   display: flex;
@@ -12248,8 +12367,11 @@ a.family-feed-row {
   .app-shell:not(.native-shell-app) .bottom-nav {
     display: none;
   }
+  /* Room for the floating Around-the-house dock (measured by
+     around-house-dock.tsx: its height plus its 1rem offset and a 1rem gap)
+     so the end of every page can scroll clear of it. */
   .app-shell:not(.native-shell-app) .app-main {
-    padding-bottom: calc(10rem + var(--safe-bottom));
+    padding-bottom: calc(max(10rem, var(--around-house-dock-height, 0px) + 2rem) + var(--safe-bottom));
   }
   .app-shell:not(.native-shell-app) .app-content-scroll-region {
     min-width: 0;
@@ -12261,10 +12383,13 @@ a.family-feed-row {
     overflow: hidden;
     position: relative;
   }
+  /* Two columns only once each card can be 20rem wide; tablet portrait
+     (768px beside the rail) stacks the cards at full width rather than
+     squeezing the Today and Coming up rows to unreadable widths. */
   .app-shell:not(.native-shell-app) .home-page {
     display: grid;
     gap: 1rem;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr));
     max-width: 1180px;
     padding: 1rem clamp(1.25rem, 4vw, 4rem) 3rem;
   }
@@ -12382,22 +12507,16 @@ a.family-feed-row {
   }
 }
 
-/* Below 1100px the Around-the-house dock's own actions row wraps onto a
-   second (or third) line — see its plain `flex-wrap` further up, only
-   forced to `nowrap` at 1100px+ — making the dock taller than .rr-fab's
-   default bottom offset (tuned for the dock's single-row height) accounts
-   for. Verified by measurement: at 768–1024px with a full 6-action dock,
-   the dock's top edge can sit above .rr-fab's default position, i.e. they
-   visually collide. Nudges-specific (.rr-fab is not shared with Calendar,
-   whose own equivalent FAB is desktop-hidden entirely — see .calendar-fab),
-   so this raises only this module's own floating button, only in the width
-   range where the taller wrapped dock is actually possible. */
-@media (min-width: 760px) and (max-width: 1099px) {
-  .app-shell:not(.native-shell-app) .rr-fab {
-    bottom: calc(var(--safe-bottom) + 16rem);
-  }
-  .app-shell:not(.native-shell-app) .calendar-fab {
-    bottom: calc(var(--safe-bottom) + 16rem);
+/* The Around-the-house dock wraps onto as many rows as its shortcuts need,
+   so the floating Add buttons sit 1rem above its measured top edge
+   (--around-house-dock-height, set by around-house-dock.tsx, plus the dock's
+   1rem bottom offset) rather than at an offset tuned for one dock height.
+   Never lower than their default position when no dock is shown. */
+@media (min-width: 760px) {
+  .app-shell:not(.native-shell-app) :is(.rr-fab, .calendar-fab) {
+    bottom: calc(
+      max(var(--bottom-nav-height) + 0.9rem, var(--around-house-dock-height, 0px) + 2rem) + var(--safe-bottom)
+    );
   }
 }
 
@@ -12528,6 +12647,10 @@ a.family-feed-row {
 }
 
 @media (min-width: 760px) {
+  /* The shortcuts sit beside the heading while they have room for a useful
+     row (30rem), and wrap beneath it at tablet widths instead of being
+     squeezed into a narrow column. The shortcuts themselves wrap at every
+     width, so none can spill out of the dock. */
   .app-shell:not(.native-shell-app) .around-house-dock {
     align-items: center;
     background: var(--colour-white);
@@ -12535,20 +12658,31 @@ a.family-feed-row {
     border-radius: var(--radius-card);
     bottom: 1rem;
     box-shadow: var(--shadow-card);
-    display: grid;
-    gap: 1rem;
-    grid-template-columns: minmax(145px, 0.28fr) minmax(0, 1fr);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.6rem 1rem;
     left: calc(224px + clamp(1rem, 3vw, 4rem));
     padding: 0.7rem 1rem;
     position: fixed;
     right: clamp(1rem, 3vw, 4rem);
     z-index: 20;
   }
+  .app-shell:not(.native-shell-app) .around-house-dock-heading {
+    min-width: 145px;
+  }
+  .app-shell:not(.native-shell-app) .around-house-dock-actions {
+    flex: 1 1 30rem;
+  }
+  /* Content-sized, so a row only wraps when the labels genuinely do not
+     fit (a 100px basis wrapped rows that had room once shrunk). */
+  .app-shell:not(.native-shell-app) .around-house-dock-action {
+    flex-basis: auto;
+  }
 }
 
 @media (min-width: 1100px) {
   .app-shell:not(.native-shell-app) .app-main {
-    padding-bottom: calc(7rem + var(--safe-bottom));
+    padding-bottom: calc(max(7rem, var(--around-house-dock-height, 0px) + 2rem) + var(--safe-bottom));
   }
   .app-shell:not(.native-shell-app) .home-page {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(280px, 1.05fr);
@@ -12578,9 +12712,6 @@ a.family-feed-row {
   .app-shell:not(.native-shell-app) .home-page > .home-around-house-card {
     grid-column: 3;
     grid-row: 3;
-  }
-  .app-shell:not(.native-shell-app) .around-house-dock-actions {
-    flex-wrap: nowrap;
   }
   /* Nudges side-by-side threshold: below this, the 760px block above keeps
      Quick add/Categories/Nudge settings stacked full-width beneath the

@@ -4,7 +4,8 @@ import { useEffect, useState } from "react";
 import { usePathname } from "next/navigation";
 import { isNativeShell } from "./native-runtime";
 
-const KEYBOARD_THRESHOLD = 120;
+/** Visual-viewport reduction (CSS px) treated as an open software keyboard. */
+export const KEYBOARD_THRESHOLD = 120;
 
 /**
  * Tracks the temporary visual-viewport reduction caused by the native
