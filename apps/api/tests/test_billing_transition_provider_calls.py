@@ -88,6 +88,86 @@ async def test_preview_uses_provider_amount_without_frontend_math(
     )
     assert result["amount_due"] == 1275
     assert result["next_amount"] == 4999
+    assert result["effective_immediately"] is True
+    assert result["effective_at"] is None
+
+
+@pytest.mark.asyncio
+async def test_preview_reads_item_level_periods_under_current_stripe_api(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_call(func):
+        return func()
+
+    subscription = _subscription()
+    subscription.pop("current_period_start")
+    subscription.pop("current_period_end")
+    subscription["items"]["data"][0]["current_period_start"] = 1_700_000_000
+    subscription["items"]["data"][0]["current_period_end"] = 1_702_592_000
+    monkeypatch.setattr(transitions_module, "call_stripe", fake_call)
+    monkeypatch.setattr(
+        transitions_module.stripe.Subscription,
+        "retrieve",
+        lambda *a, **k: subscription,
+    )
+    monkeypatch.setattr(
+        transitions_module.stripe.Invoice,
+        "create_preview",
+        lambda **kwargs: {"amount_due": 2000, "currency": "gbp"},
+    )
+    async def fake_price(*args):
+        return _price_option("price_ultimate_year", BillingInterval.year, 5900)
+
+    monkeypatch.setattr(transitions_module, "fetch_price_amount", fake_price)
+    result = await preview_subscription_change(
+        _config(), _home(), SubscriptionPlan.ultimate, BillingInterval.year
+    )
+    assert result["effective_immediately"] is True
+    assert result["period_end"].year == 2023
+
+
+@pytest.mark.asyncio
+async def test_multiple_items_select_the_stored_plan_price_safely(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    async def fake_call(func):
+        return func()
+
+    subscription = _subscription()
+    subscription["items"]["data"].append(
+        {"id": "si_addon", "price": {"id": "price_other", "recurring": {"interval": "month"}}}
+    )
+    captured: dict[str, object] = {}
+    monkeypatch.setattr(transitions_module, "call_stripe", fake_call)
+    monkeypatch.setattr(
+        transitions_module.stripe.Subscription,
+        "retrieve",
+        lambda *a, **k: subscription,
+    )
+
+    def fake_preview(**kwargs):
+        captured.update(kwargs)
+        return {"amount_due": 2000, "currency": "gbp"}
+
+    monkeypatch.setattr(transitions_module.stripe.Invoice, "create_preview", fake_preview)
+    async def fake_price(*args):
+        return _price_option("price_ultimate_year", BillingInterval.year, 5900)
+
+    monkeypatch.setattr(transitions_module, "fetch_price_amount", fake_price)
+    await preview_subscription_change(
+        _config(), _home(), SubscriptionPlan.ultimate, BillingInterval.year
+    )
+    assert captured["subscription_details"]["items"][0]["id"] == "si_test"
+
+
+def _price_option(price_id: str, interval: BillingInterval, amount: int) -> PriceOption:
+    return PriceOption(
+        interval=interval,
+        provider_price_id=price_id,
+        currency="gbp",
+        unit_amount=amount,
+        formatted_amount=f"£{amount / 100:.2f}",
+    )
 
 
 @pytest.mark.asyncio

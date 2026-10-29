@@ -1336,6 +1336,7 @@ export interface SubscriptionChangePreview {
   next_amount: number;
   next_amount_formatted: string | null;
   effective_at: string | null;
+  effective_immediately: boolean;
   requires_payment: boolean;
 }
 

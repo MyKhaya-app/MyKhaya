@@ -27,6 +27,7 @@ from mykhaya.models import (
     PermissionProfile,
     Role,
     SubscriptionProvider,
+    SubscriptionPlan,
     SubscriptionStatus,
     TokenPurpose,
     User,
@@ -55,10 +56,13 @@ def _stripe_configured() -> AsyncIterator[None]:
             # behaviour (disabled blocks Checkout) is covered by
             # test_billing_acquisition_gate.py.
             "stripe_billing_acquisition_enabled": True,
+            "stripe_ultimate_acquisition_enabled": True,
             "stripe_secret_key": SecretStr("sk_test_abc123"),
             "stripe_webhook_secret": SecretStr("whsec_test_abc123"),
             "stripe_family_monthly_price_id": "price_month123",
             "stripe_family_annual_price_id": "price_year123",
+            "stripe_ultimate_monthly_price_id": "price_ultimate_month123",
+            "stripe_ultimate_annual_price_id": "price_ultimate_year123",
         }
     )
     app.dependency_overrides[get_settings] = lambda: configured
@@ -202,6 +206,33 @@ async def test_home_admin_can_create_checkout_session(
     )
     assert response.status_code == 200, response.text
     assert response.json()["checkout_url"].startswith("https://checkout.stripe.com")
+
+
+@pytest.mark.asyncio
+async def test_new_home_can_create_ultimate_checkout_with_server_owned_price(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    observed: dict[str, object] = {}
+    monkeypatch.setattr(stripe.Customer, "create", lambda **kw: _fake_customer(kw.get("email", "")))
+
+    def create_checkout(**kwargs: object) -> dict[str, str]:
+        observed.update(kwargs)
+        return _fake_checkout_session(**kwargs)
+
+    monkeypatch.setattr(stripe.checkout.Session, "create", create_checkout)
+    home_id = await _make_home(client, uuid.uuid4().hex[:10])
+    response = await unsafe(
+        client,
+        "POST",
+        f"/api/v1/groups/{home_id}/billing/checkout-session",
+        json={"plan": SubscriptionPlan.ultimate.value, "interval": "year"},
+    )
+    assert response.status_code == 200, response.text
+    assert observed["line_items"] == [{"price": "price_ultimate_year123", "quantity": 1}]
+    assert observed["metadata"] == {
+        "mykhaya_group_id": str(home_id),
+        "mykhaya_plan": "ultimate",
+    }
 
 
 @pytest.mark.asyncio

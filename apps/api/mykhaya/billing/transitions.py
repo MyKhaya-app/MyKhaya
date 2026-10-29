@@ -19,6 +19,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mykhaya.billing.client import StripeRequestError, StripeUnavailableError, call_stripe
 from mykhaya.billing.config import StripeConfig, StripeNotConfiguredError
 from mykhaya.billing.pricing import fetch_price_amount
+from mykhaya.billing.state import extract_period, select_subscription_item
 from mykhaya.models import BillingInterval, HomeSubscription, SubscriptionPlan, SubscriptionStatus
 
 
@@ -93,10 +94,6 @@ def _id(value: Any) -> str | None:
     return None
 
 
-def _items(subscription: dict[str, Any]) -> list[dict[str, Any]]:
-    return (subscription.get("items") or {}).get("data") or []
-
-
 def payment_action_url(subscription: dict[str, Any]) -> str | None:
     invoice = subscription.get("latest_invoice")
     if not isinstance(invoice, dict):
@@ -135,11 +132,18 @@ async def retrieve_owned_subscription(
     return subscription
 
 
-def current_item(subscription: dict[str, Any]) -> dict[str, Any]:
-    items = _items(subscription)
-    if len(items) != 1 or not _id(items[0].get("price") or {}):
+def current_item(
+    subscription: dict[str, Any],
+    *,
+    expected_price_id: str | None = None,
+) -> dict[str, Any]:
+    item = select_subscription_item(subscription, preferred_price_id=expected_price_id)
+    if item is None or not _id(item.get("price") or {}):
         raise InvalidSubscriptionTransition("This subscription cannot be changed automatically.")
-    return items[0]
+    actual_price_id = _id(item.get("price") or {})
+    if expected_price_id and actual_price_id != expected_price_id:
+        raise InvalidSubscriptionTransition("The Stripe subscription price is out of date.")
+    return item
 
 
 async def preview_subscription_change(
@@ -164,7 +168,7 @@ async def preview_subscription_change(
     subscription_id = home.external_subscription_id
     assert customer_id and subscription_id
     subscription = await retrieve_owned_subscription(config, home)
-    item = current_item(subscription)
+    item = current_item(subscription, expected_price_id=home.external_price_id)
     item_id = _id(item)
     assert item_id
     if target_plan == SubscriptionPlan.free:
@@ -195,7 +199,19 @@ async def preview_subscription_change(
     target_price = (
         await fetch_price_amount(config.secret_key, target_price_id) if target_price_id else None
     )
-    period_end = subscription.get("current_period_end")
+    _, period_end_dt = extract_period(subscription, item=item)
+    period_end = int(period_end_dt.timestamp()) if period_end_dt else None
+    plan_rank = {
+        SubscriptionPlan.free: 0,
+        SubscriptionPlan.family: 1,
+        SubscriptionPlan.ultimate: 2,
+    }
+    is_upgrade = plan_rank[target_plan] > plan_rank[home.plan]
+    is_interval_change = target_plan == home.plan and target_interval != home.billing_interval
+    is_immediate = is_upgrade or is_interval_change or (
+        target_plan != SubscriptionPlan.free
+        and home.status == SubscriptionStatus.cancel_at_period_end
+    )
     return {
         "current_plan": home.plan,
         "target_plan": target_plan,
@@ -205,8 +221,11 @@ async def preview_subscription_change(
         "currency": invoice.get("currency") or (target_price.currency if target_price else None),
         "next_amount": target_price.unit_amount if target_price else 0,
         "next_amount_formatted": target_price.formatted_amount if target_price else None,
-        "effective_at": datetime.fromtimestamp(period_end, tz=UTC) if period_end else None,
+        "effective_at": datetime.fromtimestamp(period_end, tz=UTC)
+        if period_end and not is_immediate
+        else None,
         "period_end": datetime.fromtimestamp(period_end, tz=UTC) if period_end else None,
+        "effective_immediately": is_immediate,
         "requires_payment": target_plan != SubscriptionPlan.free
         and int(invoice.get("amount_due") or 0) > 0,
     }
@@ -236,11 +255,12 @@ async def apply_subscription_change(
     subscription_id = home.external_subscription_id
     assert subscription_id
     subscription = await retrieve_owned_subscription(config, home)
-    item = current_item(subscription)
+    item = current_item(subscription, expected_price_id=home.external_price_id)
     item_id = _id(item)
     assert item_id
-    period_end = subscription.get("current_period_end")
-    start = subscription.get("current_period_start")
+    start_dt, period_end_dt = extract_period(subscription, item=item)
+    start = int(start_dt.timestamp()) if start_dt else None
+    period_end = int(period_end_dt.timestamp()) if period_end_dt else None
     if not period_end or not start:
         raise InvalidSubscriptionTransition("Stripe did not return a billing period end.")
     assert config.secret_key

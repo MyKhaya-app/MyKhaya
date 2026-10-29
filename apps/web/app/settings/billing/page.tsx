@@ -765,7 +765,7 @@ export default function PlanAndBillingSettings() {
                 <dl>
                   <div><dt>Due today</dt><dd>{formatPreviewAmount(changePreview.amount_due, changePreview.currency)}</dd></div>
                   <div><dt>Next renewal</dt><dd>{changePreview.next_amount_formatted ?? "Free"}</dd></div>
-                  <div><dt>Effective</dt><dd>{changePreview.effective_at ? formatDate(changePreview.effective_at) : "At the end of this period"}</dd></div>
+                  <div><dt>Effective</dt><dd>{changePreview.effective_immediately ? "Immediately after payment" : changePreview.effective_at ? formatDate(changePreview.effective_at) : "At the end of this period"}</dd></div>
                 </dl>
                 <p className="quiet-state">Stripe calculates the final amount. Existing paid access is retained if payment needs authentication or fails.</p>
                 <button disabled={busy} onClick={() => void confirmChange()}>Confirm change</button>

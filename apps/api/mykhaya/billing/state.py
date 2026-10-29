@@ -103,21 +103,66 @@ def map_stripe_subscription_status(
     return mapped
 
 
-def extract_price_and_interval(
+def select_subscription_item(
     stripe_subscription: dict[str, Any],
-) -> tuple[str | None, BillingInterval | None]:
+    *,
+    preferred_price_id: str | None = None,
+    known_price_ids: set[str] | None = None,
+) -> dict[str, Any] | None:
+    """Select the MyKhaya recurring item without assuming Stripe's order.
+
+    A stored current Price ID is the strongest signal. For webhook and
+    reconciliation payloads, configured MyKhaya Price IDs are the next-best
+    signal. A single-item subscription remains unambiguous even when its
+    grandfathered Price is no longer in current configuration. Multiple items
+    without exactly one matching signal are rejected safely.
+    """
     items = (stripe_subscription.get("items") or {}).get("data") or []
     if not items:
+        return None
+    if preferred_price_id:
+        matches = [
+            item for item in items if _stripe_object_id(item.get("price")) == preferred_price_id
+        ]
+        if len(matches) == 1:
+            return matches[0]
+    if known_price_ids:
+        matches = [
+            item
+            for item in items
+            if (_stripe_object_id(item.get("price")) or "") in known_price_ids
+        ]
+        if len(matches) == 1:
+            return matches[0]
+    return items[0] if len(items) == 1 else None
+
+
+def extract_price_and_interval(
+    stripe_subscription: dict[str, Any],
+    *,
+    preferred_price_id: str | None = None,
+    known_price_ids: set[str] | None = None,
+) -> tuple[str | None, BillingInterval | None]:
+    item = select_subscription_item(
+        stripe_subscription,
+        preferred_price_id=preferred_price_id,
+        known_price_ids=known_price_ids,
+    )
+    if item is None:
         return None, None
-    price = items[0].get("price") or {}
-    price_id = price.get("id")
-    recurring = price.get("recurring") or {}
+    price = item.get("price") or {}
+    price_id = _stripe_object_id(price)
+    recurring = price.get("recurring") or {} if isinstance(price, dict) else {}
     interval_raw = recurring.get("interval")
     interval = BillingInterval(interval_raw) if interval_raw in ("month", "year") else None
     return price_id, interval
 
 
-def extract_period(stripe_subscription: dict[str, Any]) -> tuple[datetime | None, datetime | None]:
+def extract_period(
+    stripe_subscription: dict[str, Any],
+    *,
+    item: dict[str, Any] | None = None,
+) -> tuple[datetime | None, datetime | None]:
     """Stripe's 2025 API versions moved current_period_start/end from the
     subscription object onto its first item for multi-item-subscription
     support. Read the subscription-level fields first (older/simpler
@@ -128,10 +173,11 @@ def extract_period(stripe_subscription: dict[str, Any]) -> tuple[datetime | None
     start = stripe_subscription.get("current_period_start")
     end = stripe_subscription.get("current_period_end")
     if start is None or end is None:
-        items = (stripe_subscription.get("items") or {}).get("data") or []
-        if items:
-            start = start if start is not None else items[0].get("current_period_start")
-            end = end if end is not None else items[0].get("current_period_end")
+        if item is None:
+            item = select_subscription_item(stripe_subscription)
+        if item is not None:
+            start = start if start is not None else item.get("current_period_start")
+            end = end if end is not None else item.get("current_period_end")
     return (
         datetime.fromtimestamp(start, tz=UTC) if start is not None else None,
         datetime.fromtimestamp(end, tz=UTC) if end is not None else None,
@@ -229,7 +275,19 @@ async def apply_stripe_subscription_state(
     ):
         return None
 
-    price_id, interval = extract_price_and_interval(stripe_subscription)
+    known_price_ids = set(plan_by_price or {})
+    item = select_subscription_item(
+        stripe_subscription,
+        preferred_price_id=subscription.external_price_id,
+        known_price_ids=known_price_ids,
+    )
+    if item is None:
+        return None
+    price = item.get("price") or {}
+    price_id = _stripe_object_id(price)
+    recurring = price.get("recurring") or {}
+    interval_raw = recurring.get("interval")
+    interval = BillingInterval(interval_raw) if interval_raw in ("month", "year") else None
     requested_plan = (stripe_subscription.get("metadata") or {}).get("mykhaya_plan")
     price_plan = plan_by_price.get(price_id) if plan_by_price and price_id else None
     try:
@@ -238,7 +296,7 @@ async def apply_stripe_subscription_state(
         )
     except ValueError:
         incoming_plan = SubscriptionPlan.family
-    period_start, period_end = extract_period(stripe_subscription)
+    period_start, period_end = extract_period(stripe_subscription, item=item)
 
     # Out-of-order guard 2: for the *same* subscription ID, current_period_end
     # only ever advances forward until cancellation — a delayed/retried event

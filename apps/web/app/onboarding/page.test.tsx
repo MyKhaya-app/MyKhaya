@@ -30,6 +30,7 @@ vi.mock("@mykhaya/api-client", async (importOriginal) => {
       requestHomeJoin: vi.fn(),
       betaContinuation: vi.fn(),
       publicSignupState: vi.fn(),
+      publicLegalDocuments: vi.fn(),
     },
   };
 });
@@ -55,6 +56,10 @@ beforeEach(() => {
   vi.clearAllMocks();
   localStorage.clear();
   betaContinuation.mockResolvedValue(NOT_BETA);
+  (api.publicLegalDocuments as unknown as ReturnType<typeof vi.fn>).mockResolvedValue([
+    { key: "terms", current_version_id: "terms-1", current_version: "1.0", display_name: "Terms", audience: "adult", acceptance_required: true, action_verb: "accept", scope: "global" },
+    { key: "privacy", current_version_id: "privacy-1", current_version: "1.0", display_name: "Privacy", audience: "adult", acceptance_required: true, action_verb: "accept", scope: "global" },
+  ]);
 });
 
 /** The page first asks the server whether this is a Founding Beta account. */
@@ -178,6 +183,43 @@ describe("Onboarding — Join an existing Home", () => {
     // Still able to sign out normally from this state.
     await user.click(screen.getByRole("button", { name: "Sign out" }));
     expect(push).toHaveBeenCalledWith("/login");
+  });
+});
+
+describe("Onboarding — Paid plan selection", () => {
+  it("offers Ultimate from the actual plan step and sends the selected plan to Checkout", async () => {
+    const user = userEvent.setup();
+    post.mockResolvedValue({ id: "home-1" });
+    (api.familyPricing as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      plan: "family",
+      options: [
+        { interval: "month", provider: "stripe", currency: "gbp", unit_amount: 399, formatted_amount: "£3.99" },
+        { interval: "year", provider: "stripe", currency: "gbp", unit_amount: 3900, formatted_amount: "£39.00" },
+      ],
+      annual_saving_formatted: "£8.88",
+      annual_is_best_value: true,
+      acquisition_enabled: true,
+      ultimate_options: [
+        { interval: "month", provider: "stripe", currency: "gbp", unit_amount: 599, formatted_amount: "£5.99" },
+        { interval: "year", provider: "stripe", currency: "gbp", unit_amount: 5900, formatted_amount: "£59.00" },
+      ],
+      ultimate_annual_saving_formatted: "£12.88",
+      ultimate_annual_is_best_value: true,
+      ultimate_acquisition_enabled: true,
+    });
+    (api.createCheckoutSession as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+      checkout_url: "https://checkout.stripe.test/session",
+    });
+    await renderOnboarding();
+    await user.click(screen.getByRole("button", { name: "Create a new Home" }));
+    await user.type(screen.getByLabelText("Home name"), "Test Home");
+    await user.click(screen.getByRole("button", { name: "Create our Home" }));
+    expect(await screen.findByRole("heading", { name: "Choose your MyKhaya plan" })).toBeInTheDocument();
+    expect(screen.getByText("Ultimate")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Upgrade to Ultimate" }));
+    await waitFor(() =>
+      expect(api.createCheckoutSession).toHaveBeenCalledWith("home-1", "month", "ultimate"),
+    );
   });
 });
 

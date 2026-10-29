@@ -16,7 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mykhaya.billing.client import call_stripe
 from mykhaya.billing.config import StripeConfig, StripeNotConfiguredError
 from mykhaya.billing.diagnostics import record_billing_diagnostic
-from mykhaya.billing.state import apply_stripe_subscription_state
+from mykhaya.billing.state import apply_stripe_subscription_state, select_subscription_item
 from mykhaya.entitlements import (
     ensure_home_subscription,
     get_home_subscription,
@@ -117,14 +117,14 @@ async def confirm_checkout_session(
     if subscription_group_raw and str(subscription_group_raw) != str(group_id):
         raise CheckoutConfirmationError("The Stripe subscription does not belong to this Home.")
 
-    items = (stripe_subscription.get("items") or {}).get("data") or []
-    price_id = (items[0].get("price") or {}).get("id") if items else None
     configured_prices = {
         config.family_monthly_price_id,
         config.family_annual_price_id,
         config.ultimate_monthly_price_id,
         config.ultimate_annual_price_id,
     }
+    item = select_subscription_item(stripe_subscription, known_price_ids=configured_prices)
+    price_id = _stripe_id(item.get("price")) if item else None
     if price_id not in configured_prices:
         raise CheckoutConfirmationError(
             "The Stripe subscription does not use a configured MyKhaya plan price."

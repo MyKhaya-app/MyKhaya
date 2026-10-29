@@ -477,6 +477,7 @@ async def subscription_change_preview(
         next_amount=preview["next_amount"],
         next_amount_formatted=preview["next_amount_formatted"],
         effective_at=preview["effective_at"].isoformat() if preview["effective_at"] else None,
+        effective_immediately=preview["effective_immediately"],
         requires_payment=preview["requires_payment"],
     )
 
@@ -713,7 +714,7 @@ async def confirm_checkout(
         reconciliation_result="confirmed" if confirmed else "pending",
     )
     return CheckoutConfirmationResponse(
-        confirmed=confirmed and resolved_plan == SubscriptionPlan.family,
+        confirmed=confirmed and resolved_plan in (SubscriptionPlan.family, SubscriptionPlan.ultimate),
         effective_plan=resolved_plan,
         subscription_status=subscription.status,
     )

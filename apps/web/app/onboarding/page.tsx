@@ -150,7 +150,7 @@ export default function Onboarding() {
     router.push("/home");
   }
 
-  async function upgradeToFamily(plan: "family" | "ultimate" = requestedPlan) {
+  async function startPaidCheckout(plan: "family" | "ultimate") {
     if (!homeId || busy) return;
     setBusy(true);
     setError("");
@@ -249,7 +249,7 @@ export default function Onboarding() {
                     disabled={busy || !ultimatePricingOptionFor(pricing, billingInterval)}
                     onClick={() => {
                       setRequestedPlan("ultimate");
-                      void upgradeToFamily("ultimate");
+                      void startPaidCheckout("ultimate");
                     }}
                   >
                     {busy ? "One moment…" : "Upgrade to Ultimate"}
@@ -357,6 +357,7 @@ export default function Onboarding() {
 
   if (step === "plan") {
     const selected = pricing ? pricingOptionFor(pricing, billingInterval) : null;
+    const selectedUltimate = pricing ? ultimatePricingOptionFor(pricing, billingInterval) : null;
     const saving = pricing ? savingLabelFor(pricing, billingInterval) : null;
     const bestValue = pricing ? isBestValueInterval(pricing, billingInterval) : false;
     const paidCheckoutLegalReady = Boolean(
@@ -370,6 +371,25 @@ export default function Onboarding() {
           <p className="step">Your plan</p>
           <h1>Choose your MyKhaya plan</h1>
           <p className="muted">You can change this at any time from Settings.</p>
+
+          <div className="interval-toggle" role="group" aria-label="Billing interval">
+            <button
+              type="button"
+              className={billingInterval === "month" ? "toggle-active" : "secondary"}
+              aria-pressed={billingInterval === "month"}
+              onClick={() => setBillingInterval("month")}
+            >
+              Monthly
+            </button>
+            <button
+              type="button"
+              className={billingInterval === "year" ? "toggle-active" : "secondary"}
+              aria-pressed={billingInterval === "year"}
+              onClick={() => setBillingInterval("year")}
+            >
+              Annual
+            </button>
+          </div>
 
           <div className="feature-card-grid pricing-cards">
             <article className="card feature-card">
@@ -394,24 +414,6 @@ export default function Onboarding() {
                 {bestValue && <span className="release-badge core">Best value</span>}
               </div>
               <p className="muted">The complete MyKhaya experience for your whole household.</p>
-              <div className="interval-toggle" role="group" aria-label="Billing interval">
-                <button
-                  type="button"
-                  className={billingInterval === "month" ? "toggle-active" : "secondary"}
-                  aria-pressed={billingInterval === "month"}
-                  onClick={() => setBillingInterval("month")}
-                >
-                  Monthly
-                </button>
-                <button
-                  type="button"
-                  className={billingInterval === "year" ? "toggle-active" : "secondary"}
-                  aria-pressed={billingInterval === "year"}
-                  onClick={() => setBillingInterval("year")}
-                >
-                  Annual
-                </button>
-              </div>
               {pricingError ? (
                 <p className="notice error" role="alert">
                   Family pricing is temporarily unavailable.
@@ -451,13 +453,59 @@ export default function Onboarding() {
               ) : (
                 <button
                   type="button"
+                  aria-pressed={requestedPlan === "family"}
                   disabled={busy || pricingError || !selected || !paidCheckoutLegalReady}
-                  onClick={() => void upgradeToFamily()}
+                  onClick={() => void startPaidCheckout("family")}
                 >
                   {busy ? "One moment…" : "Upgrade to Family"}
                 </button>
               )}
             </article>
+
+            {pricing?.ultimate_options?.length ? (
+              <article className="card feature-card">
+                <div className="feature-card-heading">
+                  <h3>Ultimate</h3>
+                  {billingInterval === "year" && pricing.ultimate_annual_is_best_value && (
+                    <span className="release-badge core">Best value</span>
+                  )}
+                </div>
+                <p className="muted">
+                  Everything in Family, plus Budget, Driveway and future premium modules.
+                </p>
+                {!selectedUltimate ? (
+                  <p role="status">Ultimate pricing is temporarily unavailable.</p>
+                ) : (
+                  <>
+                    <p className="pricing-amount">
+                      <strong>{selectedUltimate.formatted_amount}</strong>
+                      <span aria-hidden="true"> / {intervalSuffix(billingInterval)}</span>
+                      <span className="sr-only"> per {billingInterval}</span>
+                    </p>
+                    <p className="hint">
+                      Renews {billingInterval === "month" ? "monthly" : "annually"} until cancelled.
+                      {billingInterval === "year" && pricing.ultimate_annual_saving_formatted
+                        ? ` Save ${pricing.ultimate_annual_saving_formatted} per year.`
+                        : ""}
+                    </p>
+                    {!canStartUltimateCheckout(pricing) ? (
+                      <p className="notice" role="status">
+                        New Ultimate sign-ups are temporarily paused.
+                      </p>
+                    ) : (
+                      <button
+                        type="button"
+                        aria-pressed={requestedPlan === "ultimate"}
+                        disabled={busy || !paidCheckoutLegalReady}
+                        onClick={() => void startPaidCheckout("ultimate")}
+                      >
+                        {busy ? "One moment..." : "Upgrade to Ultimate"}
+                      </button>
+                    )}
+                  </>
+                )}
+              </article>
+            ) : null}
           </div>
         </section>
       </main>

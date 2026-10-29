@@ -15,6 +15,7 @@ from mykhaya.billing.state import (
     extract_period,
     extract_price_and_interval,
     map_stripe_subscription_status,
+    select_subscription_item,
 )
 from mykhaya.db import SessionFactory
 from mykhaya.entitlements import get_home_subscription
@@ -153,6 +154,60 @@ def test_extract_period_falls_back_to_item_level_fields() -> None:
     start, end = extract_period(subscription)
     assert start == datetime.fromtimestamp(1_700_000_000, tz=UTC)
     assert end == datetime.fromtimestamp(1_702_592_000, tz=UTC)
+
+
+def test_multiple_items_require_a_unique_known_plan_price() -> None:
+    subscription = {
+        "items": {
+            "data": [
+                {"id": "si_addon", "price": {"id": "price_other"}},
+                {
+                    "id": "si_plan",
+                    "price": {"id": "price_family", "recurring": {"interval": "year"}},
+                    "current_period_start": 1_700_000_000,
+                    "current_period_end": 1_702_592_000,
+                },
+            ]
+        }
+    }
+    assert select_subscription_item(subscription, known_price_ids={"price_family"})["id"] == "si_plan"
+    assert select_subscription_item(subscription) is None
+    price_id, interval = extract_price_and_interval(
+        subscription, known_price_ids={"price_family"}
+    )
+    assert (price_id, interval) == ("price_family", BillingInterval.year)
+
+
+@pytest.mark.asyncio
+async def test_apply_uses_item_level_periods_and_known_plan_item() -> None:
+    home_id = await _make_home()
+    subscription = _stripe_subscription(
+        id_="sub_item_periods",
+        price_id="price_ultimate",
+        interval="year",
+    )
+    subscription.pop("current_period_start")
+    subscription.pop("current_period_end")
+    plan_item = subscription["items"]["data"][0]
+    plan_item["id"] = "si_ultimate"
+    plan_item["current_period_start"] = 1_700_000_000
+    plan_item["current_period_end"] = 1_702_592_000
+    subscription["items"]["data"].append({"id": "si_addon", "price": {"id": "price_other"}})
+
+    async with SessionFactory() as db:
+        result = await apply_stripe_subscription_state(
+            db,
+            group_id=home_id,
+            stripe_subscription=subscription,
+            actor_administrator_id=None,
+            reason="item-period regression",
+            event_type_hint="stripe_subscription_updated",
+            plan_by_price={"price_ultimate": SubscriptionPlan.ultimate},
+        )
+        await db.commit()
+        assert result is not None
+        assert result.plan == SubscriptionPlan.ultimate
+        assert result.current_period_end == datetime.fromtimestamp(1_702_592_000, tz=UTC)
 
 
 # ---------------------------------------------------------------------------

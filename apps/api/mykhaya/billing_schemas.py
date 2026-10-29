@@ -82,6 +82,7 @@ class SubscriptionChangePreviewResponse(BaseModel):
     next_amount: int
     next_amount_formatted: str | None
     effective_at: str | None
+    effective_immediately: bool
     requires_payment: bool
 
 
