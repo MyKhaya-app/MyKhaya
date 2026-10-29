@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, type FormEvent, type ReactNode } from "react";
+import { useId, type FormEvent, type ReactNode, type Ref } from "react";
 import { BottomSheet } from "./bottom-sheet";
 
 // Shared consumer form layout primitives. See docs/design/forms.md for when
@@ -15,17 +15,26 @@ export function FormLayout({
   className,
   id,
   onSubmit,
+  noValidate = true,
+  ref,
+  tabIndex,
 }: {
   children: ReactNode;
   className?: string;
   id?: string;
   /** Renders a <form> when given; otherwise a plain <div>. */
   onSubmit?: (event: FormEvent<HTMLFormElement>) => void;
+  /** Form only. Pass false to keep the browser's own required/min checks. */
+  noValidate?: boolean;
+  /** Form only. */
+  ref?: Ref<HTMLFormElement>;
+  /** Form only: -1 lets the form itself take focus when it opens. */
+  tabIndex?: number;
 }) {
   const classes = `form-layout${className ? ` ${className}` : ""}`;
   if (onSubmit) {
     return (
-      <form id={id} className={classes} onSubmit={onSubmit} noValidate>
+      <form id={id} ref={ref} className={classes} onSubmit={onSubmit} noValidate={noValidate} tabIndex={tabIndex}>
         {children}
       </form>
     );

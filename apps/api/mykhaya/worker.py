@@ -36,7 +36,11 @@ from mykhaya.notifications.lifecycle import (
 from mykhaya.notifications.nudges import deliver_daily_nudge_summary, deliver_nudge_summary
 from mykhaya.notifications.push import (
     ApnsPermanentError,
+    FcmAuthenticationError,
+    FcmConfigurationError,
+    FcmInvalidRequestError,
     FcmPermanentError,
+    FcmTransientError,
     is_subscription_gone,
     resolve_apns_config,
     resolve_fcm_config,
@@ -220,6 +224,24 @@ async def _process_native_push(db: AsyncSession, settings: Settings, event: Outb
         device.disabled_at = datetime.now(UTC)
         device.disabled_reason = "FCM rejected this device registration."
         device.disabled_source = NativePushDisabledSource.provider
+    except FcmConfigurationError:
+        delivery.status = NotificationDeliveryStatus.cancelled
+        delivery.attempted_at = datetime.now(UTC)
+        delivery.sanitised_failure_reason = "FCM service configuration is invalid."
+    except FcmAuthenticationError:
+        delivery.status = NotificationDeliveryStatus.cancelled
+        delivery.attempted_at = datetime.now(UTC)
+        delivery.sanitised_failure_reason = "FCM authentication failed."
+    except FcmInvalidRequestError:
+        delivery.status = NotificationDeliveryStatus.cancelled
+        delivery.attempted_at = datetime.now(UTC)
+        delivery.sanitised_failure_reason = "FCM rejected the notification request."
+    except FcmTransientError:
+        delivery.status = NotificationDeliveryStatus.failed
+        delivery.attempted_at = datetime.now(UTC)
+        delivery.retry_count += 1
+        delivery.sanitised_failure_reason = "Native push service temporarily unavailable."
+        raise
     except _UnsupportedNativePlatform:
         # Not retryable — no code path will ever know how to send to this
         # platform. Cancel rather than fail-and-retry-forever.

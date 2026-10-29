@@ -4790,200 +4790,6 @@ body.sheet-open {
   display: grid;
   gap: 0.65rem;
 }
-.event-section-heading {
-  align-items: center;
-  display: flex;
-  justify-content: space-between;
-}
-/* Date/Start/End: at most 2 columns, so 3 fields never have to share a row
-   at narrow widths (that was the source of the End field overflowing on
-   mobile) — Start+End sit side by side, Date/Starts/Ends gets its own row. */
-.event-when-grid {
-  display: grid;
-  gap: 0.75rem;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-}
-.event-when-grid .form-wide {
-  grid-column: 1 / -1;
-}
-/* Grid items default to min-width: auto, which floors at the item's
-   min-content size — for a native <input type="time"> (Safari/iOS
-   especially) that intrinsic size can exceed half the row, so the two
-   columns' minmax(0, 1fr) tracks never actually get to shrink the inputs:
-   they overflow their cells and visually collide at the midpoint instead of
-   leaving the gap above. Explicitly zeroing min-width on both the grid item
-   (the <label>) and the input itself is what actually lets each field
-   shrink to its column. Scoped to the event date/time controls only. */
-.event-when-grid > label {
-  min-width: 0;
-}
-.event-when-grid input[type="date"],
-.event-when-grid input[type="time"] {
-  box-sizing: border-box;
-  min-width: 0;
-  width: 100%;
-}
-/* Date "info card": icon circle, stacked caption + native value, decorative
-   chevron — one bordered row, replacing the plain oversized native-looking
-   input. The native <input type="date"> stays fully functional underneath
-   (real semantics, real iOS behaviour); only its chrome is stripped so it
-   reads as the "value" line of the card. */
-.datetime-card {
-  align-items: center;
-  background: #fffefa;
-  border: 1px solid #d9d7d0;
-  border-radius: var(--radius-small);
-  display: flex;
-  gap: 0.6rem;
-  padding: 0.45rem 0.75rem;
-}
-.datetime-card-icon {
-  align-items: center;
-  background: var(--colour-sage-soft);
-  border-radius: 50%;
-  color: var(--colour-sage-dark);
-  display: flex;
-  flex: none;
-  height: 32px;
-  justify-content: center;
-  width: 32px;
-}
-.datetime-card-body {
-  display: grid;
-  flex: 1;
-  gap: 0.05rem;
-  min-width: 0;
-}
-.datetime-card-caption {
-  color: var(--colour-muted);
-  font-size: 0.72rem;
-  font-weight: 700;
-}
-.datetime-card-input {
-  background: none;
-  border: 0;
-  color: var(--colour-slate);
-  font-size: 1rem;
-  font-weight: 700;
-  min-height: auto;
-  padding: 0;
-  width: 100%;
-}
-.datetime-card-chevron {
-  color: var(--colour-muted);
-  flex: none;
-  pointer-events: none;
-}
-/* Chromium/Android renders its own calendar-picker icon inside the input,
-   duplicating our decorative icon/chevron either side of it. Hiding it is
-   visual only — the indicator (and the click-to-open behaviour it drives)
-   stays in place at full size, just invisible, so tapping anywhere on the
-   card still opens the native picker. */
-.datetime-card-input::-webkit-calendar-picker-indicator,
-.time-card-input::-webkit-calendar-picker-indicator {
-  opacity: 0;
-}
-/* Start/End: the caption ("Start"/"End") is the outer <label>'s own text,
-   laid out above via the base `label { display: grid }` rule — this is just
-   the compact icon + value card underneath it. */
-.time-card {
-  align-items: center;
-  background: #fffefa;
-  border: 1px solid #d9d7d0;
-  border-radius: var(--radius-small);
-  display: flex;
-  gap: 0.5rem;
-  min-width: 0;
-  padding: 0.6rem 0.7rem;
-}
-.time-card-icon {
-  color: var(--colour-muted);
-  flex: none;
-}
-.time-card-input {
-  background: none;
-  border: 0;
-  color: var(--colour-slate);
-  font-size: 1rem;
-  font-weight: 700;
-  min-height: auto;
-  min-width: 0;
-  padding: 0;
-  width: 100%;
-}
-/* Calendar/category and Location rows — an icon circle, the real
-   select/input stripped to look like a value, and (for the select) a
-   decorative chevron. Same card language as the date/time controls above. */
-.icon-row {
-  align-items: center;
-  background: #fffefa;
-  border: 1px solid #d9d7d0;
-  border-radius: var(--radius-small);
-  display: flex;
-  gap: 0.6rem;
-  padding: 0.5rem 0.75rem;
-}
-.icon-row-icon {
-  align-items: center;
-  background: var(--colour-sage-soft);
-  border-radius: 50%;
-  color: var(--colour-sage-dark);
-  display: flex;
-  flex: none;
-  height: 30px;
-  justify-content: center;
-  width: 30px;
-}
-.icon-row-control {
-  background: none;
-  border: 0;
-  color: var(--colour-slate);
-  flex: 1;
-  font-size: 0.95rem;
-  font-weight: 700;
-  min-height: auto;
-  min-width: 0;
-  padding: 0;
-}
-.icon-row-control::placeholder {
-  color: var(--colour-muted);
-  font-weight: 500;
-}
-select.icon-row-control {
-  appearance: none;
-}
-.icon-row-chevron {
-  color: var(--colour-muted);
-  flex: none;
-  pointer-events: none;
-}
-/* Subtle pill secondary action, replacing the underlined link-button look
-   for the one control that toggles a real state change (multi-day). */
-.pill-button {
-  background: var(--colour-white);
-  border: 1px solid var(--colour-sage-soft);
-  border-radius: 999px;
-  color: var(--colour-sage-dark);
-  font-size: 0.8rem;
-  font-weight: 700;
-  justify-self: center;
-  min-height: 38px;
-  padding: 0.4rem 1.1rem;
-}
-.pill-button:hover {
-  background: var(--colour-sage-soft);
-  box-shadow: none;
-  transform: none;
-}
-.event-when-toggle {
-  align-items: center;
-  color: var(--colour-slate);
-  display: flex;
-  font-size: 0.85rem;
-  font-weight: 600;
-  gap: 0.5rem;
-  min-height: 44px;
-}
 .check-row {
   align-items: center;
   display: flex;
@@ -5060,9 +4866,9 @@ select.icon-row-control {
 }
 /* Compact switch, styled from a native checkbox so it keeps full checkbox
    semantics/keyboard behaviour for free — no separate ARIA switch role to
-   maintain. Sized to sit quietly next to the "All day" label rather than
-   dominate the When heading; the wrapping .event-when-toggle label keeps a
-   full accessible tap target regardless of this visual size. */
+   maintain. Sized to sit quietly next to its label (Calendar's "All day")
+   rather than dominate it; the wrapping label keeps a full accessible tap
+   target regardless of this visual size. */
 .switch {
   appearance: none;
   background: #d9d7d0;
@@ -5317,9 +5123,6 @@ select.icon-row-control {
     transition: none;
   }
 }
-.advanced-fields {
-  margin-top: 1rem;
-}
 .danger-link {
   background: transparent;
   color: #9d332f;
@@ -5481,6 +5284,34 @@ select.icon-row-control {
 /* Form actions outside a sheet footer sit after the fields. */
 .form-layout > .form-actions {
   margin-top: 0.25rem;
+}
+
+/* Calendar event editor (EventForm in app/calendar/page.tsx), built on the
+   shared primitives above; only what they do not cover lives here. */
+.calendar-event-all-day {
+  align-items: center;
+  color: var(--colour-slate);
+  display: flex;
+  font-weight: 600;
+  justify-content: space-between;
+  min-height: 44px;
+}
+.calendar-event-advanced-icon {
+  align-items: center;
+  background: var(--colour-sage-soft);
+  border-radius: 50%;
+  color: var(--colour-sage-dark);
+  display: flex;
+  flex: none;
+  height: 30px;
+  justify-content: center;
+  width: 30px;
+}
+.calendar-event-form .event-advanced > .form-layout {
+  padding-top: 0.5rem;
+}
+.calendar-event-form .danger-link {
+  justify-self: start;
 }
 
 .copy-event-source {
@@ -5688,21 +5519,6 @@ select.icon-row-control {
   input,
   select,
   textarea {
-    font-size: 16px;
-  }
-  /* .icon-row-control (below) sets its own 0.95rem font-size with higher
-     specificity (a class selector) than the plain-type-selector rule just
-     above, silently defeating it for the one *text* input that shares that
-     class — Location (app/calendar/page.tsx). Its <select> siblings
-     (Calendar, Calendar Tag) also carry the class but never need this: a
-     <select> opens a native picker, never triggers WebKit's
-     zoom-on-focus-of-a-small-font-input behaviour, so this targets
-     input.icon-row-control specifically rather than widening scope. Below
-     the 16px WebKit threshold, focusing Location auto-zoomed the whole
-     page in, and the zoom was still in effect when the event sheet closed
-     afterwards — the reported "calendar looks zoomed/shifted after saving
-     an event with a Location" bug traced to exactly this. */
-  input.icon-row-control {
     font-size: 16px;
   }
   .event-form label {
@@ -8327,9 +8143,9 @@ button.danger,
    min-content size — a native <input type="time"> especially on iOS/Safari
    has a wide intrinsic min-content width that can exceed half of a narrow
    viewport, so the minmax(0, 1fr) tracks above never actually get to shrink
-   below it and the row overflows its container instead of wrapping. Same
-   fix as .event-when-grid in Calendar's event form: zero min-width on both
-   the grid item (the <label>) and the select/input itself. */
+   below it and the row overflows its container instead of wrapping. The fix
+   is zero min-width on both the grid item (the <label>) and the
+   select/input itself, as the shared FormRow/FormField primitives do. */
 .meal-time-row > label {
   min-width: 0;
 }
@@ -8365,10 +8181,9 @@ button.danger,
   grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
 }
 /* "Plan meal" sheet (PlanFromMealSheet): Date + Meal as two clearly separate,
-   evenly sized fields — same bordered-row language as Calendar's
-   datetime-card/icon-row controls, just single-line (icon/value on one row,
-   no stacked caption) so the pair reads compactly instead of stretching the
-   sheet tall. Stacks below ~360px so neither field gets cramped. */
+   evenly sized fields in a bordered-row language, single-line (icon/value
+   on one row, no stacked caption) so the pair reads compactly instead of
+   stretching the sheet tall. Stacks below ~360px so neither field gets cramped. */
 .plan-meal-form {
   gap: 1rem;
   margin-top: 1rem;

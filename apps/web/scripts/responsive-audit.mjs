@@ -246,6 +246,105 @@ async function auditRoute(page, route, viewport, authenticated) {
   await page.waitForTimeout(150);
 }
 
+// Opens existing calendar events in turn until one's sheet offers an enabled
+// `action` button (Copy event, Edit). Recurring or shared events may not, so
+// a first row without it is not missing coverage. In the wide layout a
+// month-grid event focuses its day, and the day's events are then opened
+// from the day sheet or side pane. Returns the button, null when no event
+// offers it, or undefined when the calendar has no events at all.
+async function openEventWithAction(page, action) {
+  const events = page.locator(".month-event, .event-row");
+  // Events load after the page; a fixed pause alone can miss them on a busy
+  // machine and misreport an empty calendar.
+  await events.first().waitFor({ state: "attached", timeout: 5000 }).catch(() => {});
+  if (!(await events.count())) return undefined;
+  const actionButton = () => page.locator(".bottom-sheet").last().getByRole("button", { name: action, exact: true });
+  const closeSheets = async () => {
+    for (let attempt = 0; attempt < 3 && await page.locator(".bottom-sheet").count(); attempt += 1) {
+      await page.keyboard.press("Escape").catch(() => {});
+      await page.waitForTimeout(100);
+    }
+  };
+  const tryOpen = async (target, nested = false) => {
+    if (!(await target.isVisible())) return false;
+    await target.click({ timeout: 3000 }).catch(() => {});
+    await page.waitForTimeout(250);
+    if (await actionButton().count() && !(await actionButton().isDisabled())) return true;
+    if (!nested) {
+      const dayRows = page.locator(".bottom-sheet .event-row, .calendar-expanded-agenda-section .event-row");
+      const rowCount = await dayRows.count();
+      for (let rowIndex = 0; rowIndex < rowCount; rowIndex += 1) {
+        if (await tryOpen(dayRows.nth(rowIndex), true)) return true;
+      }
+    }
+    if (!nested) await closeSheets();
+    return false;
+  };
+  for (let eventIndex = 0; eventIndex < await events.count(); eventIndex += 1) {
+    if (await tryOpen(events.nth(eventIndex))) return actionButton();
+  }
+  return null;
+}
+
+// The Calendar event editor in its longest states, measured with
+// scroll-to-reveal reachability: Add event with multi-day, the advanced
+// disclosure open and a recurrence ending on a date; then Edit on an existing
+// event. Nothing is submitted: Add is dismissed and Edit is cancelled.
+async function auditEventEditor(page) {
+  const editorResults = [];
+  for (const viewport of viewports) {
+    for (const state of ["add", "edit"]) {
+      await page.setViewportSize({ width: viewport.width, height: viewport.height });
+      await page.goto(`${BASE}/calendar`, { waitUntil: "domcontentloaded", timeout: 30000 });
+      await applyInsets(page, viewport);
+      await page.waitForTimeout(700);
+      const issues = [];
+      if (state === "add") {
+        const add = page.locator("button.calendar-fab:visible, button.calendar-add-desktop:visible").first();
+        if (!(await add.count())) {
+          editorResults.push({ viewport: viewport.name, state, result: "NOT TESTED", issues: ["No visible Add event action"] });
+          continue;
+        }
+        await add.click({ timeout: 3000 }).catch(() => {});
+      } else {
+        const edit = await openEventWithAction(page, "Edit");
+        if (!edit) {
+          editorResults.push({ viewport: viewport.name, state, result: "NOT TESTED", issues: ["No existing event offered Edit"] });
+          continue;
+        }
+        await edit.click();
+      }
+      await page.waitForTimeout(350);
+      const sheet = page.locator(".bottom-sheet").last();
+      const form = sheet.locator("form.calendar-event-form");
+      if (!(await form.count())) {
+        editorResults.push({ viewport: viewport.name, state, result: "FAIL", issues: ["The event editor did not open on the shared form layout"] });
+        await page.keyboard.press("Escape").catch(() => {});
+        continue;
+      }
+      await sheet.locator(".event-advanced summary").click();
+      if (state === "add") {
+        await sheet.getByRole("button", { name: "Ends on another day" }).click();
+        await sheet.getByLabel("Repeat", { exact: true }).selectOption("weekly");
+        await sheet.locator("select[name=recurrence_end_mode]").selectOption("on_date");
+        for (const label of ["Title", "Starts", "Ends", "Start time", "End time", "Calendar", "Location", "Reminder", "End date", "Notes"]) {
+          if (!(await sheet.getByLabel(label, { exact: true }).count())) issues.push(`No field labelled "${label}"`);
+        }
+      }
+      await page.waitForTimeout(150);
+      const layout = await inspectLayout(page, viewport, true);
+      issues.push(...layout.issues.map(issueText));
+      const screenshot = await capture(page, `calendar-event-editor-${state}-${viewport.name}`, viewport, `calendar-event-editor-${state}`);
+      editorResults.push({ viewport: viewport.name, state, result: issues.length ? "FAIL" : "PASS", issues, screenshot, details: layout.issues.slice(0, 40) });
+      const cancel = sheet.getByRole("button", { name: "Cancel", exact: true });
+      if (await cancel.count()) await cancel.click().catch(() => {});
+      await page.keyboard.press("Escape").catch(() => {});
+      await page.waitForTimeout(150);
+    }
+  }
+  return editorResults;
+}
+
 async function auditCopyEvent(page) {
   const copyResults = [];
   for (const viewport of viewports) {
@@ -253,46 +352,12 @@ async function auditCopyEvent(page) {
     await page.goto(`${BASE}/calendar`, { waitUntil: "domcontentloaded", timeout: 30000 });
     await applyInsets(page, viewport);
     await page.waitForTimeout(700);
-    const events = page.locator(".month-event, .event-row");
-    if (!(await events.count())) {
+    const copyButton = await openEventWithAction(page, "Copy event");
+    if (copyButton === undefined) {
       copyResults.push({ viewport: viewport.name, result: "NOT TESTED", issues: ["No existing calendar event was available"] });
       continue;
     }
-
-    // Recurring events deliberately cannot be copied. Try the populated
-    // fixture events until the first event that supports Copy Event is found,
-    // rather than treating a recurring first row as missing coverage. In the
-    // wide layout a month-grid event focuses its day, and the day's events
-    // are then opened from the side pane's event list.
-    let copyButton = page.locator(".bottom-sheet").last().getByRole("button", { name: "Copy event", exact: true });
-    const closeSheets = async () => {
-      for (let attempt = 0; attempt < 3 && await page.locator(".bottom-sheet").count(); attempt += 1) {
-        await page.keyboard.press("Escape").catch(() => {});
-        await page.waitForTimeout(100);
-      }
-    };
-    // A click may open the event itself, or (wide layouts) a day sheet or
-    // side pane listing that day's events, which are tried in turn.
-    const tryOpen = async (target, nested = false) => {
-      if (!(await target.isVisible())) return false;
-      await target.click({ timeout: 3000 }).catch(() => {});
-      await page.waitForTimeout(250);
-      copyButton = page.locator(".bottom-sheet").last().getByRole("button", { name: "Copy event", exact: true });
-      if (await copyButton.count()) return true;
-      if (!nested) {
-        const dayRows = page.locator(".bottom-sheet .event-row, .calendar-expanded-agenda-section .event-row");
-        const rowCount = await dayRows.count();
-        for (let rowIndex = 0; rowIndex < rowCount; rowIndex += 1) {
-          if (await tryOpen(dayRows.nth(rowIndex), true)) return true;
-        }
-      }
-      if (!nested) await closeSheets();
-      return false;
-    };
-    for (let eventIndex = 0; eventIndex < await events.count(); eventIndex += 1) {
-      if (await tryOpen(events.nth(eventIndex))) break;
-    }
-    if (!(await copyButton.count())) {
+    if (!copyButton) {
       copyResults.push({ viewport: viewport.name, result: "NOT TESTED", issues: ["No populated non-recurring event exposed Copy event"] });
       continue;
     }
@@ -353,17 +418,18 @@ async function auditCopyEvent(page) {
   return copyResults;
 }
 
-async function writeReport(auth, copyResults) {
+async function writeReport(auth, copyResults, editorResults) {
   for (const entry of results) {
     if (entry.details?.length) entry.issues.push(`DOM details: ${JSON.stringify(entry.details)}`);
   }
-  for (const entry of [...copyResults, ...sheetResults]) {
+  for (const entry of [...copyResults, ...editorResults, ...sheetResults]) {
     if (entry.details?.length) entry.issues.push(`DOM details: ${JSON.stringify(entry.details)}`);
   }
   const rows = results.map((entry) => `<tr class="${entry.result.toLowerCase()}"><td>${escapeHtml(entry.route)}</td><td>${escapeHtml(entry.viewport)}</td><td>${entry.status ?? ""}</td><td>${escapeHtml(entry.result)}</td><td>${entry.issues.map(escapeHtml).join("<br>") || "—"}</td><td>${entry.screenshot ? `<img src="${escapeHtml(entry.screenshot)}" loading="lazy" alt="${escapeHtml(entry.route)} ${escapeHtml(entry.viewport)}">` : ""}</td></tr>`).join("\n");
   const copyRows = copyResults.map((entry) => `<tr class="${entry.result.toLowerCase().replaceAll(" ", "-")}"><td>${escapeHtml(entry.viewport)}</td><td>${escapeHtml(entry.result)}</td><td>${entry.issues.map(escapeHtml).join("<br>") || "—"}</td><td>${entry.screenshot ? `<img src="${escapeHtml(entry.screenshot)}" loading="lazy" alt="Copy Event ${escapeHtml(entry.viewport)}">` : ""}</td></tr>`).join("\n");
+  const editorRows = editorResults.map((entry) => `<tr class="${entry.result.toLowerCase().replaceAll(" ", "-")}"><td>${escapeHtml(entry.viewport)}</td><td>${escapeHtml(entry.state)}</td><td>${escapeHtml(entry.result)}</td><td>${entry.issues.map(escapeHtml).join("<br>") || "—"}</td><td>${entry.screenshot ? `<img src="${escapeHtml(entry.screenshot)}" loading="lazy" alt="Event editor ${escapeHtml(entry.state)} ${escapeHtml(entry.viewport)}">` : ""}</td></tr>`).join("\n");
   const sheetRows = sheetResults.map((entry) => `<tr class="${entry.result.toLowerCase().replaceAll(" ", "-")}"><td>${escapeHtml(entry.route)}</td><td>${escapeHtml(entry.title ?? "")}</td><td>${escapeHtml(entry.viewport)}</td><td>${escapeHtml(entry.result)}</td><td>${entry.issues.map(escapeHtml).join("<br>") || "—"}</td><td>${entry.screenshot ? `<img src="${escapeHtml(entry.screenshot)}" loading="lazy" alt="">` : ""}</td></tr>`).join("\n");
-  const html = `<!doctype html><meta charset="utf-8"><title>MyKhaya Responsive Audit</title><style>body{font:14px system-ui;margin:24px;color:#24312d}table{border-collapse:collapse;width:100%;margin:16px 0}th,td{border:1px solid #d8ded8;padding:8px;vertical-align:top;text-align:left}.pass{background:#edf7ed}.fail{background:#fff0ed}.blocked,.not-tested{background:#fff8df}img{display:block;max-width:320px;max-height:420px;border:1px solid #d8ded8}code{background:#f3f4f1;padding:2px 4px}summary{cursor:pointer}</style><h1>MyKhaya Responsive Audit</h1><p>Base URL: <code>${escapeHtml(BASE)}</code></p><p>Authentication: <strong>${auth.ok ? "PASS" : `BLOCKED — ${escapeHtml(auth.reason)}`}</strong></p><h2>Routes</h2><table><thead><tr><th>Route</th><th>Viewport</th><th>Status</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${rows}</tbody></table><h2>Create sheets</h2><table><thead><tr><th>Route</th><th>Sheet</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${sheetRows || `<tr><td colspan="6">No create sheets opened</td></tr>`}</tbody></table><h2>Calendar Copy Event</h2><table><thead><tr><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${copyRows || `<tr><td colspan="4">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Notes</h2><p>Chromium only. Safe areas are simulated through the --safe-* properties; this is not native WKWebView or physical-device evidence.</p><p>BLOCKED means authentication or required data was unavailable. NOT TESTED means the route rendered but the requested interactive component could not be opened. Screenshots are local artifacts under this audit directory.</p>`;
+  const html = `<!doctype html><meta charset="utf-8"><title>MyKhaya Responsive Audit</title><style>body{font:14px system-ui;margin:24px;color:#24312d}table{border-collapse:collapse;width:100%;margin:16px 0}th,td{border:1px solid #d8ded8;padding:8px;vertical-align:top;text-align:left}.pass{background:#edf7ed}.fail{background:#fff0ed}.blocked,.not-tested{background:#fff8df}img{display:block;max-width:320px;max-height:420px;border:1px solid #d8ded8}code{background:#f3f4f1;padding:2px 4px}summary{cursor:pointer}</style><h1>MyKhaya Responsive Audit</h1><p>Base URL: <code>${escapeHtml(BASE)}</code></p><p>Authentication: <strong>${auth.ok ? "PASS" : `BLOCKED — ${escapeHtml(auth.reason)}`}</strong></p><h2>Routes</h2><table><thead><tr><th>Route</th><th>Viewport</th><th>Status</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${rows}</tbody></table><h2>Create sheets</h2><table><thead><tr><th>Route</th><th>Sheet</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${sheetRows || `<tr><td colspan="6">No create sheets opened</td></tr>`}</tbody></table><h2>Calendar Copy Event</h2><table><thead><tr><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${copyRows || `<tr><td colspan="4">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Calendar event editor</h2><table><thead><tr><th>Viewport</th><th>State</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${editorRows || `<tr><td colspan="5">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Notes</h2><p>Chromium only. Safe areas are simulated through the --safe-* properties; this is not native WKWebView or physical-device evidence.</p><p>BLOCKED means authentication or required data was unavailable. NOT TESTED means the route rendered but the requested interactive component could not be opened. Screenshots are local artifacts under this audit directory.</p>`;
   await fs.writeFile(path.join(outputDir, "index.html"), html, "utf8");
 }
 
@@ -380,8 +446,9 @@ for (const viewport of viewports) {
   await fs.writeFile(path.join(outputDir, "results.partial.json"), JSON.stringify({ results, sheetResults }, null, 2));
 }
 const copyResults = auth.ok ? await auditCopyEvent(page) : [];
-await writeReport(auth, copyResults);
+const editorResults = auth.ok ? await auditEventEditor(page) : [];
+await writeReport(auth, copyResults, editorResults);
 await browser.close();
 const tally = (entries) => entries.reduce((counts, entry) => ({ ...counts, [entry.result]: (counts[entry.result] ?? 0) + 1 }), {});
-console.log(JSON.stringify({ baseUrl: BASE, outputDir, authenticated: auth.ok, authReason: auth.reason ?? null, routes: tally(results), createSheets: tally(sheetResults), copyEvent: tally(copyResults) }, null, 2));
-process.exitCode = [...results, ...sheetResults, ...copyResults].some((entry) => entry.result === "FAIL") || !auth.ok ? 1 : 0;
+console.log(JSON.stringify({ baseUrl: BASE, outputDir, authenticated: auth.ok, authReason: auth.reason ?? null, routes: tally(results), createSheets: tally(sheetResults), copyEvent: tally(copyResults), eventEditor: tally(editorResults) }, null, 2));
+process.exitCode = [...results, ...sheetResults, ...copyResults, ...editorResults].some((entry) => entry.result === "FAIL") || !auth.ok ? 1 : 0;

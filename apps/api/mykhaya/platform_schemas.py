@@ -852,6 +852,7 @@ class TimelineEntryResponse(BaseModel):
     status: str
     friendly_status: str
     recipient_display_name: str | None
+    provider: str | None
     retry_count: int
 
 
@@ -868,6 +869,7 @@ class DiagnosticsEntryResponse(BaseModel):
     channel: str
     status: str
     recipient_email: str | None
+    provider: str | None
     sanitised_failure_reason: str | None
     retry_count: int
     idempotency_key: str

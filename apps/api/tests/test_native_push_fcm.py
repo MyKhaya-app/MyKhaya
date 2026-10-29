@@ -20,7 +20,15 @@ from cryptography.hazmat.primitives.serialization import (
 
 from mykhaya.models import NativePushDevice
 from mykhaya.notifications import push
-from mykhaya.notifications.push import FcmConfig, FcmPermanentError, send_fcm
+from mykhaya.notifications.push import (
+    FcmAuthenticationError,
+    FcmConfig,
+    FcmConfigurationError,
+    FcmInvalidRequestError,
+    FcmPermanentError,
+    FcmTransientError,
+    send_fcm,
+)
 
 
 def _private_key_pem() -> str:
@@ -127,6 +135,17 @@ def test_send_fcm_exchanges_token_then_sends_notification_and_data_payload(
     ]
 
 
+def test_invalid_fcm_private_key_is_configuration_failure_without_network_call(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    fake = _install(monkeypatch)
+
+    with pytest.raises(FcmConfigurationError):
+        send_fcm(_config(private_key="not-a-private-key"), _device(), {"title": "T", "body": "B"})
+
+    assert fake.requests == []
+
+
 def test_fcm_access_token_uses_rs256_and_service_account_claims(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -197,8 +216,32 @@ def test_send_fcm_treats_invalid_argument_as_retryable_not_permanent(
     }
     config = _config()
 
-    with pytest.raises(httpx.HTTPStatusError):
+    with pytest.raises(FcmInvalidRequestError):
         send_fcm(config, _device(), {"title": "T", "body": "B"})
+
+
+@pytest.mark.parametrize("status", [401, 403])
+def test_send_fcm_classifies_authentication_failures_as_permanent(
+    monkeypatch: pytest.MonkeyPatch, status: int
+) -> None:
+    fake = _install(monkeypatch)
+    fake.send_response_status = status
+    fake.send_response_body = {"error": {"code": status, "status": "PERMISSION_DENIED"}}
+
+    with pytest.raises(FcmAuthenticationError):
+        send_fcm(_config(), _device(), {"title": "T", "body": "B"})
+
+
+@pytest.mark.parametrize("status", [408, 429, 500, 503])
+def test_send_fcm_classifies_provider_outages_as_retryable(
+    monkeypatch: pytest.MonkeyPatch, status: int
+) -> None:
+    fake = _install(monkeypatch)
+    fake.send_response_status = status
+    fake.send_response_body = {"error": {"code": status, "status": "UNAVAILABLE"}}
+
+    with pytest.raises(FcmTransientError):
+        send_fcm(_config(), _device(), {"title": "T", "body": "B"})
 
 
 def test_send_fcm_logs_safe_failure_diagnostics_without_body_or_token(
@@ -213,11 +256,19 @@ def test_send_fcm_logs_safe_failure_diagnostics_without_body_or_token(
     monkeypatch.setattr(push.log, "error", lambda *args, **kwargs: captured.append((args, kwargs)))
     config = _config()
 
-    with pytest.raises(httpx.HTTPStatusError):
+    with pytest.raises(FcmTransientError):
         send_fcm(config, _device(), {"title": "T", "body": "B"})
 
     assert captured == [
-        (("fcm_delivery_failed",), {"status": 500, "error_code": "INTERNAL", "retryable": True})
+        (
+            ("fcm_delivery_failed",),
+            {
+                "provider": "fcm",
+                "status": 500,
+                "error_code": "INTERNAL",
+                "retryable": True,
+            },
+        )
     ]
     logged = json.dumps(captured)
     assert "fcm-registration-token" not in logged
@@ -290,3 +341,54 @@ def test_resolve_fcm_config_requires_all_three_service_account_fields(
     config = push.resolve_fcm_config(settings)
 
     assert config.configured is False
+
+
+def test_production_settings_reject_dev_fcm_project() -> None:
+    from pydantic import ValidationError
+
+    from mykhaya.config import Settings
+
+    with pytest.raises(ValidationError, match="must be mykhaya-prod"):
+        Settings(
+            _env_file=None,
+            environment="production",
+            secret_key="test-only-secret-key-never-used-in-production-1234",
+            cookie_secure=True,
+            admin_mfa_required=True,
+            admin_url="https://admin.mykhaya.app",
+            admin_allowed_networks=["127.0.0.1/32"],
+            fcm_project_id="mykhaya-dev-faf55",
+        )
+
+
+def test_production_settings_require_complete_fcm_configuration() -> None:
+    from pydantic import ValidationError
+
+    from mykhaya.config import Settings
+
+    with pytest.raises(ValidationError, match="requires project ID"):
+        Settings(
+            _env_file=None,
+            environment="production",
+            secret_key="test-only-secret-key-never-used-in-production-1234",
+            cookie_secure=True,
+            admin_mfa_required=True,
+            admin_url="https://admin.mykhaya.app",
+            status_url="https://status.mykhaya.app",
+            public_web_url="https://mykhaya.app",
+            native_api_url="https://api.mykhaya.app",
+            admin_allowed_networks=["127.0.0.1/32"],
+            trusted_hosts=[
+                "localhost",
+                "127.0.0.1",
+                "admin.mykhaya.app",
+                "status.mykhaya.app",
+                "mykhaya.app",
+                "api.mykhaya.app",
+            ],
+            cors_origins=["https://mykhaya.app", "https://admin.mykhaya.app"],
+            fcm_delivery_configured=True,
+            fcm_project_id="mykhaya-prod",
+            fcm_client_email=None,
+            fcm_private_key=None,
+        )

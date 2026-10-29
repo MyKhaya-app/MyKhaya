@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+import { createRef } from "react";
 import { describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, within } from "@testing-library/react";
 import { FormField, FormLayout, FormRow, FormSection, FormSheet } from "./form-layout";
@@ -26,6 +27,32 @@ describe("FormField", () => {
     const input = screen.getByLabelText("Name");
     expect(input).not.toHaveAttribute("aria-invalid");
     expect(input).not.toHaveAttribute("aria-describedby");
+  });
+});
+
+describe("FormLayout", () => {
+  it("renders a form that skips browser validation by default", () => {
+    const { container } = render(<FormLayout onSubmit={() => {}}><input required /></FormLayout>);
+    expect(container.querySelector("form.form-layout")).toHaveAttribute("novalidate");
+  });
+
+  it("can keep browser validation and take focus itself", () => {
+    const ref = createRef<HTMLFormElement>();
+    const { container } = render(
+      <FormLayout id="event-form" onSubmit={() => {}} noValidate={false} ref={ref} tabIndex={-1}>
+        <input required />
+      </FormLayout>,
+    );
+    const form = container.querySelector("form")!;
+    expect(form).not.toHaveAttribute("novalidate");
+    expect(form).toHaveAttribute("tabindex", "-1");
+    expect(ref.current).toBe(form);
+  });
+
+  it("renders a plain container without onSubmit", () => {
+    const { container } = render(<FormLayout><p>Body</p></FormLayout>);
+    expect(container.querySelector("div.form-layout")).not.toBeNull();
+    expect(container.querySelector("form")).toBeNull();
   });
 });
 

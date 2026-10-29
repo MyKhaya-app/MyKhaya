@@ -22,7 +22,15 @@ services:
       MYKHAYA_COOKIE_SECURE: "true"
       MYKHAYA_ADMIN_MFA_REQUIRED: "true"
   worker:
-    environment: *production_api_environment
+    environment:
+      <<: *production_api_environment
+      # FCM is deliberately explicit in the production overlay. The values are
+      # supplied by the production host's uncommitted .env; Settings rejects a
+      # non-production project before the worker can deliver anything.
+      MYKHAYA_FCM_DELIVERY_CONFIGURED: "${MYKHAYA_FCM_DELIVERY_CONFIGURED:-false}"
+      MYKHAYA_FCM_PROJECT_ID: "${MYKHAYA_FCM_PROJECT_ID:-}"
+      MYKHAYA_FCM_CLIENT_EMAIL: "${MYKHAYA_FCM_CLIENT_EMAIL:-}"
+      MYKHAYA_FCM_PRIVATE_KEY: "${MYKHAYA_FCM_PRIVATE_KEY:-}"
   scheduler:
     environment: *production_api_environment
   migrate:

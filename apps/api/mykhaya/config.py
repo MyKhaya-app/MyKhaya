@@ -396,6 +396,37 @@ class Settings(BaseSettings):
             )
         return self
 
+    @model_validator(mode="after")
+    def validate_production_fcm_configuration(self) -> "Settings":
+        """Keep production FCM on the production Firebase project.
+
+        FCM is deployment-only configuration. A production process may be
+        started with delivery disabled, but it must never be allowed to start
+        a configured sender against a DEV project or with an incomplete PEM.
+        The values themselves are deliberately never included in the error.
+        """
+        if self.environment != "production":
+            return self
+
+        if self.fcm_project_id and self.fcm_project_id != "mykhaya-prod":
+            raise ValueError(
+                "MYKHAYA_FCM_PROJECT_ID must be mykhaya-prod in production"
+            )
+
+        if self.fcm_delivery_configured:
+            if not (self.fcm_project_id and self.fcm_client_email and self.fcm_private_key):
+                raise ValueError(
+                    "Production FCM delivery requires project ID, client email, and private key"
+                )
+            pem = self.fcm_private_key.get_secret_value().replace("\\n", "\n").strip()
+            if not (
+                pem.startswith("-----BEGIN PRIVATE KEY-----")
+                and pem.endswith("-----END PRIVATE KEY-----")
+            ):
+                raise ValueError("MYKHAYA_FCM_PRIVATE_KEY must contain a PKCS#8 PEM key")
+
+        return self
+
     @field_validator("cookie_secure")
     @classmethod
     def secure_cookie_in_production(cls, value: bool, info: object) -> bool:

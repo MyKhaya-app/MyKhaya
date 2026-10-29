@@ -16,6 +16,7 @@ from mykhaya.db import SessionFactory
 from mykhaya.main import app
 from mykhaya.models import (
     AdministrativeAuditEvent,
+    NativePushDevice,
     NotificationChannel,
     NotificationDelivery,
     NotificationDeliveryStatus,
@@ -26,11 +27,38 @@ from mykhaya.models import (
     User,
 )
 from mykhaya.notifications.labels import friendly_status, notification_type_label
+from mykhaya.routers.communications_admin import _delivery_provider
 from mykhaya.security import password_hash
 
 ADMIN_ORIGIN = "http://admin.localhost:8080"
 ADMIN_PASSWORD = "A separate operator password!"
 AdminFactory = Callable[[PlatformRole], Awaitable[PlatformAdministrator]]
+
+
+def test_delivery_provider_labels_without_exposing_tokens() -> None:
+    android = NativePushDevice(
+        id=uuid.uuid4(),
+        platform="android",
+        token="secret-token",
+        installation_id="android-install",
+    )
+    ios = NativePushDevice(
+        id=uuid.uuid4(),
+        platform="ios",
+        token="secret-token",
+        installation_id="ios-install",
+    )
+    devices = {android.id: android, ios.id: ios}
+
+    assert _delivery_provider(
+        NotificationDelivery(native_push_device_id=android.id), devices
+    ) == "Android · FCM"
+    assert _delivery_provider(
+        NotificationDelivery(native_push_device_id=ios.id), devices
+    ) == "iOS · APNs"
+    assert _delivery_provider(
+        NotificationDelivery(push_subscription_id=uuid.uuid4()), devices
+    ) == "Web Push"
 
 
 @pytest.fixture
@@ -296,6 +324,7 @@ async def test_diagnostics_filters_by_status_and_channel(
     assert len(items) == 1
     assert items[0]["status"] == "failed"
     assert items[0]["sanitised_failure_reason"] == "Device unsubscribed or expired."
+    assert items[0]["provider"] is None
 
     by_channel = await admin_client.get(
         "/api/v1/platform/communications/diagnostics",

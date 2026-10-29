@@ -314,7 +314,7 @@ def test_send_apns_classifies_device_rejection_as_permanent(
     ("status", "reason", "retryable", "exception"),
     [
         (400, "BadDeviceToken", False, ApnsPermanentError),
-        (403, "InvalidProviderToken", False, httpx.HTTPStatusError),
+        (403, "BadEnvironmentKeyInToken", False, ApnsPermanentError),
         (410, "Unregistered", False, ApnsPermanentError),
         (500, "InternalServerError", True, httpx.HTTPStatusError),
     ],
@@ -347,6 +347,7 @@ def test_send_apns_logs_safe_failure_diagnostics(
         (
             ("apns_delivery_failed",),
             {
+                "provider": "apns",
                 "status": status,
                 "reason": reason,
                 "request_id": "request-id-123",
@@ -377,7 +378,7 @@ def test_send_apns_failure_diagnostics_never_log_response_body_or_secrets(
         private_key=_private_key_pem(),
     )
 
-    with pytest.raises(httpx.HTTPStatusError):
+    with pytest.raises(ApnsPermanentError):
         send_apns(config, _device(), {"title": "T", "body": "B"})
 
     logged = json.dumps(captured)

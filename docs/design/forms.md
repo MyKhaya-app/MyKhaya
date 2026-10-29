@@ -55,6 +55,36 @@ implementation.
   form. Do not nest framed sections.
 - Show validation under the field it concerns (`error`). Use a
   `.notice.error` banner only for form-level or server errors.
+- A notice about a field the form corrected for the user (for example, End
+  moved to stay after Start) is that field's `hint`, so it is announced with
+  the field.
+- Optional, less-used fields can sit in a closed `<details>` disclosure
+  after the main fields. Put a plain `FormLayout` (no `onSubmit`) inside it
+  for the same spacing.
+- `FormLayout` sets `noValidate` by default, for forms that validate
+  themselves, like Copy Event. A form that relies on the browser's own
+  `required` and `min` checks passes `noValidate={false}`.
+
+## Calendar event editor
+
+The Calendar event editor (`EventForm` in `apps/web/app/calendar/page.tsx`)
+is the full-size example:
+
+- Add event is a `FormSheet`. Edit event stays a `BottomSheet` because the
+  same sheet first shows the read-only event; its edit-mode footer is
+  `FormActions` with Save changes and Cancel (back to the event).
+- The form is a `FormLayout` that keeps browser validation and takes focus
+  itself when it opens (`tabIndex={-1}`), so iOS does not zoom into a field.
+- When is a `FormSection`: the All day switch, the date on its own row
+  (Date, or Starts and Ends for a multi-day event), then Start time and End
+  time in a `FormRow`.
+- People is a `FormSection` around the shared member rows.
+- Calendar, Calendar Tag and Location are `FormField`s with visible labels.
+  The Personal and shared calendar notes are the Calendar field's hint.
+- Reminder, Repeat, the recurrence end and Notes sit in the "Reminder, repeat
+  and notes" disclosure, in `FormRow`s with `minColumnWidth="10rem"` so the
+  selects stack on phones. The recurrence end date's validation is that
+  field's `error`.
 
 ## Sheet or dialog
 

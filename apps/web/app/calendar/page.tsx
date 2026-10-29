@@ -9,13 +9,11 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
-  Clock,
   Copy,
   Layers,
   MapPin,
   Plus,
   Search,
-  Tag,
   Trash2,
   Users,
   X,
@@ -39,6 +37,7 @@ import { Avatar } from "@/components/avatar";
 import { AvatarStack } from "@/components/avatar";
 import { participantsForEvent } from "@/components/avatar-stack-logic";
 import { BottomSheet } from "@/components/bottom-sheet";
+import { FormActions, FormField, FormLayout, FormRow, FormSection, FormSheet } from "@/components/form-layout";
 import { isNativeShell } from "@/components/native-runtime";
 import { desktopShellViewport } from "@/components/use-desktop-shell";
 import { NATIVE_COMPACT_RAIL_QUERY, NATIVE_WIDE_QUERY } from "@/components/native-layout";
@@ -527,124 +526,102 @@ function EventForm({
     });
   }
 
+  // The End-after-Start correction notice belongs to whichever end field the
+  // form shows: Ends (a date) for a multi-day event, otherwise End time.
+  const endNotice = rangeNotice || undefined;
+
   return (
-    <form id={formId} className="event-form" onSubmit={submit} ref={formRef} tabIndex={-1}>
-      <label className="form-wide">
-        Title
-        <input
-          name="title"
-          defaultValue={initial?.title ?? ""}
-          required
-          maxLength={180}
-        />
-      </label>
-      <div className="form-wide event-section">
-        <div className="event-section-heading">
-          <span className="eyebrow">When</span>
-          <label className="event-when-toggle">
-            All day
+    <FormLayout
+      id={formId}
+      className="calendar-event-form"
+      onSubmit={submit}
+      // Title, the dates and the recurrence end date rely on the browser's
+      // own required/min checks, exactly as before the shared layout.
+      noValidate={false}
+      ref={formRef}
+      tabIndex={-1}
+    >
+      <FormField label="Title">
+        {(control) => (
+          <input
+            {...control}
+            name="title"
+            defaultValue={initial?.title ?? ""}
+            required
+            maxLength={180}
+          />
+        )}
+      </FormField>
+      <FormSection title="When">
+        <label className="calendar-event-all-day">
+          All day
+          <input
+            className="switch"
+            type="checkbox"
+            role="switch"
+            aria-checked={allDay}
+            checked={allDay}
+            onChange={(event) => onToggleAllDay(event.target.checked)}
+          />
+        </label>
+        <FormField label={multiDay ? "Starts" : "Date"}>
+          {(control) => (
             <input
-              className="switch"
-              type="checkbox"
-              role="switch"
-              aria-checked={allDay}
-              checked={allDay}
-              onChange={(event) => onToggleAllDay(event.target.checked)}
+              {...control}
+              type="date"
+              value={startDate}
+              onChange={(event) => onStartDateChange(event.target.value)}
+              required
             />
-          </label>
-        </div>
-        <div className="event-when-grid">
-          <label className="form-wide datetime-card">
-            <span className="datetime-card-icon" aria-hidden="true">
-              <CalendarDays size={18} />
-            </span>
-            <span className="datetime-card-body">
-              <span className="datetime-card-caption">{multiDay ? "Starts" : "Date"}</span>
+          )}
+        </FormField>
+        {multiDay && (
+          <FormField label="Ends" hint={endNotice}>
+            {(control) => (
               <input
-                className="datetime-card-input"
+                {...control}
                 type="date"
-                value={startDate}
-                onChange={(event) => onStartDateChange(event.target.value)}
+                value={endDate}
+                onChange={(event) => onEndDateChange(event.target.value)}
                 required
               />
-            </span>
-            <ChevronDown className="datetime-card-chevron" size={16} aria-hidden="true" />
-          </label>
-          {!allDay && (
-            <label>
-              Start
-              <span className="time-card">
-                <Clock className="time-card-icon" size={15} aria-hidden="true" />
+            )}
+          </FormField>
+        )}
+        {!allDay && (
+          <FormRow>
+            <FormField label="Start time">
+              {(control) => (
                 <input
-                  className="time-card-input"
+                  {...control}
                   type="time"
                   value={startTime}
                   onChange={(event) => onStartTimeChange(event.target.value)}
                   required
                 />
-              </span>
-            </label>
-          )}
-          {!allDay && !multiDay && (
-            <label>
-              End
-              <span className="time-card">
-                <Clock className="time-card-icon" size={15} aria-hidden="true" />
+              )}
+            </FormField>
+            <FormField label="End time" hint={multiDay ? undefined : endNotice}>
+              {(control) => (
                 <input
-                  className="time-card-input"
+                  {...control}
                   type="time"
                   value={endTime}
                   onChange={(event) => onEndTimeChange(event.target.value)}
                   required
                 />
-              </span>
-            </label>
-          )}
-        </div>
-        {multiDay && (
-          <div className="event-when-grid">
-            <label className="form-wide datetime-card">
-              <span className="datetime-card-icon" aria-hidden="true">
-                <CalendarDays size={18} />
-              </span>
-              <span className="datetime-card-body">
-                <span className="datetime-card-caption">Ends</span>
-                <input
-                  className="datetime-card-input"
-                  type="date"
-                  value={endDate}
-                  onChange={(event) => onEndDateChange(event.target.value)}
-                  required
-                />
-              </span>
-              <ChevronDown className="datetime-card-chevron" size={16} aria-hidden="true" />
-            </label>
-            {!allDay && (
-              <label>
-                End time
-                <span className="time-card">
-                  <Clock className="time-card-icon" size={15} aria-hidden="true" />
-                  <input
-                    className="time-card-input"
-                    type="time"
-                    value={endTime}
-                    onChange={(event) => onEndTimeChange(event.target.value)}
-                    required
-                  />
-                </span>
-              </label>
-            )}
-          </div>
+              )}
+            </FormField>
+          </FormRow>
         )}
         <button
           type="button"
-          className="pill-button"
+          className="secondary"
           onClick={() => onToggleMultiDay(!multiDay)}
         >
-          {multiDay ? "− Same day event" : "+ Ends on another day"}
+          {multiDay ? "Same day event" : "Ends on another day"}
         </button>
-        {rangeNotice && <p className="quiet-state">{rangeNotice}</p>}
-      </div>
+      </FormSection>
       {/* A Personal Calendar event is never shared — see create_event's
           Personal-Calendar member check — so there is nothing for the
           People section to offer while it's selected. Same reasoning for an
@@ -654,8 +631,7 @@ function EventForm({
         !isSharedEvent &&
         calendarTarget !== PERSONAL_CALENDAR_VALUE &&
         !calendarTarget.startsWith(SHARE_VALUE_PREFIX) && (
-        <div className="form-wide event-section">
-          <span className="eyebrow">People</span>
+        <FormSection title="People">
           <div className="member-list">
             {members.map((member) => {
               // Assigning a *new* member is the Family-only "shared event"
@@ -697,88 +673,80 @@ function EventForm({
             })}
           </div>
           {!sharedEventsEnabled && (
-            <p className="quiet-state">
+            <p className="form-field-hint">
               Assigning this event to other household members is available with MyKhaya Family.
             </p>
           )}
-        </div>
+        </FormSection>
       )}
       {isSharedEvent && (
-        <p className="form-wide icon-row">
-          <span className="icon-row-icon" aria-hidden="true">
-            <Layers size={16} />
-          </span>
-          <span className="icon-row-control quiet-state">
-            {initial?.shared_by_home_name
-              ? `Shared by ${initial.shared_by_home_name} — no Calendar Tag to choose here.`
-              : "Shared calendar — no Calendar Tag to choose here."}
-          </span>
+        <p className="form-field-hint">
+          {initial?.shared_by_home_name
+            ? `Shared by ${initial.shared_by_home_name} — no Calendar Tag to choose here.`
+            : "Shared calendar — no Calendar Tag to choose here."}
         </p>
       )}
       {!isSharedEvent && (
-      <label className="form-wide icon-row">
-        <span className="icon-row-icon" aria-hidden="true">
-          <Layers size={16} />
-        </span>
-        <span className="sr-only">Calendar</span>
-        <select
-          className="icon-row-control"
-          name="calendar"
-          value={calendarTarget}
-          onChange={(event) => setCalendarTarget(event.target.value)}
-          // Where an event lives is fixed at creation — matching the
-          // backend's EventUpdate schema, which has no calendar_id field at
-          // all (moving an existing event between calendars isn't
-          // supported). Shown (not hidden) on edit so it's still clear
-          // which calendar the event belongs to.
-          disabled={Boolean(initial)}
+        <FormField
+          label="Calendar"
+          hint={
+            calendarTarget === PERSONAL_CALENDAR_VALUE
+              ? "Only you can see events in this calendar."
+              : calendarTarget.startsWith(SHARE_VALUE_PREFIX)
+                ? "This event will be created on a calendar shared with you — everyone it's shared with can see it."
+                : undefined
+          }
         >
-          <optgroup label="Home calendars">
-            {homeCalendars.map((calendar) => {
-              const locked = isCalendarLockedForSelection(calendar, initial?.calendar_id);
-              return (
-                <option key={calendar.id} value={calendar.id} disabled={locked}>
-                  {calendar.is_primary ? "Home calendar" : calendar.name}
-                  {locked ? " (Family)" : ""}
-                </option>
-              );
-            })}
-          </optgroup>
-          {personalCalendar && (() => {
-            const locked = isCalendarLockedForSelection(personalCalendar, initial?.calendar_id);
-            return (
-              <option value={PERSONAL_CALENDAR_VALUE} disabled={locked}>
-                Personal calendar
-                {locked ? " (Family)" : ""}
-              </option>
-            );
-          })()}
-          {/* Only ever offered when creating a brand-new event — an
-              existing event's calendar assignment never changes via edit
-              (initial is undefined here whenever writableShares is
-              non-empty, since the parent only passes shares for the create
-              flow). */}
-          {writableShares.length > 0 && (
-            <optgroup label="Shared calendars">
-              {writableShares.map((share) => (
-                <option key={share.id} value={`${SHARE_VALUE_PREFIX}${share.id}`}>
-                  {share.calendar_name} · {share.source_group_name}
-                </option>
-              ))}
-            </optgroup>
+          {(control) => (
+            <select
+              {...control}
+              name="calendar"
+              value={calendarTarget}
+              onChange={(event) => setCalendarTarget(event.target.value)}
+              // Where an event lives is fixed at creation — matching the
+              // backend's EventUpdate schema, which has no calendar_id field at
+              // all (moving an existing event between calendars isn't
+              // supported). Shown (not hidden) on edit so it's still clear
+              // which calendar the event belongs to.
+              disabled={Boolean(initial)}
+            >
+              <optgroup label="Home calendars">
+                {homeCalendars.map((calendar) => {
+                  const locked = isCalendarLockedForSelection(calendar, initial?.calendar_id);
+                  return (
+                    <option key={calendar.id} value={calendar.id} disabled={locked}>
+                      {calendar.is_primary ? "Home calendar" : calendar.name}
+                      {locked ? " (Family)" : ""}
+                    </option>
+                  );
+                })}
+              </optgroup>
+              {personalCalendar && (() => {
+                const locked = isCalendarLockedForSelection(personalCalendar, initial?.calendar_id);
+                return (
+                  <option value={PERSONAL_CALENDAR_VALUE} disabled={locked}>
+                    Personal calendar
+                    {locked ? " (Family)" : ""}
+                  </option>
+                );
+              })()}
+              {/* Only ever offered when creating a brand-new event — an
+                  existing event's calendar assignment never changes via edit
+                  (initial is undefined here whenever writableShares is
+                  non-empty, since the parent only passes shares for the create
+                  flow). */}
+              {writableShares.length > 0 && (
+                <optgroup label="Shared calendars">
+                  {writableShares.map((share) => (
+                    <option key={share.id} value={`${SHARE_VALUE_PREFIX}${share.id}`}>
+                      {share.calendar_name} · {share.source_group_name}
+                    </option>
+                  ))}
+                </optgroup>
+              )}
+            </select>
           )}
-        </select>
-        <ChevronDown className="icon-row-chevron" size={16} aria-hidden="true" />
-      </label>
-      )}
-      {calendarTarget === PERSONAL_CALENDAR_VALUE && (
-        <p className="form-wide quiet-state">Only you can see events in this calendar.</p>
-      )}
-      {calendarTarget.startsWith(SHARE_VALUE_PREFIX) && (
-        <p className="form-wide quiet-state">
-          This event will be created on a calendar shared with you — everyone it's shared with
-          can see it.
-        </p>
+        </FormField>
       )}
       {/* Calendar Tag: a colour/category tag, entirely separate from which
           calendar contains the event (see PERSONAL_CALENDAR_VALUE's
@@ -787,128 +755,127 @@ function EventForm({
           external recipient isn't authorised to use (same reasoning as the
           People section above). */}
       {!isSharedEvent && !calendarTarget.startsWith(SHARE_VALUE_PREFIX) && (
-        <label className="form-wide icon-row">
-          <span className="icon-row-icon" aria-hidden="true">
-            <Tag size={16} />
-          </span>
-          <span className="sr-only">Calendar Tag</span>
-          <select
-            className="icon-row-control"
-            name="tag"
-            value={tagSelection}
-            onChange={(event) => setTagSelection(event.target.value)}
-          >
-            <option value="">No tag</option>
-            {labels.map((label) => {
-              // Transition-safe, matching update_event's own check: a tag
-              // already assigned to this event stays selectable (so
-              // resaving never breaks), but a different, over-the-plan-limit
-              // tag preserved past a downgrade can't be newly assigned.
-              const locked =
-                label.commercial_access === "read_only_due_to_plan" &&
-                initial?.label?.id !== label.id;
-              return (
-                <option key={label.id} value={label.id} disabled={locked}>
-                  {label.name}
-                  {locked ? " (Family)" : ""}
-                </option>
-              );
-            })}
-          </select>
-          <ChevronDown className="icon-row-chevron" size={16} aria-hidden="true" />
-        </label>
+        <FormField label="Calendar Tag">
+          {(control) => (
+            <select
+              {...control}
+              name="tag"
+              value={tagSelection}
+              onChange={(event) => setTagSelection(event.target.value)}
+            >
+              <option value="">No tag</option>
+              {labels.map((label) => {
+                // Transition-safe, matching update_event's own check: a tag
+                // already assigned to this event stays selectable (so
+                // resaving never breaks), but a different, over-the-plan-limit
+                // tag preserved past a downgrade can't be newly assigned.
+                const locked =
+                  label.commercial_access === "read_only_due_to_plan" &&
+                  initial?.label?.id !== label.id;
+                return (
+                  <option key={label.id} value={label.id} disabled={locked}>
+                    {label.name}
+                    {locked ? " (Family)" : ""}
+                  </option>
+                );
+              })}
+            </select>
+          )}
+        </FormField>
       )}
-      <label className="form-wide icon-row">
-        <span className="icon-row-icon" aria-hidden="true">
-          <MapPin size={16} />
-        </span>
-        <span className="sr-only">Location</span>
-        <input
-          className="icon-row-control"
-          name="location"
-          placeholder="Add a location"
-          maxLength={200}
-          defaultValue={initial?.location_text ?? ""}
-        />
-      </label>
-      <details className="form-wide event-advanced">
+      <FormField label="Location">
+        {(control) => (
+          <input
+            {...control}
+            name="location"
+            placeholder="Add a location"
+            maxLength={200}
+            defaultValue={initial?.location_text ?? ""}
+          />
+        )}
+      </FormField>
+      <details className="event-advanced">
         <summary>
           <span className="event-advanced-lead">
-            <span className="icon-row-icon" aria-hidden="true">
+            <span className="calendar-event-advanced-icon" aria-hidden="true">
               <Bell size={16} />
             </span>
             Reminder, repeat and notes
           </span>
           <ChevronRight className="chevron" size={18} aria-hidden="true" />
         </summary>
-        <div className="event-form advanced-fields">
-          <label>
-            Reminder
-            <select
-              name="reminder"
-              defaultValue={initial?.reminder_minutes ?? ""}
-            >
-              <option value="">None</option>
-              <option value="0">At event time</option>
-              <option value="15">15 minutes before</option>
-              <option value="60">1 hour before</option>
-              <option value="1440">1 day before</option>
-            </select>
-          </label>
-          <label>
-            Repeat
-            <select
-              name="recurrence"
-              value={recurrence}
-              onChange={(event) => {
-                const next = event.target.value as RecurrencePattern;
-                setRecurrence(next);
-                if (next === "none") {
-                  setRecurrenceEndMode("never");
-                  setRecurrenceEndDate("");
-                  setRecurrenceNotice("");
-                }
-              }}
-            >
-              <option value="none">Does not repeat</option>
-              <option value="daily">Daily</option>
-              <option value="weekly">Weekly</option>
-              <option value="monthly">Monthly</option>
-              <option value="yearly">Yearly</option>
-              <option value="weekdays">Weekdays</option>
-            </select>
-          </label>
-          {recurrence !== "none" && (
-            <>
-              <label>
-                Ends
+        <FormLayout>
+          <FormRow minColumnWidth="10rem">
+            <FormField label="Reminder">
+              {(control) => (
                 <select
-                  name="recurrence_end_mode"
-                  value={recurrenceEndMode}
+                  {...control}
+                  name="reminder"
+                  defaultValue={initial?.reminder_minutes ?? ""}
+                >
+                  <option value="">None</option>
+                  <option value="0">At event time</option>
+                  <option value="15">15 minutes before</option>
+                  <option value="60">1 hour before</option>
+                  <option value="1440">1 day before</option>
+                </select>
+              )}
+            </FormField>
+            <FormField label="Repeat">
+              {(control) => (
+                <select
+                  {...control}
+                  name="recurrence"
+                  value={recurrence}
                   onChange={(event) => {
-                    const next = event.target.value as "never" | "on_date";
-                    setRecurrenceEndMode(next);
-                    if (next === "never") {
+                    const next = event.target.value as RecurrencePattern;
+                    setRecurrence(next);
+                    if (next === "none") {
+                      setRecurrenceEndMode("never");
                       setRecurrenceEndDate("");
                       setRecurrenceNotice("");
-                    } else if (!recurrenceEndDate) {
-                      setRecurrenceEndDate(startDate);
                     }
                   }}
                 >
-                  <option value="never">Never</option>
-                  <option value="on_date">On date</option>
+                  <option value="none">Does not repeat</option>
+                  <option value="daily">Daily</option>
+                  <option value="weekly">Weekly</option>
+                  <option value="monthly">Monthly</option>
+                  <option value="yearly">Yearly</option>
+                  <option value="weekdays">Weekdays</option>
                 </select>
-              </label>
+              )}
+            </FormField>
+          </FormRow>
+          {recurrence !== "none" && (
+            <FormRow minColumnWidth="10rem">
+              <FormField label="Ends">
+                {(control) => (
+                  <select
+                    {...control}
+                    name="recurrence_end_mode"
+                    value={recurrenceEndMode}
+                    onChange={(event) => {
+                      const next = event.target.value as "never" | "on_date";
+                      setRecurrenceEndMode(next);
+                      if (next === "never") {
+                        setRecurrenceEndDate("");
+                        setRecurrenceNotice("");
+                      } else if (!recurrenceEndDate) {
+                        setRecurrenceEndDate(startDate);
+                      }
+                    }}
+                  >
+                    <option value="never">Never</option>
+                    <option value="on_date">On date</option>
+                  </select>
+                )}
+              </FormField>
               {recurrenceEndMode === "on_date" && (
-                <label className="form-wide datetime-card recurrence-end-date-field">
-                  <span className="datetime-card-icon" aria-hidden="true">
-                    <CalendarDays size={18} />
-                  </span>
-                  <span className="datetime-card-body">
-                    <span className="datetime-card-caption">End date</span>
+                <FormField label="End date" error={recurrenceNotice || undefined}>
+                  {(control) => (
                     <input
-                      className="datetime-card-input"
+                      {...control}
                       type="date"
                       value={recurrenceEndDate}
                       min={startDate}
@@ -918,22 +885,22 @@ function EventForm({
                       }}
                       required
                     />
-                  </span>
-                  <ChevronDown className="datetime-card-chevron" size={16} aria-hidden="true" />
-                </label>
+                  )}
+                </FormField>
               )}
-              {recurrenceNotice && <p className="quiet-state form-wide">{recurrenceNotice}</p>}
-            </>
+            </FormRow>
           )}
-          <label className="form-wide">
-            Notes
-            <textarea
-              name="notes"
-              maxLength={2000}
-              defaultValue={initial?.description ?? ""}
-            />
-          </label>
-        </div>
+          <FormField label="Notes">
+            {(control) => (
+              <textarea
+                {...control}
+                name="notes"
+                maxLength={2000}
+                defaultValue={initial?.description ?? ""}
+              />
+            )}
+          </FormField>
+        </FormLayout>
       </details>
       {onDelete && (
         <button className="danger-link" type="button" disabled={busy} onClick={onDelete}>
@@ -941,7 +908,7 @@ function EventForm({
           Delete event
         </button>
       )}
-    </form>
+    </FormLayout>
   );
 }
 
@@ -2417,19 +2384,15 @@ export default function CalendarPage() {
         )}
 
         {editorDay && (
-          <BottomSheet
+          <FormSheet
             title="Add event"
             onDismiss={() => setEditorDay(null)}
+            busy={busy}
             fullHeight
-            footer={
-              <div className="sheet-actions">
-                <button form="calendar-new-event-form" disabled={busy}>
-                  {busy ? "Saving…" : "Save event"}
-                </button>
-                <button className="secondary" type="button" onClick={() => setEditorDay(null)}>
-                  Cancel
-                </button>
-              </div>
+            primaryAction={
+              <button type="submit" form="calendar-new-event-form" disabled={busy}>
+                {busy ? "Saving…" : "Save event"}
+              </button>
             }
           >
             <EventForm
@@ -2446,7 +2409,7 @@ export default function CalendarPage() {
               onSubmit={create}
               onSubmitShared={createShared}
             />
-          </BottomSheet>
+          </FormSheet>
         )}
 
         {selectedEvent && !pendingEditPayload && !pendingDelete && (() => {
@@ -2469,7 +2432,7 @@ export default function CalendarPage() {
               showCloseButton={false}
               fullHeight
               footer={
-                <div className="sheet-actions">
+                <FormActions>
                   {editingSelected ? (
                     <Fragment key="edit-mode-footer">
                       <button key="save-event" type="submit" form="calendar-edit-event-form" disabled={busy}>
@@ -2521,7 +2484,7 @@ export default function CalendarPage() {
                       </button>
                     </Fragment>
                   )}
-                </div>
+                </FormActions>
               }
             >
               {editingSelected ? (
