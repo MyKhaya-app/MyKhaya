@@ -169,7 +169,10 @@ same posture ADR 0012 already established for the iOS bundle ID.
   storage permissions, since none of those capabilities exist in this shell
   yet.
 
-## What's intentionally not implemented yet
+## Historical implementation notes and remaining deferred work
+
+The older phase notes below are retained as architecture history. They do not
+override the current close-out status or the release runbook above.
 
 Deferred to later Android phases (see the audit/phased plan referenced in
 ADR 0014) — present in the shared web app already but inert or unreachable
