@@ -7,6 +7,7 @@ import { Bell, Camera, ChevronRight, Home, Shield, Trash2, UserRound } from "luc
 import Link from "next/link";
 import { Avatar } from "@/components/avatar";
 import { ColourSwatchPicker } from "@/components/colour-swatch-picker";
+import { FormActions, FormField, FormLayout, FormRow } from "@/components/form-layout";
 import { BottomSheet } from "@/components/bottom-sheet";
 import { SettingsPage } from "@/components/settings-page";
 import { Toast } from "@/components/toast";
@@ -421,23 +422,23 @@ export default function Profile() {
           Shared with your household so they can wish you well.
         </p>
         {editingBirthday && user && (
-          <form className="profile-birthday-edit" onSubmit={saveBirthday}>
-            <div className="profile-birthday-fields">
-              <label>
-                Month
-                <select name="birth_month" defaultValue={user.birth_month ?? ""}>
-                  <option value="">Not set</option>
-                  {MONTHS.map((name, index) => (
-                    <option key={name} value={index + 1}>{name}</option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Day
-                <input type="number" name="birth_day" min={1} max={31} defaultValue={user.birth_day ?? ""} />
-              </label>
-            </div>
-            <div className="profile-birthday-edit-actions">
+          <FormLayout className="profile-birthday-edit" onSubmit={saveBirthday} noValidate={false}>
+            <FormRow minColumnWidth="7rem">
+              <FormField label="Month">
+                {(control) => (
+                  <select {...control} name="birth_month" defaultValue={user.birth_month ?? ""}>
+                    <option value="">Not set</option>
+                    {MONTHS.map((name, index) => (
+                      <option key={name} value={index + 1}>{name}</option>
+                    ))}
+                  </select>
+                )}
+              </FormField>
+              <FormField label="Day">
+                {(control) => <input {...control} type="number" name="birth_day" min={1} max={31} defaultValue={user.birth_day ?? ""} />}
+              </FormField>
+            </FormRow>
+            <FormActions>
               <button type="submit" disabled={saving}>
                 {saving ? "Saving…" : "Save"}
               </button>
@@ -451,8 +452,8 @@ export default function Profile() {
               >
                 Cancel
               </button>
-            </div>
-          </form>
+            </FormActions>
+          </FormLayout>
         )}
       </section>
 

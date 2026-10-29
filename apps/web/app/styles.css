@@ -3038,31 +3038,9 @@ html.native-shell .home-section-overlap {
 .support-reference {
   font-size: 1.05rem;
 }
-.routine-form {
-  display: grid;
-  gap: 1rem;
-}
-.routine-form fieldset {
-  border: 0;
-  border-top: 1px solid #eee8df;
-  display: grid;
-  gap: 0.75rem;
-  margin: 0;
-  padding: 1rem 0 0;
-}
-.routine-form legend {
-  color: var(--colour-muted);
-  font-size: 0.8rem;
-  font-weight: 800;
-  letter-spacing: 0.04em;
-  padding: 0 0.4rem 0 0;
-  text-transform: uppercase;
-}
-.routine-form label {
-  display: grid;
-  gap: 0.35rem;
-}
-.routine-form label small,
+/* Routines & Reminders editors (app/settings/routines-reminders) are built on
+   the shared form primitives; only the Repeat choice and the checkbox
+   settings rows are their own. */
 .routine-setting small {
   color: var(--colour-muted);
   font-size: 0.8rem;
@@ -3080,11 +3058,6 @@ html.native-shell .home-section-overlap {
 .routine-choice button {
   min-height: 44px;
 }
-.routine-date-grid {
-  display: grid;
-  gap: 0.75rem;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
 .routine-setting {
   align-items: center;
   display: flex !important;
@@ -3100,10 +3073,6 @@ html.native-shell .home-section-overlap {
   display: grid;
   gap: 0.1rem;
 }
-.routine-form-actions {
-  display: flex;
-  gap: 0.5rem;
-}
 .sheet-footer {
   background: var(--colour-white);
   border-top: 1px solid #ebe4da;
@@ -3111,11 +3080,9 @@ html.native-shell .home-section-overlap {
   flex: none;
   padding: 0.75rem 1.3125rem calc(0.75rem + var(--safe-bottom));
 }
-.sheet-footer .routine-form-actions,
 .sheet-footer .sheet-actions {
   margin: 0;
 }
-.sheet-footer .routine-form-actions > button,
 .sheet-footer .sheet-actions > button {
   flex: 1 1 0;
   min-width: 0;
@@ -3418,7 +3385,7 @@ html.native-shell .home-section-overlap {
 }
 /* NotificationPermissionPrompt's footer (Enable notifications / Not now,
    Open phone settings / Maybe later): an asymmetric two-button row rather
-   than routine-form-actions' even 50/50 split — the primary action reads as
+   than the sheet footer's even 50/50 split — the primary action reads as
    the clear default, the secondary as a smaller, clearly-secondary escape
    hatch. Both buttons keep the shared button/.secondary styling (colour,
    radius, padding) untouched; only the row's width distribution is scoped
@@ -5216,6 +5183,11 @@ body.sheet-open {
 .form-section:not(.form-section-framed) > .form-section-title + .form-section-body {
   clear: both;
 }
+/* On a page, a section's legend can hold the page's own h2 so the heading
+   outline is kept; it keeps the page heading's look, not the legend's. */
+.form-section-title > :is(h2, h3) {
+  margin: 0;
+}
 .form-section-framed {
   border: 1px solid var(--colour-line);
   border-radius: 0.85rem;
@@ -5876,12 +5848,6 @@ button.danger,
 
 
 @media (max-width: 760px) {
-  .routine-form {
-    padding: 1rem;
-  }
-  .routine-date-grid {
-    grid-template-columns: 1fr;
-  }
   .rr-row {
     grid-template-columns: 40px minmax(0, 1fr);
   }
@@ -9581,6 +9547,38 @@ select.plan-meal-field-input {
   color: var(--colour-forest-dark);
   font-size: 1.3rem;
 }
+.billing-change-options,
+.billing-change-confirmation {
+  display: grid;
+  gap: 0.65rem;
+  margin-top: 1rem;
+}
+.billing-change-options h3,
+.billing-change-confirmation h3 {
+  margin: 0;
+}
+.billing-change-confirmation dl {
+  background: white;
+  border-radius: var(--radius-card);
+  display: grid;
+  gap: 0.6rem;
+  margin: 0;
+  padding: 1rem;
+}
+.billing-change-confirmation dl div {
+  align-items: baseline;
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+}
+.billing-change-confirmation dt {
+  color: var(--colour-slate);
+}
+.billing-change-confirmation dd {
+  font-weight: 700;
+  margin: 0;
+  text-align: right;
+}
 .billing-manage-summary span,
 .billing-upcoming-card span,
 .billing-upcoming-card small {
@@ -12040,25 +12038,12 @@ a.family-feed-row {
 .profile-birthday-hint {
   margin: 0.6rem 0 0;
 }
-.profile-birthday-edit {
+/* The birthday editor is a shared FormLayout; this only separates it from
+   the summary rows above. */
+.profile-birthday-edit.form-layout {
   border-top: 1px solid var(--colour-border);
-  display: grid;
-  gap: 0.65rem;
   margin-top: 0.85rem;
   padding-top: 0.85rem;
-}
-.profile-birthday-fields {
-  display: grid;
-  gap: 0.65rem;
-  grid-template-columns: 1fr 0.7fr;
-}
-.profile-birthday-fields label {
-  display: grid;
-  gap: 0.3rem;
-}
-.profile-birthday-edit-actions {
-  display: flex;
-  gap: 0.6rem;
 }
 .profile-photo-sheet {
   display: grid;

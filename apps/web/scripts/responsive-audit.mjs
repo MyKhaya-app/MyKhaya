@@ -345,6 +345,138 @@ async function auditEventEditor(page) {
   return editorResults;
 }
 
+const LONG_TEXT = "Bring the green recycling box and the garden waste bin to the kerb, then check the side gate is latched so the collection crew can get through without ringing the bell.";
+
+// The Routines & Reminders editors and the Settings forms on the shared form
+// primitives, each in a meaningful filled state, plus a failed save. The
+// failed save is answered by an intercepted request, so it never reaches the
+// API; every other editor is cancelled, so nothing is saved.
+async function auditNudgeForms(page) {
+  const nudgeResults = [];
+  const openEditor = async (kind) => {
+    await page.locator("button.rr-fab").click({ timeout: 3000 });
+    await page.getByRole("button", { name: `New ${kind}`, exact: true }).click({ timeout: 3000 });
+    await page.waitForTimeout(350);
+  };
+  const requireLabels = async (scope, labels, issues) => {
+    for (const label of labels) {
+      if (!(await scope.getByLabel(label, { exact: true }).count())) issues.push(`No field labelled "${label}"`);
+    }
+  };
+  const states = [
+    ["routine", async (sheet, issues) => {
+      await openEditor("Routine");
+      await sheet().getByLabel("Description (optional)", { exact: true }).fill(LONG_TEXT);
+      await sheet().getByRole("button", { name: "Weekly", exact: true }).click();
+      await sheet().getByLabel("Every", { exact: true }).selectOption("2");
+      await requireLabels(sheet(), ["Title", "Who this is for", "Category (optional)", "Every", "Anchor date", "Remind", "Starts", "Ends (optional)"], issues);
+      return true;
+    }],
+    ["reminder", async (sheet, issues) => {
+      await openEditor("Reminder");
+      await sheet().getByLabel("Notes (optional)", { exact: true }).fill(LONG_TEXT);
+      await sheet().getByLabel("Scope", { exact: true }).selectOption("household");
+      await sheet().getByLabel("Repeat", { exact: true }).selectOption("weekly");
+      await sheet().getByLabel("Remind", { exact: true }).selectOption("hourly");
+      await requireLabels(sheet(), ["Title", "Scope", "Assign to (household only)", "Category (optional)", "Due date", "Due time", "Repeat", "Remind"], issues);
+      return true;
+    }],
+    ["to-do", async (sheet, issues) => {
+      await openEditor("To-do");
+      await sheet().getByLabel("Notes (optional)", { exact: true }).fill(LONG_TEXT);
+      await sheet().getByLabel("Scope", { exact: true }).selectOption("household");
+      await requireLabels(sheet(), ["Title", "Due date", "Scope", "Category (optional)", "Assign to (household only)"], issues);
+      return true;
+    }],
+    ["reminder save error", async (sheet, issues) => {
+      await page.route("**/api/v1/homes/*/reminders", (route) => route.request().method() === "POST"
+        ? route.fulfill({ status: 422, contentType: "application/json", body: JSON.stringify({ detail: `The audit rejected this save on purpose. ${LONG_TEXT}` }) })
+        : route.continue());
+      await openEditor("Reminder");
+      await sheet().getByLabel("Title", { exact: true }).fill("Responsive audit reminder");
+      await sheet().getByRole("button", { name: "Save", exact: true }).click();
+      const error = sheet().locator(".notice.error");
+      await error.waitFor({ state: "visible", timeout: 5000 }).catch(() => issues.push("The failed save did not show its error inside the sheet"));
+      if (await sheet().getByRole("button", { name: "Save", exact: true }).isDisabled()) issues.push("Save stayed disabled after the failed save");
+      if (await sheet().getByRole("button", { name: "Cancel", exact: true }).isDisabled()) issues.push("Cancel stayed disabled after the failed save");
+      await error.scrollIntoViewIfNeeded().catch(() => {});
+      return true;
+    }],
+    ["edit", async (sheet, issues) => {
+      const edit = page.locator("button.rr-card-action:visible", { hasText: "Edit" }).first();
+      if (!(await edit.count())) return false;
+      await edit.click({ timeout: 3000 });
+      await page.waitForTimeout(350);
+      if (!/^Edit /.test((await sheet().locator("#sheet-title").textContent().catch(() => "")) ?? "")) issues.push("Edit did not open an edit sheet");
+      return true;
+    }],
+  ];
+  for (const viewport of viewports) {
+    for (const [state, prepare] of states) {
+      await page.setViewportSize({ width: viewport.width, height: viewport.height });
+      await page.goto(`${BASE}/settings/routines-reminders`, { waitUntil: "domcontentloaded", timeout: 30000 });
+      await applyInsets(page, viewport);
+      await page.locator("button.rr-fab").waitFor({ state: "visible", timeout: 5000 }).catch(() => {});
+      await page.waitForTimeout(500);
+      const issues = [];
+      const sheet = () => page.locator(".bottom-sheet").last();
+      let opened = false;
+      try {
+        opened = await prepare(sheet, issues);
+      } catch (error) {
+        issues.push(`Could not prepare the state: ${error.message.split("\n")[0]}`);
+      }
+      if (!opened) {
+        nudgeResults.push({ form: "Routines & Reminders", viewport: viewport.name, state, result: "NOT TESTED", issues: ["No existing item offered Edit"] });
+        continue;
+      }
+      if (!(await sheet().locator("form.rr-form").count())) issues.push("The editor did not open on the shared form layout");
+      await page.waitForTimeout(150);
+      const layout = await inspectLayout(page, viewport, true);
+      issues.push(...layout.issues.map(issueText));
+      const screenshot = await capture(page, `nudges-${state}`, viewport, `nudges-${state}`);
+      nudgeResults.push({ form: "Routines & Reminders", viewport: viewport.name, state, result: issues.length ? "FAIL" : "PASS", issues, screenshot, details: layout.issues.slice(0, 40) });
+      const cancel = sheet().getByRole("button", { name: "Cancel", exact: true });
+      if (await cancel.count()) await cancel.click().catch(() => {});
+      await page.unrouteAll({ behavior: "ignoreErrors" });
+      await page.waitForTimeout(150);
+    }
+
+    // Settings pages: measured as pages, in their expanded states.
+    const pageStates = [
+      ["/settings/notifications", "notification preferences (custom times)", async (issues) => {
+        await page.getByRole("checkbox", { name: "Send me a daily Nudge summary" }).waitFor({ timeout: 5000 });
+        if (!(await page.getByRole("checkbox", { name: "Send me a daily Nudge summary" }).isChecked())) await page.getByRole("checkbox", { name: "Send me a daily Nudge summary" }).check();
+        for (const select of await page.getByRole("combobox", { name: "Delivery time", exact: true }).all()) await select.selectOption("custom");
+        await requireLabels(page, ["Evening Clean-up time", "Days", "Lock-screen preview", "Start", "End"], issues);
+        if ((await page.getByLabel("Custom time", { exact: true }).count()) !== 2) issues.push("Both Custom time fields should be shown");
+      }],
+      ["/settings/profile", "profile birthday editor", async (issues) => {
+        await page.locator(".profile-detail-value").getByRole("button", { name: "Edit" }).click({ timeout: 5000 });
+        await requireLabels(page, ["Month", "Day"], issues);
+      }],
+    ];
+    for (const [route, state, prepare] of pageStates) {
+      await page.setViewportSize({ width: viewport.width, height: viewport.height });
+      await page.goto(`${BASE}${route}`, { waitUntil: "domcontentloaded", timeout: 30000 });
+      await applyInsets(page, viewport);
+      const issues = [];
+      try {
+        await prepare(issues);
+      } catch (error) {
+        issues.push(`Could not prepare the state: ${error.message.split("\n")[0]}`);
+      }
+      if (!(await page.locator("form.form-layout").count())) issues.push("The form is not on the shared form layout");
+      await page.waitForTimeout(150);
+      const layout = await inspectLayout(page, viewport);
+      issues.push(...layout.issues.map(issueText));
+      const screenshot = await capture(page, `${route}-${state}`, viewport, `${route}-${state}`);
+      nudgeResults.push({ form: route, viewport: viewport.name, state, result: issues.length ? "FAIL" : "PASS", issues, screenshot, details: layout.issues.slice(0, 40) });
+    }
+  }
+  return nudgeResults;
+}
+
 async function auditCopyEvent(page) {
   const copyResults = [];
   for (const viewport of viewports) {
@@ -418,18 +550,19 @@ async function auditCopyEvent(page) {
   return copyResults;
 }
 
-async function writeReport(auth, copyResults, editorResults) {
+async function writeReport(auth, copyResults, editorResults, nudgeResults) {
   for (const entry of results) {
     if (entry.details?.length) entry.issues.push(`DOM details: ${JSON.stringify(entry.details)}`);
   }
-  for (const entry of [...copyResults, ...editorResults, ...sheetResults]) {
+  for (const entry of [...copyResults, ...editorResults, ...nudgeResults, ...sheetResults]) {
     if (entry.details?.length) entry.issues.push(`DOM details: ${JSON.stringify(entry.details)}`);
   }
   const rows = results.map((entry) => `<tr class="${entry.result.toLowerCase()}"><td>${escapeHtml(entry.route)}</td><td>${escapeHtml(entry.viewport)}</td><td>${entry.status ?? ""}</td><td>${escapeHtml(entry.result)}</td><td>${entry.issues.map(escapeHtml).join("<br>") || "—"}</td><td>${entry.screenshot ? `<img src="${escapeHtml(entry.screenshot)}" loading="lazy" alt="${escapeHtml(entry.route)} ${escapeHtml(entry.viewport)}">` : ""}</td></tr>`).join("\n");
   const copyRows = copyResults.map((entry) => `<tr class="${entry.result.toLowerCase().replaceAll(" ", "-")}"><td>${escapeHtml(entry.viewport)}</td><td>${escapeHtml(entry.result)}</td><td>${entry.issues.map(escapeHtml).join("<br>") || "—"}</td><td>${entry.screenshot ? `<img src="${escapeHtml(entry.screenshot)}" loading="lazy" alt="Copy Event ${escapeHtml(entry.viewport)}">` : ""}</td></tr>`).join("\n");
   const editorRows = editorResults.map((entry) => `<tr class="${entry.result.toLowerCase().replaceAll(" ", "-")}"><td>${escapeHtml(entry.viewport)}</td><td>${escapeHtml(entry.state)}</td><td>${escapeHtml(entry.result)}</td><td>${entry.issues.map(escapeHtml).join("<br>") || "—"}</td><td>${entry.screenshot ? `<img src="${escapeHtml(entry.screenshot)}" loading="lazy" alt="Event editor ${escapeHtml(entry.state)} ${escapeHtml(entry.viewport)}">` : ""}</td></tr>`).join("\n");
+  const nudgeRows = nudgeResults.map((entry) => `<tr class="${entry.result.toLowerCase().replaceAll(" ", "-")}"><td>${escapeHtml(entry.form)}</td><td>${escapeHtml(entry.state)}</td><td>${escapeHtml(entry.viewport)}</td><td>${escapeHtml(entry.result)}</td><td>${entry.issues.map(escapeHtml).join("<br>") || "—"}</td><td>${entry.screenshot ? `<img src="${escapeHtml(entry.screenshot)}" loading="lazy" alt="${escapeHtml(entry.state)} ${escapeHtml(entry.viewport)}">` : ""}</td></tr>`).join("\n");
   const sheetRows = sheetResults.map((entry) => `<tr class="${entry.result.toLowerCase().replaceAll(" ", "-")}"><td>${escapeHtml(entry.route)}</td><td>${escapeHtml(entry.title ?? "")}</td><td>${escapeHtml(entry.viewport)}</td><td>${escapeHtml(entry.result)}</td><td>${entry.issues.map(escapeHtml).join("<br>") || "—"}</td><td>${entry.screenshot ? `<img src="${escapeHtml(entry.screenshot)}" loading="lazy" alt="">` : ""}</td></tr>`).join("\n");
-  const html = `<!doctype html><meta charset="utf-8"><title>MyKhaya Responsive Audit</title><style>body{font:14px system-ui;margin:24px;color:#24312d}table{border-collapse:collapse;width:100%;margin:16px 0}th,td{border:1px solid #d8ded8;padding:8px;vertical-align:top;text-align:left}.pass{background:#edf7ed}.fail{background:#fff0ed}.blocked,.not-tested{background:#fff8df}img{display:block;max-width:320px;max-height:420px;border:1px solid #d8ded8}code{background:#f3f4f1;padding:2px 4px}summary{cursor:pointer}</style><h1>MyKhaya Responsive Audit</h1><p>Base URL: <code>${escapeHtml(BASE)}</code></p><p>Authentication: <strong>${auth.ok ? "PASS" : `BLOCKED — ${escapeHtml(auth.reason)}`}</strong></p><h2>Routes</h2><table><thead><tr><th>Route</th><th>Viewport</th><th>Status</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${rows}</tbody></table><h2>Create sheets</h2><table><thead><tr><th>Route</th><th>Sheet</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${sheetRows || `<tr><td colspan="6">No create sheets opened</td></tr>`}</tbody></table><h2>Calendar Copy Event</h2><table><thead><tr><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${copyRows || `<tr><td colspan="4">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Calendar event editor</h2><table><thead><tr><th>Viewport</th><th>State</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${editorRows || `<tr><td colspan="5">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Notes</h2><p>Chromium only. Safe areas are simulated through the --safe-* properties; this is not native WKWebView or physical-device evidence.</p><p>BLOCKED means authentication or required data was unavailable. NOT TESTED means the route rendered but the requested interactive component could not be opened. Screenshots are local artifacts under this audit directory.</p>`;
+  const html = `<!doctype html><meta charset="utf-8"><title>MyKhaya Responsive Audit</title><style>body{font:14px system-ui;margin:24px;color:#24312d}table{border-collapse:collapse;width:100%;margin:16px 0}th,td{border:1px solid #d8ded8;padding:8px;vertical-align:top;text-align:left}.pass{background:#edf7ed}.fail{background:#fff0ed}.blocked,.not-tested{background:#fff8df}img{display:block;max-width:320px;max-height:420px;border:1px solid #d8ded8}code{background:#f3f4f1;padding:2px 4px}summary{cursor:pointer}</style><h1>MyKhaya Responsive Audit</h1><p>Base URL: <code>${escapeHtml(BASE)}</code></p><p>Authentication: <strong>${auth.ok ? "PASS" : `BLOCKED — ${escapeHtml(auth.reason)}`}</strong></p><h2>Routes</h2><table><thead><tr><th>Route</th><th>Viewport</th><th>Status</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${rows}</tbody></table><h2>Create sheets</h2><table><thead><tr><th>Route</th><th>Sheet</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${sheetRows || `<tr><td colspan="6">No create sheets opened</td></tr>`}</tbody></table><h2>Calendar Copy Event</h2><table><thead><tr><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${copyRows || `<tr><td colspan="4">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Calendar event editor</h2><table><thead><tr><th>Viewport</th><th>State</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${editorRows || `<tr><td colspan="5">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Routines, Reminders and Settings forms</h2><table><thead><tr><th>Form</th><th>State</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${nudgeRows || `<tr><td colspan="6">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Notes</h2><p>Chromium only. Safe areas are simulated through the --safe-* properties; this is not native WKWebView or physical-device evidence.</p><p>BLOCKED means authentication or required data was unavailable. NOT TESTED means the route rendered but the requested interactive component could not be opened. Screenshots are local artifacts under this audit directory.</p>`;
   await fs.writeFile(path.join(outputDir, "index.html"), html, "utf8");
 }
 
@@ -447,8 +580,9 @@ for (const viewport of viewports) {
 }
 const copyResults = auth.ok ? await auditCopyEvent(page) : [];
 const editorResults = auth.ok ? await auditEventEditor(page) : [];
-await writeReport(auth, copyResults, editorResults);
+const nudgeResults = auth.ok ? await auditNudgeForms(page) : [];
+await writeReport(auth, copyResults, editorResults, nudgeResults);
 await browser.close();
 const tally = (entries) => entries.reduce((counts, entry) => ({ ...counts, [entry.result]: (counts[entry.result] ?? 0) + 1 }), {});
-console.log(JSON.stringify({ baseUrl: BASE, outputDir, authenticated: auth.ok, authReason: auth.reason ?? null, routes: tally(results), createSheets: tally(sheetResults), copyEvent: tally(copyResults), eventEditor: tally(editorResults) }, null, 2));
-process.exitCode = [...results, ...sheetResults, ...copyResults, ...editorResults].some((entry) => entry.result === "FAIL") || !auth.ok ? 1 : 0;
+console.log(JSON.stringify({ baseUrl: BASE, outputDir, authenticated: auth.ok, authReason: auth.reason ?? null, routes: tally(results), createSheets: tally(sheetResults), copyEvent: tally(copyResults), eventEditor: tally(editorResults), nudgeForms: tally(nudgeResults) }, null, 2));
+process.exitCode = [...results, ...sheetResults, ...copyResults, ...editorResults, ...nudgeResults].some((entry) => entry.result === "FAIL") || !auth.ok ? 1 : 0;

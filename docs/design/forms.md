@@ -61,6 +61,21 @@ implementation.
 - Optional, less-used fields can sit in a closed `<details>` disclosure
   after the main fields. Put a plain `FormLayout` (no `onSubmit`) inside it
   for the same spacing.
+- Pick `minColumnWidth` from what the row holds. Times can use the
+  default. A row with a date uses `10rem`, so it stacks at 320px, where a
+  date beside another control is clipped. A row whose selects have long
+  options (for example "Personal — only reminds you" or "Hourly until
+  completed") uses `14rem`, so it stacks on every phone and sits side by
+  side only in wider sheets and panels. A cut-off select option is a
+  defect, not a layout.
+- Checkbox settings rows (`.check-row`, or a checkbox with a title and
+  description) are not `FormField`s: the label wraps the checkbox and its
+  text. Put them straight into the `FormSection`.
+- On a page rather than a sheet, a `FormSection` can take the page's own
+  heading as its title (`title={<h2>Quiet hours</h2>}`), so the page keeps
+  its heading outline and each group is still named by it.
+- Show a save error inside the sheet that is open, at the top of its form,
+  not on the page behind the sheet.
 - `FormLayout` sets `noValidate` by default, for forms that validate
   themselves, like Copy Event. A form that relies on the browser's own
   `required` and `min` checks passes `noValidate={false}`.
@@ -85,6 +100,43 @@ is the full-size example:
   and notes" disclosure, in `FormRow`s with `minColumnWidth="10rem"` so the
   selects stack on phones. The recurrence end date's validation is that
   field's `error`.
+
+## Routines, Reminders and To-dos
+
+The Routine, Reminder and To-do editors in Nudges
+(`apps/web/app/settings/routines-reminders/page.tsx`):
+
+- Each is a `FormSheet` (Routine and Reminder full height) whose form is a
+  `FormLayout` with class `rr-form`, keeping the browser's `required`
+  checks. A failed save shows its `.notice.error` at the top of that form;
+  the page's own error notice is hidden while an editor is open.
+- Plain `FormSection`s with `divider`: Routine, Schedule and
+  Notifications & Home; Reminder, Who and When; To-do, When and who.
+- Scope, assignee and category selects sit in `14rem` rows. Due date and
+  time, Starts and Ends, and Every with the anchor date sit in `10rem`
+  rows. The anchor date's explanation is its `hint`.
+- The Repeat Daily/Weekly choice (`.routine-choice`) and the Critical and
+  Pin checkboxes (`.routine-setting`) keep their own markup.
+- Not migrated: the Add menu, the Choose category and Manage categories
+  sheets (lists of actions, not forms) and the MOT plan delete
+  confirmation.
+
+## Settings
+
+- Notification preferences (`app/settings/notifications/page.tsx`) is one
+  `FormLayout` card. Each part is a `FormSection` titled by its existing
+  `h2`, with `divider` between them. Delivery time and Custom time share a
+  `14rem` row; quiet hours Start and End share a default row. The submit
+  button is in `FormActions`.
+- The Profile birthday editor (`app/settings/profile/page.tsx`) is a
+  `FormLayout` with Month and Day in a `FormRow` and Save and Cancel in
+  `FormActions`.
+- Not migrated:
+  - Calendar settings, whose sentence-style rows ("Remind me [30 minutes]
+    before events I'm attending") are their own design.
+  - Security (MFA and re-authentication), Billing and Members (invites,
+    relationships and managed-child permissions), which are outside the
+    scope of a presentation-only migration.
 
 ## Sheet or dialog
 
@@ -132,8 +184,13 @@ its own design decision and is not part of this standard yet.
   zone. Add a fixture to `scripts/form-layout-fixtures.tsx` for a new form
   pattern.
 - `pnpm --filter @mykhaya/web audit:responsive` runs the same inspector
-  against a running app, signed in, across every consumer route, each
-  module's create sheet and Copy Event.
+  against a running app, signed in, across every consumer route and each
+  module's create sheet. It also opens the migrated forms in filled states:
+  - Copy Event, and the Calendar event editor (Add and Edit);
+  - the Routine, Reminder and To-do editors, an Edit, and a Reminder save
+    that the audit rejects in the browser, so nothing reaches the API;
+  - Notification preferences with both custom times shown, and the
+    Profile birthday editor.
 - Both are Chromium with simulated safe areas. WebKit on iOS sizes native
   controls differently, so a physical iPhone review is still required
   ([mobile standards](../engineering/mobile-standards.md)).

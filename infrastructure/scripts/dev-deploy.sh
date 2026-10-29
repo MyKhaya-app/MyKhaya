@@ -200,7 +200,7 @@ preflight() {
   host_port=$(env_value MYKHAYA_DEV_HOST_PORT)
   mailpit_port=$(env_value MYKHAYA_DEV_MAILPIT_PORT)
   bind_address=${bind_address:-0.0.0.0}
-  host_port=${host_port:-8080}
+  host_port=${host_port:-8089}
   mailpit_port=${mailpit_port:-8025}
   case "$host_port" in *[!0-9]*|'') die "development host port must be numeric" ;; esac
   case "$mailpit_port" in *[!0-9]*|'') die "Mailpit port must be numeric" ;; esac
@@ -252,7 +252,7 @@ probe_url() {
 
 health_checks() {
   host_port=$(env_value MYKHAYA_DEV_HOST_PORT)
-  host_port=${host_port:-8080}
+  host_port=${host_port:-8089}
   base_url="http://127.0.0.1:${host_port}/api/v1/health"
   say "Checking liveness and readiness"
   count=0

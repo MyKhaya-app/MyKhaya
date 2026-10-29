@@ -7,6 +7,7 @@ import type {
   PushSubscriptionSummary,
 } from "@mykhaya/shared-types";
 import { api } from "@mykhaya/api-client";
+import { FormActions, FormField, FormLayout, FormRow, FormSection } from "@/components/form-layout";
 import { SettingsPage } from "@/components/settings-page";
 import { isStandalone } from "@/components/install-prompt";
 import { diagnosePushEnvironment, subscribeToPush, type SubscribeStage } from "@/components/push-subscribe";
@@ -262,187 +263,204 @@ export default function NotificationSettings() {
         )}
       </section>
 
-      <form className="card details" onSubmit={save}>
-        <h2>Channels</h2>
-        <label className="check-row">
-          <input type="checkbox" name="push_enabled" defaultChecked={prefs.push_enabled} /> Push notifications
-        </label>
-        <label className="check-row">
-          <input type="checkbox" name="in_app_enabled" defaultChecked={prefs.in_app_enabled} /> In-app notifications
-        </label>
-        <label className="check-row">
-          <input type="checkbox" name="email_enabled" defaultChecked={prefs.email_enabled} /> Also email me
-        </label>
+      <FormLayout className="card details notification-preferences" onSubmit={save} noValidate={false}>
+        <FormSection title={<h2>Channels</h2>}>
+          <label className="check-row">
+            <input type="checkbox" name="push_enabled" defaultChecked={prefs.push_enabled} /> Push notifications
+          </label>
+          <label className="check-row">
+            <input type="checkbox" name="in_app_enabled" defaultChecked={prefs.in_app_enabled} /> In-app notifications
+          </label>
+          <label className="check-row">
+            <input type="checkbox" name="email_enabled" defaultChecked={prefs.email_enabled} /> Also email me
+          </label>
+        </FormSection>
 
-        <h2>What to notify me about</h2>
-        <label className="check-row">
-          <input
-            type="checkbox"
-            name="event_reminders_enabled"
-            defaultChecked={prefs.event_reminders_enabled}
-          />{" "}
-          Event reminders
-        </label>
-        <label className="check-row">
-          <input
-            type="checkbox"
-            name="event_invitations_enabled"
-            defaultChecked={prefs.event_invitations_enabled}
-          />{" "}
-          Event invitations
-        </label>
-        <label className="check-row">
-          <input
-            type="checkbox"
-            name="event_changes_enabled"
-            defaultChecked={prefs.event_changes_enabled}
-          />{" "}
-          Event updates and cancellations
-        </label>
-        <label className="check-row">
-          <input
-            type="checkbox"
-            name="household_reminders_enabled"
-            defaultChecked={prefs.household_reminders_enabled}
-          />{" "}
-          Household reminders (bins, routines)
-        </label>
-        <label className="check-row">
-          <input
-            type="checkbox"
-            name="list_assignments_enabled"
-            defaultChecked={prefs.list_assignments_enabled}
-          /> List item assignments
-        </label>
-        <label className="check-row">
-          <input
-            type="checkbox"
-            name="wishlist_sharing_enabled"
-            defaultChecked={prefs.wishlist_sharing_enabled}
-          /> Wishlist sharing
-        </label>
-
-        <h2>Nudges</h2>
-        <label className="check-row">
-          <input
-            type="checkbox"
-            checked={nudgeSummaryEnabled}
-            onChange={(event) => setNudgeSummaryEnabled(event.target.checked)}
-          />{" "}
-          Send me a daily Nudge summary
-        </label>
-        <p className="muted">One notification with today&rsquo;s routines, reminders and assigned to-dos.</p>
-        <label>
-          Delivery time
-          <select
-            value={nudgeSummaryPreset}
-            disabled={!nudgeSummaryEnabled}
-            onChange={(event) => setNudgeSummaryPreset(event.target.value)}
-          >
-            {BRIEFING_PRESETS.map(([time, label]) => (
-              <option key={time} value={time}>
-                {label} ({time})
-              </option>
-            ))}
-            <option value="custom">Custom time</option>
-          </select>
-        </label>
-        {nudgeSummaryPreset === "custom" && (
-          <label>
-            Custom time
+        <FormSection title={<h2>What to notify me about</h2>} divider>
+          <label className="check-row">
             <input
-              type="time"
-              name="daily_nudge_summary_time_custom"
-              defaultValue={prefs.daily_nudge_summary_time}
-              disabled={!nudgeSummaryEnabled}
-            />
+              type="checkbox"
+              name="event_reminders_enabled"
+              defaultChecked={prefs.event_reminders_enabled}
+            />{" "}
+            Event reminders
           </label>
-        )}
-        <label className="check-row">
-          <input type="checkbox" name="nudges_evening_cleanup_enabled" defaultChecked={prefs.nudges_evening_cleanup_enabled} />
-          Evening Clean-up
-        </label>
-        <label>
-          Evening Clean-up time
-          <input type="time" name="nudges_evening_time" defaultValue={prefs.nudges_evening_time} />
-        </label>
-        <label className="check-row">
-          <input type="checkbox" name="nudges_day_complete_enabled" defaultChecked={prefs.nudges_day_complete_enabled} />
-          Day Complete acknowledgement
-        </label>
-
-        <h2>Daily briefing</h2>
-        <label className="check-row">
-          <input
-            type="checkbox"
-            name="daily_briefing_enabled"
-            defaultChecked={prefs.daily_briefing_enabled}
-          />{" "}
-          Send me a morning summary
-        </label>
-        <label>
-          Delivery time
-          <select value={briefingPreset} onChange={(event) => setBriefingPreset(event.target.value)}>
-            {BRIEFING_PRESETS.map(([time, label]) => (
-              <option key={time} value={time}>
-                {label} ({time})
-              </option>
-            ))}
-            <option value="custom">Custom time</option>
-          </select>
-        </label>
-        {briefingPreset === "custom" && (
-          <label>
-            Custom time
-            <input type="time" name="briefing_time_custom" defaultValue={prefs.briefing_time} />
+          <label className="check-row">
+            <input
+              type="checkbox"
+              name="event_invitations_enabled"
+              defaultChecked={prefs.event_invitations_enabled}
+            />{" "}
+            Event invitations
           </label>
-        )}
-        <label>
-          Days
-          <select name="briefing_days" defaultValue={prefs.briefing_days}>
-            <option value="daily">Every day</option>
-            <option value="weekdays">Weekdays only</option>
-          </select>
-        </label>
-        <label className="check-row">
-          <input
-            type="checkbox"
-            name="empty_day_briefing_enabled"
-            defaultChecked={prefs.empty_day_briefing_enabled}
-          />{" "}
-          Still send a briefing on days with nothing planned
-        </label>
+          <label className="check-row">
+            <input
+              type="checkbox"
+              name="event_changes_enabled"
+              defaultChecked={prefs.event_changes_enabled}
+            />{" "}
+            Event updates and cancellations
+          </label>
+          <label className="check-row">
+            <input
+              type="checkbox"
+              name="household_reminders_enabled"
+              defaultChecked={prefs.household_reminders_enabled}
+            />{" "}
+            Household reminders (bins, routines)
+          </label>
+          <label className="check-row">
+            <input
+              type="checkbox"
+              name="list_assignments_enabled"
+              defaultChecked={prefs.list_assignments_enabled}
+            /> List item assignments
+          </label>
+          <label className="check-row">
+            <input
+              type="checkbox"
+              name="wishlist_sharing_enabled"
+              defaultChecked={prefs.wishlist_sharing_enabled}
+            /> Wishlist sharing
+          </label>
+        </FormSection>
 
-        <h2>Privacy</h2>
-        <label>
-          Lock-screen preview
-          <select name="lock_screen_preview_level" defaultValue={prefs.lock_screen_preview_level}>
-            <option value="full">Show full details</option>
-            <option value="title_only">Title only</option>
-            <option value="hidden">Hide content</option>
-          </select>
-        </label>
+        <FormSection title={<h2>Nudges</h2>} divider>
+          <label className="check-row">
+            <input
+              type="checkbox"
+              checked={nudgeSummaryEnabled}
+              onChange={(event) => setNudgeSummaryEnabled(event.target.checked)}
+            />{" "}
+            Send me a daily Nudge summary
+          </label>
+          <p className="form-field-hint">One notification with today&rsquo;s routines, reminders and assigned to-dos.</p>
+          <FormRow minColumnWidth="14rem">
+            <FormField label="Delivery time">
+              {(control) => (
+                <select
+                  {...control}
+                  value={nudgeSummaryPreset}
+                  disabled={!nudgeSummaryEnabled}
+                  onChange={(event) => setNudgeSummaryPreset(event.target.value)}
+                >
+                  {BRIEFING_PRESETS.map(([time, label]) => (
+                    <option key={time} value={time}>
+                      {label} ({time})
+                    </option>
+                  ))}
+                  <option value="custom">Custom time</option>
+                </select>
+              )}
+            </FormField>
+            {nudgeSummaryPreset === "custom" && (
+              <FormField label="Custom time">
+                {(control) => (
+                  <input
+                    {...control}
+                    type="time"
+                    name="daily_nudge_summary_time_custom"
+                    defaultValue={prefs.daily_nudge_summary_time}
+                    disabled={!nudgeSummaryEnabled}
+                  />
+                )}
+              </FormField>
+            )}
+          </FormRow>
+          <label className="check-row">
+            <input type="checkbox" name="nudges_evening_cleanup_enabled" defaultChecked={prefs.nudges_evening_cleanup_enabled} />
+            Evening Clean-up
+          </label>
+          <FormField label="Evening Clean-up time">
+            {(control) => <input {...control} type="time" name="nudges_evening_time" defaultValue={prefs.nudges_evening_time} />}
+          </FormField>
+          <label className="check-row">
+            <input type="checkbox" name="nudges_day_complete_enabled" defaultChecked={prefs.nudges_day_complete_enabled} />
+            Day Complete acknowledgement
+          </label>
+        </FormSection>
 
-        <h2>Quiet hours</h2>
-        <label>
-          Start
-          <input type="time" name="quiet_hours_start" defaultValue={prefs.quiet_hours_start ?? ""} />
-        </label>
-        <label>
-          End
-          <input type="time" name="quiet_hours_end" defaultValue={prefs.quiet_hours_end ?? ""} />
-        </label>
-        <label className="check-row">
-          <input
-            type="checkbox"
-            name="quiet_hours_critical_only"
-            defaultChecked={prefs.quiet_hours_critical_only}
-          />{" "}
-          Still allow critical reminders (e.g. medication) during quiet hours
-        </label>
+        <FormSection title={<h2>Daily briefing</h2>} divider>
+          <label className="check-row">
+            <input
+              type="checkbox"
+              name="daily_briefing_enabled"
+              defaultChecked={prefs.daily_briefing_enabled}
+            />{" "}
+            Send me a morning summary
+          </label>
+          <FormRow minColumnWidth="14rem">
+            <FormField label="Delivery time">
+              {(control) => (
+                <select {...control} value={briefingPreset} onChange={(event) => setBriefingPreset(event.target.value)}>
+                  {BRIEFING_PRESETS.map(([time, label]) => (
+                    <option key={time} value={time}>
+                      {label} ({time})
+                    </option>
+                  ))}
+                  <option value="custom">Custom time</option>
+                </select>
+              )}
+            </FormField>
+            {briefingPreset === "custom" && (
+              <FormField label="Custom time">
+                {(control) => <input {...control} type="time" name="briefing_time_custom" defaultValue={prefs.briefing_time} />}
+              </FormField>
+            )}
+          </FormRow>
+          <FormField label="Days">
+            {(control) => (
+              <select {...control} name="briefing_days" defaultValue={prefs.briefing_days}>
+                <option value="daily">Every day</option>
+                <option value="weekdays">Weekdays only</option>
+              </select>
+            )}
+          </FormField>
+          <label className="check-row">
+            <input
+              type="checkbox"
+              name="empty_day_briefing_enabled"
+              defaultChecked={prefs.empty_day_briefing_enabled}
+            />{" "}
+            Still send a briefing on days with nothing planned
+          </label>
+        </FormSection>
 
-        <button disabled={saving}>{saving ? "Saving…" : "Save preferences"}</button>
-      </form>
+        <FormSection title={<h2>Privacy</h2>} divider>
+          <FormField label="Lock-screen preview">
+            {(control) => (
+              <select {...control} name="lock_screen_preview_level" defaultValue={prefs.lock_screen_preview_level}>
+                <option value="full">Show full details</option>
+                <option value="title_only">Title only</option>
+                <option value="hidden">Hide content</option>
+              </select>
+            )}
+          </FormField>
+        </FormSection>
+
+        <FormSection title={<h2>Quiet hours</h2>} divider>
+          <FormRow>
+            <FormField label="Start">
+              {(control) => <input {...control} type="time" name="quiet_hours_start" defaultValue={prefs.quiet_hours_start ?? ""} />}
+            </FormField>
+            <FormField label="End">
+              {(control) => <input {...control} type="time" name="quiet_hours_end" defaultValue={prefs.quiet_hours_end ?? ""} />}
+            </FormField>
+          </FormRow>
+          <label className="check-row">
+            <input
+              type="checkbox"
+              name="quiet_hours_critical_only"
+              defaultChecked={prefs.quiet_hours_critical_only}
+            />{" "}
+            Still allow critical reminders (e.g. medication) during quiet hours
+          </label>
+        </FormSection>
+
+        <FormActions>
+          <button type="submit" disabled={saving}>{saving ? "Saving…" : "Save preferences"}</button>
+        </FormActions>
+      </FormLayout>
     </SettingsPage>
   );
 }

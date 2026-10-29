@@ -387,6 +387,20 @@ describe("Profile — Account details summary", () => {
     expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
   });
 
+  it("lays Month and Day out as one shared form row and keeps the Day range check", async () => {
+    render(<Profile />);
+    await screen.findByRole("heading", { name: "Account details" });
+    await waitFor(() => expect(screen.getAllByText("Home admin").length).toBeGreaterThan(0));
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+
+    const day = screen.getByRole("spinbutton", { name: "Day" });
+    expect(day).toHaveAttribute("min", "1");
+    expect(day).toHaveAttribute("max", "31");
+    expect(day.closest("form")).not.toHaveAttribute("novalidate");
+    expect(screen.getByRole("combobox", { name: "Month" }).closest(".form-row")).toBe(day.closest(".form-row"));
+  });
+
   it("Cancel hides the editing controls again without saving", async () => {
     render(<Profile />);
     await screen.findByRole("heading", { name: "Account details" });
