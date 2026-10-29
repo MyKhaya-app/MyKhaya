@@ -28,6 +28,42 @@ def releaseKeyPassword = releaseSigningValue('keyPassword', 'MYKHAYA_UPLOAD_KEY_
 def releaseSigningConfigured = [releaseStoreFile, releaseStorePassword, releaseKeyAlias, releaseKeyPassword]
     .every { it != null && !it.isEmpty() }
 
+def verifyCapacitorConfiguration = { File configFile, String environment, String expectedApplicationId, String expectedFrontend, String expectedHost ->
+    if (!configFile.isFile()) {
+        throw new GradleException(
+            "Missing generated Capacitor configuration for ${environment} at ${configFile}. " +
+            "Run the matching MYKHAYA_ANDROID_ENV cap sync before building."
+        )
+    }
+
+    def config = new groovy.json.JsonSlurper().parse(configFile)
+    def server = config.server
+    def actualFrontend = server?.url
+    def actualHosts = server?.allowNavigation
+
+    if (config.appId != expectedApplicationId) {
+        throw new GradleException(
+            "${environment} Capacitor configuration has appId ${config.appId}; expected ${expectedApplicationId}. " +
+            "Run the matching MYKHAYA_ANDROID_ENV cap sync before building."
+        )
+    }
+    if (actualFrontend != expectedFrontend) {
+        throw new GradleException(
+            "${environment} Capacitor configuration points at ${actualFrontend}; expected ${expectedFrontend}. " +
+            "Run MYKHAYA_ANDROID_ENV=${environment == 'PROD' ? 'production' : 'development'} npx cap sync android."
+        )
+    }
+    if (actualHosts != [expectedHost]) {
+        throw new GradleException(
+            "${environment} Capacitor configuration has an unexpected allowNavigation host list; " +
+            "expected only ${expectedHost}. Run the matching MYKHAYA_ANDROID_ENV cap sync before building."
+        )
+    }
+    if (server?.cleartext != false) {
+        throw new GradleException("${environment} Capacitor configuration must keep cleartext disabled.")
+    }
+}
+
 android {
     namespace = "app.mykhaya.mobile"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -35,8 +71,8 @@ android {
         applicationId "app.mykhaya.mobile"
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 30
-        versionName "0.1.30"
+        versionCode 31
+        versionName "0.1.31"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
              // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
@@ -184,14 +220,43 @@ tasks.register('verifyProductionReleaseSigning') {
     }
 }
 
+tasks.register('verifyDevelopmentCapacitorConfiguration') {
+    doLast {
+        verifyCapacitorConfiguration(file('src/main/assets/capacitor.config.json'), 'DEV', 'app.mykhaya.mobile', 'https://dev.mykhaya.app', 'dev.mykhaya.app')
+        logger.lifecycle('DEV Capacitor configuration verified for dev.mykhaya.app')
+    }
+}
+
+tasks.register('verifyProductionCapacitorConfiguration') {
+    doLast {
+        verifyCapacitorConfiguration(file('src/main/assets/capacitor.config.json'), 'PROD', 'app.mykhaya.mobile.prod', 'https://mykhaya.app', 'mykhaya.app')
+        logger.lifecycle('PROD Capacitor configuration verified for mykhaya.app')
+    }
+}
+
 tasks.matching { it.name in ['preDevelopmentDebugBuild', 'preDevelopmentReleaseBuild'] }.configureEach {
     dependsOn tasks.named('verifyDevelopmentFirebaseConfiguration')
+    dependsOn tasks.named('verifyDevelopmentCapacitorConfiguration')
 }
 
 tasks.matching { it.name in ['preProductionDebugBuild', 'preProductionReleaseBuild'] }.configureEach {
     dependsOn tasks.named('verifyProductionFirebaseConfiguration')
+    dependsOn tasks.named('verifyProductionCapacitorConfiguration')
 }
 
 tasks.matching { it.name == 'preProductionReleaseBuild' }.configureEach {
     dependsOn tasks.named('verifyProductionReleaseSigning')
+}
+
+// Re-check the merged asset that is actually consumed by the Android variant.
+tasks.matching { it.name == 'mergeProductionReleaseAssets' }.configureEach {
+    doLast {
+        verifyCapacitorConfiguration(file("${buildDir}/intermediates/assets/productionRelease/mergeProductionReleaseAssets/capacitor.config.json"), 'PROD', 'app.mykhaya.mobile.prod', 'https://mykhaya.app', 'mykhaya.app')
+    }
+}
+
+tasks.matching { it.name == 'mergeDevelopmentDebugAssets' }.configureEach {
+    doLast {
+        verifyCapacitorConfiguration(file("${buildDir}/intermediates/assets/developmentDebug/mergeDevelopmentDebugAssets/capacitor.config.json"), 'DEV', 'app.mykhaya.mobile', 'https://dev.mykhaya.app', 'dev.mykhaya.app')
+    }
 }

@@ -12,9 +12,14 @@ equivalent iOS decision) and
 [ADR 0011](../../docs/architecture/adr/0011-single-pwa-retire-mobile-app.md)
 for why this is a thin shell and not a second frontend implementation.
 
-The shell and shared Android native capability path are implemented. The
-remaining first milestone is live Firebase/device validation; credentials and
-signing material remain external and local.
+## Current close-out status
+
+The Android shell, Firebase integration, PROD release signing path, and
+environment fail-closed checks are implemented. PROD v0.1.31 is in Google Play
+Internal Testing and has been confirmed working on a physical Samsung,
+including FCM delivery. The historical implementation notes later in this
+file are retained for context; current build and release instructions are in
+`docs/mobile/android-play-release.md`.
 
 ## What lives here vs. what doesn't
 
@@ -84,9 +89,9 @@ Gradle build itself has not been executed here — only statically verified
 runtime/device verification is still required before this ships — see the
 Phase 1 completion report for exactly what was and wasn't verified.
 
-The development and production debug variants have been built successfully
-with the locally installed JDK and Android SDK. Run them in separate Gradle
-invocations so the DEV-only Firebase configuration is not applied to PROD:
+The development and production debug variants can be built with the installed
+JDK and Android SDK. Run them in separate Gradle invocations so each build
+uses a freshly synced matching environment:
 
 ```powershell
 cd android
@@ -101,21 +106,39 @@ and `app/build/outputs/apk/production/debug/app-production-debug.apk`.
 
 `MYKHAYA_ANDROID_ENV` (`development` | `production`, default `development`)
 selects which live frontend origin a build points at — see `src/config.ts`.
-Production builds must set `MYKHAYA_ANDROID_ENV=production` explicitly. The
-native API uses the same frontend origin's `/api/v1` route in both
-environments. There is no separate `.env` file for this package; it is a
-single named variable, the same `MYKHAYA_`-prefixed convention used
-throughout the backend and by `apps/ios-shell`'s `MYKHAYA_IOS_ENV`.
+Capacitor evaluates this variable during `cap sync`, not during Gradle
+compilation. Production Gradle variants now fail closed if the generated
+asset is missing, points at DEV, has the wrong app ID, or has the wrong
+navigation host. The merged production asset is checked again during the
+release build. The native API uses the same frontend origin's `/api/v1` route
+in both environments.
 
-```sh
-MYKHAYA_ANDROID_ENV=production npx cap sync android
+```powershell
+cd apps/android-shell
+$env:MYKHAYA_ANDROID_ENV = "production"
+pnpm exec cap sync android
 ```
 
 The matching production debug variant is `android/gradlew.bat
 assembleProductionDebug`. DEV and PROD use separate application IDs so both
-can be installed side by side; release signing is intentionally not configured
-until a real keystore is supplied. For the first Play Internal Testing bundle,
-follow [the Android Play release runbook](../../docs/mobile/android-play-release.md).
+can be installed side by side. For DEV, set `MYKHAYA_ANDROID_ENV` to
+`development` before syncing and use `assembleDevelopmentDebug`.
+
+Do not build a production variant from a DEV-synced asset:
+
+```powershell
+cd apps/android-shell
+$env:MYKHAYA_ANDROID_ENV = "production"
+pnpm exec cap sync android
+cd android
+.\gradlew.bat bundleProductionRelease --offline --no-daemon
+```
+
+The focused Gradle checks are also runnable directly as
+`verifyDevelopmentCapacitorConfiguration` or
+`verifyProductionCapacitorConfiguration` and do not print credentials. For
+the first Play Internal Testing bundle, follow [the Android Play release
+runbook](../../docs/mobile/android-play-release.md).
 
 ## Application identity
 

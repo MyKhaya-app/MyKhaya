@@ -1,5 +1,23 @@
 # Android Shell — Status & Handover
 
+## Current close-out status (2026-10-29)
+
+The previous pause described in this document is complete. PROD v0.1.31 is in
+Google Play Internal Testing and has been confirmed working on a physical
+Samsung, including FCM delivery. The permanent upload keystore exists outside
+the repository, PROD Firebase is configured for `mykhaya-prod`, and the build
+now fails closed on mismatched Firebase or Capacitor environment identity.
+
+Validated locally: Android TypeScript typecheck, 13 Android shell unit tests,
+91 focused shared native/web tests (with 9 intentional skips), a DEV debug APK,
+and the PROD release AAB. The AAB was built as version `0.1.31` / versionCode
+31 and was not uploaded by this workspace.
+
+Remaining evidence gaps are physical-device coverage for biometric/resume
+re-lock, predictive back, offline recovery, camera/file flows, terminated-state
+notification routing, and final Android App Links verification. Treat the
+historical notes below as context, not as current release blockers.
+
 Android development is **paused, not abandoned**. This document is the single
 place to read before resuming it — it records what's actually done, what's
 implemented but unverified live, what's deferred, the exact resume point, and
