@@ -280,6 +280,26 @@ async def apply_stripe_subscription_state(
     subscription.billing_interval = interval
     subscription.current_period_start = period_start
     subscription.current_period_end = period_end
+    pending_matches = (
+        subscription.pending_plan is not None
+        and subscription.pending_plan == incoming_plan
+        and (
+            subscription.pending_billing_interval is None
+            or subscription.pending_billing_interval == interval
+        )
+    )
+    # A verified Stripe update is the only authority that clears a pending
+    # local transition. For a scheduled Free downgrade, Stripe reports the
+    # terminal cancellation instead of a Free price, so that status also
+    # completes the pending request.
+    if pending_matches or (
+        subscription.pending_plan == SubscriptionPlan.free
+        and mapped_status == SubscriptionStatus.cancelled
+    ):
+        subscription.pending_plan = None
+        subscription.pending_billing_interval = None
+        subscription.pending_effective_at = None
+        subscription.stripe_schedule_id = None
     if was_complimentary:
         # The transition itself is preserved in HomeSubscriptionEvent history
         # below (from_provider=complimentary); these live fields would

@@ -1295,6 +1295,10 @@ export interface BillingStatus {
   price: SubscriptionPrice | null;
   current_period_end: string | null;
   cancel_at_period_end: boolean;
+  pending_plan?: SubscriptionPlanValue | null;
+  pending_billing_interval?: BillingInterval | null;
+  pending_effective_at?: string | null;
+  has_pending_change?: boolean;
   affected_adult_members?: string[];
   retention_state?: "retained_free" | "restored" | "purge_pending" | "purged" | null;
   retention_deadline?: string | null;
@@ -1320,6 +1324,19 @@ export interface BillingStatus {
   nudges_enabled: boolean;
   budget_enabled: boolean;
   driveway_enabled: boolean;
+}
+
+export interface SubscriptionChangePreview {
+  current_plan: SubscriptionPlanValue;
+  target_plan: SubscriptionPlanValue;
+  current_interval: BillingInterval | null;
+  target_interval: BillingInterval | null;
+  amount_due: number;
+  currency: string | null;
+  next_amount: number;
+  next_amount_formatted: string | null;
+  effective_at: string | null;
+  requires_payment: boolean;
 }
 
 export interface PricingOption {

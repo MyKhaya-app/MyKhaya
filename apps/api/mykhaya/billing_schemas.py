@@ -67,6 +67,30 @@ class PortalSessionResponse(BaseModel):
     portal_url: str
 
 
+class SubscriptionChangeRequest(StrictModel):
+    target_plan: SubscriptionPlan
+    target_interval: BillingInterval | None = None
+
+
+class SubscriptionChangePreviewResponse(BaseModel):
+    current_plan: SubscriptionPlan
+    target_plan: SubscriptionPlan
+    current_interval: BillingInterval | None
+    target_interval: BillingInterval | None
+    amount_due: int
+    currency: str | None
+    next_amount: int
+    next_amount_formatted: str | None
+    effective_at: str | None
+    requires_payment: bool
+
+
+class SubscriptionChangeResponse(BaseModel):
+    kind: str
+    pending_payment: bool
+    payment_action_url: str | None = None
+
+
 class SubscriptionPriceResponse(BaseModel):
     """The actual amount this Home's own subscription is billed — resolved
     live from Stripe against HomeSubscription.external_price_id, which may
@@ -96,6 +120,10 @@ class BillingStatusResponse(BaseModel):
     price: SubscriptionPriceResponse | None
     current_period_end: str | None
     cancel_at_period_end: bool
+    pending_plan: SubscriptionPlan | None = None
+    pending_billing_interval: BillingInterval | None = None
+    pending_effective_at: str | None = None
+    has_pending_change: bool = False
     affected_adult_members: list[str]
     retention_state: str | None
     retention_deadline: str | None

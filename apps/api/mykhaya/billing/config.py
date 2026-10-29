@@ -113,6 +113,24 @@ def _from_db_row(row: PlatformStripeSettings, settings: Settings) -> StripeConfi
     family_signups_enabled = row.family_signups_enabled
     ultimate_signups_enabled = row.ultimate_signups_enabled
 
+    # The deployment environment is an isolation boundary, not an admin
+    # preference.  A PCC row must never be able to make production use Stripe
+    # test credentials, or make a non-production deployment use live billing.
+    expected_mode: StripeModeLiteral = "live" if settings.environment == "production" else "test"
+    if mode != expected_mode:
+        return StripeConfig(
+            source="database",
+            configured=False,
+            mode=mode,
+            acquisition_enabled=acquisition_enabled,
+            family_signups_enabled=family_signups_enabled,
+            ultimate_signups_enabled=ultimate_signups_enabled,
+            incomplete_reason=(
+                f"The enabled PCC configuration selects {mode.capitalize()} mode, but "
+                f"{settings.environment} deployments require Stripe {expected_mode} mode."
+            ),
+        )
+
     if mode == "test":
         publishable_key = row.test_publishable_key
         encrypted_secret_key = row.encrypted_test_secret_key

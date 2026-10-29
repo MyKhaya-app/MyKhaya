@@ -2095,6 +2095,30 @@ export class MyKhayaClient {
       `/groups/${encodeURIComponent(homeId)}/billing/portal-session`,
       { method: "POST" },
     );
+  previewSubscriptionChange = (
+    homeId: string,
+    targetPlan: import("@mykhaya/shared-types").SubscriptionPlanValue,
+    targetInterval?: import("@mykhaya/shared-types").BillingInterval,
+  ) =>
+    this.request<import("@mykhaya/shared-types").SubscriptionChangePreview>(
+      `/groups/${encodeURIComponent(homeId)}/billing/change-preview`,
+      {
+        method: "POST",
+        body: JSON.stringify({ target_plan: targetPlan, target_interval: targetInterval ?? null }),
+      },
+    );
+  changeSubscription = (
+    homeId: string,
+    targetPlan: import("@mykhaya/shared-types").SubscriptionPlanValue,
+    targetInterval?: import("@mykhaya/shared-types").BillingInterval,
+  ) =>
+    this.request<{ kind: string; pending_payment: boolean; payment_action_url: string | null }>(
+      `/groups/${encodeURIComponent(homeId)}/billing/change`,
+      {
+        method: "POST",
+        body: JSON.stringify({ target_plan: targetPlan, target_interval: targetInterval ?? null }),
+      },
+    );
   post = <T>(path: string, body: unknown) =>
     this.request<T>(path, { method: "POST", body: JSON.stringify(body) });
   get = <T>(path: string) => this.request<T>(path);

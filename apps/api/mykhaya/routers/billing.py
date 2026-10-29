@@ -40,6 +40,13 @@ from mykhaya.billing.reconciliation import (
     CheckoutNotCompleteError,
     confirm_checkout_session,
 )
+from mykhaya.billing.transitions import (
+    InvalidSubscriptionTransition,
+    SubscriptionChangeError,
+    apply_subscription_change,
+    lock_home_for_change,
+    preview_subscription_change,
+)
 from mykhaya.billing.webhooks import (
     WebhookSignatureError,
     process_webhook_event,
@@ -56,6 +63,9 @@ from mykhaya.billing_schemas import (
     PlanComparisonRow,
     PortalSessionResponse,
     PricingOptionResponse,
+    SubscriptionChangePreviewResponse,
+    SubscriptionChangeRequest,
+    SubscriptionChangeResponse,
     SubscriptionPriceResponse,
 )
 from mykhaya.config import Settings, get_settings
@@ -367,6 +377,12 @@ async def billing_status(
         cancel_at_period_end=bool(
             subscription and subscription.status == SubscriptionStatus.cancel_at_period_end
         ),
+        pending_plan=subscription.pending_plan if subscription else None,
+        pending_billing_interval=subscription.pending_billing_interval if subscription else None,
+        pending_effective_at=subscription.pending_effective_at.isoformat()
+        if subscription and subscription.pending_effective_at
+        else None,
+        has_pending_change=bool(subscription and subscription.pending_plan is not None),
         affected_adult_members=affected_adult_members,
         retention_state=lifecycle.state.value if lifecycle else None,
         retention_deadline=lifecycle.retention_deadline.isoformat() if lifecycle else None,
@@ -406,6 +422,118 @@ async def billing_status(
         nudges_enabled=await has_entitlement(db, group_id, "nudges.enabled"),
         budget_enabled=await has_entitlement(db, group_id, "budget.enabled"),
         driveway_enabled=await has_entitlement(db, group_id, "driveway.enabled"),
+    )
+
+
+async def _billing_change_home(
+    group_id: uuid.UUID, auth: AuthContext, db: AsyncSession
+) -> HomeSubscription:
+    await require_capability(group_id, Capability.billing_manage, auth, db)
+    subscription = await get_home_subscription(db, group_id)
+    if subscription is None or subscription.provider != SubscriptionProvider.stripe:
+        raise HTTPException(status.HTTP_409_CONFLICT, "This Home has no Stripe subscription yet.")
+    return subscription
+
+
+@group_router.post(
+    "/change-preview", response_model=SubscriptionChangePreviewResponse
+)
+async def subscription_change_preview(
+    group_id: uuid.UUID,
+    body: SubscriptionChangeRequest,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> SubscriptionChangePreviewResponse:
+    subscription = await _billing_change_home(group_id, auth, db)
+    config = await resolve_stripe_config(settings, db)
+    try:
+        preview = await preview_subscription_change(
+            config, subscription, body.target_plan, body.target_interval
+        )
+    except InvalidSubscriptionTransition as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
+    except StripeNotConfiguredError:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE, "Billing is not available."
+        ) from None
+    except (StripeUnavailableError, StripeRequestError) as exc:
+        await log.aerror(
+            "stripe_subscription_change_preview_failed",
+            group_id=str(group_id),
+            error_type=type(exc).__name__,
+        )
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "We couldn't calculate that change right now.",
+        ) from None
+    return SubscriptionChangePreviewResponse(
+        current_plan=preview["current_plan"],
+        target_plan=preview["target_plan"],
+        current_interval=preview["current_interval"],
+        target_interval=preview["target_interval"],
+        amount_due=preview["amount_due"],
+        currency=preview["currency"],
+        next_amount=preview["next_amount"],
+        next_amount_formatted=preview["next_amount_formatted"],
+        effective_at=preview["effective_at"].isoformat() if preview["effective_at"] else None,
+        requires_payment=preview["requires_payment"],
+    )
+
+
+@group_router.post("/change", response_model=SubscriptionChangeResponse)
+async def subscription_change(
+    group_id: uuid.UUID,
+    body: SubscriptionChangeRequest,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> SubscriptionChangeResponse:
+    await enforce_rate_limit(request, settings, "billing-change", 10, 300)
+    subscription = await _billing_change_home(group_id, auth, db)
+    await lock_home_for_change(db, group_id)
+    await db.refresh(subscription)
+    config = await resolve_stripe_config(settings, db)
+    try:
+        result = await apply_subscription_change(
+            db,
+            config,
+            subscription,
+            body.target_plan,
+            body.target_interval,
+            idempotency_key=(
+                f"mykhaya-change:{group_id}:{body.target_plan.value}:"
+                f"{body.target_interval or 'none'}"
+            ),
+        )
+        await db.commit()
+    except InvalidSubscriptionTransition as exc:
+        await db.rollback()
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
+    except StripeNotConfiguredError:
+        await db.rollback()
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE, "Billing is not available."
+        ) from None
+    except (StripeUnavailableError, StripeRequestError) as exc:
+        await db.rollback()
+        await log.aerror(
+            "stripe_subscription_change_failed",
+            group_id=str(group_id),
+            error_type=type(exc).__name__,
+        )
+        raise HTTPException(
+            status.HTTP_402_PAYMENT_REQUIRED,
+            "The subscription change was not completed.",
+        ) from None
+    except SubscriptionChangeError as exc:
+        await db.rollback()
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
+    return SubscriptionChangeResponse(
+        kind=result["kind"],
+        pending_payment=result["pending_payment"],
+        payment_action_url=result.get("payment_action_url"),
     )
 
 

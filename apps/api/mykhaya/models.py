@@ -3647,6 +3647,17 @@ class HomeSubscription(UuidTimeMixin, Base):
     billing_interval: Mapped[BillingInterval | None] = mapped_column(
         Enum(BillingInterval, name="billing_interval")
     )
+    # A server-scheduled Stripe plan change. These fields are display state only;
+    # Stripe remains authoritative and the webhook clears/updates them when the
+    # scheduled phase becomes effective.
+    pending_plan: Mapped[SubscriptionPlan | None] = mapped_column(
+        Enum(SubscriptionPlan, name="subscription_plan", create_type=False)
+    )
+    pending_billing_interval: Mapped[BillingInterval | None] = mapped_column(
+        Enum(BillingInterval, name="billing_interval", create_type=False)
+    )
+    pending_effective_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    stripe_schedule_id: Mapped[str | None] = mapped_column(String(255), index=True)
     current_period_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     current_period_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # Complimentary access — a first-class MyKhaya concept, not a fake/100%-off
