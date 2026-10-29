@@ -4670,6 +4670,25 @@ body.sheet-open {
 .bottom-sheet.full-height {
   height: min(94dvh, 900px);
 }
+/* Short screens: a phone in landscape (the same 520px boundary as the
+   short-screen shell rules; the Duo, tablets and desktop are taller). The
+   portrait allowances above stacked up there: the 88dvh cap left a gap above
+   even a full-height sheet, and the footer added its own 0.75rem on top of
+   the home-indicator inset. Here the sheet fills the backdrop below its top
+   inset, and the footer pads by the larger of the two, so its buttons sit
+   just clear of the home indicator rather than 0.75rem above it. Portrait,
+   the Duo and desktop are unchanged. */
+@media (max-height: 520px) {
+  .bottom-sheet {
+    max-height: 100%;
+  }
+  .bottom-sheet.full-height {
+    height: 100%;
+  }
+  .sheet-footer {
+    padding-bottom: max(0.75rem, var(--safe-bottom));
+  }
+}
 .bottom-sheet > header {
   align-items: center;
   border-bottom: 1px solid #ebe4da;

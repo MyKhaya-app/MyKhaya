@@ -27,6 +27,22 @@ import {
   pickAvatarFromGallery,
 } from "@/components/native-avatar-picker";
 
+// The API's birthday rules (_validate_birthday in apps/api/mykhaya/schemas.py),
+// checked here too so each problem can be shown on the field it concerns.
+// The API stays the authority; February allows 29 because there is no year.
+const DAYS_IN_MONTH = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
+type BirthdayErrors = { month?: string; day?: string; form?: string };
+
+function birthdayFieldErrors(month: number | null, day: number | null, monthName: (month: number) => string): BirthdayErrors {
+  if (month === null && day === null) return {};
+  if (month === null) return { month: "Choose the month as well, or clear Day." };
+  if (day === null) return { day: "Enter the day as well, or set Month to Not set." };
+  const days = DAYS_IN_MONTH[month - 1]!;
+  if (day > days) return { day: `${monthName(month)} has ${days} days.` };
+  return {};
+}
+
 const MONTHS = [
   "January", "February", "March", "April", "May", "June",
   "July", "August", "September", "October", "November", "December",
@@ -67,6 +83,7 @@ export default function Profile() {
   const [colourError, setColourError] = useState("");
   const [photoSheetOpen, setPhotoSheetOpen] = useState(false);
   const [editingBirthday, setEditingBirthday] = useState(false);
+  const [birthdayErrors, setBirthdayErrors] = useState<BirthdayErrors>({});
   const libraryInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
 
@@ -98,24 +115,33 @@ export default function Profile() {
     }
   }
 
+  // Month and Day are checked together, so editing either clears both
+  // field errors. A failed save's message stays until the next attempt.
+  function clearBirthdayFieldErrors() {
+    setBirthdayErrors(({ form }) => (form ? { form } : {}));
+  }
+
   async function saveBirthday(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setSaving(true);
-    setError("");
     setMessage("");
     const form = new FormData(event.currentTarget);
     const month = form.get("birth_month");
     const day = form.get("birth_day");
+    const payload = {
+      birth_month: month ? Number(month) : null,
+      birth_day: day ? Number(day) : null,
+    };
+    const fieldErrors = birthdayFieldErrors(payload.birth_month, payload.birth_day, (value) => MONTHS[value - 1]!);
+    setBirthdayErrors(fieldErrors);
+    if (fieldErrors.month || fieldErrors.day) return;
+    setSaving(true);
     try {
-      const updated = await api.updateMyBirthday({
-        birth_month: month ? Number(month) : null,
-        birth_day: day ? Number(day) : null,
-      });
+      const updated = await api.updateMyBirthday(payload);
       setUser(updated);
       setMessage("Your birthday was saved.");
       setEditingBirthday(false);
     } catch (cause) {
-      setError((cause as Error).message);
+      setBirthdayErrors({ form: (cause as Error).message });
     } finally {
       setSaving(false);
     }
@@ -411,7 +437,7 @@ export default function Profile() {
             <dd className="profile-detail-value">
               <span>{birthdayLabel(user)}</span>
               {!editingBirthday && (
-                <button type="button" className="tertiary" onClick={() => setEditingBirthday(true)}>
+                <button type="button" className="tertiary" onClick={() => { setBirthdayErrors({}); setEditingBirthday(true); }}>
                   Edit
                 </button>
               )}
@@ -423,10 +449,16 @@ export default function Profile() {
         </p>
         {editingBirthday && user && (
           <FormLayout className="profile-birthday-edit" onSubmit={saveBirthday} noValidate={false}>
+            {birthdayErrors.form && <p className="notice error" role="alert">{birthdayErrors.form}</p>}
             <FormRow minColumnWidth="7rem">
-              <FormField label="Month">
+              <FormField label="Month" error={birthdayErrors.month}>
                 {(control) => (
-                  <select {...control} name="birth_month" defaultValue={user.birth_month ?? ""}>
+                  <select
+                    {...control}
+                    name="birth_month"
+                    defaultValue={user.birth_month ?? ""}
+                    onChange={clearBirthdayFieldErrors}
+                  >
                     <option value="">Not set</option>
                     {MONTHS.map((name, index) => (
                       <option key={name} value={index + 1}>{name}</option>
@@ -434,8 +466,18 @@ export default function Profile() {
                   </select>
                 )}
               </FormField>
-              <FormField label="Day">
-                {(control) => <input {...control} type="number" name="birth_day" min={1} max={31} defaultValue={user.birth_day ?? ""} />}
+              <FormField label="Day" error={birthdayErrors.day}>
+                {(control) => (
+                  <input
+                    {...control}
+                    type="number"
+                    name="birth_day"
+                    min={1}
+                    max={31}
+                    defaultValue={user.birth_day ?? ""}
+                    onChange={clearBirthdayFieldErrors}
+                  />
+                )}
               </FormField>
             </FormRow>
             <FormActions>
@@ -447,6 +489,7 @@ export default function Profile() {
                 className="tertiary"
                 onClick={() => {
                   setEditingBirthday(false);
+                  setBirthdayErrors({});
                   setError("");
                 }}
               >

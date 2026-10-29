@@ -47,6 +47,17 @@ describe("shared form layout CSS", () => {
     expect(rule(".sheet-footer")).toContain("calc(0.75rem + var(--safe-bottom))");
   });
 
+  it("lets a sheet use a short landscape screen without stacking the footer padding on the home-indicator inset", () => {
+    const start = css.indexOf("@media (max-height: 520px) {\n  .bottom-sheet {");
+    expect(start).toBeGreaterThan(-1);
+    const block = css.slice(start, css.indexOf("\n}\n", start));
+    expect(block).toMatch(/ {2}\.bottom-sheet \{\s*max-height: 100%;/);
+    expect(block).toMatch(/ {2}\.bottom-sheet\.full-height \{\s*height: 100%;/);
+    expect(block).toMatch(/ {2}\.sheet-footer \{\s*padding-bottom: max\(0\.75rem, var\(--safe-bottom\)\);/);
+    // Portrait, the Duo and desktop keep the full allowance.
+    expect(rule(".bottom-sheet")).toContain("max-height: min(88dvh, 820px);");
+  });
+
   it("gives the sheet close button a 44px hit area", () => {
     expect(rule(".bottom-sheet-close::after")).toContain("inset: -5px;");
   });

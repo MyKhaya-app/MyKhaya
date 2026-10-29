@@ -130,7 +130,11 @@ The Routine, Reminder and To-do editors in Nudges
   button is in `FormActions`.
 - The Profile birthday editor (`app/settings/profile/page.tsx`) is a
   `FormLayout` with Month and Day in a `FormRow` and Save and Cancel in
-  `FormActions`.
+  `FormActions`. It checks the API's two birthday rules before saving, so a
+  missing Month or Day, or a day past the end of the month, is shown as that
+  field's `error`. Editing either field clears both. A failed save shows
+  inside the editor and keeps the entered values. The browser's own 1–31
+  check on Day stays, and the API remains the authority.
 - Not migrated:
   - Calendar settings, whose sentence-style rows ("Remind me [30 minutes]
     before events I'm attending") are their own design.
@@ -158,6 +162,10 @@ its own design decision and is not part of this standard yet.
   Escape and the Android back gesture also dismiss.
 - While the software keyboard is open, the sheet follows the visual viewport
   so the footer stays above the keyboard.
+- On a short screen (520px tall or less, which means a phone in landscape),
+  the sheet fills the height below the backdrop's top inset. The footer pads
+  by the home-indicator inset or 0.75rem, whichever is larger, rather than
+  their sum. Taller screens keep the portrait allowances.
 - While `busy`, every dismissal path is disabled so a save in flight is not
   orphaned.
 
