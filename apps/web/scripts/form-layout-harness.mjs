@@ -162,7 +162,40 @@ for (const profile of PROFILES) {
     await page.close();
   }
 }
+// Inspector self-tests: small static pages with a known answer, proving the
+// input-adornment allowance is narrow. A marked adornment may overlap only
+// its own input, and only when it is contained, padded for, keyboard
+// reachable and correctly named; every other overlap must still fail.
+const field = (inputAttributes, buttonAttributes, { padding = 52, buttonStyle = "" } = {}) => `
+  <div class="wrap" style="position:relative;width:300px">
+    <input ${inputAttributes} style="box-sizing:border-box;width:300px;height:50px;padding:0 ${padding}px 0 12px;border:1px solid #999;font:16px sans-serif">
+    <button type="button" ${buttonAttributes} style="position:absolute;right:3px;top:3px;width:44px;height:44px;padding:0;border:0;${buttonStyle}">·</button>
+  </div>`;
+const ADORNED = 'data-input-adornment="password-visibility" aria-controls="pw"';
+const INSPECTOR_SELF_TESTS = [
+  { name: "marked password toggle over its own padded input passes", html: field('id="pw" type="password"', `${ADORNED} aria-label="Show password"`), expect: [] },
+  { name: "the same toggle shown as Hide password while the password is visible passes", html: field('id="pw" type="text"', `${ADORNED} aria-label="Hide password"`), expect: [] },
+  { name: "the same overlap without the marker still fails", html: field('id="pw" type="password"', 'aria-label="Show password"'), expect: ["control-overlap"] },
+  { name: "a marker naming a different input still fails", html: `${field('id="pw" type="password"', 'data-input-adornment="password-visibility" aria-controls="other" aria-label="Show password"')}<input id="other" style="margin-top:80px">`, expect: ["control-overlap"] },
+  { name: "a marked toggle that also overlaps an unrelated control still fails", html: field('id="pw" type="password"', `${ADORNED} aria-label="Show password"`).replace("</div>", '<button type="button" style="position:absolute;right:20px;top:10px;width:60px;height:30px">Other</button></div>'), expect: ["control-overlap"] },
+  { name: "text that can run under the toggle fails", html: field('id="pw" type="password"', `${ADORNED} aria-label="Show password"`, { padding: 12 }), expect: ["input-adornment"] },
+  { name: "a toggle outside its input's wrapper fails", html: field('id="pw" type="password"', `${ADORNED} aria-label="Show password"`, { buttonStyle: "right:-30px;" }), expect: ["input-adornment"] },
+  { name: "a toggle removed from the keyboard order fails", html: field('id="pw" type="password"', `${ADORNED} tabindex="-1" aria-label="Show password"`), expect: ["input-adornment"] },
+  { name: "a toggle whose name does not match the field's state fails", html: field('id="pw" type="password"', `${ADORNED} aria-label="Hide password"`), expect: ["input-adornment"] },
+  { name: "two plain overlapping inputs still fail", html: '<div style="position:relative"><input style="position:absolute;left:0;top:0;width:200px;height:40px"><input style="position:absolute;left:100px;top:10px;width:200px;height:40px"></div>', expect: ["control-overlap"] },
+];
+const selfTestResults = [];
+const selfTestPage = await browser.newPage({ viewport: { width: 400, height: 300 } });
+for (const test of INSPECTOR_SELF_TESTS) {
+  await selfTestPage.setContent(`<!doctype html><html><body style="margin:20px">${test.html}</body></html>`);
+  const report = await selfTestPage.evaluate(inspectLayoutInPage, {});
+  const kinds = [...new Set(report.issues.map((issue) => issue.kind))].sort();
+  const passed = JSON.stringify(kinds) === JSON.stringify([...test.expect].sort());
+  selfTestResults.push({ name: test.name, passed, expected: test.expect, actual: kinds, issues: report.issues });
+}
 await browser.close();
+const selfTestFailures = selfTestResults.filter((test) => !test.passed);
+await fs.writeFile(path.join(outputDir, "inspector-self-tests.json"), JSON.stringify(selfTestResults, null, 2));
 
 const failures = results.filter((result) => result.checks.length || result.issues.length);
 await fs.writeFile(path.join(outputDir, "results.json"), JSON.stringify(results, null, 2));
@@ -179,5 +212,7 @@ for (const result of results) {
   summary.set(key, entry);
 }
 for (const [key, entry] of summary) console.log(`${key.padEnd(34)} pass ${entry.pass}/${entry.pass + entry.fail.length}${entry.fail.length ? `  FAIL: ${entry.fail.join("; ")}` : ""}`);
+for (const test of selfTestFailures) console.log(`inspector self-test FAIL: ${test.name} (expected ${JSON.stringify(test.expected)}, got ${JSON.stringify(test.actual)})`);
 console.log(`\n${results.length} states, ${failures.length} failing. Report: ${path.join(outputDir, "index.html")}`);
-process.exitCode = failures.length ? 1 : 0;
+console.log(`${selfTestResults.length} inspector self-tests, ${selfTestFailures.length} failing.`);
+process.exitCode = failures.length || selfTestFailures.length ? 1 : 0;

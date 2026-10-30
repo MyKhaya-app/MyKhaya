@@ -168,6 +168,48 @@ export function inspectLayoutInPage(options = {}) {
     }
     return { left, right, top, bottom };
   };
+  // An input adornment is a button drawn inside its own input by design, such
+  // as the sign-in password visibility toggle. It declares itself with
+  // data-input-adornment and names that input with aria-controls. Its overlap
+  // with that one input is checked as an adornment rather than failed as an
+  // accidental overlap; overlap with any other control still fails.
+  const adornedInput = (control) => {
+    if (!control.matches("button[data-input-adornment][aria-controls]")) return null;
+    const input = document.getElementById(control.getAttribute("aria-controls"));
+    return input && input.matches("input") ? input : null;
+  };
+  const adornmentProblems = (button, input) => {
+    const problems = [];
+    const box = button.getBoundingClientRect();
+    const wrapper = input.parentElement;
+    if (!wrapper || !wrapper.contains(button)) {
+      problems.push("is not inside its input's wrapper");
+    } else {
+      const bounds = wrapper.getBoundingClientRect();
+      if (box.left < bounds.left - TOLERANCE || box.right > bounds.right + TOLERANCE || box.top < bounds.top - TOLERANCE || box.bottom > bounds.bottom + TOLERANCE) {
+        problems.push("extends outside its input's wrapper");
+      }
+    }
+    // The input must reserve the button's side, so typed text stops before it.
+    const field = input.getBoundingClientRect();
+    const style = getComputedStyle(input);
+    if (box.left + box.width / 2 >= field.left + field.width / 2) {
+      const textEnd = field.right - parseFloat(style.paddingRight) - parseFloat(style.borderRightWidth);
+      if (textEnd > box.left + TOLERANCE) problems.push(`lets the input's text run ${Math.round(textEnd - box.left)}px underneath it`);
+    } else {
+      const textStart = field.left + parseFloat(style.paddingLeft) + parseFloat(style.borderLeftWidth);
+      if (textStart < box.right - TOLERANCE) problems.push(`lets the input's text run ${Math.round(box.right - textStart)}px underneath it`);
+    }
+    if (button.disabled || button.tabIndex < 0) problems.push("is not reachable from the keyboard");
+    const name = (button.getAttribute("aria-label") ?? button.textContent ?? "").trim();
+    if (button.dataset.inputAdornment === "password-visibility") {
+      const expected = input.type === "password" ? "Show password" : "Hide password";
+      if (name !== expected) problems.push(`is named "${name}" while the password is ${input.type === "password" ? "hidden" : "shown"} (expected "${expected}")`);
+    } else if (!name) {
+      problems.push("has no accessible name");
+    }
+    return problems;
+  };
   const controls = [...root.querySelectorAll("input:not([type=hidden]), select, textarea, button")].filter((control) => visible(control) && !insideIntendedScroller(control));
   for (let index = 0; index < controls.length; index += 1) {
     for (let other = index + 1; other < controls.length; other += 1) {
@@ -176,6 +218,16 @@ export function inspectLayoutInPage(options = {}) {
       const b = clippedRect(controls[other]);
       if (a.right <= a.left || a.bottom <= a.top || b.right <= b.left || b.bottom <= b.top) continue;
       if (a.left < b.right - 1 && a.right > b.left + 1 && a.top < b.bottom - 1 && a.bottom > b.top + 1) {
+        const adornment = adornedInput(controls[index]) === controls[other]
+          ? controls[index]
+          : adornedInput(controls[other]) === controls[index] ? controls[other] : null;
+        if (adornment) {
+          const input = adornment === controls[index] ? controls[other] : controls[index];
+          const problems = adornmentProblems(adornment, input);
+          if (problems.length) add("input-adornment", adornment, `Input adornment ${problems.join("; ")}`, { input: describe(input) });
+          else metrics.push({ kind: "input-adornment", element: describe(adornment), input: describe(input) });
+          continue;
+        }
         if (floatingLayer(controls[index]) !== floatingLayer(controls[other])) {
           advise("floating-overlap", controls[index], "A fixed/sticky control floats over this control at the current scroll position", { other: describe(controls[other]) });
         } else {

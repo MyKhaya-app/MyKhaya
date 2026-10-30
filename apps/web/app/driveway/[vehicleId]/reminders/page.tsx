@@ -1,13 +1,14 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, use, useEffect, useState } from "react";
+import { FormEvent, use, useEffect, useRef, useState } from "react";
 import { ChevronLeft, Plus, Trash2 } from "lucide-react";
 import type { Reminder, Vehicle } from "@mykhaya/shared-types";
 import { ApiError, api } from "@mykhaya/api-client";
 import { AppShellContent } from "@/components/app-shell";
-import { BottomSheet } from "@/components/bottom-sheet";
+import { FormField, FormLayout, FormRow, FormSheet } from "@/components/form-layout";
 import { FormStatus } from "@/components/form-status";
+import { dateInputUnreadable, useFocusFirstInvalid } from "../../vehicle-fields";
 import { useActiveHome } from "@/components/use-active-home";
 import { nudgeCardDateLabel } from "@/app/home/routine-utils";
 
@@ -190,12 +191,22 @@ function AddReminderSheet({
   const [dueTime, setDueTime] = useState("09:00");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [fieldErrors, setFieldErrors] = useState<{ title?: string; dueDate?: string }>({});
+  const [failedAttempts, setFailedAttempts] = useState(0);
+  const formRef = useRef<HTMLFormElement>(null);
+  useFocusFirstInvalid(formRef, failedAttempts);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (busy) return;
-    if (!title.trim() || !dueDate) {
-      setError("Add a title and a due date to continue.");
+    const errors = {
+      ...(title.trim() ? {} : { title: "Add a title." }),
+      ...(dueDate ? {} : { dueDate: dateInputUnreadable(event.currentTarget, "due_date") ? "Enter a full date." : "Choose a due date." }),
+    };
+    setFieldErrors(errors);
+    if (errors.title || errors.dueDate) {
+      setError("");
+      setFailedAttempts((count) => count + 1);
       return;
     }
     setBusy(true);
@@ -215,36 +226,54 @@ function AddReminderSheet({
   }
 
   return (
-    <BottomSheet title="Add reminder" onDismiss={onClose}>
-      <form onSubmit={submit} noValidate>
-        <FormStatus error={error} />
-        <label>
-          Title
-          <input
-            value={title}
-            onChange={(event) => setTitle(event.target.value)}
-            maxLength={160}
-            required
-            placeholder="MOT due"
-          />
-        </label>
-        <label>
-          Due date
-          <input
-            type="date"
-            value={dueDate}
-            onChange={(event) => setDueDate(event.target.value)}
-            required
-          />
-        </label>
-        <label>
-          Due time
-          <input type="time" value={dueTime} onChange={(event) => setDueTime(event.target.value)} />
-        </label>
-        <button className="sheet-primary" type="submit" disabled={busy}>
+    <FormSheet
+      title="Add reminder"
+      onDismiss={onClose}
+      busy={busy}
+      primaryAction={
+        <button type="submit" form="vehicle-reminder-form" disabled={busy}>
           {busy ? "Adding…" : "Add reminder"}
         </button>
-      </form>
-    </BottomSheet>
+      }
+    >
+      <FormLayout id="vehicle-reminder-form" className="vehicle-reminder-form" onSubmit={submit} ref={formRef}>
+        {error && <p className="notice error" role="alert">{error}</p>}
+        <FormField label="Title" error={fieldErrors.title}>
+          {(control) => (
+            <input
+              {...control}
+              value={title}
+              onChange={(event) => {
+                setTitle(event.target.value);
+                setFieldErrors((current) => ({ ...current, title: undefined }));
+              }}
+              maxLength={160}
+              required
+              placeholder="MOT due"
+            />
+          )}
+        </FormField>
+        <FormRow minColumnWidth="10rem">
+          <FormField label="Due date" error={fieldErrors.dueDate}>
+            {(control) => (
+              <input
+                {...control}
+                type="date"
+                name="due_date"
+                value={dueDate}
+                onChange={(event) => {
+                  setDueDate(event.target.value);
+                  setFieldErrors((current) => ({ ...current, dueDate: undefined }));
+                }}
+                required
+              />
+            )}
+          </FormField>
+          <FormField label="Due time">
+            {(control) => <input {...control} type="time" value={dueTime} onChange={(event) => setDueTime(event.target.value)} />}
+          </FormField>
+        </FormRow>
+      </FormLayout>
+    </FormSheet>
   );
 }

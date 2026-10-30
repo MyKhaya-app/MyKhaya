@@ -2,17 +2,23 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { FormEvent, use, useEffect, useState } from "react";
+import { FormEvent, use, useEffect, useRef, useState } from "react";
 import { ChevronLeft } from "lucide-react";
 import type { Member, Vehicle } from "@mykhaya/shared-types";
 import { ApiError, api } from "@mykhaya/api-client";
 import { AppShellContent } from "@/components/app-shell";
 import { useAuth } from "@/components/auth-provider";
+import { FormActions, FormLayout } from "@/components/form-layout";
 import { FormStatus } from "@/components/form-status";
 import { useActiveHome } from "@/components/use-active-home";
-import { DRIVEWAY_COUNTRIES } from "../../countries";
-
-const FUEL_TYPES = ["Petrol", "Diesel", "Electric", "Hybrid", "Plug-in hybrid", "LPG", "Other"];
+import {
+  dateInputUnreadable,
+  useFocusFirstInvalid,
+  vehicleFieldErrors,
+  VehicleFields,
+  type VehicleFieldErrors,
+  type VehicleFieldValues,
+} from "../../vehicle-fields";
 
 function loadErrorMessage(cause: unknown, fallback: string): string {
   if (cause instanceof ApiError && cause.status === 404) {
@@ -34,21 +40,36 @@ export default function VehicleDetailsEditPage({
   const [notFound, setNotFound] = useState(false);
   const [loadError, setLoadError] = useState("");
 
-  const [countryCode, setCountryCode] = useState("GB");
+  const [values, setValues] = useState<VehicleFieldValues>({
+    countryCode: "GB",
+    registration: "",
+    ownerUserId: "",
+    nickname: "",
+    make: "",
+    model: "",
+    year: "",
+    fuelType: "",
+    colour: "",
+    firstRegistrationDate: "",
+    engineSize: "",
+    vin: "",
+  });
   const [members, setMembers] = useState<Member[]>([]);
-  const [ownerUserId, setOwnerUserId] = useState("");
-  const [registration, setRegistration] = useState("");
-  const [nickname, setNickname] = useState("");
-  const [make, setMake] = useState("");
-  const [model, setModel] = useState("");
-  const [year, setYear] = useState("");
-  const [fuelType, setFuelType] = useState("");
-  const [colour, setColour] = useState("");
-  const [firstRegistrationDate, setFirstRegistrationDate] = useState("");
-  const [engineSize, setEngineSize] = useState("");
-  const [vin, setVin] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [fieldErrors, setFieldErrors] = useState<VehicleFieldErrors>({});
+  const [failedAttempts, setFailedAttempts] = useState(0);
+  const formRef = useRef<HTMLFormElement>(null);
+  useFocusFirstInvalid(formRef, failedAttempts);
+
+  const update = (patch: Partial<VehicleFieldValues>) => {
+    setValues((current) => ({ ...current, ...patch }));
+    setFieldErrors((current) => {
+      const next = { ...current };
+      for (const key of Object.keys(patch)) delete next[key as keyof VehicleFieldErrors];
+      return next;
+    });
+  };
 
   useEffect(() => {
     if (!activeHomeId) return;
@@ -58,18 +79,20 @@ export default function VehicleDetailsEditPage({
       .vehicle(activeHomeId, vehicleId)
       .then((row) => {
         setVehicle(row);
-        setOwnerUserId(row.owner_user_id);
-        setCountryCode(row.country_code);
-        setRegistration(row.registration ?? "");
-        setNickname(row.nickname);
-        setMake(row.make ?? "");
-        setModel(row.model ?? "");
-        setYear(row.year ? String(row.year) : "");
-        setFuelType(row.fuel_type ?? "");
-        setColour(row.colour ?? "");
-        setFirstRegistrationDate(row.first_registration_date ?? "");
-        setEngineSize(row.engine_size ?? "");
-        setVin(row.vin ?? "");
+        setValues({
+          ownerUserId: row.owner_user_id,
+          countryCode: row.country_code,
+          registration: row.registration ?? "",
+          nickname: row.nickname,
+          make: row.make ?? "",
+          model: row.model ?? "",
+          year: row.year ? String(row.year) : "",
+          fuelType: row.fuel_type ?? "",
+          colour: row.colour ?? "",
+          firstRegistrationDate: row.first_registration_date ?? "",
+          engineSize: row.engine_size ?? "",
+          vin: row.vin ?? "",
+        });
       })
       .catch((cause) => {
         if (cause instanceof ApiError && cause.status === 404) setNotFound(true);
@@ -83,31 +106,36 @@ export default function VehicleDetailsEditPage({
   // which would otherwise look like (and risk becoming) clearing it.
   const canSeeVin =
     !!vehicle && !!user && (vehicle.owner_user_id === user.id || activeHome?.relationship === "home_admin");
-  const ownerOptions = members.length ? members : user ? [{ user_id: user.id, display_name: "You" } as Member] : [];
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!activeHomeId || !vehicle || busy) return;
-    if (!countryCode || !registration.trim() || !nickname.trim()) {
-      setError("A nickname, country and registration are required.");
+    const errors = vehicleFieldErrors(values, {
+      requireNickname: true,
+      firstRegistrationDateUnreadable: dateInputUnreadable(event.currentTarget, "first_registration_date"),
+    });
+    setFieldErrors(errors);
+    if (Object.keys(errors).length) {
+      setError("");
+      setFailedAttempts((count) => count + 1);
       return;
     }
     setBusy(true);
     setError("");
     try {
       await api.updateVehicle(activeHomeId, vehicle.id, {
-        nickname: nickname.trim(),
-        owner_user_id: ownerUserId,
-        country_code: countryCode,
-        registration: registration.trim(),
-        make: make.trim() || null,
-        model: model.trim() || null,
-        colour: colour.trim() || null,
-        year: year ? Number(year) : null,
-        fuel_type: fuelType || null,
-        engine_size: engineSize.trim() || null,
-        first_registration_date: firstRegistrationDate || null,
-        vin: canSeeVin ? vin.trim() || null : null,
+        nickname: values.nickname.trim(),
+        owner_user_id: values.ownerUserId,
+        country_code: values.countryCode,
+        registration: values.registration.trim(),
+        make: values.make.trim() || null,
+        model: values.model.trim() || null,
+        colour: values.colour.trim() || null,
+        year: values.year ? Number(values.year) : null,
+        fuel_type: values.fuelType || null,
+        engine_size: values.engineSize.trim() || null,
+        first_registration_date: values.firstRegistrationDate || null,
+        vin: canSeeVin ? values.vin.trim() || null : null,
         expected_updated_at: vehicle.updated_at,
       });
       router.push(`/driveway/${vehicle.id}`);
@@ -155,104 +183,23 @@ export default function VehicleDetailsEditPage({
         </div>
         <FormStatus error={loadError} />
 
-        <form className="card details driveway-form" onSubmit={submit} noValidate>
-          <FormStatus error={error} />
-          <label>
-            Nickname
-            <input
-              value={nickname}
-              onChange={(event) => setNickname(event.target.value)}
-              maxLength={120}
-              required
-            />
-          </label>
-          <label>
-            Country / region
-            <select value={countryCode} onChange={(event) => setCountryCode(event.target.value)} required>
-              {DRIVEWAY_COUNTRIES.map((country) => (
-                <option key={country.code} value={country.code}>
-                  {country.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Registration / licence plate
-            <input
-              value={registration}
-              onChange={(event) => setRegistration(event.target.value)}
-              maxLength={20}
-              required
-              autoCapitalize="characters"
-            />
-          </label>
-
-          <label>
-            Owner
-            <select value={ownerUserId} onChange={(event) => setOwnerUserId(event.target.value)} required>
-              {ownerOptions.map((member) => (
-                <option key={member.user_id} value={member.user_id}>{member.user_id === user?.id ? "You" : member.display_name}</option>
-              ))}
-            </select>
-          </label>
-
-          <label>
-            Make
-            <input value={make} onChange={(event) => setMake(event.target.value)} maxLength={80} />
-          </label>
-          <label>
-            Model
-            <input value={model} onChange={(event) => setModel(event.target.value)} maxLength={80} />
-          </label>
-          <label>
-            Year
-            <input
-              type="number"
-              inputMode="numeric"
-              value={year}
-              onChange={(event) => setYear(event.target.value)}
-              min={1900}
-              max={2200}
-            />
-          </label>
-          <label>
-            Fuel type
-            <select value={fuelType} onChange={(event) => setFuelType(event.target.value)}>
-              <option value="">Not set</option>
-              {FUEL_TYPES.map((option) => (
-                <option key={option} value={option}>
-                  {option}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Colour
-            <input value={colour} onChange={(event) => setColour(event.target.value)} maxLength={40} />
-          </label>
-          <label>
-            First registration date
-            <input
-              type="date"
-              value={firstRegistrationDate}
-              onChange={(event) => setFirstRegistrationDate(event.target.value)}
-            />
-          </label>
-          <label>
-            Engine size
-            <input value={engineSize} onChange={(event) => setEngineSize(event.target.value)} maxLength={20} />
-          </label>
-          {canSeeVin && (
-            <label>
-              VIN / chassis number
-              <input value={vin} onChange={(event) => setVin(event.target.value)} maxLength={32} />
-            </label>
-          )}
-
-          <button className="button" type="submit" disabled={busy}>
-            {busy ? "Saving…" : "Save changes"}
-          </button>
-        </form>
+        <FormLayout className="card details vehicle-form" onSubmit={submit} ref={formRef}>
+          <VehicleFields
+            values={values}
+            onChange={update}
+            errors={fieldErrors}
+            members={members}
+            currentUserId={user?.id}
+            showVin={canSeeVin}
+            nicknameRequired
+          />
+          {error && <p className="notice error" role="alert">{error}</p>}
+          <FormActions>
+            <button className="button" type="submit" disabled={busy}>
+              {busy ? "Saving…" : "Save changes"}
+            </button>
+          </FormActions>
+        </FormLayout>
       </main>
     </AppShellContent>
   );

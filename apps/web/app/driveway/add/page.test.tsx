@@ -77,7 +77,8 @@ describe("Add vehicle — manual creation", () => {
     const user = userEvent.setup();
     render(<AddVehiclePage />);
     await user.click(screen.getByRole("button", { name: "Add manually" }));
-    expect(await screen.findByText(/Owner/)).toHaveTextContent("OwnerYou");
+    const owner = await screen.findByRole<HTMLSelectElement>("combobox", { name: "Owner" });
+    expect(owner.selectedOptions[0]).toHaveTextContent("You");
     expect(screen.queryByRole("tab", { name: "Household" })).not.toBeInTheDocument();
   });
 
@@ -158,5 +159,65 @@ describe("Add vehicle — manual creation", () => {
 
     expect(await screen.findByText("That registration is already in use.")).toBeInTheDocument();
     expect(push).not.toHaveBeenCalled();
+  });
+});
+
+// The shared vehicle fields (../vehicle-fields.tsx) on the shared form
+// primitives: each problem is shown on, and announced with, its own field.
+describe("Add vehicle — field-level validation", () => {
+  it("shows a missing registration on the Registration field, focuses it and sends nothing", async () => {
+    const user = userEvent.setup();
+    render(<AddVehiclePage />);
+    await user.click(await screen.findByRole("button", { name: "Add manually" }));
+    await user.click(screen.getByRole("button", { name: "Add vehicle" }));
+
+    const registration = screen.getByLabelText("Registration / licence plate");
+    expect(registration).toHaveAttribute("aria-invalid", "true");
+    expect(registration).toHaveAccessibleDescription("Add the registration.");
+    await waitFor(() => expect(registration).toHaveFocus());
+    expect(api.createVehicle).not.toHaveBeenCalled();
+
+    await user.type(registration, "AP22 OOJ");
+    expect(registration).not.toHaveAttribute("aria-invalid");
+  });
+
+  it("shows a year outside 1900–2200 on the Year field", async () => {
+    const user = userEvent.setup();
+    render(<AddVehiclePage />);
+    await user.type(await screen.findByLabelText("Registration / licence plate"), "AP22 OOJ");
+    await user.click(screen.getByRole("button", { name: "Add manually" }));
+    await user.type(screen.getByLabelText("Year"), "1850");
+    await user.click(screen.getByRole("button", { name: "Add vehicle" }));
+
+    expect(screen.getByLabelText("Year")).toHaveAccessibleDescription("Enter a year between 1900 and 2200.");
+    expect(api.createVehicle).not.toHaveBeenCalled();
+  });
+
+  it("shows a failed create next to the Add vehicle action and keeps what was entered", async () => {
+    (api.createVehicle as ReturnType<typeof vi.fn>).mockRejectedValue(new ApiError(400, "That registration is already in use."));
+    const user = userEvent.setup();
+    render(<AddVehiclePage />);
+    await user.type(await screen.findByLabelText("Registration / licence plate"), "AP22 OOJ");
+    await user.click(screen.getByRole("button", { name: "Add manually" }));
+    await user.type(screen.getByLabelText("Make"), "BMW");
+    const add = screen.getByRole("button", { name: "Add vehicle" });
+    await user.click(add);
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("That registration is already in use.");
+    // Directly before the action it concerns, not at the top of the form.
+    expect(alert.compareDocumentPosition(add) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByLabelText("Make")).toHaveValue("BMW");
+    expect(add).toBeEnabled();
+  });
+
+  it("pairs short fields in shared rows and keeps the form's own validation", async () => {
+    const user = userEvent.setup();
+    render(<AddVehiclePage />);
+    await user.click(await screen.findByRole("button", { name: "Add manually" }));
+    expect(screen.getByLabelText("Make").closest(".form-row")).toBe(screen.getByLabelText("Model").closest(".form-row"));
+    expect(screen.getByLabelText("Year").closest(".form-row")).toBe(screen.getByLabelText("Fuel type").closest(".form-row"));
+    expect(screen.getByLabelText("Make").closest("form")).toHaveAttribute("novalidate");
+    expect(screen.getByLabelText("VIN / chassis number")).toHaveAccessibleDescription("Your VIN is only ever shown to you and your Home Admin.");
   });
 });

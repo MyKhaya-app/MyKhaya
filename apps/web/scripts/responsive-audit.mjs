@@ -212,6 +212,27 @@ async function authenticate(page) {
 }
 
 async function auditRoute(page, route, viewport, authenticated) {
+  if (authenticated && route.startsWith("/driveway")) {
+    drivewayRouteOwners ??= await drivewayFixtureOwners(page);
+    if (drivewayRouteOwners) {
+      await routeDriveway(page.context(), { enabled: true, ...drivewayRouteOwners });
+      try {
+        return await auditRouteOnce(page, route, viewport, authenticated);
+      } finally {
+        await unrouteDriveway(page.context());
+      }
+    }
+    // Without the fixtures the page shows Driveway's unavailable screen,
+    // which is not coverage of Driveway.
+    results.push({ route, viewport: viewport.name, result: "NOT TESTED", issues: ["Driveway fixtures unavailable: the account's Home could not be read"], details: [], status: null });
+    return;
+  }
+  return auditRouteOnce(page, route, viewport, authenticated);
+}
+
+let drivewayRouteOwners = null;
+
+async function auditRouteOnce(page, route, viewport, authenticated) {
   await page.setViewportSize({ width: viewport.width, height: viewport.height });
   const response = await page.goto(`${BASE}${route}`, { waitUntil: "domcontentloaded", timeout: 30000 });
   await applyInsets(page, viewport);
@@ -477,6 +498,391 @@ async function auditNudgeForms(page) {
   return nudgeResults;
 }
 
+// Same-origin API call from the signed-in page, with the CSRF header the API
+// requires for writes. Used only to create and remove the audit's own
+// disposable fixtures.
+function apiCall(page, method, apiPath, body) {
+  return page.evaluate(async ({ method, apiPath, body }) => {
+    const csrf = document.cookie.split("; ").find((cookie) => cookie.startsWith("mk_csrf="))?.slice(8);
+    const headers = { "Content-Type": "application/json", ...(csrf ? { "X-CSRF-Token": decodeURIComponent(csrf) } : {}) };
+    const response = await fetch(`/api/v1${apiPath}`, { method, credentials: "include", headers, body: body === undefined ? undefined : JSON.stringify(body) });
+    let json = null;
+    try { json = await response.json(); } catch { json = null; }
+    return { status: response.status, body: json };
+  }, { method, apiPath, body });
+}
+
+// Driveway is measured against fixtures served in the audit's own browser
+// context, so the result does not depend on how the account's Home or the
+// platform feature flag is configured, and nothing is written to the API or
+// its database. routeDriveway answers the feature matrix's Driveway row, the
+// billing entitlement and every /homes/{id}/vehicles request; everything else
+// still goes to the real API. With enabled: false it serves Driveway exactly
+// as the API does when the feature is off (a 404 for every vehicle request).
+const DRIVEWAY_ROUTES = {
+  features: /\/api\/v1\/features\/[^/?]+(\?.*)?$/,
+  billing: /\/api\/v1\/groups\/[^/]+\/billing(\?.*)?$/,
+  vehicles: /\/api\/v1\/homes\/[^/]+\/vehicles(\/[^?]*)?(\?.*)?$/,
+};
+const AUDIT_VEHICLE_ID = "0aa0d17e-0000-4000-8000-000000000001";
+
+function drivewayFixtureVehicles(homeId, ownerId, otherOwnerId) {
+  const vehicle = (overrides) => ({
+    group_id: homeId, owner_user_id: ownerId, colour: null, year: null, fuel_type: null, engine_size: null,
+    first_registration_date: null, vin: null, lookup_provider: null, lookup_status: null, last_successful_lookup: null,
+    tax_status: null, tax_due_date: null, inspection_status: null, inspection_due_date: null, photo_version: null,
+    archived: false, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", ...overrides,
+  });
+  return [
+    vehicle({
+      id: AUDIT_VEHICLE_ID, nickname: "Responsive audit vehicle", make: "Volkswagen", model: "Golf Estate R-Line Edition",
+      colour: "Silver", year: 2019, fuel_type: "Plug-in hybrid", engine_size: "1.4 TSI", country_code: "GB", registration: "AU19 DVW",
+      first_registration_date: "2019-03-01", inspection_status: "valid", inspection_due_date: "2026-11-20",
+    }),
+    // A long make and model, owned by another member when the Home has one.
+    vehicle({
+      id: "0aa0d17e-0000-4000-8000-000000000002", owner_user_id: otherOwnerId ?? ownerId, nickname: "Family estate",
+      make: "Mercedes-Benz", model: "GLE 350 de 4MATIC AMG Line Premium Plus", colour: "Obsidian Black", year: 2021,
+      fuel_type: "Plug-in hybrid", country_code: "GB", registration: "LN71 XYZ", inspection_status: "expired", inspection_due_date: "2026-09-01",
+    }),
+    vehicle({
+      id: "0aa0d17e-0000-4000-8000-000000000003", nickname: "Holiday car", make: "Toyota", model: "Yaris", year: 2015,
+      fuel_type: "Hybrid", country_code: "IE", registration: "191-D-12345",
+    }),
+  ];
+}
+
+function drivewayFixtureMot(vehicle) {
+  const eligible = vehicle.country_code === "GB";
+  return {
+    eligible, provider_available: false, has_registration: Boolean(vehicle.registration),
+    summary: {
+      status: eligible ? vehicle.inspection_status : null, due_date: eligible ? vehicle.inspection_due_date : null,
+      expiry_date: eligible ? vehicle.inspection_due_date : null, first_mot_due_date: null, last_test_date: null, last_result: null,
+      source: null, refreshed_at: null, stale: false, last_attempt_at: null, last_attempt_outcome: null,
+    },
+    tests: [],
+  };
+}
+
+async function routeDriveway(context, { enabled, homeId, ownerId, otherOwnerId }) {
+  const vehicles = drivewayFixtureVehicles(homeId, ownerId, otherOwnerId);
+  const plans = new Map();
+  const json = (route, status, body) => route.fulfill({ status, contentType: "application/json", body: body === undefined ? "" : JSON.stringify(body) });
+  await context.route(DRIVEWAY_ROUTES.features, async (route) => {
+    const response = await route.fetch();
+    const matrix = await response.json();
+    const existing = matrix.features?.find((row) => row.feature === "driveway") ?? { feature: "driveway" };
+    matrix.features = [...(matrix.features ?? []).filter((row) => row.feature !== "driveway"), { ...existing, enabled }];
+    await route.fulfill({ response, json: matrix });
+  });
+  await context.route(DRIVEWAY_ROUTES.billing, async (route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    const response = await route.fetch();
+    const billing = await response.json();
+    await route.fulfill({ response, json: { ...billing, driveway_enabled: true } });
+  });
+  await context.route(DRIVEWAY_ROUTES.vehicles, async (route) => {
+    if (!enabled) return json(route, 404, { detail: "Not found" });
+    const request = route.request();
+    const method = request.method();
+    const [, rest = ""] = new URL(request.url()).pathname.match(/\/vehicles(\/.*)?$/) ?? [];
+    const [vehicleId, ...tail] = rest.split("/").filter(Boolean);
+    const sub = tail.join("/");
+    if (!vehicleId) return method === "GET" ? json(route, 200, { items: vehicles }) : json(route, 201, { ...vehicles[0], ...JSON.parse(request.postData() ?? "{}") });
+    if (vehicleId === "lookup") return json(route, 200, { found: false, manual_entry_required: true, provider: null, registration: null, make: null, model: null, colour: null, year: null, fuel_type: null, engine_size: null, first_registration_date: null, tax_status: null, tax_due_date: null, inspection_status: null, inspection_due_date: null, capabilities: [], message: "Lookups are not available in the responsive audit." });
+    const vehicle = vehicles.find((item) => item.id === vehicleId);
+    if (!vehicle) return json(route, 404, { detail: "That vehicle could not be found" });
+    if (!sub) {
+      if (method === "GET") return json(route, 200, vehicle);
+      if (method === "PATCH") return json(route, 200, { ...vehicle, ...JSON.parse(request.postData() ?? "{}") });
+      return json(route, 204);
+    }
+    if (sub === "mot" || sub === "mot/refresh") return json(route, 200, drivewayFixtureMot(vehicle));
+    if (sub === "mot/nudges") {
+      if (method === "PUT") {
+        const plan = { ...JSON.parse(request.postData() ?? "{}"), scheduled: [] };
+        plans.set(vehicleId, plan);
+        return json(route, 200, { plan });
+      }
+      if (method === "DELETE") {
+        plans.delete(vehicleId);
+        return json(route, 204);
+      }
+      return json(route, 200, { plan: plans.get(vehicleId) ?? null });
+    }
+    if (sub === "reminders") return method === "GET" ? json(route, 200, { items: [] }) : json(route, 422, { detail: "Reminders are not created in the responsive audit." });
+    return json(route, 404, { detail: "Not found" });
+  });
+}
+
+async function unrouteDriveway(context) {
+  for (const pattern of Object.values(DRIVEWAY_ROUTES)) await context.unroute(pattern);
+}
+
+// The account's Home and people, for the fixtures' owners.
+async function drivewayFixtureOwners(page) {
+  await page.waitForFunction(() => localStorage.getItem("mykhaya.activeHomeId"), null, { timeout: 10000 }).catch(() => {});
+  const homeId = await page.evaluate(() => localStorage.getItem("mykhaya.activeHomeId"));
+  const me = (await apiCall(page, "GET", "/users/me")).body;
+  const members = homeId ? (await apiCall(page, "GET", `/groups/${homeId}/members`)).body : null;
+  const otherOwnerId = Array.isArray(members) ? members.find((member) => member.user_id !== me?.id)?.user_id ?? null : null;
+  return homeId && me?.id ? { homeId, ownerId: me.id, otherOwnerId } : null;
+}
+
+// Driveway's vehicle forms on the shared form primitives, in filled,
+// validation-error and failed-save states, on the fixture vehicle. Failed
+// saves are answered by intercepted requests; nothing is saved.
+async function auditDrivewayForms(page) {
+  const drivewayResults = [];
+  const states = [
+    "vehicle detail page",
+    "edit details",
+    "edit details validation",
+    "edit details failed save",
+    "add vehicle validation",
+    "MOT nudge validation",
+    "MOT nudge failed save",
+    "add reminder sheet validation",
+    "add reminder sheet failed save",
+  ];
+  await page.goto(`${BASE}/driveway`, { waitUntil: "domcontentloaded", timeout: 30000 });
+  const owners = await drivewayFixtureOwners(page);
+  if (!owners) {
+    for (const viewport of viewports) for (const state of states) drivewayResults.push({ viewport: viewport.name, state, result: "NOT TESTED", issues: ["The account's Home could not be read for the fixtures"] });
+    return drivewayResults;
+  }
+  await routeDriveway(page.context(), { enabled: true, ...owners });
+  const vehicleId = AUDIT_VEHICLE_ID;
+  const registration = "AU19 DVW";
+  // Page-level routes run before the fixtures; fallback() hands every other
+  // request on to them.
+  const rejectWith = (method, pattern, message) => page.route(pattern, (route) => route.request().method() === method
+    ? route.fulfill({ status: 422, contentType: "application/json", body: JSON.stringify({ detail: message }) })
+    : route.fallback());
+  const requireLabels = async (scope, labels, issues) => {
+    for (const label of labels) {
+      if (!(await scope.getByLabel(label, { exact: true }).count())) issues.push(`No field labelled "${label}"`);
+    }
+  };
+  const requireInvalid = async (scope, labels, issues) => {
+    for (const label of labels) {
+      const field = scope.getByLabel(label, { exact: true });
+      if ((await field.getAttribute("aria-invalid").catch(() => null)) !== "true") issues.push(`"${label}" is not marked invalid`);
+    }
+  };
+  const failedSaveMessage = `The audit rejected this save on purpose. ${LONG_TEXT}`;
+  const prepare = {
+    "vehicle detail page": async () => ({ url: `/driveway/${vehicleId}`, sheet: false, run: async (issues) => {
+      // The detail page names the vehicle by make and model, with its plate.
+      await page.getByText(registration, { exact: true }).first().waitFor({ timeout: 8000 }).catch(() => issues.push("The vehicle did not load"));
+    } }),
+    "edit details": async () => ({ url: `/driveway/${vehicleId}/details`, sheet: false, run: async (issues) => {
+      await page.getByRole("button", { name: "Save changes" }).waitFor({ timeout: 8000 });
+      await page.getByLabel("Nickname", { exact: true }).fill(`Responsive audit vehicle with a much longer nickname than usual`);
+      await requireLabels(page, ["Country / region", "Registration / licence plate", "Owner", "Nickname", "Make", "Model", "Year", "Fuel type", "Colour", "Engine size", "First registration date", "VIN / chassis number"], issues);
+    } }),
+    "edit details validation": async () => ({ url: `/driveway/${vehicleId}/details`, sheet: false, run: async (issues) => {
+      await page.getByRole("button", { name: "Save changes" }).waitFor({ timeout: 8000 });
+      await page.getByLabel("Nickname", { exact: true }).fill("");
+      await page.getByLabel("Registration / licence plate", { exact: true }).fill("");
+      await page.getByLabel("Year", { exact: true }).fill("1800");
+      await page.getByRole("button", { name: "Save changes" }).click();
+      await requireInvalid(page, ["Registration / licence plate", "Nickname", "Year"], issues);
+    } }),
+    "edit details failed save": async () => ({ url: `/driveway/${vehicleId}/details`, sheet: false, run: async (issues) => {
+      await rejectWith("PATCH", "**/api/v1/homes/*/vehicles/*", failedSaveMessage);
+      await page.getByRole("button", { name: "Save changes" }).waitFor({ timeout: 8000 });
+      await page.getByRole("button", { name: "Save changes" }).click();
+      const alert = page.locator(".notice.error", { hasText: "The audit rejected this save on purpose." });
+      await alert.waitFor({ timeout: 5000 }).catch(() => issues.push("The failed save was not shown"));
+      if (await page.getByRole("button", { name: "Save changes" }).isDisabled()) issues.push("Save changes stayed disabled");
+      await alert.scrollIntoViewIfNeeded().catch(() => {});
+    } }),
+    "add vehicle validation": async () => ({ url: "/driveway/add", sheet: false, run: async (issues) => {
+      await page.getByRole("button", { name: "Add manually" }).click({ timeout: 8000 });
+      await page.getByLabel("Year", { exact: true }).fill("1800");
+      await page.getByRole("button", { name: "Add vehicle" }).click();
+      await requireInvalid(page, ["Registration / licence plate", "Year"], issues);
+    } }),
+    "MOT nudge validation": async () => ({ url: `/driveway/${vehicleId}/mot/reminder`, sheet: false, run: async (issues) => {
+      await page.getByRole("button", { name: "Save nudge" }).waitFor({ timeout: 8000 });
+      await page.getByLabel("Reminder", { exact: true }).fill("");
+      await page.getByLabel("MOT expires", { exact: true }).fill("");
+      for (const name of ["30 days before", "7 days before"]) {
+        const chip = page.getByRole("button", { name, exact: true });
+        if ((await chip.getAttribute("aria-pressed")) === "true") await chip.click();
+      }
+      await page.getByRole("button", { name: "Save nudge" }).click();
+      await requireInvalid(page, ["Reminder", "MOT expires"], issues);
+      if (!(await page.getByText("Choose at least one time to be nudged.").count())) issues.push("No error for the Nudge me times");
+    } }),
+    "MOT nudge failed save": async () => ({ url: `/driveway/${vehicleId}/mot/reminder`, sheet: false, run: async (issues) => {
+      await rejectWith("PUT", "**/api/v1/homes/*/vehicles/*/mot/nudges", failedSaveMessage);
+      await page.getByRole("button", { name: "Save nudge" }).waitFor({ timeout: 8000 });
+      await page.getByLabel("MOT expires", { exact: true }).fill("2027-08-25");
+      await page.getByRole("button", { name: "Save nudge" }).click();
+      const alert = page.locator(".notice.error", { hasText: "The audit rejected this save on purpose." });
+      await alert.waitFor({ timeout: 5000 }).catch(() => issues.push("The failed save was not shown"));
+      await alert.scrollIntoViewIfNeeded().catch(() => {});
+    } }),
+    "add reminder sheet validation": async () => ({ url: `/driveway/${vehicleId}/reminders`, sheet: true, run: async (issues) => {
+      await page.getByRole("button", { name: /add reminder/i }).first().click({ timeout: 8000 });
+      await page.waitForTimeout(350);
+      const sheet = page.locator(".bottom-sheet").last();
+      await sheet.getByRole("button", { name: "Add reminder", exact: true }).click();
+      await requireInvalid(sheet, ["Title", "Due date"], issues);
+    } }),
+    "add reminder sheet failed save": async () => ({ url: `/driveway/${vehicleId}/reminders`, sheet: true, run: async (issues) => {
+      await rejectWith("POST", "**/api/v1/homes/*/vehicles/*/reminders", failedSaveMessage);
+      await page.getByRole("button", { name: /add reminder/i }).first().click({ timeout: 8000 });
+      await page.waitForTimeout(350);
+      const sheet = page.locator(".bottom-sheet").last();
+      await sheet.getByLabel("Title", { exact: true }).fill("Responsive audit reminder");
+      await sheet.getByLabel("Due date", { exact: true }).fill("2027-01-15");
+      await sheet.getByRole("button", { name: "Add reminder", exact: true }).click();
+      await sheet.locator(".notice.error").waitFor({ timeout: 5000 }).catch(() => issues.push("The failed save was not shown inside the sheet"));
+      if (await sheet.getByRole("button", { name: "Cancel", exact: true }).isDisabled()) issues.push("Cancel stayed disabled after the failed save");
+      if ((await sheet.getByLabel("Title", { exact: true }).inputValue()) !== "Responsive audit reminder") issues.push("The draft was not kept");
+    } }),
+  };
+  try {
+    for (const viewport of viewports) {
+      for (const state of states) {
+        await page.setViewportSize({ width: viewport.width, height: viewport.height });
+        const { url, sheet, run } = await prepare[state]();
+        await page.goto(`${BASE}${url}`, { waitUntil: "domcontentloaded", timeout: 30000 });
+        await applyInsets(page, viewport);
+        await page.waitForTimeout(500);
+        const issues = [];
+        try {
+          await run(issues);
+        } catch (error) {
+          issues.push(`Could not prepare the state: ${error.message.split("\n")[0]}`);
+        }
+        await page.waitForTimeout(200);
+        const layout = await inspectLayout(page, viewport, sheet);
+        issues.push(...layout.issues.map(issueText));
+        const screenshot = await capture(page, `driveway-${state}`, viewport, `driveway-${state}`);
+        drivewayResults.push({ viewport: viewport.name, state, result: issues.length ? "FAIL" : "PASS", issues, screenshot, details: layout.issues.slice(0, 40) });
+        await page.unrouteAll({ behavior: "ignoreErrors" });
+        if (sheet) {
+          const cancel = page.locator(".bottom-sheet").last().getByRole("button", { name: "Cancel", exact: true });
+          if (await cancel.count()) await cancel.click().catch(() => {});
+        }
+      }
+    }
+  } finally {
+    await page.unrouteAll({ behavior: "ignoreErrors" });
+    await unrouteDriveway(page.context());
+  }
+  return drivewayResults;
+}
+
+// Driveway turned off for the Home: the overview shows that it is not
+// available, and a vehicle's pages offer no form. These states pass only when
+// the unavailable screen is what renders; they are never counted as coverage
+// of the forms above.
+async function auditDrivewayDisabled(page) {
+  const disabledResults = [];
+  await page.goto(`${BASE}/driveway`, { waitUntil: "domcontentloaded", timeout: 30000 });
+  const owners = await drivewayFixtureOwners(page);
+  const states = ["overview unavailable", "vehicle details unavailable"];
+  if (!owners) {
+    for (const viewport of viewports) for (const state of states) disabledResults.push({ viewport: viewport.name, state, result: "NOT TESTED", issues: ["The account's Home could not be read for the fixtures"] });
+    return disabledResults;
+  }
+  await routeDriveway(page.context(), { enabled: false, ...owners });
+  try {
+    for (const viewport of viewports) {
+      for (const state of states) {
+        await page.setViewportSize({ width: viewport.width, height: viewport.height });
+        const url = state === "overview unavailable" ? "/driveway" : `/driveway/${AUDIT_VEHICLE_ID}/details`;
+        await page.goto(`${BASE}${url}`, { waitUntil: "domcontentloaded", timeout: 30000 });
+        await applyInsets(page, viewport);
+        const issues = [];
+        const expected = state === "overview unavailable" ? /Driveway isn.t available for this Home/ : /That vehicle could not be found/;
+        await page.getByText(expected).first().waitFor({ timeout: 8000 }).catch(() => issues.push("The unavailable message was not shown"));
+        if (await page.locator(".drv-cards, form.vehicle-form").count()) issues.push("Vehicles or a form were shown while Driveway is off");
+        await page.waitForTimeout(150);
+        const layout = await inspectLayout(page, viewport);
+        issues.push(...layout.issues.map(issueText));
+        const screenshot = await capture(page, `driveway-disabled-${state}`, viewport, `driveway-disabled-${state}`);
+        disabledResults.push({ viewport: viewport.name, state, result: issues.length ? "FAIL" : "PASS", issues, screenshot, details: layout.issues.slice(0, 40) });
+      }
+    }
+  } finally {
+    await unrouteDriveway(page.context());
+  }
+  return disabledResults;
+}
+
+// The sign-in screen's states, each in a fresh signed-out browser context so
+// the state is set up deliberately rather than inherited from the host:
+// whether /login shows the remembered-account screen depends on a local
+// sign-in hint and on the browser reporting a platform authenticator, which
+// headless Chromium does or does not depending on the machine. The
+// remembered-account state uses a mocked hint and a virtual WebAuthn
+// authenticator; no real account, passkey or credential is involved.
+async function auditSignInStates(browser) {
+  const signInResults = [];
+  const states = ["password sign-in", "password shown", "remembered account"];
+  for (const viewport of viewports) {
+    for (const state of states) {
+      const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height } });
+      const page = await context.newPage();
+      const issues = [];
+      try {
+        if (state === "remembered account") {
+          try {
+            const cdp = await context.newCDPSession(page);
+            await cdp.send("WebAuthn.enable");
+            await cdp.send("WebAuthn.addVirtualAuthenticator", {
+              options: { protocol: "ctap2", transport: "internal", hasResidentKey: true, hasUserVerification: true, isUserVerified: true },
+            });
+          } catch (error) {
+            // The state cannot be set up in this browser: not tested, not passed.
+            signInResults.push({ viewport: viewport.name, state, result: "NOT TESTED", issues: [`No virtual authenticator: ${error.message.split("\n")[0]}`] });
+            continue;
+          }
+          await context.addInitScript(() => {
+            window.localStorage.setItem("mk_biometric_hint", JSON.stringify({ userId: "00000000-0000-0000-0000-000000000000", displayName: "Audit Example", avatarVersion: null }));
+          });
+        }
+        await page.goto(`${BASE}/login`, { waitUntil: "domcontentloaded", timeout: 30000 });
+        await applyInsets(page, viewport);
+        if (state === "remembered account") {
+          await page.getByRole("button", { name: "Sign in another way" }).waitFor({ timeout: 8000 });
+          if (!(await page.getByText("Audit Example").count())) issues.push("The remembered account was not shown");
+          if (await page.locator("#signin-password").count()) issues.push("The password form showed instead of the remembered account");
+        } else {
+          const password = page.locator("#signin-password");
+          await password.waitFor({ timeout: 8000 });
+          const toggle = page.getByRole("button", { name: "Show password" });
+          if (!(await toggle.count())) issues.push('No "Show password" control');
+          if (state === "password shown") {
+            await password.fill("not-a-real-password");
+            await toggle.click();
+            if ((await password.getAttribute("type")) !== "text") issues.push("Show password did not reveal the password");
+            if (!(await page.getByRole("button", { name: "Hide password" }).count())) issues.push('The control was not renamed "Hide password"');
+          }
+        }
+        await page.waitForTimeout(150);
+        const layout = await inspectLayout(page, viewport);
+        issues.push(...layout.issues.map(issueText));
+        const screenshot = await capture(page, `signin-${state}`, viewport, `signin-${state}`);
+        signInResults.push({ viewport: viewport.name, state, result: issues.length ? "FAIL" : "PASS", issues, screenshot, details: layout.issues.slice(0, 40) });
+      } catch (error) {
+        // Set up deliberately, so a state that does not appear is a failure.
+        signInResults.push({ viewport: viewport.name, state, result: "FAIL", issues: [`The state did not appear: ${error.message.split("\n")[0]}`] });
+      } finally {
+        await context.close();
+      }
+    }
+  }
+  return signInResults;
+}
+
 async function auditCopyEvent(page) {
   const copyResults = [];
   for (const viewport of viewports) {
@@ -550,19 +956,22 @@ async function auditCopyEvent(page) {
   return copyResults;
 }
 
-async function writeReport(auth, copyResults, editorResults, nudgeResults) {
+async function writeReport(auth, copyResults, editorResults, nudgeResults, drivewayResults, drivewayDisabledResults, signInResults) {
   for (const entry of results) {
     if (entry.details?.length) entry.issues.push(`DOM details: ${JSON.stringify(entry.details)}`);
   }
-  for (const entry of [...copyResults, ...editorResults, ...nudgeResults, ...sheetResults]) {
+  for (const entry of [...copyResults, ...editorResults, ...nudgeResults, ...drivewayResults, ...drivewayDisabledResults, ...signInResults, ...sheetResults]) {
     if (entry.details?.length) entry.issues.push(`DOM details: ${JSON.stringify(entry.details)}`);
   }
   const rows = results.map((entry) => `<tr class="${entry.result.toLowerCase()}"><td>${escapeHtml(entry.route)}</td><td>${escapeHtml(entry.viewport)}</td><td>${entry.status ?? ""}</td><td>${escapeHtml(entry.result)}</td><td>${entry.issues.map(escapeHtml).join("<br>") || "—"}</td><td>${entry.screenshot ? `<img src="${escapeHtml(entry.screenshot)}" loading="lazy" alt="${escapeHtml(entry.route)} ${escapeHtml(entry.viewport)}">` : ""}</td></tr>`).join("\n");
   const copyRows = copyResults.map((entry) => `<tr class="${entry.result.toLowerCase().replaceAll(" ", "-")}"><td>${escapeHtml(entry.viewport)}</td><td>${escapeHtml(entry.result)}</td><td>${entry.issues.map(escapeHtml).join("<br>") || "—"}</td><td>${entry.screenshot ? `<img src="${escapeHtml(entry.screenshot)}" loading="lazy" alt="Copy Event ${escapeHtml(entry.viewport)}">` : ""}</td></tr>`).join("\n");
   const editorRows = editorResults.map((entry) => `<tr class="${entry.result.toLowerCase().replaceAll(" ", "-")}"><td>${escapeHtml(entry.viewport)}</td><td>${escapeHtml(entry.state)}</td><td>${escapeHtml(entry.result)}</td><td>${entry.issues.map(escapeHtml).join("<br>") || "—"}</td><td>${entry.screenshot ? `<img src="${escapeHtml(entry.screenshot)}" loading="lazy" alt="Event editor ${escapeHtml(entry.state)} ${escapeHtml(entry.viewport)}">` : ""}</td></tr>`).join("\n");
   const nudgeRows = nudgeResults.map((entry) => `<tr class="${entry.result.toLowerCase().replaceAll(" ", "-")}"><td>${escapeHtml(entry.form)}</td><td>${escapeHtml(entry.state)}</td><td>${escapeHtml(entry.viewport)}</td><td>${escapeHtml(entry.result)}</td><td>${entry.issues.map(escapeHtml).join("<br>") || "—"}</td><td>${entry.screenshot ? `<img src="${escapeHtml(entry.screenshot)}" loading="lazy" alt="${escapeHtml(entry.state)} ${escapeHtml(entry.viewport)}">` : ""}</td></tr>`).join("\n");
+  const drivewayRows = drivewayResults.map((entry) => `<tr class="${entry.result.toLowerCase().replaceAll(" ", "-")}"><td>${escapeHtml(entry.state)}</td><td>${escapeHtml(entry.viewport)}</td><td>${escapeHtml(entry.result)}</td><td>${entry.issues.map(escapeHtml).join("<br>") || "—"}</td><td>${entry.screenshot ? `<img src="${escapeHtml(entry.screenshot)}" loading="lazy" alt="${escapeHtml(entry.state)} ${escapeHtml(entry.viewport)}">` : ""}</td></tr>`).join("\n");
+  const drivewayDisabledRows = drivewayDisabledResults.map((entry) => `<tr class="${entry.result.toLowerCase().replaceAll(" ", "-")}"><td>${escapeHtml(entry.state)}</td><td>${escapeHtml(entry.viewport)}</td><td>${escapeHtml(entry.result)}</td><td>${entry.issues.map(escapeHtml).join("<br>") || "—"}</td><td>${entry.screenshot ? `<img src="${escapeHtml(entry.screenshot)}" loading="lazy" alt="${escapeHtml(entry.state)} ${escapeHtml(entry.viewport)}">` : ""}</td></tr>`).join("\n");
+  const signInRows = signInResults.map((entry) => `<tr class="${entry.result.toLowerCase().replaceAll(" ", "-")}"><td>${escapeHtml(entry.state)}</td><td>${escapeHtml(entry.viewport)}</td><td>${escapeHtml(entry.result)}</td><td>${entry.issues.map(escapeHtml).join("<br>") || "—"}</td><td>${entry.screenshot ? `<img src="${escapeHtml(entry.screenshot)}" loading="lazy" alt="${escapeHtml(entry.state)} ${escapeHtml(entry.viewport)}">` : ""}</td></tr>`).join("\n");
   const sheetRows = sheetResults.map((entry) => `<tr class="${entry.result.toLowerCase().replaceAll(" ", "-")}"><td>${escapeHtml(entry.route)}</td><td>${escapeHtml(entry.title ?? "")}</td><td>${escapeHtml(entry.viewport)}</td><td>${escapeHtml(entry.result)}</td><td>${entry.issues.map(escapeHtml).join("<br>") || "—"}</td><td>${entry.screenshot ? `<img src="${escapeHtml(entry.screenshot)}" loading="lazy" alt="">` : ""}</td></tr>`).join("\n");
-  const html = `<!doctype html><meta charset="utf-8"><title>MyKhaya Responsive Audit</title><style>body{font:14px system-ui;margin:24px;color:#24312d}table{border-collapse:collapse;width:100%;margin:16px 0}th,td{border:1px solid #d8ded8;padding:8px;vertical-align:top;text-align:left}.pass{background:#edf7ed}.fail{background:#fff0ed}.blocked,.not-tested{background:#fff8df}img{display:block;max-width:320px;max-height:420px;border:1px solid #d8ded8}code{background:#f3f4f1;padding:2px 4px}summary{cursor:pointer}</style><h1>MyKhaya Responsive Audit</h1><p>Base URL: <code>${escapeHtml(BASE)}</code></p><p>Authentication: <strong>${auth.ok ? "PASS" : `BLOCKED — ${escapeHtml(auth.reason)}`}</strong></p><h2>Routes</h2><table><thead><tr><th>Route</th><th>Viewport</th><th>Status</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${rows}</tbody></table><h2>Create sheets</h2><table><thead><tr><th>Route</th><th>Sheet</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${sheetRows || `<tr><td colspan="6">No create sheets opened</td></tr>`}</tbody></table><h2>Calendar Copy Event</h2><table><thead><tr><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${copyRows || `<tr><td colspan="4">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Calendar event editor</h2><table><thead><tr><th>Viewport</th><th>State</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${editorRows || `<tr><td colspan="5">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Routines, Reminders and Settings forms</h2><table><thead><tr><th>Form</th><th>State</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${nudgeRows || `<tr><td colspan="6">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Notes</h2><p>Chromium only. Safe areas are simulated through the --safe-* properties; this is not native WKWebView or physical-device evidence.</p><p>BLOCKED means authentication or required data was unavailable. NOT TESTED means the route rendered but the requested interactive component could not be opened. Screenshots are local artifacts under this audit directory.</p>`;
+  const html = `<!doctype html><meta charset="utf-8"><title>MyKhaya Responsive Audit</title><style>body{font:14px system-ui;margin:24px;color:#24312d}table{border-collapse:collapse;width:100%;margin:16px 0}th,td{border:1px solid #d8ded8;padding:8px;vertical-align:top;text-align:left}.pass{background:#edf7ed}.fail{background:#fff0ed}.blocked,.not-tested{background:#fff8df}img{display:block;max-width:320px;max-height:420px;border:1px solid #d8ded8}code{background:#f3f4f1;padding:2px 4px}summary{cursor:pointer}</style><h1>MyKhaya Responsive Audit</h1><p>Base URL: <code>${escapeHtml(BASE)}</code></p><p>Authentication: <strong>${auth.ok ? "PASS" : `BLOCKED — ${escapeHtml(auth.reason)}`}</strong></p><h2>Routes</h2><table><thead><tr><th>Route</th><th>Viewport</th><th>Status</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${rows}</tbody></table><h2>Create sheets</h2><table><thead><tr><th>Route</th><th>Sheet</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${sheetRows || `<tr><td colspan="6">No create sheets opened</td></tr>`}</tbody></table><h2>Calendar Copy Event</h2><table><thead><tr><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${copyRows || `<tr><td colspan="4">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Calendar event editor</h2><table><thead><tr><th>Viewport</th><th>State</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${editorRows || `<tr><td colspan="5">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Routines, Reminders and Settings forms</h2><table><thead><tr><th>Form</th><th>State</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${nudgeRows || `<tr><td colspan="6">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Driveway forms</h2><table><thead><tr><th>State</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${drivewayRows || `<tr><td colspan="5">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Driveway turned off</h2><table><thead><tr><th>State</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${drivewayDisabledRows || `<tr><td colspan="5">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Sign-in states</h2><table><thead><tr><th>State</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${signInRows || `<tr><td colspan="5">No results</td></tr>`}</tbody></table><h2>Notes</h2><p>Chromium only. Safe areas are simulated through the --safe-* properties; this is not native WKWebView or physical-device evidence.</p><p>BLOCKED means authentication or required data was unavailable. NOT TESTED means the route rendered but the requested interactive component could not be opened. Screenshots are local artifacts under this audit directory.</p>`;
   await fs.writeFile(path.join(outputDir, "index.html"), html, "utf8");
 }
 
@@ -581,8 +990,11 @@ for (const viewport of viewports) {
 const copyResults = auth.ok ? await auditCopyEvent(page) : [];
 const editorResults = auth.ok ? await auditEventEditor(page) : [];
 const nudgeResults = auth.ok ? await auditNudgeForms(page) : [];
-await writeReport(auth, copyResults, editorResults, nudgeResults);
+const drivewayResults = auth.ok ? await auditDrivewayForms(page) : [];
+const drivewayDisabledResults = auth.ok ? await auditDrivewayDisabled(page) : [];
+const signInResults = await auditSignInStates(browser);
+await writeReport(auth, copyResults, editorResults, nudgeResults, drivewayResults, drivewayDisabledResults, signInResults);
 await browser.close();
 const tally = (entries) => entries.reduce((counts, entry) => ({ ...counts, [entry.result]: (counts[entry.result] ?? 0) + 1 }), {});
-console.log(JSON.stringify({ baseUrl: BASE, outputDir, authenticated: auth.ok, authReason: auth.reason ?? null, routes: tally(results), createSheets: tally(sheetResults), copyEvent: tally(copyResults), eventEditor: tally(editorResults), nudgeForms: tally(nudgeResults) }, null, 2));
-process.exitCode = [...results, ...sheetResults, ...copyResults, ...editorResults, ...nudgeResults].some((entry) => entry.result === "FAIL") || !auth.ok ? 1 : 0;
+console.log(JSON.stringify({ baseUrl: BASE, outputDir, authenticated: auth.ok, authReason: auth.reason ?? null, routes: tally(results), createSheets: tally(sheetResults), copyEvent: tally(copyResults), eventEditor: tally(editorResults), nudgeForms: tally(nudgeResults), drivewayForms: tally(drivewayResults), drivewayDisabled: tally(drivewayDisabledResults), signIn: tally(signInResults) }, null, 2));
+process.exitCode = [...results, ...sheetResults, ...copyResults, ...editorResults, ...nudgeResults, ...drivewayResults, ...drivewayDisabledResults, ...signInResults].some((entry) => entry.result === "FAIL") || !auth.ok ? 1 : 0;

@@ -61,13 +61,16 @@ implementation.
 - Optional, less-used fields can sit in a closed `<details>` disclosure
   after the main fields. Put a plain `FormLayout` (no `onSubmit`) inside it
   for the same spacing.
-- Pick `minColumnWidth` from what the row holds. Times can use the
-  default. A row with a date uses `10rem`, so it stacks at 320px, where a
-  date beside another control is clipped. A row whose selects have long
-  options (for example "Personal — only reminds you" or "Hourly until
-  completed") uses `14rem`, so it stacks on every phone and sits side by
-  side only in wider sheets and panels. A cut-off select option is a
-  defect, not a layout.
+- Pick `minColumnWidth` from what the row holds. The consumer root font
+  size is 15px (`--font-body` on `html`), so 1rem is 15px.
+  - Times and short text fields can use the default.
+  - A row with a date uses `10rem` (150px), so it stacks at 320px, where a
+    date beside another control is clipped.
+  - A row whose selects have long options uses `14rem` (210px), so it
+    stacks on every phone and sits side by side only in wider sheets and
+    panels. Examples are "Personal — only reminds you", "Hourly until
+    completed" and "Plug-in hybrid".
+  - A cut-off select option is a defect, not a layout.
 - Checkbox settings rows (`.check-row`, or a checkbox with a title and
   description) are not `FormField`s: the label wraps the checkbox and its
   text. Put them straight into the `FormSection`.
@@ -75,7 +78,18 @@ implementation.
   heading as its title (`title={<h2>Quiet hours</h2>}`), so the page keeps
   its heading outline and each group is still named by it.
 - Show a save error inside the sheet that is open, at the top of its form,
-  not on the page behind the sheet.
+  not on the page behind the sheet. On a page form, show it directly before
+  the save button, where the person is looking when it fails.
+- Show what the form checks itself as each field's `error`, not as one
+  banner ("Add a title and a due date"). After a submit that fails those
+  checks, move focus to the first invalid field so its error is announced
+  (`useFocusFirstInvalid` in `app/driveway/vehicle-fields.tsx`).
+  - A group of choice chips has no `aria-invalid`. Describe the group by
+    its error and focus its first chip.
+  - Render a form-level error notice with `role="alert"` only while there
+    is an error. An always-present empty status region adds a grid gap.
+- Checks a form makes before saving mirror the API's own rules and never
+  replace them. The API stays the authority.
 - `FormLayout` sets `noValidate` by default, for forms that validate
   themselves, like Copy Event. A form that relies on the browser's own
   `required` and `min` checks passes `noValidate={false}`.
@@ -142,6 +156,34 @@ The Routine, Reminder and To-do editors in Nudges
     relationships and managed-child permissions), which are outside the
     scope of a presentation-only migration.
 
+## Driveway
+
+- Add vehicle and Edit details render the same fields from one component,
+  `VehicleFields` (`apps/web/app/driveway/vehicle-fields.tsx`). It holds
+  Country, Registration, Owner, Nickname, Make and Model, Year and Fuel
+  type, Colour and Engine size, First registration date, and VIN.
+  - The fields only render values, report changes and show errors. Each
+    page keeps its own state, registration normalisation, payload, save and
+    navigation.
+  - Add vehicle passes its lookup actions and result into the
+    `afterRegistration` slot. It shows Registration and the rest of the
+    fields only once a lookup or manual entry applies.
+  - Edit details requires a nickname. Both pages show the VIN only to the
+    vehicle's owner and a Home Admin, with the privacy note as its hint.
+  - `vehicleFieldErrors` holds both pages' checks: country, registration,
+    owner, the Edit nickname, a 1900–2200 year, and an unreadable first
+    registration date.
+- The vehicle Add reminder sheet is a `FormSheet` (Add reminder and Cancel
+  in the footer). Title is on its own row, then Due date and Due time in a
+  `10rem` row. Title and Due date show their own errors; a failed save
+  shows inside the sheet and keeps the draft.
+- The MOT nudge keeps its own cards, Nudge me chips, Repeat switch and
+  saved view. Only Reminder and MOT expires are `FormField`s. That replaced
+  its 15px `.drv-input`, which outranked the 16px phone rule and made iOS
+  zoom on focus.
+- Not migrated: the Remove vehicle and Change photo sheets, which are an
+  action and a confirmation, not forms.
+
 ## Sheet or dialog
 
 The consumer app presents forms as bottom sheets on every width today;
@@ -190,7 +232,8 @@ its own design decision and is not part of this standard yet.
   profiles. It measures containment, overlap, scroll-to-reveal reachability,
   footer and keyboard clearance, and the close button against the Duo status
   zone. Add a fixture to `scripts/form-layout-fixtures.tsx` for a new form
-  pattern.
+  pattern. It also runs the inspector's self-tests: small pages with a known
+  answer, including overlaps that must still fail.
 - `pnpm --filter @mykhaya/web audit:responsive` runs the same inspector
   against a running app, signed in, across every consumer route and each
   module's create sheet. It also opens the migrated forms in filled states:
@@ -198,7 +241,35 @@ its own design decision and is not part of this standard yet.
   - the Routine, Reminder and To-do editors, an Edit, and a Reminder save
     that the audit rejects in the browser, so nothing reaches the API;
   - Notification preferences with both custom times shown, and the
-    Profile birthday editor.
+    Profile birthday editor;
+  - Driveway, on fixed fixture vehicles served in the audit's own browser
+    (`routeDriveway`), so the result does not depend on the platform flag
+    or the Home, and nothing is written:
+    - the vehicle page;
+    - Edit details filled, with validation errors, and with a failed save;
+    - Add vehicle with validation errors;
+    - the MOT nudge with validation errors and with a failed save;
+    - the Add reminder sheet with validation errors and with a failed save.
+
+    The `/driveway` and `/driveway/add` route checks use the same fixtures.
+    A separate section serves Driveway as off and passes only when the
+    unavailable screen renders. Any state that cannot be set up is NOT
+    TESTED, never passed.
+  - The sign-in page's three states, each in a fresh signed-out browser:
+    the password form, the password shown, and the remembered account.
+    The remembered account uses a mocked local hint and a virtual WebAuthn
+    authenticator, never a real passkey.
+- Some controls sit inside their input by design, such as the sign-in
+  "Show password" button. Mark such a button with `data-input-adornment`
+  and name its input with `aria-controls`. The inspector then allows its
+  overlap with that one input and checks it instead:
+  - it stays inside the input's wrapper;
+  - the input's padding keeps text from running under it;
+  - it is reachable from the keyboard;
+  - a `password-visibility` adornment is named "Show password" or "Hide
+    password" to match the field.
+
+  Overlap with anything else still fails.
 - Both are Chromium with simulated safe areas. WebKit on iOS sizes native
   controls differently, so a physical iPhone review is still required
   ([mobile standards](../engineering/mobile-standards.md)).

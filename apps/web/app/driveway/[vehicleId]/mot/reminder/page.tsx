@@ -1,15 +1,17 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, use, useEffect, useState } from "react";
+import { FormEvent, use, useEffect, useRef, useState } from "react";
 import { Car, Check, ChevronLeft, Sparkles } from "lucide-react";
 import type { Member, Vehicle, VehicleMotNudgeOffset, VehicleMotNudgePlan } from "@mykhaya/shared-types";
 import { ApiError, api } from "@mykhaya/api-client";
 import { AppShellContent } from "@/components/app-shell";
+import { FormField } from "@/components/form-layout";
 import { FormStatus } from "@/components/form-status";
 import { useActiveHome } from "@/components/use-active-home";
 import { useAuth } from "@/components/auth-provider";
 import { PlateChip } from "../../../driveway-ui";
+import { useFocusFirstInvalid } from "../../../vehicle-fields";
 import { firstName, formatShortDate, joinWithAnd, vehicleName } from "../../../vehicle-display";
 
 // New MOT reminder (Nudges), pre-filled from the vehicle's MOT. Saving
@@ -55,6 +57,10 @@ export default function NewMotReminderPage({ params }: { params: Promise<{ vehic
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
   const [saved, setSaved] = useState<VehicleMotNudgePlan | null>(null);
+  const [fieldErrors, setFieldErrors] = useState<{ title?: string; dueDate?: string; offsets?: string }>({});
+  const [failedAttempts, setFailedAttempts] = useState(0);
+  const formRef = useRef<HTMLFormElement>(null);
+  useFocusFirstInvalid(formRef, failedAttempts);
 
   useEffect(() => setOrigin(originFromUrl()), []);
 
@@ -107,15 +113,24 @@ export default function NewMotReminderPage({ params }: { params: Promise<{ vehic
 
   function toggle(offset: VehicleMotNudgeOffset) {
     setOffsets((current) => (current.includes(offset) ? current.filter((item) => item !== offset) : [...current, offset]));
+    setFieldErrors((current) => ({ ...current, offsets: undefined }));
     setError("");
   }
 
   async function save(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!activeHomeId || saving) return;
-    if (!title.trim()) return setError("Give the reminder a name.");
-    if (!dueDate) return setError("Add the date this MOT expires.");
-    if (offsets.length === 0) return setError("Choose at least one time to be nudged.");
+    const errors = {
+      ...(title.trim() ? {} : { title: "Give the reminder a name." }),
+      ...(dueDate ? {} : { dueDate: "Add the date this MOT expires." }),
+      ...(offsets.length ? {} : { offsets: "Choose at least one time to be nudged." }),
+    };
+    setFieldErrors(errors);
+    if (errors.title || errors.dueDate || errors.offsets) {
+      setError("");
+      setFailedAttempts((count) => count + 1);
+      return;
+    }
     setSaving(true);
     setError("");
     try {
@@ -166,17 +181,27 @@ export default function NewMotReminderPage({ params }: { params: Promise<{ vehic
             </button>
           </section>
         ) : (
-          <form className="drv-nudge-form" onSubmit={save} noValidate>
+          <form className="drv-nudge-form" onSubmit={save} noValidate ref={formRef}>
             <p className="drv-info">
               <Sparkles size={20} aria-hidden="true" />
               <span>Filled in from your MOT record. Check it over and save.</span>
             </p>
 
             <section className="drv-card drv-form-card">
-              <div className="drv-field">
-                <label htmlFor="nudge-title">Reminder</label>
-                <input id="nudge-title" className="drv-input" type="text" maxLength={160} value={title} onChange={(event) => setTitle(event.target.value)} />
-              </div>
+              <FormField label="Reminder" error={fieldErrors.title}>
+                {(control) => (
+                  <input
+                    {...control}
+                    type="text"
+                    maxLength={160}
+                    value={title}
+                    onChange={(event) => {
+                      setTitle(event.target.value);
+                      setFieldErrors((current) => ({ ...current, title: undefined }));
+                    }}
+                  />
+                )}
+              </FormField>
               <div className="drv-field">
                 <span className="drv-field-label" id="nudge-linked">
                   Linked to
@@ -187,23 +212,49 @@ export default function NewMotReminderPage({ params }: { params: Promise<{ vehic
                   <PlateChip registration={vehicle.registration} />
                 </div>
               </div>
-              <div className="drv-field">
-                <label htmlFor="nudge-date">MOT expires</label>
-                <input id="nudge-date" className="drv-input" type="date" value={dueDate} onChange={(event) => setDueDate(event.target.value)} />
-              </div>
+              <FormField label="MOT expires" error={fieldErrors.dueDate}>
+                {(control) => (
+                  <input
+                    {...control}
+                    type="date"
+                    value={dueDate}
+                    onChange={(event) => {
+                      setDueDate(event.target.value);
+                      setFieldErrors((current) => ({ ...current, dueDate: undefined }));
+                    }}
+                  />
+                )}
+              </FormField>
             </section>
 
             <section className="drv-card drv-form-card drv-form-card-tight" aria-labelledby="nudge-when">
               <h2 id="nudge-when" className="drv-form-heading">
                 Nudge me
               </h2>
-              <div className="drv-chips drv-chips-wrap" role="group" aria-labelledby="nudge-when">
-                {WHENS.map((item) => (
-                  <button key={item.offset} type="button" className="drv-chip" aria-pressed={offsets.includes(item.offset)} onClick={() => toggle(item.offset)}>
+              <div
+                className="drv-chips drv-chips-wrap"
+                role="group"
+                aria-labelledby="nudge-when"
+                aria-describedby={fieldErrors.offsets ? "nudge-when-error" : undefined}
+              >
+                {WHENS.map((item, index) => (
+                  <button
+                    key={item.offset}
+                    type="button"
+                    className="drv-chip"
+                    aria-pressed={offsets.includes(item.offset)}
+                    data-invalid-focus={fieldErrors.offsets && index === 0 ? "true" : undefined}
+                    onClick={() => toggle(item.offset)}
+                  >
                     {item.label}
                   </button>
                 ))}
               </div>
+              {fieldErrors.offsets && (
+                <p className="field-error form-field-error" id="nudge-when-error">
+                  {fieldErrors.offsets}
+                </p>
+              )}
               <p className="drv-muted-small">You can get an MOT up to a month (minus a day) early and keep the same renewal date.</p>
             </section>
 

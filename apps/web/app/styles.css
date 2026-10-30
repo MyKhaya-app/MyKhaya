@@ -10672,6 +10672,11 @@ html:has(.drv-page)::-webkit-scrollbar,
 .drv-page .drv-cards {
   display: grid;
   gap: 12px;
+  /* An implicit column is at least as wide as a card's unwrapped content
+     (photo, name, plate and make on one line), which pushed cards past a
+     320px or 375px screen. A shrinkable column lets each card's own
+     truncation apply. Wider screens use the two-column rule below. */
+  grid-template-columns: minmax(0, 1fr);
   list-style: none;
   margin: 0;
   padding: 0;
@@ -11178,22 +11183,10 @@ html:has(.drv-page)::-webkit-scrollbar,
 .drv-page .drv-form-card-tight { gap: 12px; }
 .drv-page .drv-form-heading { font-size: 15px; font-weight: 800; margin: 0; }
 .drv-page .drv-field { display: flex; flex-direction: column; gap: 6px; }
-.drv-page .drv-field label,
+/* The MOT nudge's Reminder and MOT expires fields are shared FormFields
+   (16px on phones, so iOS does not zoom on focus); only the read-only
+   "Linked to" row uses this label. */
 .drv-page .drv-field-label { color: var(--colour-slate); font-size: 13px; font-weight: 700; }
-.drv-page .drv-input {
-  background: var(--colour-white);
-  border: 1px solid var(--colour-line-strong);
-  border-radius: 14px;
-  box-sizing: border-box;
-  color: var(--colour-slate);
-  font: inherit;
-  font-size: 15px;
-  font-weight: 600;
-  height: 48px;
-  min-height: 0;
-  padding: 0 14px;
-  width: 100%;
-}
 .drv-page .drv-linked {
   align-items: center;
   background: var(--colour-cream);
@@ -11291,6 +11284,17 @@ html:has(.drv-page)::-webkit-scrollbar,
 .drv-page .drv-show-more:focus-visible {
   outline: 3px solid var(--colour-mustard);
   outline-offset: 2px;
+}
+
+/* Narrow phones (320–375px): the 76px photo, avatar and chevron left a
+   vehicle's name about 96px, so names broke mid-word. A smaller photo and
+   tighter card spacing give it room. 393px and wider are unchanged. (A
+   container query would suit better, but the iOS app still supports iOS 15.) */
+@media (max-width: 379px) {
+  .drv-page .drv-vehicle-card { gap: 10px; padding: 12px; }
+  .drv-page .drv-vehicle-card .drv-thumb { border-radius: 14px; height: 56px; width: 56px; }
+  .drv-page .drv-vehicle-card .drv-thumb svg { height: 24px; width: 24px; }
+  .drv-page .drv-vehicle-name { font-size: 16px; }
 }
 
 /* Wider screens: use the width instead of a phone column. Phone layout

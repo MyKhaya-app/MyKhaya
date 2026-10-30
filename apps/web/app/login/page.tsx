@@ -416,6 +416,10 @@ export default function Login() {
                 <button
                   type="button"
                   className="signin-password-toggle"
+                  // Drawn inside the password field by design; the layout
+                  // inspector checks it as that field's adornment.
+                  data-input-adornment="password-visibility"
+                  aria-controls="signin-password"
                   aria-label={passwordVisible ? "Hide password" : "Show password"}
                   onClick={() => setPasswordVisible((visible) => !visible)}
                 >

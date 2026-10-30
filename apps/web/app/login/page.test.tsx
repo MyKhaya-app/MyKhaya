@@ -112,6 +112,24 @@ describe("Login — no prior biometric enrolment on this device", () => {
     expect(screen.getByText(/child sign in/i)).toBeInTheDocument();
   });
 
+  it("marks the password visibility button as its field's adornment and renames it as it toggles", async () => {
+    render(<Login />);
+    const password = screen.getByLabelText("Password");
+    const toggle = screen.getByRole("button", { name: "Show password" });
+    // The responsive audit's layout inspector allows this button to overlap
+    // only the field it names here (scripts/layout-inspector.mjs).
+    expect(toggle).toHaveAttribute("data-input-adornment", "password-visibility");
+    expect(toggle).toHaveAttribute("aria-controls", password.id);
+    expect(toggle).toHaveAttribute("type", "button");
+
+    fireEvent.click(toggle);
+    expect(password).toHaveAttribute("type", "text");
+    expect(screen.getByRole("button", { name: "Hide password" })).toBe(toggle);
+    fireEvent.click(toggle);
+    expect(password).toHaveAttribute("type", "password");
+    expect(screen.getByRole("button", { name: "Show password" })).toBe(toggle);
+  });
+
   it("password sign-in succeeds and remembers this device for next time", async () => {
     (api.post as ReturnType<typeof vi.fn>).mockResolvedValue(user);
     const typist = userEvent.setup();

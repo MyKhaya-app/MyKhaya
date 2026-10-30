@@ -159,3 +159,36 @@ describe("Vehicle details — editing", () => {
     expect(push).not.toHaveBeenCalled();
   });
 });
+
+describe("Vehicle details — field-level validation", () => {
+  it("shows a cleared nickname on the Nickname field and sends nothing", async () => {
+    renderPage();
+    const user = userEvent.setup();
+    const nickname = await screen.findByLabelText("Nickname");
+    await user.clear(nickname);
+    await user.click(screen.getByRole("button", { name: "Save changes" }));
+
+    expect(nickname).toHaveAttribute("aria-invalid", "true");
+    expect(nickname).toHaveAccessibleDescription("Add a nickname.");
+    await waitFor(() => expect(nickname).toHaveFocus());
+    expect(api.updateVehicle).not.toHaveBeenCalled();
+  });
+
+  it("shows a failed save next to Save changes and keeps the edits", async () => {
+    (api.updateVehicle as ReturnType<typeof vi.fn>).mockRejectedValue(new ApiError(409, "This vehicle changed. Reload and try again."));
+    renderPage();
+    const user = userEvent.setup();
+    const colour = await screen.findByLabelText("Colour");
+    await user.clear(colour);
+    await user.type(colour, "Blue");
+    const save = screen.getByRole("button", { name: "Save changes" });
+    await user.click(save);
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("This vehicle changed. Reload and try again.");
+    expect(alert.compareDocumentPosition(save) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(colour).toHaveValue("Blue");
+    expect(save).toBeEnabled();
+    expect(push).not.toHaveBeenCalled();
+  });
+});
