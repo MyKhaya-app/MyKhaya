@@ -15,11 +15,12 @@ import {
   savingLabelFor,
   ultimatePricingOptionFor,
 } from "@/components/family-pricing-logic";
-import { clearOnboardingIntent, readOnboardingIntent } from "@/components/onboarding-intent";
+import { clearOnboardingHomeKey, clearOnboardingIntent, ensureOnboardingHomeKey, readOnboardingIntent } from "@/components/onboarding-intent";
 import type { BillingIntervalChoice } from "@/components/onboarding-intent";
 import { nativeLogout } from "@/components/native-auth";
 import { isNativeShell } from "@/components/native-runtime";
 import { BetaEnrolment } from "@/components/beta-enrolment";
+import { useActiveHome } from "@/components/use-active-home";
 
 type Step = "choice" | "join-code" | "join-confirm" | "join-sent" | "home" | "plan";
 
@@ -38,6 +39,7 @@ type Step = "choice" | "join-code" | "join-confirm" | "join-sent" | "home" | "pl
 // Neither branch is forced: an account may sit Home-less indefinitely.
 export default function Onboarding() {
   const router = useRouter();
+  const { setActiveHomeId, refreshHomes } = useActiveHome();
   const params = useSearchParams();
   const [step, setStep] = useState<Step>("choice");
   const [error, setError] = useState(""),
@@ -57,6 +59,7 @@ export default function Onboarding() {
   // known, so the normal onboarding never flashes first.
   const betaRequested = params.get("beta") === "1";
   const [route, setRoute] = useState<"loading" | "beta" | "normal">(betaRequested ? "beta" : "loading");
+  const onboardingHomeKey = ensureOnboardingHomeKey();
   useEffect(() => {
     if (betaRequested) {
       setRoute("beta");
@@ -77,6 +80,16 @@ export default function Onboarding() {
   }, [betaRequested]);
 
   useEffect(() => {
+    if (route !== "normal" || step !== "choice") return;
+    api.resumeOnboardingHome()
+      .then((home) => {
+        setHomeId(home.id);
+        setStep("plan");
+      })
+      .catch(() => undefined);
+  }, [route, step]);
+
+  useEffect(() => {
     if (step !== "plan") return;
     const intent = readOnboardingIntent();
     if (intent) {
@@ -93,7 +106,10 @@ export default function Onboarding() {
     setError("");
     const d = new FormData(e.currentTarget);
     try {
-      const group = await api.post<{ id: string }>("/groups", { name: d.get("name") });
+      const group = await api.post<{ id: string }>("/groups", {
+        name: d.get("name"),
+        onboarding_key: onboardingHomeKey,
+      });
       setHomeId(group.id);
       setStep("plan");
     } catch (err) {
@@ -145,9 +161,23 @@ export default function Onboarding() {
     router.push("/login");
   }
 
-  function continueWithFree() {
-    clearOnboardingIntent();
-    router.push("/home");
+  async function continueWithFree() {
+    if (!homeId || busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      await api.completeOnboarding(homeId);
+      clearOnboardingIntent();
+      clearOnboardingHomeKey();
+      setActiveHomeId(homeId);
+      await refreshHomes();
+      setActiveHomeId(homeId);
+      router.replace("/home");
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "We couldn’t finish setting up your Home.");
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function startPaidCheckout(plan: "family" | "ultimate") {

@@ -18,6 +18,7 @@ export interface OnboardingIntent {
 }
 
 const STORAGE_KEY = "mk_onboarding_intent";
+const HOME_KEY_STORAGE_KEY = "mk_onboarding_home_key";
 const MAX_AGE_MS = 48 * 60 * 60 * 1000;
 
 /** Reads plan/interval query-string values as untrusted hints only —
@@ -77,4 +78,26 @@ export function clearOnboardingIntent(storage: StorageLike | null = defaultStora
   } catch {
     // ignore
   }
+}
+
+export function readOnboardingHomeKey(storage: StorageLike | null = defaultStorage()): string | null {
+  if (!storage) return null;
+  try {
+    const key = storage.getItem(HOME_KEY_STORAGE_KEY);
+    return key && /^[0-9a-f-]{36}$/i.test(key) ? key : null;
+  } catch {
+    return null;
+  }
+}
+
+export function ensureOnboardingHomeKey(storage: StorageLike | null = defaultStorage()): string {
+  const existing = readOnboardingHomeKey(storage);
+  if (existing) return existing;
+  const key = crypto.randomUUID();
+  try { storage?.setItem(HOME_KEY_STORAGE_KEY, key); } catch { /* safe to retry */ }
+  return key;
+}
+
+export function clearOnboardingHomeKey(storage: StorageLike | null = defaultStorage()): void {
+  try { storage?.removeItem(HOME_KEY_STORAGE_KEY); } catch { /* ignore */ }
 }

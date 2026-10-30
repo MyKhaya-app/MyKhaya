@@ -249,6 +249,7 @@ class MobileDeviceRenewRequest(StrictModel):
 
 class GroupCreate(StrictModel):
     name: str = Field(min_length=1, max_length=100)
+    onboarding_key: str | None = Field(default=None, min_length=20, max_length=64)
 
     @field_validator("name")
     @classmethod

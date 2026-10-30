@@ -535,8 +535,24 @@ class ActionToken(UuidTimeMixin, Base):
 
 class Group(UuidTimeMixin, Base):
     __tablename__ = "groups"
+    __table_args__ = (
+        Index(
+            "uq_groups_created_by_onboarding_key",
+            "created_by",
+            "onboarding_key",
+            unique=True,
+            postgresql_where=text("onboarding_key IS NOT NULL"),
+        ),
+    )
     name: Mapped[str] = mapped_column(String(100))
     created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+    # Present only for the consumer onboarding create flow. Ordinary Home
+    # creation deliberately leaves this NULL so legitimate multi-Home use is
+    # unaffected. The unique index makes retries for one onboarding journey
+    # converge on one Home, while the transaction lock in the route closes the
+    # concurrent-request gap before the row is created.
+    onboarding_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    onboarding_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
     last_activity_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     suspended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

@@ -4,8 +4,9 @@ import userEvent from "@testing-library/user-event";
 import Onboarding from "./page";
 
 const push = vi.fn();
+const replace = vi.fn();
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ push, replace: vi.fn() }),
+  useRouter: () => ({ push, replace }),
   useSearchParams: () => new URLSearchParams(),
 }));
 
@@ -26,6 +27,8 @@ vi.mock("@mykhaya/api-client", async (importOriginal) => {
       post: vi.fn(),
       familyPricing: vi.fn(),
       createCheckoutSession: vi.fn(),
+      resumeOnboardingHome: vi.fn(),
+      completeOnboarding: vi.fn(),
       lookupHomeJoinCode: vi.fn(),
       requestHomeJoin: vi.fn(),
       betaContinuation: vi.fn(),
@@ -40,6 +43,8 @@ const post = api.post as unknown as ReturnType<typeof vi.fn>;
 const lookupHomeJoinCode = api.lookupHomeJoinCode as unknown as ReturnType<typeof vi.fn>;
 const requestHomeJoin = api.requestHomeJoin as unknown as ReturnType<typeof vi.fn>;
 const betaContinuation = api.betaContinuation as unknown as ReturnType<typeof vi.fn>;
+const resumeOnboardingHome = api.resumeOnboardingHome as unknown as ReturnType<typeof vi.fn>;
+const completeOnboarding = api.completeOnboarding as unknown as ReturnType<typeof vi.fn>;
 
 const NOT_BETA = {
   pending: false,
@@ -56,6 +61,12 @@ beforeEach(() => {
   vi.clearAllMocks();
   localStorage.clear();
   betaContinuation.mockResolvedValue(NOT_BETA);
+  resumeOnboardingHome.mockRejectedValue(new ApiError(404, "No unfinished Home onboarding was found."));
+  (api.familyPricing as unknown as ReturnType<typeof vi.fn>).mockResolvedValue({
+    plan: "family",
+    options: [],
+    ultimate_options: [],
+  });
   (api.publicLegalDocuments as unknown as ReturnType<typeof vi.fn>).mockResolvedValue([
     { key: "terms", current_version_id: "terms-1", current_version: "1.0", display_name: "Terms", audience: "adult", acceptance_required: true, action_verb: "accept", scope: "global" },
     { key: "privacy", current_version_id: "privacy-1", current_version: "1.0", display_name: "Privacy", audience: "adult", acceptance_required: true, action_verb: "accept", scope: "global" },
@@ -111,6 +122,27 @@ describe("Onboarding — Create a new Home", () => {
     await user.click(screen.getByRole("button", { name: "Create a new Home" }));
     await user.click(screen.getByRole("button", { name: "Back" }));
     expect(screen.getByText("How would you like to use MyKhaya?")).toBeInTheDocument();
+  });
+
+  it("reuses the server's unfinished onboarding Home after a refresh", async () => {
+    resumeOnboardingHome.mockResolvedValue({ id: "home-1" });
+    await renderOnboarding();
+    expect(await screen.findByRole("heading", { name: "Choose your MyKhaya plan" })).toBeInTheDocument();
+    expect(post).not.toHaveBeenCalled();
+  });
+
+  it("completes Free onboarding before selecting the Home and navigating", async () => {
+    const user = userEvent.setup();
+    post.mockResolvedValue({ id: "home-1" });
+    completeOnboarding.mockResolvedValue({ id: "home-1" });
+    await renderOnboarding();
+    await user.click(screen.getByRole("button", { name: "Create a new Home" }));
+    await user.type(screen.getByLabelText("Home name"), "Test Home");
+    await user.click(screen.getByRole("button", { name: "Create our Home" }));
+    await screen.findByRole("heading", { name: "Choose your MyKhaya plan" });
+    await user.click(screen.getByRole("button", { name: "Continue with Free" }));
+    await waitFor(() => expect(completeOnboarding).toHaveBeenCalledWith("home-1"));
+    expect(replace).toHaveBeenCalledWith("/home");
   });
 });
 
