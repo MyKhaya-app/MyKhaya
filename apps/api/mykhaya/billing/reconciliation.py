@@ -60,6 +60,8 @@ async def _require_paid_latest_invoice(
     latest_invoice: object,
     *,
     secret_key: str,
+    expected_customer_id: str,
+    expected_subscription_id: str,
 ) -> dict[str, object]:
     """Resolve and validate the subscription's authoritative latest invoice.
 
@@ -71,19 +73,34 @@ async def _require_paid_latest_invoice(
     """
     invoice: object = latest_invoice
     invoice_id = _stripe_id(invoice)
-    if not isinstance(invoice, dict) or invoice.get("status") is None or "paid" not in invoice:
-        if not invoice_id:
-            raise ReconciliationValidationError(
-                "The Stripe subscription has no resolvable latest invoice."
-            )
+    if not invoice_id:
+        raise ReconciliationValidationError(
+            "The Stripe subscription has no resolvable latest invoice."
+        )
+    required_fields = ("status", "customer", "subscription")
+    if not isinstance(invoice, dict) or any(field not in invoice for field in required_fields):
         invoice = await call_stripe(
             lambda: stripe.Invoice.retrieve(invoice_id, api_key=secret_key)
         )
     if not isinstance(invoice, dict):
         raise ReconciliationValidationError("Stripe returned an invalid latest invoice.")
-    if invoice.get("status") != "paid" or invoice.get("paid") is not True:
+    if _stripe_id(invoice.get("id")) != invoice_id:
+        raise ReconciliationValidationError("Stripe returned a different latest invoice.")
+    if invoice.get("status") != "paid":
         raise ReconciliationValidationError(
             "The latest Stripe invoice is not confirmed paid."
+        )
+    if "paid" in invoice and invoice.get("paid") is not True:
+        raise ReconciliationValidationError(
+            "The latest Stripe invoice has contradictory payment fields."
+        )
+    if _stripe_id(invoice.get("customer")) != expected_customer_id:
+        raise SubscriptionOwnershipMismatchError(
+            "The latest Stripe invoice belongs to a different customer."
+        )
+    if _stripe_id(invoice.get("subscription")) != expected_subscription_id:
+        raise ReconciliationValidationError(
+            "The latest Stripe invoice belongs to a different subscription."
         )
     return invoice
 
@@ -335,7 +352,12 @@ async def reconcile_home_subscription(
         )
 
     latest_invoice = stripe_subscription.get("latest_invoice")
-    await _require_paid_latest_invoice(latest_invoice, secret_key=config.secret_key)
+    await _require_paid_latest_invoice(
+        latest_invoice,
+        secret_key=config.secret_key,
+        expected_customer_id=subscription.external_customer_id,
+        expected_subscription_id=subscription_id,
+    )
 
     result = await apply_stripe_subscription_state(
         db,

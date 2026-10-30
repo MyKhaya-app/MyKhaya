@@ -20,6 +20,7 @@ from mykhaya.billing.reconciliation import (
     ReconciliationValidationError,
     _require_paid_latest_invoice,
 )
+from mykhaya.billing.state import SubscriptionOwnershipMismatchError
 from mykhaya.config import get_settings
 from mykhaya.db import SessionFactory
 from mykhaya.entitlements import ensure_home_subscription
@@ -49,15 +50,113 @@ USER_PASSWORD = "Correct horse battery staple!"
 @pytest.mark.parametrize(
     ("latest_invoice", "retrieved_invoice", "should_pass"),
     [
-        ("in_paid", {"id": "in_paid", "status": "paid", "paid": True}, True),
-        ({"id": "in_expanded", "status": "paid", "paid": True}, None, True),
-        ({"id": "in_no_intent", "status": "paid", "paid": True}, None, True),
-        ("in_open", {"id": "in_open", "status": "open", "paid": False}, False),
-        ("in_unpaid", {"id": "in_unpaid", "status": "unpaid", "paid": False}, False),
-        ("in_void", {"id": "in_void", "status": "void", "paid": False}, False),
+        (
+            "in_paid",
+            {
+                "id": "in_paid",
+                "status": "paid",
+                "paid": True,
+                "customer": "cus_expected",
+                "subscription": "sub_expected",
+            },
+            True,
+        ),
+        (
+            {
+                "id": "in_expanded",
+                "status": "paid",
+                "customer": "cus_expected",
+                "subscription": "sub_expected",
+            },
+            None,
+            True,
+        ),
+        (
+            {
+                "id": "in_no_intent",
+                "status": "paid",
+                "paid": True,
+                "customer": "cus_expected",
+                "subscription": "sub_expected",
+            },
+            None,
+            True,
+        ),
+        (
+            "in_open",
+            {
+                "id": "in_open",
+                "status": "open",
+                "paid": False,
+                "customer": "cus_expected",
+                "subscription": "sub_expected",
+            },
+            False,
+        ),
+        (
+            "in_unpaid",
+            {
+                "id": "in_unpaid",
+                "status": "unpaid",
+                "paid": False,
+                "customer": "cus_expected",
+                "subscription": "sub_expected",
+            },
+            False,
+        ),
+        (
+            "in_void",
+            {
+                "id": "in_void",
+                "status": "void",
+                "paid": False,
+                "customer": "cus_expected",
+                "subscription": "sub_expected",
+            },
+            False,
+        ),
         (
             "in_uncollectible",
-            {"id": "in_uncollectible", "status": "uncollectible", "paid": False},
+            {
+                "id": "in_uncollectible",
+                "status": "uncollectible",
+                "paid": False,
+                "customer": "cus_expected",
+                "subscription": "sub_expected",
+            },
+            False,
+        ),
+        (
+            "in_contradictory",
+            {
+                "id": "in_contradictory",
+                "status": "paid",
+                "paid": False,
+                "customer": "cus_expected",
+                "subscription": "sub_expected",
+            },
+            False,
+        ),
+        (
+            "in_wrong_customer",
+            {
+                "id": "in_wrong_customer",
+                "status": "paid",
+                "paid": True,
+                "customer": "cus_other",
+                "subscription": "sub_expected",
+            },
+            False,
+        ),
+        (
+            "in_wrong_subscription",
+            {
+                "id": "in_wrong_subscription",
+                "status": "paid",
+                "paid": True,
+                "customer": "cus_expected",
+                "subscription": "sub_other",
+            },
             False,
         ),
         (None, None, False),
@@ -76,11 +175,21 @@ async def test_latest_invoice_requires_authoritative_paid_state(
 
     monkeypatch.setattr(stripe.Invoice, "retrieve", fake_retrieve)
     if should_pass:
-        invoice = await _require_paid_latest_invoice(latest_invoice, secret_key="sk_test_unused")
+        invoice = await _require_paid_latest_invoice(
+            latest_invoice,
+            secret_key="sk_test_unused",
+            expected_customer_id="cus_expected",
+            expected_subscription_id="sub_expected",
+        )
         assert invoice["status"] == "paid"
     else:
-        with pytest.raises(ReconciliationValidationError):
-            await _require_paid_latest_invoice(latest_invoice, secret_key="sk_test_unused")
+        with pytest.raises((ReconciliationValidationError, SubscriptionOwnershipMismatchError)):
+            await _require_paid_latest_invoice(
+                latest_invoice,
+                secret_key="sk_test_unused",
+                expected_customer_id="cus_expected",
+                expected_subscription_id="sub_expected",
+            )
 
 
 @pytest.fixture(autouse=True)
@@ -370,7 +479,13 @@ async def test_reconcile_applies_current_stripe_state_and_is_audited(
                     {"price": {"id": "price_month_current", "recurring": {"interval": "month"}}}
                 ]
             },
-            "latest_invoice": {"id": "in_paid", "status": "paid", "paid": True},
+            "latest_invoice": {
+                "id": "in_paid",
+                "status": "paid",
+                "paid": True,
+                "customer": f"cus_{sub_id}",
+                "subscription": sub_id,
+            },
         }
 
     monkeypatch.setattr(stripe.Subscription, "retrieve", fake_retrieve)
@@ -442,7 +557,13 @@ async def test_reconcile_with_no_named_transition_uses_the_reconciled_label(
             "items": {
                 "data": [{"price": {"id": "price_year_current", "recurring": {"interval": "year"}}}]
             },
-            "latest_invoice": {"id": "in_paid", "status": "paid", "paid": True},
+            "latest_invoice": {
+                "id": "in_paid",
+                "status": "paid",
+                "paid": True,
+                "customer": f"cus_{sub_id}",
+                "subscription": sub_id,
+            },
         }
 
     monkeypatch.setattr(stripe.Subscription, "retrieve", fake_retrieve)
