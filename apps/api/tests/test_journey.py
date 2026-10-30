@@ -1,3 +1,4 @@
+import asyncio
 import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
@@ -5,13 +6,13 @@ from typing import Any
 
 import pytest
 from httpx import ASGITransport, AsyncClient, Response
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from mykhaya.config import get_settings
 from mykhaya.db import SessionFactory
 from mykhaya.entitlements import get_home_subscription
 from mykhaya.main import app
-from mykhaya.models import ActionToken, SubscriptionPlan, TokenPurpose, User
+from mykhaya.models import ActionToken, Group, SubscriptionPlan, TokenPurpose, User
 from mykhaya.security import derived_token
 
 ORIGIN = "http://localhost:8080"
@@ -120,6 +121,113 @@ async def test_disabled_email_verification_allows_unverified_login(
             assert user.email_verified_at is not None
     finally:
         app.dependency_overrides.pop(get_settings, None)
+
+
+@pytest.mark.asyncio
+async def test_onboarding_home_creation_is_idempotent_and_free_completion_is_explicit(
+    client: AsyncClient,
+) -> None:
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"onboarding-{suffix}@example.com", "Onboarding User")
+    key = str(uuid.uuid4())
+
+    first = await unsafe(
+        client,
+        "POST",
+        "/api/v1/groups",
+        json={"name": "Our Home", "onboarding_key": key},
+    )
+    assert first.status_code == 201
+    first_id = first.json()["id"]
+
+    retry = await unsafe(
+        client,
+        "POST",
+        "/api/v1/groups",
+        json={"name": "Our Home", "onboarding_key": key},
+    )
+    assert retry.status_code == 201
+    assert retry.json()["id"] == first_id
+
+    # A second browser/device using the same account and operation key must
+    # converge even when both requests are in flight at once.
+    concurrent_key = str(uuid.uuid4())
+    async with (
+        AsyncClient(
+            transport=ASGITransport(app=app), base_url=ORIGIN, headers={"Origin": ORIGIN}
+        ) as first_device,
+        AsyncClient(
+            transport=ASGITransport(app=app), base_url=ORIGIN, headers={"Origin": ORIGIN}
+        ) as second_device,
+    ):
+        first_device.cookies.update(client.cookies)
+        second_device.cookies.update(client.cookies)
+        concurrent_responses = await asyncio.gather(
+            unsafe(
+                first_device,
+                "POST",
+                "/api/v1/groups",
+                json={"name": "Concurrent Home", "onboarding_key": concurrent_key},
+            ),
+            unsafe(
+                second_device,
+                "POST",
+                "/api/v1/groups",
+                json={"name": "Concurrent Home", "onboarding_key": concurrent_key},
+            ),
+        )
+    assert all(response.status_code == 201 for response in concurrent_responses)
+    concurrent_id = concurrent_responses[0].json()["id"]
+    assert len({response.json()["id"] for response in concurrent_responses}) == 1
+
+    # The key is scoped to the authenticated account, so another account can
+    # intentionally use the same client-generated key without gaining access
+    # to this Home.
+    other_email = f"onboarding-other-{suffix}@example.com"
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url=ORIGIN, headers={"Origin": ORIGIN}
+    ) as other_client:
+        await create_verified_user(other_client, other_email, "Other Onboarding User")
+        other_home = await unsafe(
+            other_client,
+            "POST",
+            "/api/v1/groups",
+            json={"name": "Other Home", "onboarding_key": key},
+        )
+        assert other_home.status_code == 201
+        other_id = other_home.json()["id"]
+        assert other_id not in {first_id, concurrent_id}
+        assert (
+            await unsafe(
+                other_client,
+                "POST",
+                f"/api/v1/groups/{other_id}/onboarding/complete",
+            )
+        ).status_code == 200
+
+    ambiguous_resume = await unsafe(
+        client, "GET", "/api/v1/groups/onboarding/resume"
+    )
+    assert ambiguous_resume.status_code == 409
+
+    completed = await unsafe(client, "POST", f"/api/v1/groups/{first_id}/onboarding/complete")
+    assert completed.status_code == 200
+    completed_concurrent = await unsafe(
+        client, "POST", f"/api/v1/groups/{concurrent_id}/onboarding/complete"
+    )
+    assert completed_concurrent.status_code == 200
+    assert (await unsafe(client, "GET", "/api/v1/groups/onboarding/resume")).status_code == 404
+
+    # The idempotency scope is explicit: a normal Home create is still allowed.
+    second = await unsafe(client, "POST", "/api/v1/groups", json={"name": "Our Home"})
+    assert second.status_code == 201
+    assert second.json()["id"] != first_id
+
+    async with SessionFactory() as db:
+        count = await db.scalar(
+            select(func.count(Group.id)).where(Group.id.in_([first_id, second.json()["id"]]))
+        )
+    assert count == 2
 
 
 @pytest.mark.asyncio

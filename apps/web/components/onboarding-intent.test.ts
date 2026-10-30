@@ -1,9 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
   clearOnboardingIntent,
+  clearOnboardingHomeKey,
+  ensureOnboardingHomeKey,
   parseIntentFromParams,
   readOnboardingIntent,
   saveOnboardingIntent,
+  readOnboardingHomeKey,
 } from "./onboarding-intent";
 
 describe("parseIntentFromParams", () => {
@@ -85,5 +88,17 @@ describe("saveOnboardingIntent / readOnboardingIntent / clearOnboardingIntent", 
     expect(() => saveOnboardingIntent({ plan: "family", interval: "year" }, null)).not.toThrow();
     expect(readOnboardingIntent(null)).toBeNull();
     expect(() => clearOnboardingIntent(null)).not.toThrow();
+  });
+});
+
+describe("onboarding Home operation key", () => {
+  it("persists one key so retries use one server idempotency operation", () => {
+    const storage = new FakeStorage();
+    const first = ensureOnboardingHomeKey(storage);
+    expect(first).toMatch(/^[0-9a-f-]{36}$/i);
+    expect(ensureOnboardingHomeKey(storage)).toBe(first);
+    expect(readOnboardingHomeKey(storage)).toBe(first);
+    clearOnboardingHomeKey(storage);
+    expect(readOnboardingHomeKey(storage)).toBeNull();
   });
 });

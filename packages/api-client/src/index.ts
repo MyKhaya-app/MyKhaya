@@ -694,6 +694,12 @@ export class MyKhayaClient {
       { method: "DELETE" },
     );
   homes = () => this.request<Home[]>("/groups");
+  resumeOnboardingHome = () => this.request<Home>("/groups/onboarding/resume");
+  completeOnboarding = (homeId: string) =>
+    this.request<Home>(`/groups/${encodeURIComponent(homeId)}/onboarding/complete`, {
+      method: "POST",
+      body: "{}",
+    });
   members = (homeId: string) =>
     this.request<Member[]>(`/groups/${encodeURIComponent(homeId)}/members`);
   updateMemberColour = (homeId: string, userId: string, colour: string) =>
