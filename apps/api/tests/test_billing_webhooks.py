@@ -569,7 +569,15 @@ async def test_invoice_payment_failed_refetches_subscription_and_sets_past_due(
 
     monkeypatch.setattr(stripe.Subscription, "retrieve", fake_retrieve)
 
-    invoice_payload = _event("invoice.payment_failed", {"subscription": sub_id})
+    invoice_payload = _event(
+        "invoice.payment_failed",
+        {
+            "parent": {
+                "type": "subscription_details",
+                "subscription_details": {"subscription": sub_id},
+            }
+        },
+    )
     response = await client.post(
         "/api/v1/billing/stripe/webhook",
         content=invoice_payload,

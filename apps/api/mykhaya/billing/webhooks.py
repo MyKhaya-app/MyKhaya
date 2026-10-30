@@ -59,6 +59,20 @@ def _stripe_object_id(value: Any) -> str | None:
     return None
 
 
+def _invoice_subscription_id(invoice: dict[str, Any]) -> str | None:
+    """Resolve legacy and Basil invoice subscription references safely."""
+    legacy_id = _stripe_object_id(invoice.get("subscription"))
+    parent = invoice.get("parent")
+    parent_id = None
+    if isinstance(parent, dict) and parent.get("type") == "subscription_details":
+        details = parent.get("subscription_details")
+        if isinstance(details, dict):
+            parent_id = _stripe_object_id(details.get("subscription"))
+    if legacy_id and parent_id and legacy_id != parent_id:
+        return None
+    return legacy_id or parent_id
+
+
 class WebhookSignatureError(RuntimeError):
     """Signature verification failed — the request is rejected outright
     (400) before any database work happens."""
@@ -100,7 +114,11 @@ async def _resolve_group_id(
         except ValueError:
             pass
 
-    subscription_id = _stripe_object_id(data_object.get("subscription")) or (
+    subscription_id = (
+        _invoice_subscription_id(data_object)
+        if event_type.startswith("invoice.")
+        else _stripe_object_id(data_object.get("subscription"))
+    ) or (
         _stripe_object_id(data_object.get("id"))
         if event_type.startswith("customer.subscription.")
         else None
@@ -192,7 +210,7 @@ async def _handle_invoice_event(
     the invoice payload's own snapshot of subscription state — the
     out-of-order-safe pattern documented in
     docs/architecture/commercial-entitlements.md#out-of-order-events."""
-    subscription_id = _stripe_object_id(invoice_obj.get("subscription"))
+    subscription_id = _invoice_subscription_id(invoice_obj)
     if not subscription_id or not config.secret_key:
         return
     stripe_subscription = await call_stripe(

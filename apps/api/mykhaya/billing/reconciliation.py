@@ -56,6 +56,28 @@ def _stripe_id(value: object) -> str | None:
     return None
 
 
+def _invoice_subscription_id(invoice: dict[str, object]) -> str | None:
+    """Return the subscription reference from legacy or Basil invoices.
+
+    Stripe API 2025-03-31.basil moved the subscription reference to
+    ``parent.subscription_details.subscription``.  A legacy top-level
+    reference remains authoritative when present, but contradictory fields
+    are an integrity failure rather than an opportunity to guess.
+    """
+    legacy_id = _stripe_id(invoice.get("subscription"))
+    parent = invoice.get("parent")
+    parent_id: str | None = None
+    if isinstance(parent, dict) and parent.get("type") == "subscription_details":
+        details = parent.get("subscription_details")
+        if isinstance(details, dict):
+            parent_id = _stripe_id(details.get("subscription"))
+    if legacy_id and parent_id and legacy_id != parent_id:
+        raise ReconciliationValidationError(
+            "Stripe invoice subscription references contradict each other."
+        )
+    return legacy_id or parent_id
+
+
 async def _require_paid_latest_invoice(
     latest_invoice: object,
     *,
@@ -77,7 +99,7 @@ async def _require_paid_latest_invoice(
         raise ReconciliationValidationError(
             "The Stripe subscription has no resolvable latest invoice."
         )
-    required_fields = ("status", "customer", "subscription")
+    required_fields = ("status", "customer")
     if not isinstance(invoice, dict) or any(field not in invoice for field in required_fields):
         invoice = await call_stripe(
             lambda: stripe.Invoice.retrieve(invoice_id, api_key=secret_key)
@@ -98,7 +120,7 @@ async def _require_paid_latest_invoice(
         raise SubscriptionOwnershipMismatchError(
             "The latest Stripe invoice belongs to a different customer."
         )
-    if _stripe_id(invoice.get("subscription")) != expected_subscription_id:
+    if _invoice_subscription_id(invoice) != expected_subscription_id:
         raise ReconciliationValidationError(
             "The latest Stripe invoice belongs to a different subscription."
         )

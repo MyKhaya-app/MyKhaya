@@ -18,6 +18,7 @@ from sqlalchemy import delete, select
 
 from mykhaya.billing.reconciliation import (
     ReconciliationValidationError,
+    _invoice_subscription_id,
     _require_paid_latest_invoice,
 )
 from mykhaya.billing.state import SubscriptionOwnershipMismatchError
@@ -159,6 +160,34 @@ USER_PASSWORD = "Correct horse battery staple!"
             },
             False,
         ),
+        (
+            "in_basil_parent",
+            {
+                "id": "in_basil_parent",
+                "status": "paid",
+                "customer": "cus_expected",
+                "parent": {
+                    "type": "subscription_details",
+                    "subscription_details": {"subscription": "sub_expected"},
+                },
+            },
+            True,
+        ),
+        (
+            "in_conflicting_references",
+            {
+                "id": "in_conflicting_references",
+                "status": "paid",
+                "paid": True,
+                "customer": "cus_expected",
+                "subscription": "sub_expected",
+                "parent": {
+                    "type": "subscription_details",
+                    "subscription_details": {"subscription": "sub_other"},
+                },
+            },
+            False,
+        ),
         (None, None, False),
     ],
 )
@@ -190,6 +219,32 @@ async def test_latest_invoice_requires_authoritative_paid_state(
                 expected_customer_id="cus_expected",
                 expected_subscription_id="sub_expected",
             )
+
+
+@pytest.mark.asyncio
+async def test_basil_invoice_sdk_object_uses_parent_subscription_reference() -> None:
+    invoice = stripe.Invoice.construct_from(
+        {
+            "id": "in_basil_sdk",
+            "status": "paid",
+            "customer": "cus_expected",
+            "parent": {
+                "type": "subscription_details",
+                "subscription_details": {"subscription": "sub_expected"},
+            },
+        },
+        "sk_test_unused",
+    )
+
+    assert isinstance(invoice, dict)
+    assert _invoice_subscription_id(invoice) == "sub_expected"
+    result = await _require_paid_latest_invoice(
+        invoice,
+        secret_key="sk_test_unused",
+        expected_customer_id="cus_expected",
+        expected_subscription_id="sub_expected",
+    )
+    assert result["status"] == "paid"
 
 
 @pytest.fixture(autouse=True)
