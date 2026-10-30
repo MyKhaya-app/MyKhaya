@@ -16,6 +16,10 @@ from httpx import ASGITransport, AsyncClient
 from pydantic import SecretStr
 from sqlalchemy import delete, select
 
+from mykhaya.billing.reconciliation import (
+    ReconciliationValidationError,
+    _require_paid_latest_invoice,
+)
 from mykhaya.config import get_settings
 from mykhaya.db import SessionFactory
 from mykhaya.entitlements import ensure_home_subscription
@@ -39,6 +43,44 @@ ADMIN_ORIGIN = "http://admin.localhost:8080"
 ORIGIN = "http://localhost:8080"
 ADMIN_PASSWORD = "A separate operator password!"
 USER_PASSWORD = "Correct horse battery staple!"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("latest_invoice", "retrieved_invoice", "should_pass"),
+    [
+        ("in_paid", {"id": "in_paid", "status": "paid", "paid": True}, True),
+        ({"id": "in_expanded", "status": "paid", "paid": True}, None, True),
+        ({"id": "in_no_intent", "status": "paid", "paid": True}, None, True),
+        ("in_open", {"id": "in_open", "status": "open", "paid": False}, False),
+        ("in_unpaid", {"id": "in_unpaid", "status": "unpaid", "paid": False}, False),
+        ("in_void", {"id": "in_void", "status": "void", "paid": False}, False),
+        (
+            "in_uncollectible",
+            {"id": "in_uncollectible", "status": "uncollectible", "paid": False},
+            False,
+        ),
+        (None, None, False),
+    ],
+)
+async def test_latest_invoice_requires_authoritative_paid_state(
+    latest_invoice: object,
+    retrieved_invoice: dict[str, object] | None,
+    should_pass: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_retrieve(invoice_id: str, **kwargs: object) -> dict[str, object]:
+        assert retrieved_invoice is not None
+        assert invoice_id == retrieved_invoice["id"]
+        return retrieved_invoice
+
+    monkeypatch.setattr(stripe.Invoice, "retrieve", fake_retrieve)
+    if should_pass:
+        invoice = await _require_paid_latest_invoice(latest_invoice, secret_key="sk_test_unused")
+        assert invoice["status"] == "paid"
+    else:
+        with pytest.raises(ReconciliationValidationError):
+            await _require_paid_latest_invoice(latest_invoice, secret_key="sk_test_unused")
 
 
 @pytest.fixture(autouse=True)
@@ -328,6 +370,7 @@ async def test_reconcile_applies_current_stripe_state_and_is_audited(
                     {"price": {"id": "price_month_current", "recurring": {"interval": "month"}}}
                 ]
             },
+            "latest_invoice": {"id": "in_paid", "status": "paid", "paid": True},
         }
 
     monkeypatch.setattr(stripe.Subscription, "retrieve", fake_retrieve)
@@ -399,6 +442,7 @@ async def test_reconcile_with_no_named_transition_uses_the_reconciled_label(
             "items": {
                 "data": [{"price": {"id": "price_year_current", "recurring": {"interval": "year"}}}]
             },
+            "latest_invoice": {"id": "in_paid", "status": "paid", "paid": True},
         }
 
     monkeypatch.setattr(stripe.Subscription, "retrieve", fake_retrieve)

@@ -56,6 +56,38 @@ def _stripe_id(value: object) -> str | None:
     return None
 
 
+async def _require_paid_latest_invoice(
+    latest_invoice: object,
+    *,
+    secret_key: str,
+) -> dict[str, object]:
+    """Resolve and validate the subscription's authoritative latest invoice.
+
+    Stripe may return ``latest_invoice`` as either an ID or an expanded
+    Invoice object.  An expanded object that lacks payment fields is treated
+    like an ID and re-fetched, because a subscription snapshot is not itself
+    proof of payment.  PaymentIntent presence is deliberately not required:
+    paid invoices can legitimately have no usable PaymentIntent field.
+    """
+    invoice: object = latest_invoice
+    invoice_id = _stripe_id(invoice)
+    if not isinstance(invoice, dict) or invoice.get("status") is None or "paid" not in invoice:
+        if not invoice_id:
+            raise ReconciliationValidationError(
+                "The Stripe subscription has no resolvable latest invoice."
+            )
+        invoice = await call_stripe(
+            lambda: stripe.Invoice.retrieve(invoice_id, api_key=secret_key)
+        )
+    if not isinstance(invoice, dict):
+        raise ReconciliationValidationError("Stripe returned an invalid latest invoice.")
+    if invoice.get("status") != "paid" or invoice.get("paid") is not True:
+        raise ReconciliationValidationError(
+            "The latest Stripe invoice is not confirmed paid."
+        )
+    return invoice
+
+
 async def confirm_checkout_session(
     db: AsyncSession,
     config: StripeConfig,
@@ -303,16 +335,7 @@ async def reconcile_home_subscription(
         )
 
     latest_invoice = stripe_subscription.get("latest_invoice")
-    if latest_invoice:
-        invoice = latest_invoice
-        if not isinstance(invoice, dict):
-            invoice = await call_stripe(
-                lambda: stripe.Invoice.retrieve(invoice, api_key=config.secret_key)
-            )
-        if invoice.get("paid") is not True:
-            raise ReconciliationValidationError(
-                "The latest Stripe invoice is not confirmed paid."
-            )
+    await _require_paid_latest_invoice(latest_invoice, secret_key=config.secret_key)
 
     result = await apply_stripe_subscription_state(
         db,
