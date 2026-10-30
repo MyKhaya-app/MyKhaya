@@ -43,12 +43,14 @@ from mykhaya.billing.reconciliation import (
 from mykhaya.billing.transitions import (
     InvalidSubscriptionTransition,
     SubscriptionChangeError,
+    SubscriptionValidationError,
     apply_subscription_change,
     lock_home_for_change,
     preview_subscription_change,
 )
 from mykhaya.billing.webhooks import (
     WebhookSignatureError,
+    WebhookStateApplicationError,
     process_webhook_event,
     verify_and_parse_event,
 )
@@ -452,7 +454,18 @@ async def subscription_change_preview(
             config, subscription, body.target_plan, body.target_interval
         )
     except InvalidSubscriptionTransition as exc:
-        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
+        detail = (
+            {"code": exc.safe_code, "message": str(exc)}
+            if isinstance(exc, SubscriptionValidationError)
+            else str(exc)
+        )
+        await log.awarning(
+            "stripe_subscription_change_preview_rejected",
+            group_id=str(group_id),
+            configuration_source=config.source,
+            reason=getattr(exc, "validation_reason", "invalid_transition"),
+        )
+        raise HTTPException(status.HTTP_409_CONFLICT, detail) from None
     except StripeNotConfiguredError:
         raise HTTPException(
             status.HTTP_503_SERVICE_UNAVAILABLE, "Billing is not available."
@@ -511,7 +524,18 @@ async def subscription_change(
         await db.commit()
     except InvalidSubscriptionTransition as exc:
         await db.rollback()
-        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from None
+        detail = (
+            {"code": exc.safe_code, "message": str(exc)}
+            if isinstance(exc, SubscriptionValidationError)
+            else str(exc)
+        )
+        await log.awarning(
+            "stripe_subscription_change_rejected",
+            group_id=str(group_id),
+            configuration_source=config.source,
+            reason=getattr(exc, "validation_reason", "invalid_transition"),
+        )
+        raise HTTPException(status.HTTP_409_CONFLICT, detail) from None
     except StripeNotConfiguredError:
         await db.rollback()
         raise HTTPException(
@@ -714,7 +738,8 @@ async def confirm_checkout(
         reconciliation_result="confirmed" if confirmed else "pending",
     )
     return CheckoutConfirmationResponse(
-        confirmed=confirmed and resolved_plan in (SubscriptionPlan.family, SubscriptionPlan.ultimate),
+        confirmed=confirmed
+        and resolved_plan in (SubscriptionPlan.family, SubscriptionPlan.ultimate),
         effective_plan=resolved_plan,
         subscription_status=subscription.status,
     )
@@ -794,6 +819,21 @@ async def stripe_webhook(
         )
         await db.commit()
         try:
+            state_result = (
+                exc.result
+                if isinstance(exc, WebhookStateApplicationError)
+                else None
+            )
+            safe_code = (
+                f"webhook_{state_result.outcome.value}"
+                if state_result is not None
+                else "webhook_processing_failed"
+            )
+            safe_message = (
+                "Stripe state was not applied and the webhook remains retryable."
+                if state_result is not None and state_result.retryable
+                else "MyKhaya could not process the Stripe event; Stripe should retry it."
+            )
             await record_billing_diagnostic(
                 db,
                 source="webhook",
@@ -801,10 +841,8 @@ async def stripe_webhook(
                 result="failed",
                 stripe_mode=config.mode,
                 stripe_event_id=event.get("id"),
-                safe_error_code="webhook_processing_failed",
-                safe_error_message=(
-                    "MyKhaya could not process the Stripe event; Stripe should retry it."
-                ),
+                safe_error_code=safe_code,
+                safe_error_message=safe_message,
             )
         except Exception:
             await db.rollback()

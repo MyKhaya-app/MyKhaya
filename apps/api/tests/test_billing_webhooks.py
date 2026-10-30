@@ -20,6 +20,8 @@ from httpx import ASGITransport, AsyncClient
 from pydantic import SecretStr
 from sqlalchemy import select
 
+from mykhaya.billing.state import SubscriptionStateOutcome, SubscriptionStateResult
+from mykhaya.billing.webhooks import WebhookStateApplicationError, _webhook_outcome
 from mykhaya.config import get_settings
 from mykhaya.db import SessionFactory
 from mykhaya.entitlements import effective_plan, get_home_subscription
@@ -39,6 +41,27 @@ from mykhaya.security import derived_token
 ORIGIN = "http://localhost:8080"
 PASSWORD = "Correct horse battery staple!"
 WEBHOOK_SECRET = "whsec_test_secret_abc123"
+
+
+def test_webhook_outcome_deduplicates_only_stale_or_successful_results() -> None:
+    assert _webhook_outcome(
+        SubscriptionStateResult(SubscriptionStateOutcome.APPLIED)
+    ) == "processed"
+    assert _webhook_outcome(
+        SubscriptionStateResult(SubscriptionStateOutcome.UNCHANGED)
+    ) == "processed"
+    assert _webhook_outcome(
+        SubscriptionStateResult(SubscriptionStateOutcome.STALE_EVENT)
+    ) == "ignored"
+
+    result = SubscriptionStateResult(
+        SubscriptionStateOutcome.UNKNOWN_PRICE_ID,
+        reason="price_id_not_in_configured_plan_mapping",
+        retryable=True,
+    )
+    with pytest.raises(WebhookStateApplicationError) as caught:
+        _webhook_outcome(result)
+    assert caught.value.result is result
 
 
 @pytest.fixture
@@ -140,7 +163,7 @@ def _subscription_object(
         "id": sub_id or f"sub_{uuid.uuid4().hex[:12]}",
         "status": status,
         "cancel_at_period_end": False,
-        "customer": customer or f"cus_{uuid.uuid4().hex[:12]}",
+        "customer": customer or f"cus_{group_id.hex[:12]}_{sub_id or 'webhook_test'}",
         "current_period_start": 1_700_000_000,
         "current_period_end": 1_702_592_000,
         "metadata": {"mykhaya_group_id": str(group_id)},

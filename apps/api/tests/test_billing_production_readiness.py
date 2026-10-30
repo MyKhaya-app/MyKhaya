@@ -22,7 +22,6 @@ from sqlalchemy.exc import IntegrityError
 from mykhaya.billing import pricing as pricing_module
 from mykhaya.billing.client import StripeUnavailableError
 from mykhaya.billing.state import (
-    SubscriptionOwnershipMismatchError,
     apply_stripe_subscription_state,
 )
 from mykhaya.config import Settings, get_settings
@@ -370,15 +369,16 @@ async def test_apply_stripe_state_rejects_a_subscription_whose_metadata_points_e
                 "data": [{"price": {"id": "price_month123", "recurring": {"interval": "month"}}}]
             },
         }
-        with pytest.raises(SubscriptionOwnershipMismatchError):
-            await apply_stripe_subscription_state(
-                db,
-                group_id=home_id,
-                stripe_subscription=stripe_subscription,
-                actor_administrator_id=None,
-                reason="test",
-                event_type_hint="stripe_reconciled",
-            )
+        result = await apply_stripe_subscription_state(
+            db,
+            group_id=home_id,
+            stripe_subscription=stripe_subscription,
+            actor_administrator_id=None,
+            reason="test",
+            event_type_hint="stripe_reconciled",
+        )
+        assert result.outcome.value == "ownership_mismatch"
+        assert result.reason == "subscription_metadata_home_mismatch"
 
 
 @pytest.mark.asyncio

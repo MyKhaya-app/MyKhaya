@@ -30,7 +30,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mykhaya.billing.client import call_stripe
 from mykhaya.billing.config import StripeConfig
 from mykhaya.billing.diagnostics import record_billing_diagnostic
-from mykhaya.billing.state import apply_stripe_subscription_state
+from mykhaya.billing.state import (
+    SubscriptionStateOutcome,
+    SubscriptionStateResult,
+    apply_stripe_subscription_state,
+)
 from mykhaya.models import HomeSubscription, StripeWebhookEvent, SubscriptionPlan
 
 _HANDLED_EVENT_TYPES = frozenset(
@@ -58,6 +62,14 @@ def _stripe_object_id(value: Any) -> str | None:
 class WebhookSignatureError(RuntimeError):
     """Signature verification failed — the request is rejected outright
     (400) before any database work happens."""
+
+
+class WebhookStateApplicationError(RuntimeError):
+    """A Stripe event could not be safely applied and must not be deduplicated."""
+
+    def __init__(self, result: SubscriptionStateResult) -> None:
+        super().__init__(result.reason or result.outcome.value)
+        self.result = result
 
 
 def verify_and_parse_event(payload: bytes, signature_header: str, webhook_secret: str) -> Any:
@@ -143,7 +155,7 @@ async def _handle_subscription_event(
     event_id: str,
     event_type: str,
     hint: str,
-) -> None:
+) -> SubscriptionStateResult:
     plan_by_price = {
         price_id: plan
         for price_id, plan in (
@@ -154,7 +166,7 @@ async def _handle_subscription_event(
         )
         if price_id
     }
-    await apply_stripe_subscription_state(
+    result = await apply_stripe_subscription_state(
         db,
         group_id=group_id,
         stripe_subscription=subscription_obj,
@@ -163,6 +175,7 @@ async def _handle_subscription_event(
         event_type_hint=hint,
         plan_by_price=plan_by_price,
     )
+    return result
 
 
 async def _handle_invoice_event(
@@ -174,7 +187,7 @@ async def _handle_invoice_event(
     event_id: str,
     event_type: str,
     hint: str,
-) -> None:
+) -> SubscriptionStateResult | None:
     """Refetches the current Stripe Subscription object rather than trusting
     the invoice payload's own snapshot of subscription state — the
     out-of-order-safe pattern documented in
@@ -185,7 +198,7 @@ async def _handle_invoice_event(
     stripe_subscription = await call_stripe(
         lambda: stripe.Subscription.retrieve(subscription_id, api_key=config.secret_key)
     )
-    await apply_stripe_subscription_state(
+    result = await apply_stripe_subscription_state(
         db,
         group_id=group_id,
         stripe_subscription=stripe_subscription,
@@ -203,6 +216,20 @@ async def _handle_invoice_event(
             if price_id
         },
     )
+    return result
+
+
+def _webhook_outcome(result: SubscriptionStateResult) -> str:
+    if result.outcome in (
+        SubscriptionStateOutcome.APPLIED,
+        SubscriptionStateOutcome.UNCHANGED,
+    ):
+        return "processed"
+    if result.outcome == SubscriptionStateOutcome.STALE_EVENT:
+        return "ignored"
+    if not result.retryable:
+        return "ignored"
+    raise WebhookStateApplicationError(result)
 
 
 async def process_webhook_event(
@@ -241,7 +268,7 @@ async def process_webhook_event(
         await _handle_checkout_completed(db, group_id, data_object)
         outcome = "processed"
     elif event_type == "customer.subscription.created":
-        await _handle_subscription_event(
+        outcome = _webhook_outcome(await _handle_subscription_event(
             db,
             group_id,
             data_object,
@@ -249,10 +276,9 @@ async def process_webhook_event(
             event_id=event_id,
             event_type=event_type,
             hint="stripe_subscription_activated",
-        )
-        outcome = "processed"
+        ))
     elif event_type == "customer.subscription.updated":
-        await _handle_subscription_event(
+        outcome = _webhook_outcome(await _handle_subscription_event(
             db,
             group_id,
             data_object,
@@ -260,10 +286,9 @@ async def process_webhook_event(
             event_id=event_id,
             event_type=event_type,
             hint="stripe_subscription_updated",
-        )
-        outcome = "processed"
+        ))
     elif event_type == "customer.subscription.deleted":
-        await _handle_subscription_event(
+        outcome = _webhook_outcome(await _handle_subscription_event(
             db,
             group_id,
             data_object,
@@ -271,10 +296,9 @@ async def process_webhook_event(
             event_id=event_id,
             event_type=event_type,
             hint="stripe_subscription_cancelled",
-        )
-        outcome = "processed"
+        ))
     elif event_type == "invoice.payment_succeeded":
-        await _handle_invoice_event(
+        result = await _handle_invoice_event(
             db,
             group_id,
             data_object,
@@ -283,9 +307,9 @@ async def process_webhook_event(
             event_type=event_type,
             hint="stripe_subscription_renewed",
         )
-        outcome = "processed"
+        outcome = _webhook_outcome(result) if result is not None else "ignored"
     elif event_type == "invoice.payment_failed":
-        await _handle_invoice_event(
+        result = await _handle_invoice_event(
             db,
             group_id,
             data_object,
@@ -294,7 +318,7 @@ async def process_webhook_event(
             event_type=event_type,
             hint="stripe_payment_failed",
         )
-        outcome = "processed"
+        outcome = _webhook_outcome(result) if result is not None else "ignored"
 
     db.add(
         StripeWebhookEvent(

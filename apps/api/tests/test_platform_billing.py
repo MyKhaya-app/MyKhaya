@@ -180,8 +180,8 @@ async def _make_stripe_home(
         subscription.plan = SubscriptionPlan.family
         subscription.provider = SubscriptionProvider.stripe
         subscription.status = status
-        subscription.external_customer_id = f"cus_{uuid.uuid4().hex[:12]}"
         subscription.external_subscription_id = subscription_id or f"sub_{uuid.uuid4().hex[:12]}"
+        subscription.external_customer_id = f"cus_{subscription.external_subscription_id}"
         subscription.external_price_id = price_id
         subscription.billing_interval = BillingInterval(interval)
         await db.commit()
@@ -320,7 +320,7 @@ async def test_reconcile_applies_current_stripe_state_and_is_audited(
             "id": sub_id,
             "status": "active",
             "cancel_at_period_end": False,
-            "customer": f"cus_{uuid.uuid4().hex[:12]}",
+                "customer": f"cus_{sub_id}",
             "current_period_start": 1_700_000_000,
             "current_period_end": 1_800_000_000,
             "items": {
@@ -393,7 +393,7 @@ async def test_reconcile_with_no_named_transition_uses_the_reconciled_label(
             "id": sub_id,
             "status": "active",
             "cancel_at_period_end": False,
-            "customer": f"cus_{uuid.uuid4().hex[:12]}",
+                "customer": f"cus_{sub_id}",
             "current_period_start": 1_700_000_000,
             "current_period_end": 1_900_000_000,
             "items": {

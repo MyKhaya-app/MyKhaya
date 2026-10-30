@@ -13,6 +13,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import stripe
+import structlog
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,6 +22,8 @@ from mykhaya.billing.config import StripeConfig, StripeNotConfiguredError
 from mykhaya.billing.pricing import fetch_price_amount
 from mykhaya.billing.state import extract_period, select_subscription_item
 from mykhaya.models import BillingInterval, HomeSubscription, SubscriptionPlan, SubscriptionStatus
+
+log = structlog.get_logger(__name__)
 
 
 class SubscriptionChangeError(RuntimeError):
@@ -33,6 +36,15 @@ class SubscriptionOwnershipError(SubscriptionChangeError):
 
 class InvalidSubscriptionTransition(SubscriptionChangeError):
     pass
+
+
+class SubscriptionValidationError(InvalidSubscriptionTransition):
+    """A provider/local state mismatch that must fail closed."""
+
+    def __init__(self, message: str, *, reason: str) -> None:
+        super().__init__(message)
+        self.safe_code = "subscription_validation_failed"
+        self.validation_reason = reason
 
 
 def price_id_for(
@@ -140,9 +152,137 @@ def current_item(
     item = select_subscription_item(subscription, preferred_price_id=expected_price_id)
     if item is None or not _id(item.get("price") or {}):
         raise InvalidSubscriptionTransition("This subscription cannot be changed automatically.")
+    return item
+
+
+def _price_field(price: Any, key: str) -> Any:
+    if isinstance(price, dict):
+        return price.get(key)
+    return None
+
+
+async def _retrieve_price(config: StripeConfig, price_id: str) -> dict[str, Any]:
+    assert config.secret_key
+    price = await call_stripe(
+        lambda: stripe.Price.retrieve(
+            price_id,
+            expand=["product"],
+            api_key=config.secret_key,
+        )
+    )
+    return price
+
+
+async def _validate_current_item(
+    config: StripeConfig,
+    home: HomeSubscription,
+    subscription: dict[str, Any],
+) -> dict[str, Any]:
+    """Validate the existing recurring plan without requiring the latest Price ID.
+
+    The configured current plan Price is used as a product/currency/interval
+    reference only. The subscription may use an inactive historical Price from
+    that same Stripe product. The database Price ID remains an integrity check:
+    it must identify the item Stripe returned, so a stale or mis-bound local row
+    cannot be used to mutate a subscription.
+    """
+    item = current_item(subscription, expected_price_id=home.external_price_id)
     actual_price_id = _id(item.get("price") or {})
-    if expected_price_id and actual_price_id != expected_price_id:
-        raise InvalidSubscriptionTransition("The Stripe subscription price is out of date.")
+    assert actual_price_id
+    if home.external_price_id and actual_price_id != home.external_price_id:
+        await log.awarning(
+            "stripe_subscription_validation_failed",
+            comparison_type="stored_price_id_vs_stripe_item_price_id",
+            configuration_source=config.source,
+            reason="local_database_price_does_not_match_stripe",
+            stored_price_id=home.external_price_id,
+            stripe_price_id=actual_price_id,
+        )
+        raise SubscriptionValidationError(
+            "The Home's billing record no longer matches Stripe.",
+            reason="local_database_price_does_not_match_stripe",
+        )
+
+    expected_price_id = price_id_for(config, home.plan, home.billing_interval)
+    if not expected_price_id:
+        raise SubscriptionValidationError(
+            "The existing subscription plan is not configured.",
+            reason="current_plan_price_not_configured",
+        )
+    reference_price = await _retrieve_price(config, expected_price_id)
+    actual_price = item.get("price") or {}
+    # Stripe's subscription expansion normally contains these fields. Fetch
+    # the exact Price as a fallback so validation is never based on a partial
+    # object supplied by a versioned Stripe API response.
+    if not all(
+        (
+            _price_field(actual_price, "product"),
+            _price_field(actual_price, "currency"),
+            _price_field(actual_price, "recurring"),
+        )
+    ):
+        actual_price = await _retrieve_price(config, actual_price_id)
+
+    expected_product_id = _id(_price_field(reference_price, "product"))
+    actual_product_id = _id(_price_field(actual_price, "product"))
+    expected_currency = _price_field(reference_price, "currency")
+    actual_currency = _price_field(actual_price, "currency")
+    expected_interval = _price_field(_price_field(reference_price, "recurring"), "interval")
+    actual_interval = _price_field(_price_field(actual_price, "recurring"), "interval")
+    if not expected_product_id or not actual_product_id or actual_product_id != expected_product_id:
+        reason = "stripe_price_product_mismatch"
+    elif actual_currency != expected_currency:
+        reason = "stripe_price_currency_mismatch"
+    elif actual_interval != (home.billing_interval.value if home.billing_interval else None):
+        reason = "stripe_price_interval_mismatch"
+    elif actual_interval != expected_interval:
+        reason = "configured_reference_interval_mismatch"
+    else:
+        reason = None
+    if reason:
+        await log.awarning(
+            "stripe_subscription_validation_failed",
+            comparison_type="historical_price_against_configured_plan_reference",
+            configuration_source=config.source,
+            reason=reason,
+            configured_reference_price_id=expected_price_id,
+            stripe_price_id=actual_price_id,
+        )
+        raise SubscriptionValidationError(
+            "The existing Stripe subscription is not a valid subscription for this plan.",
+            reason=reason,
+        )
+
+    # Do not silently choose between two eligible plan items. Unrelated Stripe
+    # add-ons remain untouched, but a second item for this same product and
+    # billing cadence makes the subscription unsafe to mutate automatically.
+    eligible_count = 0
+    for candidate in (subscription.get("items") or {}).get("data") or []:
+        if _id(candidate) == _id(item):
+            eligible_count += 1
+            continue
+        candidate_price = candidate.get("price") or {}
+        candidate_product = _id(_price_field(candidate_price, "product"))
+        candidate_recurring = _price_field(candidate_price, "recurring") or {}
+        if (
+            candidate_product == actual_product_id
+            and _price_field(candidate_price, "currency") == actual_currency
+            and _price_field(candidate_recurring, "interval") == actual_interval
+        ):
+            eligible_count += 1
+    if eligible_count != 1:
+        await log.awarning(
+            "stripe_subscription_validation_failed",
+            comparison_type="eligible_subscription_item_count",
+            configuration_source=config.source,
+            reason="multiple_or_missing_eligible_items",
+            stripe_price_id=actual_price_id,
+            eligible_item_count=eligible_count,
+        )
+        raise SubscriptionValidationError(
+            "This subscription cannot be changed automatically.",
+            reason="multiple_or_missing_eligible_items",
+        )
     return item
 
 
@@ -168,7 +308,7 @@ async def preview_subscription_change(
     subscription_id = home.external_subscription_id
     assert customer_id and subscription_id
     subscription = await retrieve_owned_subscription(config, home)
-    item = current_item(subscription, expected_price_id=home.external_price_id)
+    item = await _validate_current_item(config, home, subscription)
     item_id = _id(item)
     assert item_id
     if target_plan == SubscriptionPlan.free:
@@ -255,7 +395,7 @@ async def apply_subscription_change(
     subscription_id = home.external_subscription_id
     assert subscription_id
     subscription = await retrieve_owned_subscription(config, home)
-    item = current_item(subscription, expected_price_id=home.external_price_id)
+    item = await _validate_current_item(config, home, subscription)
     item_id = _id(item)
     assert item_id
     start_dt, period_end_dt = extract_period(subscription, item=item)

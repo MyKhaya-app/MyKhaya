@@ -37,7 +37,11 @@ from mykhaya.billing.client import StripeRequestError, StripeUnavailableError, c
 from mykhaya.billing.config import resolve_stripe_config
 from mykhaya.billing.diagnostics import record_billing_diagnostic
 from mykhaya.billing.pricing import fetch_price_amount
-from mykhaya.billing.reconciliation import NoStripeSubscriptionError, reconcile_home_subscription
+from mykhaya.billing.reconciliation import (
+    NoStripeSubscriptionError,
+    ReconciliationValidationError,
+    reconcile_home_subscription,
+)
 from mykhaya.billing.state import SubscriptionOwnershipMismatchError
 from mykhaya.calendar_highlights import sync_holiday_source
 from mykhaya.calendar_provisioning import ensure_personal_calendar
@@ -4801,6 +4805,24 @@ async def reconcile_stripe_subscription(
         )
     except NoStripeSubscriptionError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    except ReconciliationValidationError as exc:
+        await db.rollback()
+        await log.awarning(
+            "stripe_reconciliation_validation_failed",
+            group_id=str(group_id),
+            reason=str(exc),
+        )
+        await record_billing_diagnostic(
+            db,
+            source="manual_reconciliation",
+            stage="validation",
+            result="failed",
+            stripe_mode=stripe_config.mode,
+            group_id=group_id,
+            safe_error_code="reconciliation_validation_failed",
+            safe_error_message="Stripe state failed reconciliation validation.",
+        )
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     except SubscriptionOwnershipMismatchError as exc:
         # Never silently attach another Home's Stripe object — surface this
         # as a support/security exception for an operator to investigate,
@@ -4808,6 +4830,16 @@ async def reconcile_stripe_subscription(
         await db.rollback()
         await log.aerror(
             "stripe_reconciliation_ownership_mismatch", group_id=str(group_id), detail=str(exc)
+        )
+        await record_billing_diagnostic(
+            db,
+            source="manual_reconciliation",
+            stage="validation",
+            result="failed",
+            stripe_mode=stripe_config.mode,
+            group_id=group_id,
+            safe_error_code="ownership_mismatch",
+            safe_error_message="Stripe ownership did not match the Home.",
         )
         raise HTTPException(
             status.HTTP_409_CONFLICT,
