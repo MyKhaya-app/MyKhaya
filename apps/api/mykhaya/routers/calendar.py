@@ -63,6 +63,7 @@ from mykhaya.schemas import (
     CalendarListResponse,
     EventActivityResponse,
     EventAttendanceUpdate,
+    EventCopyDestination,
     EventCopyRequest,
     EventCopyResponse,
     EventCreate,
@@ -74,6 +75,8 @@ from mykhaya.schemas import (
     EventListResponse,
     EventMutationScope,
     EventOccurrence,
+    EventReuseSuggestion,
+    EventReuseSuggestionListResponse,
     EventUpdate,
     HomeCalendarCreate,
     HomeCalendarDeleteRequest,
@@ -1267,6 +1270,113 @@ async def list_events(
 
     items.sort(key=lambda item: item.start_at)
     return EventListResponse(items=items, next_page=page + 1 if has_more else None)
+
+
+@router.get("/{home_id}/event-suggestions", response_model=EventReuseSuggestionListResponse)
+async def event_suggestions(
+    home_id: uuid.UUID,
+    q: str = Query(min_length=2, max_length=80),
+    limit: int = Query(default=5, ge=1, le=5),
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> EventReuseSuggestionListResponse:
+    """Return a small, permission-filtered history for the Add Event title field."""
+    membership = await require_capability(home_id, Capability.calendar_view, auth, db)
+    capabilities = await capabilities_for(db, membership)
+    preferences = await get_or_create_preferences(db, auth.user.id)
+    term = q.strip()
+    if len(term) < 2:
+        return EventReuseSuggestionListResponse(items=[])
+
+    filters = [
+        CalendarEvent.group_id == home_id,
+        CalendarEvent.deleted_at.is_(None),
+        CalendarEvent.title.ilike(f"%{term}%"),
+        _personal_calendar_visibility_filter(home_id, auth.user.id),
+    ]
+    if Capability.calendar_view_all not in capabilities:
+        filters.append(
+            or_(
+                CalendarEvent.created_by == auth.user.id,
+                CalendarEvent.id.in_(
+                    select(CalendarEventMember.event_id).where(
+                        CalendarEventMember.user_id == auth.user.id
+                    )
+                ),
+            )
+        )
+    rows = list(
+        (
+            await db.scalars(
+                select(CalendarEvent)
+                .where(and_(*filters))
+                .order_by(CalendarEvent.created_at.desc())
+                .limit(100)
+            )
+        ).all()
+    )
+    if not preferences.show_declined_events and rows:
+        declined_ids = set(
+            (
+                await db.scalars(
+                    select(CalendarEventMember.event_id).where(
+                        CalendarEventMember.event_id.in_([event.id for event in rows]),
+                        CalendarEventMember.user_id == auth.user.id,
+                        CalendarEventMember.attendance_status == "declined",
+                    )
+                )
+            ).all()
+        )
+        rows = [event for event in rows if event.id not in declined_ids]
+
+    normalized_term = term.casefold()
+    ranked = sorted(
+        rows,
+        key=lambda event: (
+            0
+            if event.title.casefold() == normalized_term
+            else 1
+            if event.title.casefold().startswith(normalized_term)
+            else 2,
+            -event.created_at.timestamp(),
+        ),
+    )
+    seen: set[tuple[object, ...]] = set()
+    items: list[EventReuseSuggestion] = []
+    for event in ranked:
+        duration_seconds = int((event.end_at - event.start_at).total_seconds())
+        fingerprint = (
+            event.title.casefold(),
+            event.calendar_id,
+            event.label_id,
+            event.description,
+            event.location_text,
+            event.reminder_minutes,
+            event.is_all_day,
+            event.timezone,
+            duration_seconds,
+        )
+        if fingerprint in seen:
+            continue
+        seen.add(fingerprint)
+        items.append(
+            EventReuseSuggestion(
+                source_event_id=event.id,
+                title=event.title,
+                start_at=event.start_at,
+                end_at=event.end_at,
+                is_all_day=event.is_all_day,
+                timezone=event.timezone,
+                description=event.description,
+                location_text=event.location_text,
+                calendar_id=event.calendar_id,
+                label_id=event.label_id,
+                reminder_minutes=event.reminder_minutes,
+            )
+        )
+        if len(items) >= limit:
+            break
+    return EventReuseSuggestionListResponse(items=items)
 
 
 # Registered ahead of GET /{home_id}/events/{event_id} deliberately — Starlette

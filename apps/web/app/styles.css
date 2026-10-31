@@ -5301,6 +5301,50 @@ body.sheet-open {
 .calendar-event-form .event-advanced > .form-layout {
   padding-top: 0.5rem;
 }
+.calendar-event-suggestions {
+  background: var(--colour-surface, #fffdf8);
+  border: 1px solid var(--colour-border, #d8ded8);
+  border-radius: 0.75rem;
+  box-shadow: 0 8px 24px rgb(36 49 45 / 12%);
+  display: grid;
+  gap: 0.15rem;
+  margin-top: -0.65rem;
+  max-height: 15rem;
+  overflow-y: auto;
+  padding: 0.35rem;
+  position: relative;
+  z-index: 3;
+}
+.calendar-event-suggestion {
+  align-items: flex-start;
+  background: transparent;
+  border: 0;
+  border-radius: 0.55rem;
+  color: inherit;
+  display: grid;
+  gap: 0.15rem;
+  min-height: 3.25rem;
+  padding: 0.55rem 0.7rem;
+  text-align: left;
+  width: 100%;
+}
+.calendar-event-suggestion:hover,
+.calendar-event-suggestion:focus-visible,
+.calendar-event-suggestion.is-active {
+  background: var(--colour-sage-soft);
+  outline: none;
+}
+.calendar-event-suggestion-title {
+  font-weight: 800;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.calendar-event-suggestion-meta {
+  color: var(--colour-muted);
+  font-size: 0.8rem;
+  line-height: 1.35;
+}
 .calendar-event-form .danger-link {
   justify-self: start;
 }

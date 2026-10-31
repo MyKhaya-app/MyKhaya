@@ -1101,6 +1101,26 @@ class EventListResponse(BaseModel):
     next_page: int | None
 
 
+class EventReuseSuggestion(BaseModel):
+    """Safe reusable fields from an event the caller may already view."""
+
+    source_event_id: uuid.UUID
+    title: str
+    start_at: datetime
+    end_at: datetime
+    is_all_day: bool
+    timezone: str
+    description: str | None
+    location_text: str | None
+    calendar_id: uuid.UUID
+    label_id: uuid.UUID | None
+    reminder_minutes: int | None
+
+
+class EventReuseSuggestionListResponse(BaseModel):
+    items: list[EventReuseSuggestion]
+
+
 class HomeSummaryResponse(BaseModel):
     home_name: str
     member_count: int

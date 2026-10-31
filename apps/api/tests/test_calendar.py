@@ -1854,6 +1854,85 @@ async def _create_event(client: AsyncClient, home_id: str, **overrides: object) 
 
 
 @pytest.mark.asyncio
+async def test_event_suggestions_rank_deduplicate_and_isolate_home_history(
+    client: AsyncClient,
+) -> None:
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    await create_verified_user(client, f"suggestions-{suffix}@example.com", "Suggestions")
+    home_id = await _home_with_calendar(client, "Suggestions Home")
+
+    older = await _create_event(
+        client,
+        home_id,
+        title="Swimming",
+        start_at="2026-10-20T17:00:00+01:00",
+        end_at="2026-10-20T18:00:00+01:00",
+        description="Pool session",
+        location_text="Leisure centre",
+        reminder_minutes=15,
+    )
+    await _create_event(
+        client,
+        home_id,
+        title="Swimming",
+        start_at="2026-10-27T17:00:00+00:00",
+        end_at="2026-10-27T18:00:00+00:00",
+        description="Pool session",
+        location_text="Leisure centre",
+        reminder_minutes=15,
+    )
+    await _create_event(
+        client,
+        home_id,
+        title="Swimming lesson",
+        start_at="2026-10-21T17:00:00+01:00",
+        end_at="2026-10-21T18:00:00+01:00",
+    )
+    await _create_event(
+        client,
+        home_id,
+        title="At-home swimming",
+        start_at="2026-10-22T17:00:00+01:00",
+        end_at="2026-10-22T18:00:00+01:00",
+    )
+
+    other_home = await _home_with_calendar(client, "Other Suggestions Home")
+    await _create_event(
+        client,
+        other_home,
+        title="Swimming elsewhere",
+        start_at="2026-10-23T17:00:00+01:00",
+        end_at="2026-10-23T18:00:00+01:00",
+    )
+
+    response = await client.get(
+        f"/api/v1/homes/{home_id}/event-suggestions", params={"q": "sWiMmInG"}
+    )
+    assert response.status_code == 200
+    items = response.json()["items"]
+    assert [item["title"] for item in items] == [
+        "Swimming",
+        "Swimming lesson",
+        "At-home swimming",
+    ]
+    assert items[0]["source_event_id"] != older["event_id"]
+    assert items[0]["description"] == "Pool session"
+    assert items[0]["location_text"] == "Leisure centre"
+    assert items[0]["reminder_minutes"] == 15
+
+    assert (
+        await client.get(
+            f"/api/v1/homes/{home_id}/event-suggestions", params={"q": "zzzz"}
+        )
+    ).json() == {"items": []}
+    assert (
+        await client.get(
+            f"/api/v1/homes/{home_id}/event-suggestions", params={"q": "s"}
+        )
+    ).status_code == 422
+
+
+@pytest.mark.asyncio
 async def test_editing_only_the_title_succeeds(client: AsyncClient) -> None:
     suffix = datetime.now(UTC).strftime("%H%M%S%f")
     await create_verified_user(client, f"edittitle-{suffix}@example.com", "Edit Title")

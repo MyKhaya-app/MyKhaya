@@ -65,6 +65,7 @@ vi.mock("@mykhaya/api-client", async (importOriginal) => {
       billingStatus: vi.fn(),
       birthdays: vi.fn(),
       sharedCalendars: vi.fn(),
+      eventSuggestions: vi.fn(),
       createEvent: vi.fn(),
       updateEvent: vi.fn(),
       deleteEvent: vi.fn(),
@@ -109,6 +110,7 @@ beforeEach(() => {
   });
   (api.birthdays as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [] });
   (api.sharedCalendars as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [] });
+  (api.eventSuggestions as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [] });
   (api.calendarHighlightDates as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [] });
 });
 
@@ -975,6 +977,53 @@ describe("Calendar — Add/Edit Event: Calendar vs Calendar Tag", () => {
     const dialog = await openAddEventSheet();
     expect(within(dialog).getByLabelText("Calendar")).toBeInTheDocument();
     expect(within(dialog).getByLabelText("Calendar Tag")).toBeInTheDocument();
+  });
+
+  it("reuses a matching event's safe fields without submitting until the user saves", async () => {
+    (api.eventSuggestions as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [
+        {
+          source_event_id: "event-history-1",
+          title: "Swimming lesson",
+          start_at: "2026-11-14T18:30:00Z",
+          end_at: "2026-11-14T20:00:00Z",
+          is_all_day: false,
+          timezone: "UTC",
+          description: "Bring goggles",
+          location_text: "Leisure centre",
+          calendar_id: secondaryCalendar.id,
+          label_id: activityTag.id,
+          reminder_minutes: 15,
+        },
+      ],
+    });
+    const dialog = await openAddEventSheet();
+
+    fireEvent.change(within(dialog).getByLabelText("Title"), {
+      target: { value: "Swim" },
+    });
+
+    const suggestion = await within(dialog).findByRole("option", { name: /Swimming lesson/ });
+    expect(api.createEvent).not.toHaveBeenCalled();
+    fireEvent.click(suggestion);
+
+    expect(within(dialog).getByLabelText<HTMLInputElement>("Title").value).toBe(
+      "Swimming lesson",
+    );
+    expect(within(dialog).getByLabelText<HTMLInputElement>("Location").value).toBe(
+      "Leisure centre",
+    );
+    expect(within(dialog).getByLabelText<HTMLSelectElement>("Reminder").value).toBe("15");
+    expect(within(dialog).getByLabelText<HTMLTextAreaElement>("Notes").value).toBe(
+      "Bring goggles",
+    );
+    expect(within(dialog).getByLabelText<HTMLSelectElement>("Calendar").value).toBe(
+      secondaryCalendar.id,
+    );
+    expect(within(dialog).getByLabelText<HTMLSelectElement>("Calendar Tag").value).toBe(
+      activityTag.id,
+    );
+    expect(within(dialog).queryByRole("listbox")).toBeNull();
   });
 
   it("shows separate Calendar and Calendar Tag fields when editing an event", async () => {

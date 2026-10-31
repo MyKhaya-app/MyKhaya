@@ -1151,6 +1151,12 @@ export class MyKhayaClient {
       `/homes/${encodeURIComponent(homeId)}/events/upcoming?${search.toString()}`,
     );
   };
+  eventSuggestions = (homeId: string, query: string, limit = 5) => {
+    const search = new URLSearchParams({ q: query, limit: String(limit) });
+    return this.request<import("@mykhaya/shared-types").EventReuseSuggestionListResponse>(
+      `/homes/${encodeURIComponent(homeId)}/event-suggestions?${search.toString()}`,
+    );
+  };
   createEvent = (
     homeId: string,
     body: import("@mykhaya/shared-types").EventPayload,

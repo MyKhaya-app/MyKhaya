@@ -289,6 +289,24 @@ export interface EventListResponse {
   next_page: number | null;
 }
 
+export interface EventReuseSuggestion {
+  source_event_id: string;
+  title: string;
+  start_at: string;
+  end_at: string;
+  is_all_day: boolean;
+  timezone: string;
+  description: string | null;
+  location_text: string | null;
+  calendar_id: string;
+  label_id: string | null;
+  reminder_minutes: number | null;
+}
+
+export interface EventReuseSuggestionListResponse {
+  items: EventReuseSuggestion[];
+}
+
 export interface InvitationResponse {
   id: string;
   group_id: string;

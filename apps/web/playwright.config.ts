@@ -4,7 +4,9 @@ export default defineConfig({
   fullyParallel: false,
   retries: 1,
   use: {
-    baseURL: process.env.PLAYWRIGHT_BASE_URL ?? "http://127.0.0.1:8089",
+    // Local API CSRF/origin policy allow-lists localhost; using 127.0.0.1
+    // causes authenticated mutating requests to fail before login handling.
+    baseURL: process.env.PLAYWRIGHT_BASE_URL ?? "http://localhost:8089",
     extraHTTPHeaders: process.env.PLAYWRIGHT_HOST_HEADER
       ? { Host: process.env.PLAYWRIGHT_HOST_HEADER }
       : undefined,

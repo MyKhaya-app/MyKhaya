@@ -25,6 +25,7 @@ import type {
   EventMutationScope,
   EventOccurrence,
   EventPayload,
+  EventReuseSuggestion,
   HomeCalendar,
   Member,
   RecurrencePattern,
@@ -199,6 +200,12 @@ function utcMidnightOf(dateInput: string): Date {
   return new Date(Date.UTC(year, month - 1, day));
 }
 
+function shiftDateKey(value: string, days: number): string {
+  const date = utcMidnightOf(value);
+  date.setUTCDate(date.getUTCDate() + days);
+  return dateKey(date);
+}
+
 // Calendar and Calendar Tag are two independent concepts on an event
 // (calendar_id / label_id) — this is the frontend's *Calendar* picker's
 // sentinel scheme (see the separate `tagSelection` state below for Calendar
@@ -232,6 +239,7 @@ function isRecurringOwnEvent(event: EventOccurrence): boolean {
 }
 
 function EventForm({
+  homeId,
   formId,
   labels,
   homeCalendars,
@@ -249,6 +257,7 @@ function EventForm({
   debug = false,
 }: {
   formId: string;
+  homeId: string;
   /** Calendar Tags (CalendarEventLabel) — a colour/category tag, entirely
    *  independent of which calendar contains the event. */
   labels: EventLabel[];
@@ -323,6 +332,16 @@ function EventForm({
     initial?.recurrence_end_date ?? initialWhen.startDate,
   );
   const [recurrenceNotice, setRecurrenceNotice] = useState("");
+  const [title, setTitle] = useState(initial?.title ?? "");
+  const [description, setDescription] = useState(initial?.description ?? "");
+  const [locationText, setLocationText] = useState(initial?.location_text ?? "");
+  const [reminderValue, setReminderValue] = useState(
+    initial?.reminder_minutes == null ? "" : String(initial.reminder_minutes),
+  );
+  const [suggestions, setSuggestions] = useState<EventReuseSuggestion[]>([]);
+  const [suggestionsOpen, setSuggestionsOpen] = useState(false);
+  const [activeSuggestionIndex, setActiveSuggestionIndex] = useState(-1);
+  const suggestionRequest = useRef(0);
   // See WhenState.hasTimedValues — a ref, not state, because flipping it
   // must never itself trigger a render; it only gates what onToggleAllDay
   // does the next time the user actually turns All day off.
@@ -335,6 +354,89 @@ function EventForm({
   // here) but the parent strips them via toSharedEventPayload before this
   // ever reaches the share-scoped endpoint — see calendar-utils.ts.
   const isSharedEvent = Boolean(initial?.share_id);
+
+  useEffect(() => {
+    if (initial || title.trim().length < 2) {
+      setSuggestions([]);
+      setSuggestionsOpen(false);
+      return;
+    }
+    const requestId = ++suggestionRequest.current;
+    const timer = window.setTimeout(() => {
+      api
+        .eventSuggestions(homeId, title.trim())
+        .then((response) => {
+          if (requestId !== suggestionRequest.current) return;
+          setSuggestions(response.items);
+          setSuggestionsOpen(response.items.length > 0);
+          setActiveSuggestionIndex(-1);
+        })
+        .catch(() => {
+          if (requestId !== suggestionRequest.current) return;
+          setSuggestions([]);
+          setSuggestionsOpen(false);
+        });
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [homeId, initial, title]);
+
+  function applySuggestion(suggestion: EventReuseSuggestion) {
+    setTitle(suggestion.title);
+    setDescription(suggestion.description ?? "");
+    setLocationText(suggestion.location_text ?? "");
+    setReminderValue(
+      suggestion.reminder_minutes == null ? "" : String(suggestion.reminder_minutes),
+    );
+
+    const sourceZone = suggestion.timezone;
+    if (suggestion.is_all_day) {
+      const sourceEnd = new Date(suggestion.end_at);
+      sourceEnd.setUTCDate(sourceEnd.getUTCDate() - 1);
+      const span = Math.max(0, Math.round(
+        (utcMidnightOf(dateKey(sourceEnd)).getTime() -
+          utcMidnightOf(dateKey(new Date(suggestion.start_at))).getTime()) /
+          86_400_000,
+      ));
+      setAllDay(true);
+      setEndDate(shiftDateKey(startDate, span));
+      setMultiDay(span > 0);
+    } else {
+      const sourceStart = splitZoned(new Date(suggestion.start_at), sourceZone);
+      const sourceEnd = splitZoned(new Date(suggestion.end_at), sourceZone);
+      const destinationStart = zonedInstant(startDate, sourceStart.time);
+      const duration = Math.max(
+        DEFAULT_EVENT_DURATION_MINUTES * 60_000,
+        new Date(suggestion.end_at).getTime() - new Date(suggestion.start_at).getTime(),
+      );
+      const destinationEnd = splitZoned(
+        new Date(destinationStart.getTime() + duration),
+        eventTimeZone,
+      );
+      setAllDay(false);
+      setStartTime(sourceStart.time);
+      setEndTime(destinationEnd.time || sourceEnd.time);
+      setEndDate(destinationEnd.date);
+      setMultiDay(destinationEnd.date !== startDate);
+    }
+
+    const sourceCalendar = homeCalendars.find((calendar) => calendar.id === suggestion.calendar_id);
+    if (sourceCalendar && !isCalendarLockedForSelection(sourceCalendar, null)) {
+      setCalendarTarget(sourceCalendar.id);
+    } else if (
+      personalCalendar?.id === suggestion.calendar_id &&
+      !isCalendarLockedForSelection(personalCalendar, null)
+    ) {
+      setCalendarTarget(PERSONAL_CALENDAR_VALUE);
+    }
+    const sourceLabel = labels.find((label) => label.id === suggestion.label_id);
+    if (sourceLabel && sourceLabel.commercial_access !== "read_only_due_to_plan") {
+      setTagSelection(sourceLabel.id);
+    } else if (suggestion.label_id == null || !sourceLabel) {
+      setTagSelection("");
+    }
+    setSuggestionsOpen(false);
+    setActiveSuggestionIndex(-1);
+  }
   // The Calendar picker's value: a real HomeCalendar id (covers both the
   // primary "Home calendar" and any secondary one, e.g. "GFOAT"),
   // PERSONAL_CALENDAR_VALUE, or a SHARE_VALUE_PREFIX-tagged CalendarShare id
@@ -546,12 +648,79 @@ function EventForm({
           <input
             {...control}
             name="title"
-            defaultValue={initial?.title ?? ""}
+            value={title}
+            onChange={(event) => {
+              setTitle(event.target.value);
+              setSuggestionsOpen(!initial && event.target.value.trim().length >= 2);
+            }}
+            onFocus={() => {
+              if (!initial && suggestions.length > 0) setSuggestionsOpen(true);
+            }}
+            onBlur={() => window.setTimeout(() => setSuggestionsOpen(false), 120)}
+            onKeyDown={(event) => {
+              if (initial || suggestions.length === 0) return;
+              if (event.key === "Escape") {
+                setSuggestionsOpen(false);
+                setActiveSuggestionIndex(-1);
+              } else if (event.key === "ArrowDown") {
+                event.preventDefault();
+                setSuggestionsOpen(true);
+                setActiveSuggestionIndex((current) => (current + 1) % suggestions.length);
+              } else if (event.key === "ArrowUp") {
+                event.preventDefault();
+                setActiveSuggestionIndex((current) =>
+                  current <= 0 ? suggestions.length - 1 : current - 1,
+                );
+              } else if (event.key === "Enter" && activeSuggestionIndex >= 0) {
+                event.preventDefault();
+                applySuggestion(suggestions[activeSuggestionIndex]!);
+              }
+            }}
+            role="combobox"
+            aria-autocomplete="list"
+            aria-expanded={!initial && suggestionsOpen}
+            aria-controls={!initial ? "calendar-event-suggestions" : undefined}
+            aria-activedescendant={
+              activeSuggestionIndex >= 0
+                ? `calendar-event-suggestion-${activeSuggestionIndex}`
+                : undefined
+            }
             required
             maxLength={180}
           />
         )}
       </FormField>
+      {!initial && suggestionsOpen && suggestions.length > 0 && (
+        <div
+          id="calendar-event-suggestions"
+          className="calendar-event-suggestions"
+          role="listbox"
+          aria-label="Previously used events"
+        >
+          {suggestions.map((suggestion, index) => {
+            const sourceStart = splitZoned(new Date(suggestion.start_at), suggestion.timezone);
+            const sourceEnd = splitZoned(new Date(suggestion.end_at), suggestion.timezone);
+            const timing = suggestion.is_all_day
+              ? "All day"
+              : `${sourceStart.time}–${sourceEnd.time}`;
+            return (
+              <button
+                key={`${suggestion.source_event_id}-${index}`}
+                id={`calendar-event-suggestion-${index}`}
+                type="button"
+                className={`calendar-event-suggestion${index === activeSuggestionIndex ? " is-active" : ""}`}
+                role="option"
+                aria-selected={index === activeSuggestionIndex}
+                onMouseDown={(event) => event.preventDefault()}
+                onClick={() => applySuggestion(suggestion)}
+              >
+                <span className="calendar-event-suggestion-title">{suggestion.title}</span>
+                <span className="calendar-event-suggestion-meta">Previously used · {timing}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
       <FormSection title="When">
         <label className="calendar-event-all-day">
           All day
@@ -790,7 +959,8 @@ function EventForm({
             name="location"
             placeholder="Add a location"
             maxLength={200}
-            defaultValue={initial?.location_text ?? ""}
+            value={locationText}
+            onChange={(event) => setLocationText(event.target.value)}
           />
         )}
       </FormField>
@@ -811,7 +981,8 @@ function EventForm({
                 <select
                   {...control}
                   name="reminder"
-                  defaultValue={initial?.reminder_minutes ?? ""}
+                  value={reminderValue}
+                  onChange={(event) => setReminderValue(event.target.value)}
                 >
                   <option value="">None</option>
                   <option value="0">At event time</option>
@@ -896,7 +1067,8 @@ function EventForm({
                 {...control}
                 name="notes"
                 maxLength={2000}
-                defaultValue={initial?.description ?? ""}
+                value={description}
+                onChange={(event) => setDescription(event.target.value)}
               />
             )}
           </FormField>
@@ -2397,6 +2569,7 @@ export default function CalendarPage() {
           >
             <EventForm
               formId="calendar-new-event-form"
+              homeId={activeHomeId!}
               labels={labels}
               homeCalendars={homeCalendars}
               members={members}
@@ -2490,6 +2663,7 @@ export default function CalendarPage() {
               {editingSelected ? (
                 <EventForm
                   formId="calendar-edit-event-form"
+                  homeId={activeHomeId!}
                   labels={labels}
                   homeCalendars={homeCalendars}
                   members={members}
