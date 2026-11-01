@@ -16,6 +16,8 @@ import { AppShellContent } from "@/components/app-shell";
 import { Avatar } from "@/components/avatar";
 import { BottomSheet } from "@/components/bottom-sheet";
 import { FormStatus } from "@/components/form-status";
+import { FormField, FormLayout, FormRow, FormSheet } from "@/components/form-layout";
+import { useFormFieldErrors } from "@/components/form-field-errors";
 import { ListScopeConfirmation } from "@/components/list-scope-confirmation";
 import { useActiveHome } from "@/components/use-active-home";
 import { listIconGlyph } from "../list-icons";
@@ -471,11 +473,15 @@ function EditItemSheet({
   const [sectionId, setSectionId] = useState(item.section_id ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const fields = useFormFieldErrors({
+    text: { missing: "Give this item some text.", blank: "Give this item some text." },
+  });
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!text.trim()) {
-      setError("Give this item some text.");
+    if (busy) return;
+    if (!fields.check()) {
+      setError("");
       return;
     }
     setBusy(true);
@@ -497,73 +503,76 @@ function EditItemSheet({
   }
 
   return (
-    <BottomSheet title="Edit item" onDismiss={onClose}>
-      <form onSubmit={submit}>
-        <label>
-          Item
-          <input value={text} onChange={(event) => setText(event.target.value)} maxLength={200} required />
-        </label>
-        <div className="meal-time-row">
-          <label>
-            Quantity (optional)
-            <input
-              value={quantity}
-              onChange={(event) => setQuantity(event.target.value)}
-              placeholder="e.g. 2"
-              maxLength={40}
-            />
-          </label>
-          <label>
-            Assign to (optional)
-            <select value={assignedTo} onChange={(event) => setAssignedTo(event.target.value)}>
-              <option value="">No one</option>
-              {members.map((member) => (
-                <option key={member.user_id} value={member.user_id}>
-                  {member.display_name}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
-        <label>
-          Note (optional)
-          <input value={note} onChange={(event) => setNote(event.target.value)} maxLength={500} />
-        </label>
-        {sections.length > 0 && (
-          <label>
-            Section
-            <select value={sectionId} onChange={(event) => setSectionId(event.target.value)}>
-              <option value="">Uncategorised</option>
-              {sections.map((section) => <option key={section.id} value={section.id}>{section.name}</option>)}
-            </select>
-          </label>
-        )}
-        <FormStatus error={error} />
-        <button className="sheet-primary" disabled={busy}>
+    <FormSheet
+      title="Edit item"
+      onDismiss={onClose}
+      busy={busy}
+      primaryAction={
+        <button type="submit" form="list-item-form" disabled={busy}>
           {busy ? "Saving…" : "Save"}
         </button>
+      }
+    >
+      <FormLayout id="list-item-form" ref={fields.formRef} onSubmit={submit}>
+        {error && <p className="notice error" role="alert">{error}</p>}
+        <FormField label="Item" error={fields.errors.text}>
+          {(control) => (
+            <input
+              {...control}
+              name="text"
+              value={text}
+              onChange={(event) => {
+                setText(event.target.value);
+                fields.clear("text");
+              }}
+              maxLength={200}
+              required
+            />
+          )}
+        </FormField>
+        <FormRow minColumnWidth="10rem">
+          <FormField label="Quantity (optional)">
+            {(control) => <input {...control} value={quantity} onChange={(event) => setQuantity(event.target.value)} placeholder="e.g. 2" maxLength={40} />}
+          </FormField>
+          <FormField label="Assign to (optional)">
+            {(control) => (
+              <select {...control} value={assignedTo} onChange={(event) => setAssignedTo(event.target.value)}>
+                <option value="">No one</option>
+                {members.map((member) => (
+                  <option key={member.user_id} value={member.user_id}>
+                    {member.display_name}
+                  </option>
+                ))}
+              </select>
+            )}
+          </FormField>
+        </FormRow>
+        <FormField label="Note (optional)">
+          {(control) => <input {...control} value={note} onChange={(event) => setNote(event.target.value)} maxLength={500} />}
+        </FormField>
+        {sections.length > 0 && (
+          <FormField label="Section">
+            {(control) => (
+              <select {...control} value={sectionId} onChange={(event) => setSectionId(event.target.value)}>
+                <option value="">Uncategorised</option>
+                {sections.map((section) => <option key={section.id} value={section.id}>{section.name}</option>)}
+              </select>
+            )}
+          </FormField>
+        )}
+        {/* Reordering and removal act at once, not on Save. */}
         <div className="lists-edit-item-secondary">
-          <button
-            type="button"
-            className="secondary"
-            disabled={!canMoveUp}
-            onClick={() => onMove(-1)}
-          >
+          <button type="button" className="secondary" disabled={!canMoveUp || busy} onClick={() => onMove(-1)}>
             <ArrowUp size={14} aria-hidden="true" /> Move up
           </button>
-          <button
-            type="button"
-            className="secondary"
-            disabled={!canMoveDown}
-            onClick={() => onMove(1)}
-          >
+          <button type="button" className="secondary" disabled={!canMoveDown || busy} onClick={() => onMove(1)}>
             <ArrowDown size={14} aria-hidden="true" /> Move down
           </button>
         </div>
-        <button type="button" className="secondary" onClick={onDelete}>
+        <button type="button" className="secondary" disabled={busy} onClick={onDelete}>
           <Trash2 size={16} aria-hidden="true" /> Remove item
         </button>
-      </form>
-    </BottomSheet>
+      </FormLayout>
+    </FormSheet>
   );
 }

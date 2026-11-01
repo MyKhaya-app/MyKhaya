@@ -93,6 +93,17 @@ implementation.
 - `FormLayout` sets `noValidate` by default, for forms that validate
   themselves, like Copy Event. A form that relies on the browser's own
   `required` and `min` checks passes `noValidate={false}`.
+- To show a form's own constraints as field errors, use
+  `useFormFieldErrors` (`components/form-field-errors.ts`) rather than
+  writing the checks again. Give each checked control a `name` and keep its
+  `required`, `min`, `max`, `step` and `type`. On submit, `check()` reads
+  each control's `validity` and returns the errors by name, in plain
+  wording. It then moves focus to the first invalid control.
+  - Pass a field's wording as `missing`, and, for a value the form trims
+    before saving, `blank` (spaces alone).
+  - Because the errors come from the controls' own constraints, the form
+    checks exactly what the browser would. Nothing new is enforced.
+  - Budget, Meal Plans, Lists and Wishlists use it.
 
 ## Calendar event editor
 
@@ -200,11 +211,12 @@ dismissal locked while saving). The helpers are in
     exactly as before, and a blank amount is an error, never 0.
 - **Checks.** The forms are `noValidate`, but every control keeps the
   `required`, `min`, `max` and `step` it always had.
-  `useBudgetFieldErrors` reads each control's own `validity` on submit and
-  shows the result as that field's `error`. The checks are therefore exactly
-  the browser's, now shown in the field, with focus on the first one. A
-  name the form already trimmed before saving (an income source, a planned
-  item) also rejects spaces alone. The API stays the authority.
+  `useBudgetFieldErrors` (the shared `useFormFieldErrors`) reads each
+  control's own `validity` on submit and shows the result as that field's
+  `error`. The checks are therefore exactly the browser's, now shown in the
+  field, with focus on the first one. A name the form already trimmed
+  before saving (an income source, a planned item) also rejects spaces
+  alone. The API stays the authority.
 - **Dates and months.** A date or month that sits beside another control
   goes in a `10rem` `FormRow`: Amount and Date; Received date and Budget
   month; Start month and End month. Each one stacks at 320px. "Leave empty
@@ -242,6 +254,76 @@ dismissal locked while saving). The helpers are in
   - the + Add menu, the planned item's detail sheet and the Settings and
     Partner sharing pickers, which are lists of actions;
   - the delete confirmations.
+
+## Meal Plans, Lists and Wishlists
+
+Every data-entry sheet in these modules is a `FormSheet`. Save and Cancel
+are in the footer, dismissal is locked while saving, a failed save shows at
+the top of the form and keeps the draft, and each checked field shows its
+own error (`useFormFieldErrors`). Payloads and API calls are unchanged.
+
+- **Meal Plans** (`app/meal-plans/page.tsx`):
+  - **Add/Edit planned meal:**
+    - The Saved meal / Quick meal toggle keeps its own buttons.
+    - The meal, the quick-meal name and Date are each a field.
+    - Date has its own row, then Meal and Time share a row.
+    - Who's eating is a `FormSection` around the existing check rows and
+      member rows, then Cooking and Makes leftovers.
+  - **Add/Edit saved meal** (full height):
+    - Name and Description are fields, and Category and Favourite share a
+      row.
+    - The Timing & servings, Method and More details disclosures hold a
+      plain `FormLayout`. Prep, Cook and Servings are a three-column row
+      that stacks on phones.
+    - The photo picker (preview, native gallery, file input) and the
+      ingredient cards (quantity, unit, name, remove) keep their own markup
+      as the form's specialist controls.
+    - The picker's file input is `.visually-hidden`. That utility sets
+      `min-height: 0`, because otherwise a hidden input keeps the global
+      47px control height as an invisible box that a short landscape sheet
+      has to scroll to.
+  - **Import recipe:** a URL field. After a failure, Add manually and Try
+    another link stay in the form.
+  - **Plan this meal:** Date and Meal keep their icon-in-field look
+    (`.plan-meal-field`) inside shared fields, in a `10rem` row. Those
+    controls now have 16px text on phones, so iOS does not zoom them.
+  - **Add ingredients to list:** a `FormSheet` around a form without
+    `onSubmit`, so Enter in the new-list name does not add the
+    ingredients. The ingredients are a `FormSection`.
+- **Lists** (`app/lists/page.tsx`, `app/lists/[id]/page.tsx`):
+  - New list and Rename list share List name and Icon (`ListNameFields`).
+  - **New/Edit template:** the section editor (named sections,
+    reordering, default items) is a repeatable specialist control inside a
+    `FormSection` titled Sections. Its inputs have accessible names
+    ("Section 1 name", "Section 1 default item 1").
+  - **Edit item:** Quantity and Assign to share a `10rem` row. Move up,
+    Move down and Remove item act at once, not on Save, and stay in the
+    form body.
+  - The inline "Add an item…" row on a list is a quick-entry control, not
+    a form, and stays as it is.
+- **Wishlists** (`app/wish-lists/page.tsx`,
+  `app/wish-lists/[id]/page.tsx`):
+  - New wishlist and Edit wishlist render the same fields from
+    `app/wish-lists/wishlist-fields.tsx`: Title, then Occasion and Date
+    in a `10rem` row, then Description.
+  - Add item and Edit item share `WishlistItemFields`: Item name, then the
+    link with Find product details and its preview, then Price, Currency
+    and Quantity in a three-column row, then Note. The link, its button and
+    the preview are one group (`.wishlists-link-field`).
+  - **Share wishlist:** the Home switch and Manage people stay above the
+    form, because they act at once. Name and Email are fields, and an
+    invalid email is Email's error.
+  - The owner's sheets never touch reservation data. Reserve, Mark as bought
+    and their states are the viewer's row actions, unchanged.
+- Not migrated, because they are actions, confirmations or one-time
+  displays, not forms:
+  - the planned meal and saved meal views, the action menus and Add meal's
+    choice sheet;
+  - Copy previous week, and the duplicate and result screens of Add
+    ingredients;
+  - the at-limit New list screen and the move-scope confirmation;
+  - Wishlist actions, the matched-account confirmation, the one-time guest
+    link and PIN screens, and Manage sharing.
 
 ## Sheet or dialog
 
@@ -333,6 +415,21 @@ its own design decision and is not part of this standard yet.
     - Update actual amount filled, and with validation;
     - a Set up next month failed save;
     - Add category with validation.
+  - Meal Plans, Lists and Wishlists, on fixture data served in the audit's
+    own browser (`routeHomeModules`), with long names, nine ingredients and
+    a sectioned list. Every write is rejected in the browser, and the
+    wishlist is the signed-in member's own, so only the owner view, which
+    has no reservation fields, is served. It covers 22 states:
+    - planned meal Add (empty and with validation), Edit filled, and a
+      failed save;
+    - saved meal Add (empty and with validation), Edit with every
+      disclosure open, and a failed save;
+    - Import recipe with an invalid link and with a failed import;
+    - Plan this meal with validation, and Add ingredients to list;
+    - New wishlist with validation, Edit wishlist filled, Add item filled,
+      an Edit item failed save, and Share with validation;
+    - New list with validation, a template with several sections, a Rename
+      list failed save, and Edit list item filled and with validation.
   - The sign-in page's three states, each in a fresh signed-out browser:
     the password form, the password shown, and the remembered account.
     The remembered account uses a mocked local hint and a virtual WebAuthn

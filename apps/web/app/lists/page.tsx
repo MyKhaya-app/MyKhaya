@@ -8,6 +8,8 @@ import { ApiError, api } from "@mykhaya/api-client";
 import { AppShellContent } from "@/components/app-shell";
 import { BottomSheet } from "@/components/bottom-sheet";
 import { FormStatus } from "@/components/form-status";
+import { FormField, FormLayout, FormSection, FormSheet } from "@/components/form-layout";
+import { useFormFieldErrors, type FormFieldErrors } from "@/components/form-field-errors";
 import { ListScopeConfirmation } from "@/components/list-scope-confirmation";
 import {
   atListLimitMessage,
@@ -468,6 +470,49 @@ export default function ListsPage() {
   );
 }
 
+const LIST_NAME_MESSAGES = {
+  name: { missing: "Give this list a name.", blank: "Give this list a name." },
+};
+
+/** List name and icon, shared by New list and Rename list. */
+function ListNameFields({
+  name,
+  icon,
+  errors,
+  placeholder,
+  onName,
+  onIcon,
+}: {
+  name: string;
+  icon: ListIcon | "";
+  errors: FormFieldErrors;
+  placeholder?: string;
+  onName: (value: string) => void;
+  onIcon: (value: ListIcon | "") => void;
+}) {
+  return (
+    <>
+      <FormField label="List name" error={errors.name}>
+        {(control) => (
+          <input {...control} name="name" value={name} onChange={(event) => onName(event.target.value)} placeholder={placeholder} maxLength={160} autoFocus required />
+        )}
+      </FormField>
+      <FormField label="Icon (optional)">
+        {(control) => (
+          <select {...control} value={icon} onChange={(event) => onIcon(event.target.value as ListIcon | "")}>
+            <option value="">No icon</option>
+            {LIST_ICON_OPTIONS.map((row) => (
+              <option key={row.key} value={row.key}>
+                {row.label}
+              </option>
+            ))}
+          </select>
+        )}
+      </FormField>
+    </>
+  );
+}
+
 function CreateListSheet({
   homeId,
   templates,
@@ -497,11 +542,13 @@ function CreateListSheet({
   const [scope, setScope] = useState<ListTemplateScope>(defaultScope);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const fields = useFormFieldErrors(LIST_NAME_MESSAGES);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!name.trim()) {
-      setError("Give this list a name.");
+    if (busy) return;
+    if (!fields.check()) {
+      setError("");
       return;
     }
     setBusy(true);
@@ -552,54 +599,51 @@ function CreateListSheet({
   }
 
   return (
-    <BottomSheet title="New list" onDismiss={onClose}>
-      <form onSubmit={submit}>
-        <label>
-          List name
-          <input
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-            placeholder="e.g. Groceries"
-            maxLength={160}
-            autoFocus
-            required
-          />
-        </label>
-        <label>
-          Icon (optional)
-          <select value={icon} onChange={(event) => setIcon(event.target.value as ListIcon | "")}>
-            <option value="">No icon</option>
-            {LIST_ICON_OPTIONS.map((row) => (
-              <option key={row.key} value={row.key}>
-                {row.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        {templates.length > 0 && (
-          <label>
-            Start from a template (optional)
-            <select value={templateId} onChange={(event) => setTemplateId(event.target.value)}>
-              <option value="">Blank list</option>
-              {templates.map((template) => (
-                <option key={template.id} value={template.id}>{template.name}</option>
-              ))}
-            </select>
-          </label>
-        )}
-        <label>
-          List scope
-          <select value={scope} onChange={(event) => setScope(event.target.value as ListTemplateScope)}>
-            <option value="personal">Personal — only you</option>
-            <option value="household">Household</option>
-          </select>
-        </label>
-        <FormStatus error={error} />
-        <button className="sheet-primary" disabled={busy}>
+    <FormSheet
+      title="New list"
+      onDismiss={onClose}
+      busy={busy}
+      primaryAction={
+        <button type="submit" form="list-create-form" disabled={busy}>
           {busy ? "Creating…" : "Create list"}
         </button>
-      </form>
-    </BottomSheet>
+      }
+    >
+      <FormLayout id="list-create-form" ref={fields.formRef} onSubmit={submit}>
+        {error && <p className="notice error" role="alert">{error}</p>}
+        <ListNameFields
+          name={name}
+          icon={icon}
+          errors={fields.errors}
+          placeholder="e.g. Groceries"
+          onName={(value) => {
+            setName(value);
+            fields.clear("name");
+          }}
+          onIcon={setIcon}
+        />
+        {templates.length > 0 && (
+          <FormField label="Start from a template (optional)">
+            {(control) => (
+              <select {...control} value={templateId} onChange={(event) => setTemplateId(event.target.value)}>
+                <option value="">Blank list</option>
+                {templates.map((template) => (
+                  <option key={template.id} value={template.id}>{template.name}</option>
+                ))}
+              </select>
+            )}
+          </FormField>
+        )}
+        <FormField label="List scope">
+          {(control) => (
+            <select {...control} value={scope} onChange={(event) => setScope(event.target.value as ListTemplateScope)}>
+              <option value="personal">Personal — only you</option>
+              <option value="household">Household</option>
+            </select>
+          )}
+        </FormField>
+      </FormLayout>
+    </FormSheet>
   );
 }
 
@@ -623,10 +667,17 @@ function CreateTemplateSheet({
   })) ?? [{ name: "", items: [""] }]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const fields = useFormFieldErrors({
+    name: { missing: "Give this template a name.", blank: "Give this template a name." },
+  });
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!name.trim()) return setError("Give this template a name.");
+    if (busy) return;
+    if (!fields.check()) {
+      setError("");
+      return;
+    }
     const payloadSections = sections
       .filter((section) => section.name.trim())
       .map((section) => ({
@@ -663,32 +714,65 @@ function CreateTemplateSheet({
   }
 
   return (
-    <BottomSheet title={template ? "Edit template" : "New template"} onDismiss={onClose}>
-      <form onSubmit={submit}>
-        <label>Template name<input value={name} onChange={(event) => setName(event.target.value)} maxLength={160} autoFocus required /></label>
-        <label>Description (optional)<textarea value={description} onChange={(event) => setDescription(event.target.value)} maxLength={500} /></label>
-        <label>Scope<select value={scope} onChange={(event) => setScope(event.target.value as ListTemplateScope)}><option value="personal">Personal</option><option value="household">Household</option></select></label>
-        <fieldset className="lists-template-sections">
-          <legend>Sections</legend>
+    <FormSheet
+      title={template ? "Edit template" : "New template"}
+      onDismiss={onClose}
+      busy={busy}
+      primaryAction={
+        <button type="submit" form="list-template-form" disabled={busy}>
+          {busy ? "Saving…" : template ? "Save template" : "Create template"}
+        </button>
+      }
+    >
+      <FormLayout id="list-template-form" ref={fields.formRef} onSubmit={submit}>
+        {error && <p className="notice error" role="alert">{error}</p>}
+        <FormField label="Template name" error={fields.errors.name}>
+          {(control) => (
+            <input
+              {...control}
+              name="name"
+              value={name}
+              onChange={(event) => {
+                setName(event.target.value);
+                fields.clear("name");
+              }}
+              maxLength={160}
+              autoFocus
+              required
+            />
+          )}
+        </FormField>
+        <FormField label="Description (optional)">
+          {(control) => <textarea {...control} value={description} onChange={(event) => setDescription(event.target.value)} maxLength={500} />}
+        </FormField>
+        <FormField label="Scope">
+          {(control) => (
+            <select {...control} value={scope} onChange={(event) => setScope(event.target.value as ListTemplateScope)}>
+              <option value="personal">Personal</option>
+              <option value="household">Household</option>
+            </select>
+          )}
+        </FormField>
+        {/* The section editor (named sections, reordering, default items) is
+            this form's own repeatable control, kept as it was. */}
+        <FormSection title="Sections" className="lists-template-sections">
           {sections.map((section, index) => (
             <div className="lists-template-section-editor" key={index}>
               <div className="lists-template-section-heading">
-                <input value={section.name} placeholder={`Section ${index + 1}`} maxLength={160} onChange={(event) => setSections((current) => current.map((value, position) => position === index ? { ...value, name: event.target.value } : value))} />
+                <input value={section.name} placeholder={`Section ${index + 1}`} aria-label={`Section ${index + 1} name`} maxLength={160} onChange={(event) => setSections((current) => current.map((value, position) => position === index ? { ...value, name: event.target.value } : value))} />
                 <button type="button" className="icon-button secondary" aria-label="Move section up" disabled={index === 0} onClick={() => moveSection(index, -1)}><ArrowUp size={15} aria-hidden="true" /></button>
                 <button type="button" className="icon-button secondary" aria-label="Move section down" disabled={index === sections.length - 1} onClick={() => moveSection(index, 1)}><ArrowDown size={15} aria-hidden="true" /></button>
               </div>
               {section.items.map((item, itemIndex) => (
-                <input key={itemIndex} value={item} placeholder="Default item (optional)" maxLength={200} onChange={(event) => setSections((current) => current.map((value, position) => position === index ? { ...value, items: value.items.map((entry, entryIndex) => entryIndex === itemIndex ? event.target.value : entry) } : value))} />
+                <input key={itemIndex} value={item} placeholder="Default item (optional)" aria-label={`Section ${index + 1} default item ${itemIndex + 1}`} maxLength={200} onChange={(event) => setSections((current) => current.map((value, position) => position === index ? { ...value, items: value.items.map((entry, entryIndex) => entryIndex === itemIndex ? event.target.value : entry) } : value))} />
               ))}
               <button type="button" className="tertiary" onClick={() => setSections((current) => current.map((value, position) => position === index ? { ...value, items: [...value.items, ""] } : value))}>Add default item</button>
             </div>
           ))}
           <button type="button" className="tertiary" onClick={() => setSections((current) => [...current, { name: "", items: [""] }])}>Add section</button>
-        </fieldset>
-        <FormStatus error={error} />
-        <button className="sheet-primary" disabled={busy}>{busy ? "Saving…" : template ? "Save template" : "Create template"}</button>
-      </form>
-    </BottomSheet>
+        </FormSection>
+      </FormLayout>
+    </FormSheet>
   );
 }
 
@@ -707,11 +791,13 @@ function RenameListSheet({
   const [icon, setIcon] = useState<ListIcon | "">(list.icon ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const fields = useFormFieldErrors(LIST_NAME_MESSAGES);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!name.trim()) {
-      setError("Give this list a name.");
+    if (busy) return;
+    if (!fields.check()) {
+      setError("");
       return;
     }
     setBusy(true);
@@ -731,34 +817,29 @@ function RenameListSheet({
   }
 
   return (
-    <BottomSheet title="Rename list" onDismiss={onClose}>
-      <form onSubmit={submit}>
-        <label>
-          List name
-          <input
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-            maxLength={160}
-            autoFocus
-            required
-          />
-        </label>
-        <label>
-          Icon (optional)
-          <select value={icon} onChange={(event) => setIcon(event.target.value as ListIcon | "")}>
-            <option value="">No icon</option>
-            {LIST_ICON_OPTIONS.map((row) => (
-              <option key={row.key} value={row.key}>
-                {row.label}
-              </option>
-            ))}
-          </select>
-        </label>
-        <FormStatus error={error} />
-        <button className="sheet-primary" disabled={busy}>
+    <FormSheet
+      title="Rename list"
+      onDismiss={onClose}
+      busy={busy}
+      primaryAction={
+        <button type="submit" form="list-rename-form" disabled={busy}>
           {busy ? "Saving…" : "Save"}
         </button>
-      </form>
-    </BottomSheet>
+      }
+    >
+      <FormLayout id="list-rename-form" ref={fields.formRef} onSubmit={submit}>
+        {error && <p className="notice error" role="alert">{error}</p>}
+        <ListNameFields
+          name={name}
+          icon={icon}
+          errors={fields.errors}
+          onName={(value) => {
+            setName(value);
+            fields.clear("name");
+          }}
+          onIcon={setIcon}
+        />
+      </FormLayout>
+    </FormSheet>
   );
 }

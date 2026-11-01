@@ -236,6 +236,11 @@ async function auditRouteOnce(page, route, viewport, authenticated) {
   await page.setViewportSize({ width: viewport.width, height: viewport.height });
   const response = await page.goto(`${BASE}${route}`, { waitUntil: "domcontentloaded", timeout: 30000 });
   await applyInsets(page, viewport);
+  // Let the page finish its first requests (access checks, the Home, its
+  // data) before measuring, so a slow load is not measured as its loading
+  // screen, and a create action that has not rendered yet is not silently
+  // skipped. Capped, because some pages keep polling.
+  await page.waitForLoadState("networkidle", { timeout: 5000 }).catch(() => {});
   await page.waitForTimeout(500);
   const screenshot = await capture(page, route, viewport);
   if (!authenticated && !publicRoutes.includes(route)) {
@@ -1047,6 +1052,363 @@ async function auditBudgetForms(page) {
   return budgetResults;
 }
 
+// Meal Plans, Lists and Wishlists are measured against fixtures served in the
+// audit's own browser, like Budget and Driveway: every request these pages
+// make for their own data is answered here, with long names and full forms,
+// so the result does not depend on the account's own meals, lists or
+// wishlists, or on its plan. Every write (POST, PUT, PATCH, DELETE) is
+// rejected in the browser, so nothing is created, changed or deleted. The
+// wishlist is the signed-in member's own, so only the owner view (which has
+// no reservation fields at all) is ever served.
+const HOME_MODULE_ROUTES = {
+  homeModules: /\/api\/v1\/homes\/[^/]+\/(meal-plan|meals|lists|list-templates|wishlists)(\/[^?]*)?(\?.*)?$/,
+  topWishlists: /\/api\/v1\/wishlists(\/[^?]*)?(\?.*)?$/,
+  billing: /\/api\/v1\/groups\/[^/]+\/billing(\?.*)?$/,
+};
+const P2E_REJECTION = `The audit rejected this save on purpose. ${LONG_TEXT}`;
+const P2E_IDS = {
+  meal: "0aa0e2e0-0000-4000-8000-000000000001",
+  entry: "0aa0e2e0-0000-4000-8000-000000000002",
+  list: "0aa0e2e0-0000-4000-8000-000000000003",
+  section: "0aa0e2e0-0000-4000-8000-000000000004",
+  item: "0aa0e2e0-0000-4000-8000-000000000005",
+  template: "0aa0e2e0-0000-4000-8000-000000000006",
+  wishlist: "0aa0e2e0-0000-4000-8000-000000000007",
+  wishItem: "0aa0e2e0-0000-4000-8000-000000000008",
+};
+const P2E_NAMES = {
+  entry: "Audit fixture — slow-cooked lamb shoulder with rosemary roasties",
+  meal: "Audit fixture — Grandma's Sunday roast chicken with all the trimmings",
+  list: "Audit fixture — Big weekly shop for the whole household",
+  item: "Audit fixture — Free-range eggs, the large box for weekend baking",
+  wishlist: "Audit fixture — Birthday wishlist for the big four-oh celebration",
+  wishItem: "Audit fixture — Noise-cancelling over-ear headphones in midnight blue",
+};
+
+function homeModuleFixtures({ ownerId }) {
+  const stamp = "2026-01-01T00:00:00Z";
+  // Only the signed-in member eats, so in a Home with more members the
+  // member list is shown open on Edit.
+  const members = [ownerId];
+  const ingredients = Array.from({ length: 9 }, (_, index) => ({
+    id: `0aa0e2e0-0000-4000-8001-${String(index).padStart(12, "0")}`, position: index,
+    text: ["Whole free-range chicken", "Maris Piper potatoes", "Carrots", "Parsnips", "Fresh rosemary and thyme", "Garlic bulb", "Unsalted butter", "Chicken stock", "Plain flour for the gravy"][index],
+    quantity: ["1.8", "1", "4", "4", "1", "1", "50", "500", "2"][index], unit: ["kg", "kg", null, null, "bunch", null, "g", "ml", "tbsp"][index],
+  }));
+  const meal = {
+    id: P2E_IDS.meal, name: P2E_NAMES.meal, description: LONG_TEXT, image_url: null, meal_type: "dinner",
+    prep_minutes: 25, cook_minutes: 95, servings: 6, instructions: `${LONG_TEXT}\n\n${LONG_TEXT}`, is_favourite: true,
+    tags: ["sunday", "family favourite", "make ahead"], source_url: "https://www.example.com/recipes/sunday-roast-chicken-with-all-the-trimmings",
+    ingredients, created_by: ownerId, created_at: stamp, updated_at: stamp,
+  };
+  const mealSummary = {
+    id: meal.id, name: meal.name, description: meal.description, image_url: null, meal_type: meal.meal_type,
+    prep_minutes: meal.prep_minutes, cook_minutes: meal.cook_minutes, servings: meal.servings, is_favourite: true,
+    tags: meal.tags, ingredient_count: ingredients.length, created_at: stamp, updated_at: stamp,
+  };
+  const entry = (date) => ({
+    id: P2E_IDS.entry, meal_id: null, meal_name: null, quick_meal_name: P2E_NAMES.entry, meal_image_url: null,
+    is_favourite: false, date, meal_slot: "dinner", time: "18:30", member_ids: members, cook_member_id: ownerId,
+    makes_leftovers: true, created_by: ownerId, updated_at: stamp,
+  });
+  const list = {
+    id: P2E_IDS.list, name: P2E_NAMES.list, icon: null, item_count: 1, remaining_count: 1, created_by: ownerId,
+    scope: "household", created_at: stamp, updated_at: stamp, commercial_access: "normal",
+  };
+  const listDetail = {
+    ...list,
+    items: [{ id: P2E_IDS.item, position: 0, section_id: P2E_IDS.section, text: P2E_NAMES.item, quantity: "2 dozen", note: LONG_TEXT, assigned_member_id: ownerId, is_checked: false, completed_at: null, completed_by: null }],
+    sections: [{ id: P2E_IDS.section, name: "Dairy, eggs and chilled", position: 0, updated_at: stamp, items: [] }],
+    source_template_id: null, source_template_name: null,
+  };
+  const template = {
+    id: P2E_IDS.template, name: "Audit fixture — Weekly shop template", description: LONG_TEXT, scope: "household",
+    owner_user_id: ownerId, group_id: "", archived: false, created_at: stamp, updated_at: stamp,
+    sections: [{ id: P2E_IDS.section, name: "Fruit and vegetables", position: 0, items: [{ id: "0aa0e2e0-0000-4000-8002-000000000001", text: "Bananas", position: 0 }] }],
+  };
+  const wishItem = {
+    id: P2E_IDS.wishItem, name: P2E_NAMES.wishItem, url: "https://www.example.com/products/noise-cancelling-over-ear-headphones-midnight-blue",
+    price: "279.99", currency: "GBP", note: LONG_TEXT, image_url: null, quantity: 1, sort_order: 0, created_at: stamp, updated_at: stamp,
+  };
+  const wishlistBase = {
+    id: P2E_IDS.wishlist, title: P2E_NAMES.wishlist, occasion: "birthday", occasion_date: "2027-03-14", description: LONG_TEXT,
+    owner_user_id: ownerId, home_visible: true, share_count: 2, created_at: stamp, updated_at: stamp,
+  };
+  return { meal, mealSummary, entry, list, listDetail, template, wishItem, wishlistBase };
+}
+
+async function routeHomeModules(context, owners) {
+  const fixtures = homeModuleFixtures(owners);
+  const json = (route, status, body) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
+  const addDays = (date, days) => { const next = new Date(`${date}T00:00:00Z`); next.setUTCDate(next.getUTCDate() + days); return next.toISOString().slice(0, 10); };
+  await context.route(HOME_MODULE_ROUTES.billing, async (route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    const response = await route.fetch();
+    const billing = await response.json();
+    await route.fulfill({ response, json: { ...billing, meals_enabled: true, lists_enabled: true, wishlists_enabled: true, list_usage: { count: 1, limit: null, over_limit: false } } });
+  });
+  await context.route(HOME_MODULE_ROUTES.homeModules, async (route) => {
+    const request = route.request();
+    if (request.method() !== "GET") return json(route, 422, { detail: P2E_REJECTION });
+    const url = new URL(request.url());
+    const [, homeId, module, rest = ""] = url.pathname.match(/\/homes\/([^/]+)\/(meal-plan|meals|lists|list-templates|wishlists)(\/[^?]*)?$/) ?? [];
+    if (module === "meal-plan" && rest === "/day") { const date = url.searchParams.get("date"); return json(route, 200, { date, entries: [fixtures.entry(date)] }); }
+    if (module === "meal-plan" && rest === "/week") { const start = url.searchParams.get("start_date"); return json(route, 200, { start_date: start, days: Array.from({ length: 7 }, (_, index) => ({ date: addDays(start, index), entries: [fixtures.entry(addDays(start, index))] })) }); }
+    if (module === "meals" && rest === "") return json(route, 200, { items: [fixtures.mealSummary] });
+    if (module === "meals" && rest === "/recent") return json(route, 200, { items: [] });
+    if (module === "meals" && rest === `/${P2E_IDS.meal}`) return json(route, 200, fixtures.meal);
+    if (module === "lists" && rest === "") return json(route, 200, { items: [fixtures.list] });
+    if (module === "lists" && rest === `/${P2E_IDS.list}`) return json(route, 200, fixtures.listDetail);
+    if (module === "list-templates" && rest === "") return json(route, 200, { items: [{ ...fixtures.template, group_id: homeId }] });
+    if (module === "wishlists" && rest === "") return json(route, 200, { items: [{ ...fixtures.wishlistBase, home_id: homeId, owner_display_name: "You", item_count: 1, is_owner: true }] });
+    return json(route, 404, { detail: "Not found" });
+  });
+  await context.route(HOME_MODULE_ROUTES.topWishlists, async (route) => {
+    const request = route.request();
+    if (request.method() !== "GET") return json(route, 422, { detail: P2E_REJECTION });
+    const rest = new URL(request.url()).pathname.replace(/^.*\/api\/v1\/wishlists/, "");
+    if (rest === "/shared-with-me") return json(route, 200, { items: [] });
+    if (rest === `/${P2E_IDS.wishlist}`) return json(route, 200, { ...fixtures.wishlistBase, home_id: owners.homeId, items: [fixtures.wishItem] });
+    return json(route, 404, { detail: "Not found" });
+  });
+}
+
+async function unrouteHomeModules(context) {
+  for (const pattern of Object.values(HOME_MODULE_ROUTES)) await context.unroute(pattern);
+}
+
+// The Meal Plans, Lists and Wishlists forms on the shared form primitives:
+// empty create forms, filled edit forms with long values, validation errors,
+// failed saves, opened disclosures, long ingredient lists and the share form.
+// Every state is a sheet, measured with scroll-to-reveal reachability.
+async function auditHomeModuleForms(page) {
+  const moduleResults = [];
+  const sheet = () => page.locator(".bottom-sheet").last();
+  const requireInvalid = async (selectors, issues) => {
+    for (const [label, selector] of selectors) {
+      const field = typeof selector === "string" ? sheet().locator(selector) : selector;
+      if ((await field.first().getAttribute("aria-invalid").catch(() => null)) !== "true") issues.push(`"${label}" is not marked invalid`);
+    }
+  };
+  const requireFailedSave = async (primary, issues) => {
+    await sheet().locator(".notice.error", { hasText: "The audit rejected" }).first()
+      .waitFor({ timeout: 5000 }).catch(() => issues.push("The failed save was not shown inside the sheet"));
+    if (await sheet().getByRole("button", { name: primary, exact: true }).isDisabled().catch(() => true)) issues.push(`${primary} stayed disabled after the failed save`);
+    if (await sheet().getByRole("button", { name: "Cancel", exact: true }).isDisabled().catch(() => true)) issues.push("Cancel stayed disabled after the failed save");
+  };
+  const settle = (ms = 300) => page.waitForTimeout(ms);
+  const openEntryEdit = async () => {
+    await page.getByRole("button", { name: new RegExp(P2E_NAMES.entry.slice(0, 30)) }).first().click({ timeout: 8000 });
+    await settle();
+    await sheet().getByRole("button", { name: "Edit meal" }).click({ timeout: 3000 });
+    await settle();
+  };
+  const openAddPlannedMeal = async () => {
+    const slotAdd = page.locator(".mealplan-slot-add:visible").first();
+    if (await slotAdd.count()) await slotAdd.click({ timeout: 8000 });
+    else await page.getByRole("button", { name: "Add meal" }).first().click({ timeout: 8000 });
+    await settle();
+  };
+  const openMealsTab = async () => {
+    await page.getByRole("tab", { name: "Meals" }).click({ timeout: 8000 });
+    await settle(500);
+  };
+  const openMealDetail = async () => {
+    await openMealsTab();
+    await page.getByRole("button", { name: new RegExp(`^${P2E_NAMES.meal.slice(0, 30)}`) }).first().click({ timeout: 8000 });
+    await sheet().getByRole("button", { name: "Plan this meal" }).waitFor({ timeout: 8000 });
+  };
+  const openMealChoice = async (choice) => {
+    await openMealsTab();
+    await page.locator("button.rr-fab").click({ timeout: 8000 });
+    await settle();
+    await sheet().getByRole("button", { name: choice }).click({ timeout: 3000 });
+    await settle();
+  };
+  const openAllDisclosures = async () => {
+    for (const summary of await sheet().locator("details:not([open]) > summary").all()) await summary.click().catch(() => {});
+  };
+  const wishlistUrl = `/wish-lists/${P2E_IDS.wishlist}`;
+  const listUrl = `/lists/${P2E_IDS.list}`;
+  const prepare = {
+    "planned meal add empty": ["/meal-plans", async () => { await openAddPlannedMeal(); }],
+    "planned meal add validation": ["/meal-plans", async (issues) => {
+      await openAddPlannedMeal();
+      await sheet().getByRole("button", { name: "Quick meal" }).click();
+      await sheet().locator('input[type="date"]').fill("");
+      await sheet().getByRole("button", { name: "Save", exact: true }).click();
+      await requireInvalid([["Quick meal name", 'input[name="quickName"]'], ["Date", 'input[name="date"]']], issues);
+    }],
+    "planned meal edit filled": ["/meal-plans", async (issues) => {
+      await openEntryEdit();
+      if ((await sheet().locator('input[name="quickName"]').inputValue().catch(() => "")) !== P2E_NAMES.entry) issues.push("The planned meal was not shown as saved");
+    }],
+    "planned meal failed save": ["/meal-plans", async (issues) => {
+      await openEntryEdit();
+      await sheet().getByRole("button", { name: "Save", exact: true }).click();
+      await requireFailedSave("Save", issues);
+    }],
+    "saved meal add empty": ["/meal-plans", async () => { await openMealChoice(/Create a meal/); }],
+    "saved meal validation": ["/meal-plans", async (issues) => {
+      await openMealChoice(/Create a meal/);
+      await sheet().getByLabel("Name", { exact: true }).fill("   ");
+      await sheet().getByLabel("Prep (minutes)", { exact: true }).fill("-5");
+      await sheet().getByLabel("Servings", { exact: true }).fill("0");
+      await sheet().getByRole("button", { name: "Save meal", exact: true }).click();
+      await requireInvalid([["Name", sheet().getByLabel("Name", { exact: true })], ["Prep (minutes)", sheet().getByLabel("Prep (minutes)", { exact: true })], ["Servings", sheet().getByLabel("Servings", { exact: true })]], issues);
+    }],
+    "saved meal edit long form": ["/meal-plans", async (issues) => {
+      await openMealDetail();
+      await sheet().getByRole("button", { name: "Edit meal" }).click({ timeout: 3000 });
+      await sheet().getByLabel("Name", { exact: true }).waitFor({ timeout: 8000 });
+      await openAllDisclosures();
+      if ((await sheet().locator(".meal-ingredient-card").count()) !== 9) issues.push("Not every ingredient was shown");
+    }],
+    "saved meal failed save": ["/meal-plans", async (issues) => {
+      await openMealDetail();
+      await sheet().getByRole("button", { name: "Edit meal" }).click({ timeout: 3000 });
+      await sheet().getByLabel("Name", { exact: true }).waitFor({ timeout: 8000 });
+      await sheet().getByRole("button", { name: "Save meal", exact: true }).click();
+      await requireFailedSave("Save meal", issues);
+    }],
+    "import recipe validation": ["/meal-plans", async (issues) => {
+      await openMealChoice(/Import from a recipe/);
+      await sheet().getByLabel("Recipe URL", { exact: true }).fill("not a link");
+      await sheet().getByRole("button", { name: "Import recipe", exact: true }).click();
+      await requireInvalid([["Recipe URL", sheet().getByLabel("Recipe URL", { exact: true })]], issues);
+    }],
+    "import recipe failed": ["/meal-plans", async (issues) => {
+      await openMealChoice(/Import from a recipe/);
+      await sheet().getByLabel("Recipe URL", { exact: true }).fill("https://www.example.com/recipes/a-recipe-the-audit-will-not-import");
+      await sheet().getByRole("button", { name: "Import recipe", exact: true }).click();
+      await requireFailedSave("Import recipe", issues);
+      if (!(await sheet().getByRole("button", { name: "Add manually" }).count())) issues.push("Add manually was not offered after the failure");
+    }],
+    "plan this meal validation": ["/meal-plans", async (issues) => {
+      await openMealDetail();
+      await sheet().getByRole("button", { name: "Plan this meal" }).click();
+      await settle();
+      await sheet().getByLabel("Date", { exact: true }).fill("");
+      await sheet().getByRole("button", { name: "Add to plan", exact: true }).click();
+      await requireInvalid([["Date", sheet().getByLabel("Date", { exact: true })]], issues);
+    }],
+    "add ingredients to list": ["/meal-plans", async (issues) => {
+      await openMealDetail();
+      await sheet().getByRole("button", { name: /Add ingredients to list/ }).click();
+      await sheet().locator(".meal-ingredient-checklist .check-row").first().waitFor({ timeout: 8000 }).catch(() => issues.push("The ingredients were not listed"));
+      if (!(await sheet().getByRole("button", { name: /^Add \d+ items?$/ }).count())) issues.push("The add action is not in the sheet");
+    }],
+    "new wishlist validation": ["/wish-lists", async (issues) => {
+      await page.getByRole("button", { name: "New wishlist" }).first().click({ timeout: 8000 });
+      await settle();
+      await sheet().getByRole("button", { name: "Create wishlist", exact: true }).click();
+      await requireInvalid([["Title", sheet().getByLabel("Title", { exact: true })]], issues);
+    }],
+    "edit wishlist filled": [wishlistUrl, async (issues) => {
+      await page.getByRole("button", { name: "Wishlist actions" }).click({ timeout: 8000 });
+      await sheet().getByRole("button", { name: "Edit wishlist" }).click({ timeout: 3000 });
+      await settle();
+      if ((await sheet().getByLabel("Title", { exact: true }).inputValue()) !== P2E_NAMES.wishlist) issues.push("The wishlist was not shown as saved");
+    }],
+    "add item filled": [wishlistUrl, async () => {
+      await page.getByRole("button", { name: "Add item" }).first().click({ timeout: 8000 });
+      await settle();
+      await sheet().getByLabel("Item name", { exact: true }).fill(P2E_NAMES.wishItem);
+      await sheet().getByLabel("Link (optional)", { exact: true }).fill("https://www.example.com/products/a-very-long-product-link-that-keeps-going-and-going");
+      await sheet().getByLabel("Price (optional)", { exact: true }).fill("1249.99");
+      await sheet().getByLabel("Currency", { exact: true }).fill("GBP");
+      await sheet().getByLabel("Note (optional)", { exact: true }).fill(LONG_TEXT);
+    }],
+    "edit item failed save": [wishlistUrl, async (issues) => {
+      await page.getByRole("button", { name: `Edit ${P2E_NAMES.wishItem}` }).click({ timeout: 8000 });
+      await settle();
+      await sheet().getByRole("button", { name: "Save", exact: true }).click();
+      await requireFailedSave("Save", issues);
+    }],
+    "share wishlist validation": [wishlistUrl, async (issues) => {
+      await page.getByRole("button", { name: "Share wishlist" }).first().click({ timeout: 8000 });
+      await settle();
+      await sheet().getByLabel(/^Email/).fill("not-an-email");
+      await sheet().getByRole("button", { name: "Share wishlist", exact: true }).click();
+      await requireInvalid([["Name", sheet().getByLabel("Name", { exact: true })], ["Email", sheet().getByLabel(/^Email/)]], issues);
+    }],
+    "new list validation": ["/lists", async (issues) => {
+      await page.locator("button.rr-fab").click({ timeout: 8000 });
+      await settle();
+      await sheet().getByRole("button", { name: "Create list", exact: true }).click();
+      await requireInvalid([["List name", sheet().getByLabel("List name", { exact: true })]], issues);
+    }],
+    "new template sections": ["/lists", async (issues) => {
+      await page.getByRole("button", { name: "Templates" }).first().click({ timeout: 8000 });
+      await settle();
+      await page.locator("button.rr-fab").click({ timeout: 8000 });
+      await settle();
+      await sheet().getByLabel("Template name", { exact: true }).fill("Audit fixture — Template with several long section names");
+      for (let index = 0; index < 2; index += 1) await sheet().getByRole("button", { name: "Add section" }).click();
+      await sheet().getByLabel("Section 1 name").fill("Fruit, vegetables and fresh herbs from the market");
+      await sheet().getByRole("button", { name: "Add default item" }).first().click();
+      if ((await sheet().getByLabel(/^Section \d+ name$/).count()) !== 3) issues.push("Sections were not added");
+    }],
+    "rename list failed save": ["/lists", async (issues) => {
+      await page.getByRole("button", { name: `More actions for ${P2E_NAMES.list}` }).click({ timeout: 8000 });
+      await sheet().getByRole("button", { name: "Rename list" }).click({ timeout: 3000 });
+      await settle();
+      await sheet().getByRole("button", { name: "Save", exact: true }).click();
+      await requireFailedSave("Save", issues);
+    }],
+    "edit list item filled": [listUrl, async (issues) => {
+      await page.getByRole("button", { name: new RegExp(P2E_NAMES.item.slice(0, 30)) }).first().click({ timeout: 8000 });
+      await settle();
+      if ((await sheet().getByLabel("Item", { exact: true }).inputValue()) !== P2E_NAMES.item) issues.push("The item was not shown as saved");
+    }],
+    "edit list item validation": [listUrl, async (issues) => {
+      await page.getByRole("button", { name: new RegExp(P2E_NAMES.item.slice(0, 30)) }).first().click({ timeout: 8000 });
+      await settle();
+      await sheet().getByLabel("Item", { exact: true }).fill("   ");
+      await sheet().getByRole("button", { name: "Save", exact: true }).click();
+      await requireInvalid([["Item", sheet().getByLabel("Item", { exact: true })]], issues);
+    }],
+  };
+  const states = Object.keys(prepare);
+  await page.goto(`${BASE}/meal-plans`, { waitUntil: "domcontentloaded", timeout: 30000 });
+  const owners = await drivewayFixtureOwners(page);
+  if (!owners) {
+    for (const viewport of viewports) for (const state of states) moduleResults.push({ viewport: viewport.name, state, result: "NOT TESTED", issues: ["The account's Home could not be read for the fixtures"] });
+    return moduleResults;
+  }
+  await routeHomeModules(page.context(), owners);
+  try {
+    for (const viewport of viewports) {
+      for (const state of states) {
+        await page.setViewportSize({ width: viewport.width, height: viewport.height });
+        const [url, run] = prepare[state];
+        await page.goto(`${BASE}${url}`, { waitUntil: "domcontentloaded", timeout: 30000 });
+        await applyInsets(page, viewport);
+        await page.waitForTimeout(600);
+        const issues = [];
+        try {
+          await run(issues);
+        } catch (error) {
+          issues.push(`Could not prepare the state: ${error.message.split("\n")[0]}`);
+        }
+        await page.waitForTimeout(200);
+        if (!(await sheet().locator(".form-layout").count())) issues.push("The sheet's form is not on the shared form layout");
+        const layout = await inspectLayout(page, viewport, true);
+        issues.push(...layout.issues.map(issueText));
+        const screenshot = await capture(page, `p2e-${state}`, viewport, `p2e-${state}`);
+        moduleResults.push({ viewport: viewport.name, state, result: issues.length ? "FAIL" : "PASS", issues, screenshot, details: layout.issues.slice(0, 40) });
+        for (let attempt = 0; attempt < 4 && await page.locator(".bottom-sheet").count(); attempt += 1) {
+          await page.keyboard.press("Escape").catch(() => {});
+          await page.waitForTimeout(100);
+        }
+      }
+    }
+  } finally {
+    await unrouteHomeModules(page.context());
+  }
+  return moduleResults;
+}
+
 // Driveway turned off for the Home: the overview shows that it is not
 // available, and a vehicle's pages offer no form. These states pass only when
 // the unavailable screen is what renders; they are never counted as coverage
@@ -1295,11 +1657,11 @@ async function auditCopyEventAt(page, viewport, copyResults) {
   await page.keyboard.press("Escape").catch(() => {});
 }
 
-async function writeReport(auth, copyResults, editorResults, nudgeResults, drivewayResults, drivewayDisabledResults, budgetResults, signInResults) {
+async function writeReport(auth, copyResults, editorResults, nudgeResults, drivewayResults, drivewayDisabledResults, budgetResults, moduleResults, signInResults) {
   for (const entry of results) {
     if (entry.details?.length) entry.issues.push(`DOM details: ${JSON.stringify(entry.details)}`);
   }
-  for (const entry of [...copyResults, ...editorResults, ...nudgeResults, ...drivewayResults, ...drivewayDisabledResults, ...budgetResults, ...signInResults, ...sheetResults]) {
+  for (const entry of [...copyResults, ...editorResults, ...nudgeResults, ...drivewayResults, ...drivewayDisabledResults, ...budgetResults, ...moduleResults, ...signInResults, ...sheetResults]) {
     if (entry.details?.length) entry.issues.push(`DOM details: ${JSON.stringify(entry.details)}`);
   }
   const rows = results.map((entry) => `<tr class="${entry.result.toLowerCase()}"><td>${escapeHtml(entry.route)}</td><td>${escapeHtml(entry.viewport)}</td><td>${entry.status ?? ""}</td><td>${escapeHtml(entry.result)}</td><td>${entry.issues.map(escapeHtml).join("<br>") || "—"}</td><td>${entry.screenshot ? `<img src="${escapeHtml(entry.screenshot)}" loading="lazy" alt="${escapeHtml(entry.route)} ${escapeHtml(entry.viewport)}">` : ""}</td></tr>`).join("\n");
@@ -1309,9 +1671,10 @@ async function writeReport(auth, copyResults, editorResults, nudgeResults, drive
   const drivewayRows = drivewayResults.map((entry) => `<tr class="${entry.result.toLowerCase().replaceAll(" ", "-")}"><td>${escapeHtml(entry.state)}</td><td>${escapeHtml(entry.viewport)}</td><td>${escapeHtml(entry.result)}</td><td>${entry.issues.map(escapeHtml).join("<br>") || "—"}</td><td>${entry.screenshot ? `<img src="${escapeHtml(entry.screenshot)}" loading="lazy" alt="${escapeHtml(entry.state)} ${escapeHtml(entry.viewport)}">` : ""}</td></tr>`).join("\n");
   const drivewayDisabledRows = drivewayDisabledResults.map((entry) => `<tr class="${entry.result.toLowerCase().replaceAll(" ", "-")}"><td>${escapeHtml(entry.state)}</td><td>${escapeHtml(entry.viewport)}</td><td>${escapeHtml(entry.result)}</td><td>${entry.issues.map(escapeHtml).join("<br>") || "—"}</td><td>${entry.screenshot ? `<img src="${escapeHtml(entry.screenshot)}" loading="lazy" alt="${escapeHtml(entry.state)} ${escapeHtml(entry.viewport)}">` : ""}</td></tr>`).join("\n");
   const budgetRows = budgetResults.map((entry) => `<tr class="${entry.result.toLowerCase().replaceAll(" ", "-")}"><td>${escapeHtml(entry.state)}</td><td>${escapeHtml(entry.viewport)}</td><td>${escapeHtml(entry.result)}</td><td>${entry.issues.map(escapeHtml).join("<br>") || "—"}</td><td>${entry.screenshot ? `<img src="${escapeHtml(entry.screenshot)}" loading="lazy" alt="${escapeHtml(entry.state)} ${escapeHtml(entry.viewport)}">` : ""}</td></tr>`).join("\n");
+  const moduleRows = moduleResults.map((entry) => `<tr class="${entry.result.toLowerCase().replaceAll(" ", "-")}"><td>${escapeHtml(entry.state)}</td><td>${escapeHtml(entry.viewport)}</td><td>${escapeHtml(entry.result)}</td><td>${entry.issues.map(escapeHtml).join("<br>") || "—"}</td><td>${entry.screenshot ? `<img src="${escapeHtml(entry.screenshot)}" loading="lazy" alt="${escapeHtml(entry.state)} ${escapeHtml(entry.viewport)}">` : ""}</td></tr>`).join("\n");
   const signInRows = signInResults.map((entry) => `<tr class="${entry.result.toLowerCase().replaceAll(" ", "-")}"><td>${escapeHtml(entry.state)}</td><td>${escapeHtml(entry.viewport)}</td><td>${escapeHtml(entry.result)}</td><td>${entry.issues.map(escapeHtml).join("<br>") || "—"}</td><td>${entry.screenshot ? `<img src="${escapeHtml(entry.screenshot)}" loading="lazy" alt="${escapeHtml(entry.state)} ${escapeHtml(entry.viewport)}">` : ""}</td></tr>`).join("\n");
   const sheetRows = sheetResults.map((entry) => `<tr class="${entry.result.toLowerCase().replaceAll(" ", "-")}"><td>${escapeHtml(entry.route)}</td><td>${escapeHtml(entry.title ?? "")}</td><td>${escapeHtml(entry.viewport)}</td><td>${escapeHtml(entry.result)}</td><td>${entry.issues.map(escapeHtml).join("<br>") || "—"}</td><td>${entry.screenshot ? `<img src="${escapeHtml(entry.screenshot)}" loading="lazy" alt="">` : ""}</td></tr>`).join("\n");
-  const html = `<!doctype html><meta charset="utf-8"><title>MyKhaya Responsive Audit</title><style>body{font:14px system-ui;margin:24px;color:#24312d}table{border-collapse:collapse;width:100%;margin:16px 0}th,td{border:1px solid #d8ded8;padding:8px;vertical-align:top;text-align:left}.pass{background:#edf7ed}.fail{background:#fff0ed}.blocked,.not-tested{background:#fff8df}img{display:block;max-width:320px;max-height:420px;border:1px solid #d8ded8}code{background:#f3f4f1;padding:2px 4px}summary{cursor:pointer}</style><h1>MyKhaya Responsive Audit</h1><p>Base URL: <code>${escapeHtml(BASE)}</code></p><p>Authentication: <strong>${auth.ok ? "PASS" : `BLOCKED — ${escapeHtml(auth.reason)}`}</strong></p><h2>Routes</h2><table><thead><tr><th>Route</th><th>Viewport</th><th>Status</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${rows}</tbody></table><h2>Create sheets</h2><table><thead><tr><th>Route</th><th>Sheet</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${sheetRows || `<tr><td colspan="6">No create sheets opened</td></tr>`}</tbody></table><h2>Calendar Copy Event</h2><table><thead><tr><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${copyRows || `<tr><td colspan="4">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Calendar event editor</h2><table><thead><tr><th>Viewport</th><th>State</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${editorRows || `<tr><td colspan="5">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Routines, Reminders and Settings forms</h2><table><thead><tr><th>Form</th><th>State</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${nudgeRows || `<tr><td colspan="6">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Driveway forms</h2><table><thead><tr><th>State</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${drivewayRows || `<tr><td colspan="5">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Driveway turned off</h2><table><thead><tr><th>State</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${drivewayDisabledRows || `<tr><td colspan="5">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Budget forms</h2><table><thead><tr><th>State</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${budgetRows || `<tr><td colspan="5">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Sign-in states</h2><table><thead><tr><th>State</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${signInRows || `<tr><td colspan="5">No results</td></tr>`}</tbody></table><h2>Notes</h2><p>Chromium only. Safe areas are simulated through the --safe-* properties; this is not native WKWebView or physical-device evidence.</p><p>BLOCKED means authentication or required data was unavailable. NOT TESTED means the route rendered but the requested interactive component could not be opened. Screenshots are local artifacts under this audit directory.</p>`;
+  const html = `<!doctype html><meta charset="utf-8"><title>MyKhaya Responsive Audit</title><style>body{font:14px system-ui;margin:24px;color:#24312d}table{border-collapse:collapse;width:100%;margin:16px 0}th,td{border:1px solid #d8ded8;padding:8px;vertical-align:top;text-align:left}.pass{background:#edf7ed}.fail{background:#fff0ed}.blocked,.not-tested{background:#fff8df}img{display:block;max-width:320px;max-height:420px;border:1px solid #d8ded8}code{background:#f3f4f1;padding:2px 4px}summary{cursor:pointer}</style><h1>MyKhaya Responsive Audit</h1><p>Base URL: <code>${escapeHtml(BASE)}</code></p><p>Authentication: <strong>${auth.ok ? "PASS" : `BLOCKED — ${escapeHtml(auth.reason)}`}</strong></p><h2>Routes</h2><table><thead><tr><th>Route</th><th>Viewport</th><th>Status</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${rows}</tbody></table><h2>Create sheets</h2><table><thead><tr><th>Route</th><th>Sheet</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${sheetRows || `<tr><td colspan="6">No create sheets opened</td></tr>`}</tbody></table><h2>Calendar Copy Event</h2><table><thead><tr><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${copyRows || `<tr><td colspan="4">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Calendar event editor</h2><table><thead><tr><th>Viewport</th><th>State</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${editorRows || `<tr><td colspan="5">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Routines, Reminders and Settings forms</h2><table><thead><tr><th>Form</th><th>State</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${nudgeRows || `<tr><td colspan="6">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Driveway forms</h2><table><thead><tr><th>State</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${drivewayRows || `<tr><td colspan="5">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Driveway turned off</h2><table><thead><tr><th>State</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${drivewayDisabledRows || `<tr><td colspan="5">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Budget forms</h2><table><thead><tr><th>State</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${budgetRows || `<tr><td colspan="5">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Meal Plans, Lists and Wishlists forms</h2><table><thead><tr><th>State</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${moduleRows || `<tr><td colspan="5">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Sign-in states</h2><table><thead><tr><th>State</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${signInRows || `<tr><td colspan="5">No results</td></tr>`}</tbody></table><h2>Notes</h2><p>Chromium only. Safe areas are simulated through the --safe-* properties; this is not native WKWebView or physical-device evidence.</p><p>BLOCKED means authentication or required data was unavailable. NOT TESTED means the route rendered but the requested interactive component could not be opened. Screenshots are local artifacts under this audit directory.</p>`;
   await fs.writeFile(path.join(outputDir, "index.html"), html, "utf8");
 }
 
@@ -1333,9 +1696,10 @@ const nudgeResults = auth.ok ? await auditNudgeForms(page) : [];
 const drivewayResults = auth.ok ? await auditDrivewayForms(page) : [];
 const drivewayDisabledResults = auth.ok ? await auditDrivewayDisabled(page) : [];
 const budgetResults = auth.ok ? await auditBudgetForms(page) : [];
+const moduleResults = auth.ok ? await auditHomeModuleForms(page) : [];
 const signInResults = await auditSignInStates(browser);
-await writeReport(auth, copyResults, editorResults, nudgeResults, drivewayResults, drivewayDisabledResults, budgetResults, signInResults);
+await writeReport(auth, copyResults, editorResults, nudgeResults, drivewayResults, drivewayDisabledResults, budgetResults, moduleResults, signInResults);
 await browser.close();
 const tally = (entries) => entries.reduce((counts, entry) => ({ ...counts, [entry.result]: (counts[entry.result] ?? 0) + 1 }), {});
-console.log(JSON.stringify({ baseUrl: BASE, outputDir, authenticated: auth.ok, authReason: auth.reason ?? null, routes: tally(results), createSheets: tally(sheetResults), copyEvent: tally(copyResults), eventEditor: tally(editorResults), nudgeForms: tally(nudgeResults), drivewayForms: tally(drivewayResults), drivewayDisabled: tally(drivewayDisabledResults), budgetForms: tally(budgetResults), signIn: tally(signInResults) }, null, 2));
-process.exitCode = [...results, ...sheetResults, ...copyResults, ...editorResults, ...nudgeResults, ...drivewayResults, ...drivewayDisabledResults, ...budgetResults, ...signInResults].some((entry) => entry.result === "FAIL") || !auth.ok ? 1 : 0;
+console.log(JSON.stringify({ baseUrl: BASE, outputDir, authenticated: auth.ok, authReason: auth.reason ?? null, routes: tally(results), createSheets: tally(sheetResults), copyEvent: tally(copyResults), eventEditor: tally(editorResults), nudgeForms: tally(nudgeResults), drivewayForms: tally(drivewayResults), drivewayDisabled: tally(drivewayDisabledResults), budgetForms: tally(budgetResults), moduleForms: tally(moduleResults), signIn: tally(signInResults) }, null, 2));
+process.exitCode = [...results, ...sheetResults, ...copyResults, ...editorResults, ...nudgeResults, ...drivewayResults, ...drivewayDisabledResults, ...budgetResults, ...moduleResults, ...signInResults].some((entry) => entry.result === "FAIL") || !auth.ok ? 1 : 0;

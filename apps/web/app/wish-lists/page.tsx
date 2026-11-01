@@ -3,14 +3,16 @@
 import { FormEvent, useEffect, useState } from "react";
 import Link from "next/link";
 import { Gift, LockKeyhole, Plus, Users } from "lucide-react";
-import type { WishlistCreatePayload, WishlistOccasion, WishlistSummary } from "@mykhaya/shared-types";
+import type { WishlistCreatePayload, WishlistSummary } from "@mykhaya/shared-types";
 import { ApiError, api } from "@mykhaya/api-client";
 import { AppShellContent } from "@/components/app-shell";
-import { BottomSheet } from "@/components/bottom-sheet";
 import { FamilyUpsell } from "@/components/family-upsell";
 import { FormStatus } from "@/components/form-status";
+import { FormLayout, FormSheet } from "@/components/form-layout";
+import { useFormFieldErrors } from "@/components/form-field-errors";
 import { useActiveHome } from "@/components/use-active-home";
-import { WISHLIST_OCCASION_OPTIONS, occasionLabel } from "./occasion";
+import { occasionLabel } from "./occasion";
+import { WISHLIST_FIELD_MESSAGES, WishlistFields, type WishlistFieldValues } from "./wishlist-fields";
 
 // Wishlists is a Family-plan, per-person module — every member can keep
 // their own wishlists, other Home members see them automatically, and the
@@ -219,27 +221,26 @@ function CreateWishlistSheet({
   onClose: () => void;
   onCreated: () => Promise<void>;
 }) {
-  const [title, setTitle] = useState("");
-  const [occasion, setOccasion] = useState<WishlistOccasion>("general");
-  const [occasionDate, setOccasionDate] = useState("");
-  const [description, setDescription] = useState("");
+  const [values, setValues] = useState<WishlistFieldValues>({ title: "", occasion: "general", occasionDate: "", description: "" });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const fields = useFormFieldErrors(WISHLIST_FIELD_MESSAGES);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!title.trim()) {
-      setError("Give this wishlist a title.");
+    if (busy) return;
+    if (!fields.check()) {
+      setError("");
       return;
     }
     setBusy(true);
     setError("");
     try {
       const payload: WishlistCreatePayload = {
-        title: title.trim(),
-        occasion,
-        occasion_date: occasionDate || null,
-        description: description.trim() || null,
+        title: values.title.trim(),
+        occasion: values.occasion,
+        occasion_date: values.occasionDate || null,
+        description: values.description.trim() || null,
       };
       await api.createWishlist(homeId, payload);
       await onCreated();
@@ -251,52 +252,28 @@ function CreateWishlistSheet({
   }
 
   return (
-    <BottomSheet title="New wishlist" onDismiss={onClose}>
-      <form onSubmit={submit}>
-        <label>
-          Title
-          <input
-            value={title}
-            onChange={(event) => setTitle(event.target.value)}
-            placeholder="e.g. Birthday wishlist"
-            maxLength={160}
-            autoFocus
-            required
-          />
-        </label>
-        <div className="meal-time-row">
-          <label>
-            Occasion
-            <select value={occasion} onChange={(event) => setOccasion(event.target.value as WishlistOccasion)}>
-              {WISHLIST_OCCASION_OPTIONS.map((row) => (
-                <option key={row.key} value={row.key}>
-                  {row.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Date (optional)
-            <input
-              type="date"
-              value={occasionDate}
-              onChange={(event) => setOccasionDate(event.target.value)}
-            />
-          </label>
-        </div>
-        <label>
-          Description (optional)
-          <input
-            value={description}
-            onChange={(event) => setDescription(event.target.value)}
-            maxLength={1000}
-          />
-        </label>
-        <FormStatus error={error} />
-        <button className="sheet-primary" disabled={busy}>
+    <FormSheet
+      title="New wishlist"
+      onDismiss={onClose}
+      busy={busy}
+      primaryAction={
+        <button type="submit" form="wishlist-create-form" disabled={busy}>
           {busy ? "Creating…" : "Create wishlist"}
         </button>
-      </form>
-    </BottomSheet>
+      }
+    >
+      <FormLayout id="wishlist-create-form" ref={fields.formRef} onSubmit={submit}>
+        {error && <p className="notice error" role="alert">{error}</p>}
+        <WishlistFields
+          values={values}
+          errors={fields.errors}
+          autoFocusTitle
+          onChange={(patch, field) => {
+            setValues((current) => ({ ...current, ...patch }));
+            fields.clear(field);
+          }}
+        />
+      </FormLayout>
+    </FormSheet>
   );
 }

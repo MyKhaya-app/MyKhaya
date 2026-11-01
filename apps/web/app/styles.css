@@ -2107,11 +2107,15 @@ html.native-shell .home-section-overlap {
   display: grid;
   grid-template-columns: 1fr 220px auto;
 }
+/* min-height/min-width 0: a hidden <input> otherwise keeps the global
+   control min-height (47px) as an invisible box a sheet must scroll to. */
 .visually-hidden {
   border: 0;
   clip: rect(0 0 0 0);
   height: 1px;
   margin: -1px;
+  min-height: 0;
+  min-width: 0;
   overflow: hidden;
   padding: 0;
   position: absolute;
@@ -4768,13 +4772,6 @@ body.sheet-open {
 }
 .form-wide {
   grid-column: 1 / -1;
-}
-/* A plain content section — no fieldset border/legend chrome. Used for
-   When/People/advanced groupings in the event editor so the form reads as
-   normal content rather than a stack of bordered boxes. */
-.event-section {
-  display: grid;
-  gap: 0.65rem;
 }
 .check-row {
   align-items: center;
@@ -8204,28 +8201,14 @@ button.danger,
 .meal-source-toggle button {
   flex: 1;
 }
-.meal-form-row {
-  display: grid;
-  gap: 0.75rem;
-  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-}
 /* "Plan meal" sheet (PlanFromMealSheet): Date + Meal as two clearly separate,
    evenly sized fields in a bordered-row language, single-line (icon/value
    on one row, no stacked caption) so the pair reads compactly instead of
-   stretching the sheet tall. Stacks below ~360px so neither field gets cramped. */
+   stretching the sheet tall. They sit in a shared FormRow (10rem), which
+   stacks them when the sheet is too narrow. */
 .plan-meal-form {
   gap: 1rem;
   margin-top: 1rem;
-}
-.plan-meal-fields {
-  display: grid;
-  gap: 0.75rem;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-}
-@media (max-width: 360px) {
-  .plan-meal-fields {
-    grid-template-columns: minmax(0, 1fr);
-  }
 }
 .plan-meal-field {
   align-items: center;
@@ -8258,6 +8241,13 @@ button.danger,
 }
 select.plan-meal-field-input {
   appearance: none;
+}
+/* 0.95rem above outranks the 16px phone rule for inputs, and iOS zooms the
+   page when a focused control computes under 16px. */
+@media (max-width: 800px) {
+  .plan-meal-field-input {
+    font-size: 16px;
+  }
 }
 .plan-meal-field-chevron {
   color: var(--colour-muted);
@@ -9228,6 +9218,14 @@ select.plan-meal-field-input {
    excessive scrolling while still reading as organised, not cramped. */
 .wishlists-item-form {
   gap: 0.75rem;
+}
+/* The link, its Find product details button and the preview result are one
+   group (LinkPreviewField), spaced like the rest of the item form. */
+.wishlists-link-field {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
 }
 .wishlists-preview-button {
   align-self: flex-start;
