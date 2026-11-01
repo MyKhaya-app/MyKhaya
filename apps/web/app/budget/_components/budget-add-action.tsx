@@ -4,6 +4,8 @@ import { FormEvent, useEffect, useState } from "react";
 import { ArrowRight, CircleDollarSign, Plus, Receipt, WalletCards } from "lucide-react";
 import { api, type BudgetCategory } from "@mykhaya/api-client";
 import { BottomSheet } from "@/components/bottom-sheet";
+import { FormField, FormLayout, FormRow, FormSheet } from "@/components/form-layout";
+import { BudgetAmountField, useBudgetFieldErrors } from "./budget-form-fields";
 
 type AddMode = "menu" | "fixed" | "variable";
 
@@ -25,6 +27,12 @@ export function BudgetAddAction({ homeId, onRefresh, onSpending, onIncome }: { h
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const period = currentPeriod();
+  const fields = useBudgetFieldErrors({
+    category: { missing: "Choose a category." },
+    amount: { missing: "Enter an amount." },
+    startsOn: { missing: "Choose a start month." },
+    endsOn: { range: "Choose an end month on or after the start month." },
+  });
 
   useEffect(() => {
     if (mode !== "fixed" && mode !== "variable") return;
@@ -36,6 +44,7 @@ export function BudgetAddAction({ homeId, onRefresh, onSpending, onIncome }: { h
 
   function open(next: AddMode) {
     setError("");
+    fields.clearAll();
     setMode(next);
     setStartsOn(`${period.year}-${String(period.month).padStart(2, "0")}`);
     setEndsOn("");
@@ -48,7 +57,11 @@ export function BudgetAddAction({ homeId, onRefresh, onSpending, onIncome }: { h
 
   async function save(event: FormEvent) {
     event.preventDefault();
-    if (mode !== "fixed" && mode !== "variable") return;
+    if ((mode !== "fixed" && mode !== "variable") || saving) return;
+    if (!fields.check()) {
+      setError("");
+      return;
+    }
     setSaving(true);
     setError("");
     try {
@@ -90,27 +103,36 @@ export function BudgetAddAction({ homeId, onRefresh, onSpending, onIncome }: { h
         <button type="button" className="budget-picker-row" onClick={() => { setMode(null); onIncome?.(); }}><span className="budget-picker-icon"><WalletCards size={21} /></span><span className="budget-picker-copy"><strong>Income</strong><small>Add or update income.</small></span><ArrowRight size={19} aria-hidden="true" /></button>
       </div>
     </BottomSheet>}
-    {(mode === "fixed" || mode === "variable") && <BottomSheet title={mode === "fixed" ? "Add fixed cost" : "Add variable budget"} onDismiss={close}>
-      <form className="budget-sheet-form" onSubmit={save}>
-        <label htmlFor="budget-item-category">Category</label>
-        <select id="budget-item-category" value={categoryId} onChange={(event) => setCategoryId(event.target.value)} required>{categories.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>
-        <label htmlFor="budget-item-name">Name</label>
-        <input id="budget-item-name" value={name} onChange={(event) => setName(event.target.value)} placeholder={mode === "fixed" ? "e.g. Mortgage" : "Optional"} />
-        <label htmlFor="budget-item-amount">{mode === "fixed" ? "Monthly amount" : "Planned amount"}</label>
-        <input id="budget-item-amount" type="number" min="0" step="0.01" value={amount} onChange={(event) => setAmount(event.target.value)} required />
+    {(mode === "fixed" || mode === "variable") && <FormSheet
+      title={mode === "fixed" ? "Add fixed cost" : "Add variable budget"}
+      onDismiss={close}
+      busy={saving}
+      primaryAction={<button type="submit" form="budget-item-form" disabled={saving}>{saving ? "Saving…" : mode === "fixed" ? "Add fixed cost" : "Add variable budget"}</button>}
+    >
+      <FormLayout id="budget-item-form" ref={fields.formRef} onSubmit={save}>
+        {error && <p className="notice error" role="alert">{error}</p>}
+        <FormField label="Category" error={fields.errors.category}>
+          {(control) => <select {...control} name="category" value={categoryId} onChange={(event) => { setCategoryId(event.target.value); fields.clear("category"); }} required>{categories.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select>}
+        </FormField>
+        <FormField label="Name">
+          {(control) => <input {...control} value={name} onChange={(event) => setName(event.target.value)} placeholder={mode === "fixed" ? "e.g. Mortgage" : "Optional"} />}
+        </FormField>
+        <BudgetAmountField label={mode === "fixed" ? "Monthly amount" : "Planned amount"} name="amount" value={amount} onChange={(value) => { setAmount(value); fields.clear("amount"); }} error={fields.errors.amount} />
         <label className="budget-sheet-toggle"><span><strong>{mode === "fixed" ? "Repeat monthly" : "Carry forward automatically"}</strong></span><input type="checkbox" checked={recurring} onChange={(event) => setRecurring(event.target.checked)} /></label>
         {mode === "fixed" && <>
-          <label htmlFor="budget-item-starts-on">Start month</label>
-          <input id="budget-item-starts-on" type="month" className="consumer-date-time-control" value={startsOn} onChange={(event) => setStartsOn(event.target.value)} required />
-          <label htmlFor="budget-item-ends-on">End month</label>
-          <input id="budget-item-ends-on" type="month" className="consumer-date-time-control" value={endsOn} min={startsOn || undefined} onChange={(event) => setEndsOn(event.target.value)} />
-          <p className="budget-field-hint">Leave empty for no end date</p>
-          <label htmlFor="budget-item-notes">Notes (optional)</label>
-          <textarea id="budget-item-notes" value={notes} onChange={(event) => setNotes(event.target.value)} rows={3} />
+          <FormRow minColumnWidth="10rem">
+            <FormField label="Start month" error={fields.errors.startsOn}>
+              {(control) => <input {...control} name="startsOn" type="month" value={startsOn} onChange={(event) => { setStartsOn(event.target.value); fields.clear("startsOn"); fields.clear("endsOn"); }} required />}
+            </FormField>
+            <FormField label="End month" hint="Leave empty for no end date" error={fields.errors.endsOn}>
+              {(control) => <input {...control} name="endsOn" type="month" value={endsOn} min={startsOn || undefined} onChange={(event) => { setEndsOn(event.target.value); fields.clear("endsOn"); }} />}
+            </FormField>
+          </FormRow>
+          <FormField label="Notes (optional)">
+            {(control) => <textarea {...control} value={notes} onChange={(event) => setNotes(event.target.value)} rows={3} />}
+          </FormField>
         </>}
-        {error && <p role="alert">{error}</p>}
-        <button type="submit" disabled={saving}>{saving ? "Saving…" : mode === "fixed" ? "Add fixed cost" : "Add variable budget"}</button>
-      </form>
-    </BottomSheet>}
+      </FormLayout>
+    </FormSheet>}
   </>;
 }

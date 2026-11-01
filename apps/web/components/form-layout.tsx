@@ -1,6 +1,6 @@
 "use client";
 
-import { useId, type FormEvent, type ReactNode, type Ref } from "react";
+import { useEffect, useId, type FormEvent, type ReactNode, type Ref, type RefObject } from "react";
 import { BottomSheet } from "./bottom-sheet";
 
 // Shared consumer form layout primitives. See docs/design/forms.md for when
@@ -201,4 +201,17 @@ export function FormSheet({
       {children}
     </BottomSheet>
   );
+}
+
+/**
+ * After a submit that fails the form's own checks, moves focus to the first
+ * invalid control so its error is announced. A control that cannot carry
+ * aria-invalid (the first chip of a choice group) opts in with
+ * data-invalid-focus="true". Pass a count that goes up on each failed submit.
+ */
+export function useFocusFirstInvalid(container: RefObject<HTMLElement | null>, attempt: number) {
+  useEffect(() => {
+    if (!attempt) return;
+    container.current?.querySelector<HTMLElement>('[aria-invalid="true"], [data-invalid-focus="true"]')?.focus();
+  }, [attempt, container]);
 }

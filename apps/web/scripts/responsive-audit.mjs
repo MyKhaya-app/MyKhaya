@@ -779,6 +779,274 @@ async function auditDrivewayForms(page) {
   return drivewayResults;
 }
 
+// Budget is measured against fixtures served in the audit's own browser
+// context, like Driveway: every /homes/{id}/budget request is answered here,
+// with long names and pence amounts, so the result does not depend on the
+// account's own Budget. Every write (POST, PUT, PATCH, DELETE) is rejected
+// in the browser, so no financial record is created, changed or deleted.
+const BUDGET_ROUTE = /\/api\/v1\/homes\/[^/]+\/budget(\/[^?]*)?(\?.*)?$/;
+const BUDGET_CATEGORY_ID = "0aa0b0d9-0000-4000-8000-000000000001";
+const BUDGET_ITEM_ID = "0aa0b0d9-0000-4000-8000-000000000011";
+const BUDGET_MONTH_ITEM_ID = "0aa0b0d9-0000-4000-8000-000000000021";
+const BUDGET_ENTRY_ID = "0aa0b0d9-0000-4000-8000-000000000031";
+const BUDGET_REJECTION = `The audit rejected this save on purpose. ${LONG_TEXT}`;
+
+function budgetFixtures(year, month) {
+  const categoryName = "Household bills, utilities and the shared car";
+  const fixedItem = {
+    id: BUDGET_MONTH_ITEM_ID, budget_item_id: BUDGET_ITEM_ID, category_id: BUDGET_CATEGORY_ID,
+    name: "Mortgage — Nationwide 25-year fixed rate (joint account)", item_type: "fixed", planned_amount: 1234.56,
+    note: LONG_TEXT, starts_on: "2026-01-01", ends_on: "2030-12-01", payment_status: "not_paid", paid_entry: null,
+  };
+  const variableItem = {
+    id: "0aa0b0d9-0000-4000-8000-000000000022", budget_item_id: "0aa0b0d9-0000-4000-8000-000000000012", category_id: BUDGET_CATEGORY_ID,
+    name: "Electricity and gas (variable tariff)", item_type: "variable", planned_amount: 187.4, note: null, starts_on: "2026-01-01", ends_on: null, payment_status: null, paid_entry: null,
+  };
+  return {
+    profile: { id: "0aa0b0d9-0000-4000-8000-000000000041", owner_user_id: "0aa0b0d9-0000-4000-8000-000000000042", currency: "GBP", month_start_day: 1, default_view: "personal", archived: false },
+    categories: [
+      { id: BUDGET_CATEGORY_ID, name: categoryName, sort_order: 0, archived: false },
+      { id: "0aa0b0d9-0000-4000-8000-000000000002", name: "Groceries", sort_order: 1, archived: false },
+    ],
+    items: [
+      { id: BUDGET_ITEM_ID, category_id: BUDGET_CATEGORY_ID, name: fixedItem.name, item_type: "fixed", default_amount: 1234.56, recurring: true, starts_on: "2026-01-01", ends_on: "2030-12-01", notes: LONG_TEXT, archived: false },
+      { id: variableItem.budget_item_id, category_id: BUDGET_CATEGORY_ID, name: variableItem.name, item_type: "variable", default_amount: 187.4, recurring: true, starts_on: "2026-01-01", ends_on: null, notes: null, archived: false },
+    ],
+    entry: {
+      id: BUDGET_ENTRY_ID, category_id: BUDGET_CATEGORY_ID, description: "Annual boiler service and replacement thermostatic radiator valves",
+      amount: 249.99, spent_on: `${year}-${String(month).padStart(2, "0")}-14`, note: LONG_TEXT, budget_month_item_id: null,
+    },
+    month: {
+      configured: true, id: "0aa0b0d9-0000-4000-8000-000000000051", year, month,
+      categories: [
+        { id: "0aa0b0d9-0000-4000-8000-000000000061", category_id: BUDGET_CATEGORY_ID, category_name: categoryName, planned_amount: 1421.96, actual_source: "entries", manual_actual: null, entries_actual: 249.99, fixed_actual: 312.45, actual_amount: 562.44, note: null, fixed_planned_amount: 1234.56, variable_planned_amount: 187.4, items: [fixedItem, variableItem] },
+        { id: "0aa0b0d9-0000-4000-8000-000000000062", category_id: "0aa0b0d9-0000-4000-8000-000000000002", category_name: "Groceries", planned_amount: 600, actual_source: "entries", manual_actual: null, entries_actual: 0, fixed_actual: null, actual_amount: 0, note: null, fixed_planned_amount: 0, variable_planned_amount: 600, items: [] },
+      ],
+      income: [{
+        id: "0aa0b0d9-0000-4000-8000-000000000071", source_id: "0aa0b0d9-0000-4000-8000-000000000072", source_name: "Salary — Norfolk and Norwich University Hospitals",
+        expected_amount: 4850.75, received_amount: 4200.5, usual_payday_day: 25, recurring: true, expected_date: `${year}-${String(month).padStart(2, "0")}-25`, received_date: null, budget_year: year, budget_month: month,
+      }],
+    },
+  };
+}
+
+async function routeBudget(context) {
+  const now = new Date();
+  const json = (route, status, body) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
+  await context.route(BUDGET_ROUTE, async (route) => {
+    const request = route.request();
+    if (request.method() !== "GET") return json(route, 422, { detail: BUDGET_REJECTION });
+    const url = new URL(request.url());
+    const rest = url.pathname.replace(/^.*\/budget/, "");
+    const [, yearPart, monthPart] = rest.match(/^\/months\/(\d+)\/(\d+)/) ?? [];
+    const fixtures = budgetFixtures(Number(yearPart ?? url.searchParams.get("year")) || now.getFullYear(), Number(monthPart ?? url.searchParams.get("month")) || now.getMonth() + 1);
+    if (rest === "" || rest === "/settings") return json(route, 200, fixtures.profile);
+    if (rest === "/categories") return json(route, 200, fixtures.categories);
+    if (rest === "/items") return json(route, 200, fixtures.items.filter((item) => !url.searchParams.get("category_id") || item.category_id === url.searchParams.get("category_id")));
+    if (rest === "/entries") return json(route, 200, [fixtures.entry]);
+    if (rest === `/entries/${BUDGET_ENTRY_ID}`) return json(route, 200, fixtures.entry);
+    if (yearPart && rest === `/months/${yearPart}/${monthPart}`) return json(route, 200, fixtures.month);
+    if (rest === "/shares" || rest === "/shared-with-me" || rest === "/income-sources") return json(route, 200, []);
+    return json(route, 404, { detail: "Not found" });
+  });
+}
+
+// Budget's forms on the shared form primitives: empty Add forms, filled Edit
+// forms with long values, validation errors, failed saves, the paid-item
+// payment sheet, the month copy confirmation and the planned amount sheet.
+// Every state is a sheet, measured with scroll-to-reveal reachability.
+async function auditBudgetForms(page) {
+  const budgetResults = [];
+  const states = [
+    "income add empty",
+    "income edit filled",
+    "income validation",
+    "income failed save",
+    "fixed cost add validation",
+    "fixed cost add failed save",
+    "spending entry add validation",
+    "spending entry edit failed save",
+    "planned item edit validation",
+    "mark as paid sheet",
+    "planned amount failed save",
+    "actual amount filled",
+    "actual amount validation",
+    "actual amount failed save",
+    "month copy failed save",
+    "add category validation",
+  ];
+  const categoryUrl = `/budget/categories/${BUDGET_CATEGORY_ID}`;
+  const sheet = () => page.locator(".bottom-sheet").last();
+  const requireInvalid = async (labels, issues) => {
+    for (const label of labels) {
+      const field = sheet().getByLabel(label, { exact: true });
+      if ((await field.getAttribute("aria-invalid").catch(() => null)) !== "true") issues.push(`"${label}" is not marked invalid`);
+    }
+  };
+  const requireFailedSave = async (primary, issues) => {
+    await sheet().locator(".notice.error", { hasText: "The audit rejected" }).or(sheet().locator(".notice.error", { hasText: "Couldn’t" })).first()
+      .waitFor({ timeout: 5000 }).catch(() => issues.push("The failed save was not shown inside the sheet"));
+    if (await sheet().getByRole("button", { name: primary, exact: true }).isDisabled().catch(() => true)) issues.push(`${primary} stayed disabled after the failed save`);
+    if (await sheet().getByRole("button", { name: "Cancel", exact: true }).isDisabled().catch(() => true)) issues.push("Cancel stayed disabled after the failed save");
+  };
+  const openIncome = async (name) => {
+    await page.getByRole("button", { name }).first().click({ timeout: 8000 });
+    await page.waitForTimeout(300);
+  };
+  const openAddMenu = async (choice) => {
+    await page.getByRole("button", { name: "Add Budget item" }).click({ timeout: 8000 });
+    await page.getByRole("button", { name: choice }).click({ timeout: 3000 });
+    await page.waitForTimeout(300);
+  };
+  const openActual = async () => {
+    await page.getByRole("button", { name: "Quick actions" }).click({ timeout: 8000 });
+    await page.getByRole("button", { name: "Update actual amount" }).click({ timeout: 3000 });
+    await page.waitForTimeout(300);
+  };
+  const openPlannedItem = async () => {
+    await page.getByRole("button", { name: /Mortgage — Nationwide/ }).first().click({ timeout: 8000 });
+    await page.waitForTimeout(250);
+  };
+  const prepare = {
+    "income add empty": ["/budget/income", async () => openIncome(/Add income source/)],
+    "income edit filled": ["/budget/income", async (issues) => {
+      await openIncome(/Salary — Norfolk/);
+      await sheet().getByLabel("Received date", { exact: true }).fill("2026-02-28");
+      if ((await sheet().getByLabel("Expected amount (per month)", { exact: true }).inputValue()) !== "4850.75") issues.push("The expected amount was not shown as saved");
+    }],
+    "income validation": ["/budget/income", async (issues) => {
+      await openIncome(/Salary — Norfolk/);
+      await sheet().getByLabel("Source name", { exact: true }).fill("   ");
+      await sheet().getByLabel("Expected amount (per month)", { exact: true }).fill("");
+      await sheet().getByLabel("Received amount (per month)", { exact: true }).fill("12.345");
+      await sheet().getByRole("button", { name: "Save changes", exact: true }).click();
+      await requireInvalid(["Source name", "Expected amount (per month)", "Received amount (per month)"], issues);
+    }],
+    "income failed save": ["/budget/income", async (issues) => {
+      await openIncome(/Salary — Norfolk/);
+      await sheet().getByRole("button", { name: "Save changes", exact: true }).click();
+      await requireFailedSave("Save changes", issues);
+      if ((await sheet().getByLabel("Received amount (per month)", { exact: true }).inputValue()) !== "4200.5") issues.push("The draft was not kept");
+    }],
+    "fixed cost add validation": ["/budget", async (issues) => {
+      await openAddMenu(/Fixed monthly cost/);
+      await sheet().getByLabel("Start month", { exact: true }).fill("2026-11");
+      await sheet().getByLabel("End month", { exact: true }).fill("2026-10");
+      await sheet().getByRole("button", { name: "Add fixed cost", exact: true }).click();
+      await requireInvalid(["Monthly amount", "End month"], issues);
+    }],
+    "fixed cost add failed save": ["/budget", async (issues) => {
+      await openAddMenu(/Fixed monthly cost/);
+      await sheet().getByLabel("Name", { exact: true }).fill("Broadband, landline and streaming bundle (24 months)");
+      await sheet().getByLabel("Monthly amount", { exact: true }).fill("64.99");
+      await sheet().getByLabel("Notes (optional)", { exact: true }).fill(LONG_TEXT);
+      await sheet().getByRole("button", { name: "Add fixed cost", exact: true }).click();
+      await requireFailedSave("Add fixed cost", issues);
+    }],
+    "spending entry add validation": ["/budget/spending", async (issues) => {
+      await page.getByRole("button", { name: /Add spending entry/ }).first().click({ timeout: 8000 });
+      await page.waitForTimeout(300);
+      await sheet().getByLabel("Date", { exact: true }).fill("");
+      await sheet().getByRole("button", { name: "Add entry", exact: true }).click();
+      await requireInvalid(["Description", "Amount", "Date"], issues);
+    }],
+    "spending entry edit failed save": ["/budget/spending", async (issues) => {
+      await page.getByRole("button", { name: /Annual boiler service/ }).first().click({ timeout: 8000 });
+      await page.waitForTimeout(300);
+      await sheet().getByRole("button", { name: "Save changes", exact: true }).click();
+      await requireFailedSave("Save changes", issues);
+    }],
+    "planned item edit validation": [categoryUrl, async (issues) => {
+      await openPlannedItem();
+      await sheet().getByRole("button", { name: "Edit item", exact: true }).click({ timeout: 3000 });
+      await page.waitForTimeout(300);
+      await sheet().getByLabel("Planned amount", { exact: true }).fill("");
+      await sheet().getByRole("button", { name: "Save changes", exact: true }).click();
+      await requireInvalid(["Planned amount"], issues);
+    }],
+    "mark as paid sheet": [categoryUrl, async (issues) => {
+      await openPlannedItem();
+      await sheet().getByRole("button", { name: "Mark as paid", exact: true }).click({ timeout: 3000 });
+      await sheet().getByLabel("Fixed item (optional)", { exact: true }).waitFor({ timeout: 5000 }).catch(() => issues.push("The fixed item was not offered"));
+      if ((await sheet().getByLabel("Amount", { exact: true }).inputValue()) !== "1234.56") issues.push("The payment did not start from the planned amount");
+    }],
+    "planned amount failed save": [categoryUrl, async (issues) => {
+      await page.getByRole("button", { name: "Quick actions" }).click({ timeout: 8000 });
+      await page.getByRole("button", { name: "Edit planned amount" }).click({ timeout: 3000 });
+      await page.waitForTimeout(300);
+      await sheet().getByRole("button", { name: "Save plan", exact: true }).click();
+      await requireFailedSave("Save plan", issues);
+    }],
+    "actual amount filled": [categoryUrl, async (issues) => {
+      await openActual();
+      const field = sheet().getByLabel("Fixed monthly amount", { exact: true });
+      if ((await field.inputValue()) !== "312.45") issues.push(`Opened on ${await field.inputValue()}, not the stored 312.45`);
+      await field.fill("1234.5");
+      if ((await field.inputValue()) !== "1234.5") issues.push("Typing did not change the amount");
+    }],
+    "actual amount validation": [categoryUrl, async (issues) => {
+      await openActual();
+      await sheet().getByLabel("Fixed monthly amount", { exact: true }).fill("12.345");
+      await sheet().getByRole("button", { name: "Save fixed amount", exact: true }).click();
+      await requireInvalid(["Fixed monthly amount"], issues);
+    }],
+    "actual amount failed save": [categoryUrl, async (issues) => {
+      await openActual();
+      await sheet().getByLabel("Fixed monthly amount", { exact: true }).fill("400.01");
+      await sheet().getByRole("button", { name: "Save fixed amount", exact: true }).click();
+      await requireFailedSave("Save fixed amount", issues);
+      if ((await sheet().getByLabel("Fixed monthly amount", { exact: true }).inputValue()) !== "400.01") issues.push("The draft was not kept");
+    }],
+    "month copy failed save": ["/budget/categories", async (issues) => {
+      await page.getByRole("button", { name: /Set up next month/ }).click({ timeout: 8000 });
+      await page.waitForTimeout(300);
+      const create = sheet().getByRole("button", { name: /^Create .* plan$/ });
+      const label = (await create.textContent()) ?? "";
+      await create.click();
+      await requireFailedSave(label.trim(), issues);
+    }],
+    "add category validation": ["/budget/categories", async (issues) => {
+      await page.getByRole("button", { name: /Add category/ }).first().click({ timeout: 8000 });
+      await page.waitForTimeout(300);
+      // Creating a category takes no planned amount, so none is offered.
+      if (await sheet().getByLabel(/Planned amount/).count()) issues.push("Add category offers a planned amount it does not save");
+      await sheet().getByRole("button", { name: "Create category", exact: true }).click();
+      await requireInvalid(["Category name"], issues);
+    }],
+  };
+  await routeBudget(page.context());
+  try {
+    for (const viewport of viewports) {
+      for (const state of states) {
+        await page.setViewportSize({ width: viewport.width, height: viewport.height });
+        const [url, run] = prepare[state];
+        await page.goto(`${BASE}${url}`, { waitUntil: "domcontentloaded", timeout: 30000 });
+        await applyInsets(page, viewport);
+        await page.waitForTimeout(500);
+        const issues = [];
+        try {
+          await run(issues);
+        } catch (error) {
+          issues.push(`Could not prepare the state: ${error.message.split("\n")[0]}`);
+        }
+        await page.waitForTimeout(200);
+        if (!(await sheet().locator("form.form-layout").count())) issues.push("The sheet's form is not on the shared form layout");
+        const layout = await inspectLayout(page, viewport, true);
+        issues.push(...layout.issues.map(issueText));
+        const screenshot = await capture(page, `budget-${state}`, viewport, `budget-${state}`);
+        budgetResults.push({ viewport: viewport.name, state, result: issues.length ? "FAIL" : "PASS", issues, screenshot, details: layout.issues.slice(0, 40) });
+        for (let attempt = 0; attempt < 3 && await page.locator(".bottom-sheet").count(); attempt += 1) {
+          await page.keyboard.press("Escape").catch(() => {});
+          await page.waitForTimeout(100);
+        }
+      }
+    }
+  } finally {
+    await page.context().unroute(BUDGET_ROUTE);
+  }
+  return budgetResults;
+}
+
 // Driveway turned off for the Home: the overview shows that it is not
 // available, and a vehicle's pages offer no form. These states pass only when
 // the unavailable screen is what renders; they are never counted as coverage
@@ -883,84 +1151,155 @@ async function auditSignInStates(browser) {
   return signInResults;
 }
 
+// Copy Event is measured on one fixture event served in the audit's own
+// browser, so every viewport has a copyable event whatever today's date is
+// and whatever events the account holds. The event is a one-off, owned by
+// the signed-in user, on the Home's primary calendar: the conditions under
+// which the event sheet offers Copy event. It is placed inside whichever
+// window the calendar asks for (the current hour of today when the window
+// includes now, so the month grid and the day agenda both show it). Every
+// event write is rejected in the browser, so nothing is created or changed.
+const COPY_EVENT_ROUTE = /\/api\/v1\/homes\/[^/]+\/events(\/[^?]*)?(\?.*)?$/;
+const COPY_EVENT_ID = "0aa0ce7e-0000-4000-8000-000000000001";
+
+function copyFixtureStart(url) {
+  const params = new URL(url).searchParams;
+  const hour = 3600000;
+  const now = Date.now();
+  const after = Date.parse(params.get("after") ?? "");
+  if (Number.isFinite(after)) return Math.ceil(after / hour) * hour + hour;
+  const from = Date.parse(params.get("start_at") ?? "");
+  const to = Date.parse(params.get("end_at") ?? "");
+  if (Number.isFinite(from) && Number.isFinite(to) && (now < from || now >= to)) return Math.floor((from + (to - from) / 2) / hour) * hour;
+  return Math.floor(now / hour) * hour;
+}
+
+function copyFixtureEvent(start, { ownerId, calendarId }) {
+  const startAt = new Date(start).toISOString();
+  return {
+    occurrence_id: `${COPY_EVENT_ID}:${startAt}`, event_id: COPY_EVENT_ID, calendar_id: calendarId,
+    title: "Responsive audit — Copy Event fixture", start_at: startAt, end_at: new Date(start + 3600000).toISOString(),
+    is_all_day: false, timezone: "Europe/London", description: LONG_TEXT, location_text: "Village hall, Church Lane",
+    label: null, calendar_color: "#2f6f5e", member_ids: [], recurrence: "none", recurrence_end_date: null,
+    reminder_minutes: 30, created_by: ownerId, updated_at: "2026-01-01T00:00:00Z", occurrence_start: startAt, is_overridden: false,
+  };
+}
+
+async function routeCopyEvent(context, owners) {
+  let last = copyFixtureEvent(copyFixtureStart(`${BASE}/`), owners);
+  const json = (route, status, body) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
+  await context.route(COPY_EVENT_ROUTE, async (route) => {
+    const request = route.request();
+    if (request.method() !== "GET") return json(route, 422, { detail: "Events are not written in the responsive audit." });
+    const rest = new URL(request.url()).pathname.replace(/^.*\/events/, "");
+    if (rest === "" || rest === "/upcoming") {
+      last = copyFixtureEvent(copyFixtureStart(request.url()), owners);
+      return json(route, 200, { items: [last], next_page: null });
+    }
+    if (rest === `/${COPY_EVENT_ID}`) return json(route, 200, { event: last, activity: [] });
+    return json(route, 404, { detail: "Not found" });
+  });
+}
+
+async function copyEventOwners(page) {
+  const owners = await drivewayFixtureOwners(page);
+  if (!owners) return null;
+  const calendars = (await apiCall(page, "GET", `/homes/${owners.homeId}/calendars`)).body;
+  const calendar = calendars?.items?.find((item) => item.is_primary && item.commercial_access === "normal") ?? calendars?.items?.find((item) => item.commercial_access === "normal");
+  return calendar ? { ownerId: owners.ownerId, calendarId: calendar.id } : null;
+}
+
 async function auditCopyEvent(page) {
   const copyResults = [];
-  for (const viewport of viewports) {
-    await page.setViewportSize({ width: viewport.width, height: viewport.height });
-    await page.goto(`${BASE}/calendar`, { waitUntil: "domcontentloaded", timeout: 30000 });
-    await applyInsets(page, viewport);
-    await page.waitForTimeout(700);
-    const copyButton = await openEventWithAction(page, "Copy event");
-    if (copyButton === undefined) {
-      copyResults.push({ viewport: viewport.name, result: "NOT TESTED", issues: ["No existing calendar event was available"] });
-      continue;
-    }
-    if (!copyButton) {
-      copyResults.push({ viewport: viewport.name, result: "NOT TESTED", issues: ["No populated non-recurring event exposed Copy event"] });
-      continue;
-    }
-    await copyButton.click();
-    await page.waitForTimeout(250);
-    const copySheet = page.locator(".bottom-sheet").last();
-    const dateInputs = copySheet.locator('input[type="date"]');
-    const addDate = copySheet.getByRole("button", { name: /Add another date/i });
-    const issues = [];
-    if (await dateInputs.count() !== 1) issues.push("Expected one empty initial destination row");
-    if (await dateInputs.count() && await dateInputs.nth(0).inputValue()) issues.push("Initial destination date was preselected");
-    const initialCopyButton = copySheet.getByRole("button", { name: "Copy event", exact: true });
-    if (await initialCopyButton.count() && !(await initialCopyButton.isDisabled())) issues.push("Copy action was enabled before a destination date was selected");
-    if (await dateInputs.count() && await addDate.count()) {
-      await dateInputs.nth(0).fill("2030-11-07");
-      if (await dateInputs.nth(0).inputValue() !== "2030-11-07") issues.push("Changing the primary destination date did not replace its value");
-      await dateInputs.nth(0).fill("2030-11-05");
-      const firstTimes = copySheet.locator('input[type="time"]');
-      if (await firstTimes.count() === 2) {
-        await firstTimes.nth(0).fill("15:00");
-        await firstTimes.nth(1).fill("23:00");
-      }
-      await addDate.click();
-      await page.waitForTimeout(100);
-      const rowsAfterAdd = copySheet.locator('input[type="date"]');
-      if (await rowsAfterAdd.count() !== 2) issues.push("Add another date did not create an independent row");
-      if (await rowsAfterAdd.count() >= 2) await rowsAfterAdd.nth(1).fill("2030-11-07");
-      const secondTimes = copySheet.locator('input[type="time"]');
-      if (await secondTimes.count() === 4) {
-        await secondTimes.nth(2).fill("16:00");
-        await secondTimes.nth(3).fill("22:00");
-      }
-      const remove = copySheet.getByRole("button", { name: /Remove destination/i });
-      if (await remove.count()) {
-        await remove.last().click();
-        await page.waitForTimeout(100);
-        if (await copySheet.locator('input[type="date"]').count() !== 1) issues.push("Removing a destination did not preserve the primary row");
-        await addDate.click();
-        await copySheet.locator('input[type="date"]').nth(1).fill("2030-11-07");
-        const restoredTimes = copySheet.locator('input[type="time"]');
-        if (await restoredTimes.count() === 4) {
-          await restoredTimes.nth(2).fill("16:00");
-          await restoredTimes.nth(3).fill("22:00");
-        }
-      }
-    }
-    const timeInputs = copySheet.locator('input[type="time"]');
-    if (await timeInputs.count() !== 4) issues.push("Expected independent start/end inputs for both destination rows");
-    if (!(await copySheet.getByRole("button", { name: /Copy event \(2\)/i }).count())) issues.push("Multiple destination action was not enabled");
-    // A third row exercises sheet scrolling and footer clearance.
-    if (await addDate.count()) await addDate.click();
-    const layout = await inspectLayout(page, viewport, true);
-    issues.push(...layout.issues.map(issueText));
-    const screenshot = await capture(page, `calendar-copy-event-${viewport.name}`, viewport, "calendar-copy-event");
-    copyResults.push({ viewport: viewport.name, result: issues.length ? "FAIL" : "PASS", issues, screenshot, details: layout.issues.slice(0, 40) });
-    await page.keyboard.press("Escape").catch(() => {});
+  await page.goto(`${BASE}/calendar`, { waitUntil: "domcontentloaded", timeout: 30000 });
+  const owners = await copyEventOwners(page);
+  if (!owners) {
+    for (const viewport of viewports) copyResults.push({ viewport: viewport.name, result: "NOT TESTED", issues: ["The account's Home calendar could not be read for the fixture event"] });
+    return copyResults;
+  }
+  await routeCopyEvent(page.context(), owners);
+  try {
+    for (const viewport of viewports) await auditCopyEventAt(page, viewport, copyResults);
+  } finally {
+    await page.context().unroute(COPY_EVENT_ROUTE);
   }
   return copyResults;
 }
 
-async function writeReport(auth, copyResults, editorResults, nudgeResults, drivewayResults, drivewayDisabledResults, signInResults) {
+async function auditCopyEventAt(page, viewport, copyResults) {
+  await page.setViewportSize({ width: viewport.width, height: viewport.height });
+  await page.goto(`${BASE}/calendar`, { waitUntil: "domcontentloaded", timeout: 30000 });
+  await applyInsets(page, viewport);
+  await page.waitForTimeout(700);
+  const copyButton = await openEventWithAction(page, "Copy event");
+  if (copyButton === undefined) {
+    copyResults.push({ viewport: viewport.name, result: "NOT TESTED", issues: ["The fixture event was not shown"] });
+    return;
+  }
+  if (!copyButton) {
+    copyResults.push({ viewport: viewport.name, result: "NOT TESTED", issues: ["The fixture event did not offer Copy event"] });
+    return;
+  }
+  await copyButton.click();
+  await page.waitForTimeout(250);
+  const copySheet = page.locator(".bottom-sheet").last();
+  const dateInputs = copySheet.locator('input[type="date"]');
+  const addDate = copySheet.getByRole("button", { name: /Add another date/i });
+  const issues = [];
+  if (await dateInputs.count() !== 1) issues.push("Expected one empty initial destination row");
+  if (await dateInputs.count() && await dateInputs.nth(0).inputValue()) issues.push("Initial destination date was preselected");
+  const initialCopyButton = copySheet.getByRole("button", { name: "Copy event", exact: true });
+  if (await initialCopyButton.count() && !(await initialCopyButton.isDisabled())) issues.push("Copy action was enabled before a destination date was selected");
+  if (await dateInputs.count() && await addDate.count()) {
+    await dateInputs.nth(0).fill("2030-11-07");
+    if (await dateInputs.nth(0).inputValue() !== "2030-11-07") issues.push("Changing the primary destination date did not replace its value");
+    await dateInputs.nth(0).fill("2030-11-05");
+    const firstTimes = copySheet.locator('input[type="time"]');
+    if (await firstTimes.count() === 2) {
+      await firstTimes.nth(0).fill("15:00");
+      await firstTimes.nth(1).fill("23:00");
+    }
+    await addDate.click();
+    await page.waitForTimeout(100);
+    const rowsAfterAdd = copySheet.locator('input[type="date"]');
+    if (await rowsAfterAdd.count() !== 2) issues.push("Add another date did not create an independent row");
+    if (await rowsAfterAdd.count() >= 2) await rowsAfterAdd.nth(1).fill("2030-11-07");
+    const secondTimes = copySheet.locator('input[type="time"]');
+    if (await secondTimes.count() === 4) {
+      await secondTimes.nth(2).fill("16:00");
+      await secondTimes.nth(3).fill("22:00");
+    }
+    const remove = copySheet.getByRole("button", { name: /Remove destination/i });
+    if (await remove.count()) {
+      await remove.last().click();
+      await page.waitForTimeout(100);
+      if (await copySheet.locator('input[type="date"]').count() !== 1) issues.push("Removing a destination did not preserve the primary row");
+      await addDate.click();
+      await copySheet.locator('input[type="date"]').nth(1).fill("2030-11-07");
+      const restoredTimes = copySheet.locator('input[type="time"]');
+      if (await restoredTimes.count() === 4) {
+        await restoredTimes.nth(2).fill("16:00");
+        await restoredTimes.nth(3).fill("22:00");
+      }
+    }
+  }
+  const timeInputs = copySheet.locator('input[type="time"]');
+  if (await timeInputs.count() !== 4) issues.push("Expected independent start/end inputs for both destination rows");
+  if (!(await copySheet.getByRole("button", { name: /Copy event \(2\)/i }).count())) issues.push("Multiple destination action was not enabled");
+  // A third row exercises sheet scrolling and footer clearance.
+  if (await addDate.count()) await addDate.click();
+  const layout = await inspectLayout(page, viewport, true);
+  issues.push(...layout.issues.map(issueText));
+  const screenshot = await capture(page, `calendar-copy-event-${viewport.name}`, viewport, "calendar-copy-event");
+  copyResults.push({ viewport: viewport.name, result: issues.length ? "FAIL" : "PASS", issues, screenshot, details: layout.issues.slice(0, 40) });
+  await page.keyboard.press("Escape").catch(() => {});
+}
+
+async function writeReport(auth, copyResults, editorResults, nudgeResults, drivewayResults, drivewayDisabledResults, budgetResults, signInResults) {
   for (const entry of results) {
     if (entry.details?.length) entry.issues.push(`DOM details: ${JSON.stringify(entry.details)}`);
   }
-  for (const entry of [...copyResults, ...editorResults, ...nudgeResults, ...drivewayResults, ...drivewayDisabledResults, ...signInResults, ...sheetResults]) {
+  for (const entry of [...copyResults, ...editorResults, ...nudgeResults, ...drivewayResults, ...drivewayDisabledResults, ...budgetResults, ...signInResults, ...sheetResults]) {
     if (entry.details?.length) entry.issues.push(`DOM details: ${JSON.stringify(entry.details)}`);
   }
   const rows = results.map((entry) => `<tr class="${entry.result.toLowerCase()}"><td>${escapeHtml(entry.route)}</td><td>${escapeHtml(entry.viewport)}</td><td>${entry.status ?? ""}</td><td>${escapeHtml(entry.result)}</td><td>${entry.issues.map(escapeHtml).join("<br>") || "—"}</td><td>${entry.screenshot ? `<img src="${escapeHtml(entry.screenshot)}" loading="lazy" alt="${escapeHtml(entry.route)} ${escapeHtml(entry.viewport)}">` : ""}</td></tr>`).join("\n");
@@ -969,9 +1308,10 @@ async function writeReport(auth, copyResults, editorResults, nudgeResults, drive
   const nudgeRows = nudgeResults.map((entry) => `<tr class="${entry.result.toLowerCase().replaceAll(" ", "-")}"><td>${escapeHtml(entry.form)}</td><td>${escapeHtml(entry.state)}</td><td>${escapeHtml(entry.viewport)}</td><td>${escapeHtml(entry.result)}</td><td>${entry.issues.map(escapeHtml).join("<br>") || "—"}</td><td>${entry.screenshot ? `<img src="${escapeHtml(entry.screenshot)}" loading="lazy" alt="${escapeHtml(entry.state)} ${escapeHtml(entry.viewport)}">` : ""}</td></tr>`).join("\n");
   const drivewayRows = drivewayResults.map((entry) => `<tr class="${entry.result.toLowerCase().replaceAll(" ", "-")}"><td>${escapeHtml(entry.state)}</td><td>${escapeHtml(entry.viewport)}</td><td>${escapeHtml(entry.result)}</td><td>${entry.issues.map(escapeHtml).join("<br>") || "—"}</td><td>${entry.screenshot ? `<img src="${escapeHtml(entry.screenshot)}" loading="lazy" alt="${escapeHtml(entry.state)} ${escapeHtml(entry.viewport)}">` : ""}</td></tr>`).join("\n");
   const drivewayDisabledRows = drivewayDisabledResults.map((entry) => `<tr class="${entry.result.toLowerCase().replaceAll(" ", "-")}"><td>${escapeHtml(entry.state)}</td><td>${escapeHtml(entry.viewport)}</td><td>${escapeHtml(entry.result)}</td><td>${entry.issues.map(escapeHtml).join("<br>") || "—"}</td><td>${entry.screenshot ? `<img src="${escapeHtml(entry.screenshot)}" loading="lazy" alt="${escapeHtml(entry.state)} ${escapeHtml(entry.viewport)}">` : ""}</td></tr>`).join("\n");
+  const budgetRows = budgetResults.map((entry) => `<tr class="${entry.result.toLowerCase().replaceAll(" ", "-")}"><td>${escapeHtml(entry.state)}</td><td>${escapeHtml(entry.viewport)}</td><td>${escapeHtml(entry.result)}</td><td>${entry.issues.map(escapeHtml).join("<br>") || "—"}</td><td>${entry.screenshot ? `<img src="${escapeHtml(entry.screenshot)}" loading="lazy" alt="${escapeHtml(entry.state)} ${escapeHtml(entry.viewport)}">` : ""}</td></tr>`).join("\n");
   const signInRows = signInResults.map((entry) => `<tr class="${entry.result.toLowerCase().replaceAll(" ", "-")}"><td>${escapeHtml(entry.state)}</td><td>${escapeHtml(entry.viewport)}</td><td>${escapeHtml(entry.result)}</td><td>${entry.issues.map(escapeHtml).join("<br>") || "—"}</td><td>${entry.screenshot ? `<img src="${escapeHtml(entry.screenshot)}" loading="lazy" alt="${escapeHtml(entry.state)} ${escapeHtml(entry.viewport)}">` : ""}</td></tr>`).join("\n");
   const sheetRows = sheetResults.map((entry) => `<tr class="${entry.result.toLowerCase().replaceAll(" ", "-")}"><td>${escapeHtml(entry.route)}</td><td>${escapeHtml(entry.title ?? "")}</td><td>${escapeHtml(entry.viewport)}</td><td>${escapeHtml(entry.result)}</td><td>${entry.issues.map(escapeHtml).join("<br>") || "—"}</td><td>${entry.screenshot ? `<img src="${escapeHtml(entry.screenshot)}" loading="lazy" alt="">` : ""}</td></tr>`).join("\n");
-  const html = `<!doctype html><meta charset="utf-8"><title>MyKhaya Responsive Audit</title><style>body{font:14px system-ui;margin:24px;color:#24312d}table{border-collapse:collapse;width:100%;margin:16px 0}th,td{border:1px solid #d8ded8;padding:8px;vertical-align:top;text-align:left}.pass{background:#edf7ed}.fail{background:#fff0ed}.blocked,.not-tested{background:#fff8df}img{display:block;max-width:320px;max-height:420px;border:1px solid #d8ded8}code{background:#f3f4f1;padding:2px 4px}summary{cursor:pointer}</style><h1>MyKhaya Responsive Audit</h1><p>Base URL: <code>${escapeHtml(BASE)}</code></p><p>Authentication: <strong>${auth.ok ? "PASS" : `BLOCKED — ${escapeHtml(auth.reason)}`}</strong></p><h2>Routes</h2><table><thead><tr><th>Route</th><th>Viewport</th><th>Status</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${rows}</tbody></table><h2>Create sheets</h2><table><thead><tr><th>Route</th><th>Sheet</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${sheetRows || `<tr><td colspan="6">No create sheets opened</td></tr>`}</tbody></table><h2>Calendar Copy Event</h2><table><thead><tr><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${copyRows || `<tr><td colspan="4">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Calendar event editor</h2><table><thead><tr><th>Viewport</th><th>State</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${editorRows || `<tr><td colspan="5">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Routines, Reminders and Settings forms</h2><table><thead><tr><th>Form</th><th>State</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${nudgeRows || `<tr><td colspan="6">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Driveway forms</h2><table><thead><tr><th>State</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${drivewayRows || `<tr><td colspan="5">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Driveway turned off</h2><table><thead><tr><th>State</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${drivewayDisabledRows || `<tr><td colspan="5">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Sign-in states</h2><table><thead><tr><th>State</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${signInRows || `<tr><td colspan="5">No results</td></tr>`}</tbody></table><h2>Notes</h2><p>Chromium only. Safe areas are simulated through the --safe-* properties; this is not native WKWebView or physical-device evidence.</p><p>BLOCKED means authentication or required data was unavailable. NOT TESTED means the route rendered but the requested interactive component could not be opened. Screenshots are local artifacts under this audit directory.</p>`;
+  const html = `<!doctype html><meta charset="utf-8"><title>MyKhaya Responsive Audit</title><style>body{font:14px system-ui;margin:24px;color:#24312d}table{border-collapse:collapse;width:100%;margin:16px 0}th,td{border:1px solid #d8ded8;padding:8px;vertical-align:top;text-align:left}.pass{background:#edf7ed}.fail{background:#fff0ed}.blocked,.not-tested{background:#fff8df}img{display:block;max-width:320px;max-height:420px;border:1px solid #d8ded8}code{background:#f3f4f1;padding:2px 4px}summary{cursor:pointer}</style><h1>MyKhaya Responsive Audit</h1><p>Base URL: <code>${escapeHtml(BASE)}</code></p><p>Authentication: <strong>${auth.ok ? "PASS" : `BLOCKED — ${escapeHtml(auth.reason)}`}</strong></p><h2>Routes</h2><table><thead><tr><th>Route</th><th>Viewport</th><th>Status</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${rows}</tbody></table><h2>Create sheets</h2><table><thead><tr><th>Route</th><th>Sheet</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${sheetRows || `<tr><td colspan="6">No create sheets opened</td></tr>`}</tbody></table><h2>Calendar Copy Event</h2><table><thead><tr><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${copyRows || `<tr><td colspan="4">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Calendar event editor</h2><table><thead><tr><th>Viewport</th><th>State</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${editorRows || `<tr><td colspan="5">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Routines, Reminders and Settings forms</h2><table><thead><tr><th>Form</th><th>State</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${nudgeRows || `<tr><td colspan="6">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Driveway forms</h2><table><thead><tr><th>State</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${drivewayRows || `<tr><td colspan="5">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Driveway turned off</h2><table><thead><tr><th>State</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${drivewayDisabledRows || `<tr><td colspan="5">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Budget forms</h2><table><thead><tr><th>State</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${budgetRows || `<tr><td colspan="5">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Sign-in states</h2><table><thead><tr><th>State</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${signInRows || `<tr><td colspan="5">No results</td></tr>`}</tbody></table><h2>Notes</h2><p>Chromium only. Safe areas are simulated through the --safe-* properties; this is not native WKWebView or physical-device evidence.</p><p>BLOCKED means authentication or required data was unavailable. NOT TESTED means the route rendered but the requested interactive component could not be opened. Screenshots are local artifacts under this audit directory.</p>`;
   await fs.writeFile(path.join(outputDir, "index.html"), html, "utf8");
 }
 
@@ -992,9 +1332,10 @@ const editorResults = auth.ok ? await auditEventEditor(page) : [];
 const nudgeResults = auth.ok ? await auditNudgeForms(page) : [];
 const drivewayResults = auth.ok ? await auditDrivewayForms(page) : [];
 const drivewayDisabledResults = auth.ok ? await auditDrivewayDisabled(page) : [];
+const budgetResults = auth.ok ? await auditBudgetForms(page) : [];
 const signInResults = await auditSignInStates(browser);
-await writeReport(auth, copyResults, editorResults, nudgeResults, drivewayResults, drivewayDisabledResults, signInResults);
+await writeReport(auth, copyResults, editorResults, nudgeResults, drivewayResults, drivewayDisabledResults, budgetResults, signInResults);
 await browser.close();
 const tally = (entries) => entries.reduce((counts, entry) => ({ ...counts, [entry.result]: (counts[entry.result] ?? 0) + 1 }), {});
-console.log(JSON.stringify({ baseUrl: BASE, outputDir, authenticated: auth.ok, authReason: auth.reason ?? null, routes: tally(results), createSheets: tally(sheetResults), copyEvent: tally(copyResults), eventEditor: tally(editorResults), nudgeForms: tally(nudgeResults), drivewayForms: tally(drivewayResults), drivewayDisabled: tally(drivewayDisabledResults), signIn: tally(signInResults) }, null, 2));
-process.exitCode = [...results, ...sheetResults, ...copyResults, ...editorResults, ...nudgeResults, ...drivewayResults, ...drivewayDisabledResults, ...signInResults].some((entry) => entry.result === "FAIL") || !auth.ok ? 1 : 0;
+console.log(JSON.stringify({ baseUrl: BASE, outputDir, authenticated: auth.ok, authReason: auth.reason ?? null, routes: tally(results), createSheets: tally(sheetResults), copyEvent: tally(copyResults), eventEditor: tally(editorResults), nudgeForms: tally(nudgeResults), drivewayForms: tally(drivewayResults), drivewayDisabled: tally(drivewayDisabledResults), budgetForms: tally(budgetResults), signIn: tally(signInResults) }, null, 2));
+process.exitCode = [...results, ...sheetResults, ...copyResults, ...editorResults, ...nudgeResults, ...drivewayResults, ...drivewayDisabledResults, ...budgetResults, ...signInResults].some((entry) => entry.result === "FAIL") || !auth.ok ? 1 : 0;

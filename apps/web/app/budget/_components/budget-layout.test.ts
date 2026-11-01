@@ -15,6 +15,14 @@ describe("Budget native layout contract", () => {
     expect(budgetRules).toMatch(/\.budget-page[\s\S]*overflow-x\s*:\s*clip/);
   });
 
+  it("styles the sheets' checkbox rows wherever they render, with no form sizing of its own", () => {
+    // The + Add sheets on Overview and Income render outside .budget-page;
+    // field sizing comes from the shared form primitives.
+    expect(styles).toMatch(/(?:^|\n)\.budget-sheet-toggle \{/);
+    expect(styles).not.toContain(".budget-page .budget-sheet-toggle");
+    expect(styles).not.toContain(".budget-field-hint");
+  });
+
   it("does not add global viewport or body geometry rules", () => {
     expect(budgetRules).not.toMatch(/(?:^|\})\s*(?:html|body|:root)\s*\{/);
   });

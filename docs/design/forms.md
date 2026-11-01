@@ -83,7 +83,7 @@ implementation.
 - Show what the form checks itself as each field's `error`, not as one
   banner ("Add a title and a due date"). After a submit that fails those
   checks, move focus to the first invalid field so its error is announced
-  (`useFocusFirstInvalid` in `app/driveway/vehicle-fields.tsx`).
+  (`useFocusFirstInvalid` in `components/form-layout.tsx`).
   - A group of choice chips has no `aria-invalid`. Describe the group by
     its error and focus its first chip.
   - Render a form-level error notice with `role="alert"` only while there
@@ -184,6 +184,65 @@ The Routine, Reminder and To-do editors in Nudges
 - Not migrated: the Remove vehicle and Change photo sheets, which are an
   action and a confirmation, not forms.
 
+## Budget
+
+Budget's data-entry sheets are `FormSheet`s (save and Cancel in the footer,
+dismissal locked while saving). The helpers are in
+`apps/web/app/budget/_components/budget-form-fields.tsx`.
+
+- **Money.** `BudgetAmountField` is a `FormField` around a number input
+  with two decimal places (`step="0.01"`). Its minimum is the field's
+  existing one: `0` for planned, fixed-cost and income amounts, and `0.01`
+  for spending entries, which the API requires to be above zero.
+  - There is no currency symbol inside the input, so nothing overlaps the
+    value. The page shows the formatted amount (`£1,234.56`) elsewhere.
+  - The value stays the string the person typed. Each form converts it
+    exactly as before, and a blank amount is an error, never 0.
+- **Checks.** The forms are `noValidate`, but every control keeps the
+  `required`, `min`, `max` and `step` it always had.
+  `useBudgetFieldErrors` reads each control's own `validity` on submit and
+  shows the result as that field's `error`. The checks are therefore exactly
+  the browser's, now shown in the field, with focus on the first one. A
+  name the form already trimmed before saving (an income source, a planned
+  item) also rejects spaces alone. The API stays the authority.
+- **Dates and months.** A date or month that sits beside another control
+  goes in a `10rem` `FormRow`: Amount and Date; Received date and Budget
+  month; Start month and End month. Each one stacks at 320px. "Leave empty
+  for no end date" is End month's `hint`, and an end month before the start
+  month is End month's error.
+- **Choices.** Fixed or variable is chosen in the + Add menu, not in a
+  field. Repeat monthly, Recurring income and the month-copy choices are
+  checkbox rows (`.budget-sheet-toggle`) placed straight in the form. These
+  rows are styled outside `.budget-page` too, because the + Add sheets on
+  Overview and Income render outside the page's `<main>`.
+- **Paid and unpaid.** A fixed item is paid by recording a spending entry
+  linked to it ("Mark as paid" opens Add spending entry with the item, its
+  name and its planned amount filled in). Edit spending entry sends the link
+  back unchanged unless the category changes. There is no paid/unpaid field.
+- **Month actions.** Set up next month (the month copy) is a `FormSheet`
+  whose primary action names the month it creates. Its three copy choices
+  keep their defaults: fixed costs and income on, variable budgets off.
+- **Delete and archive.** These stay as a danger link at the end of the
+  edit form. Delete income source and Delete spending entry still open
+  their own confirmation sheet.
+- **Planned and actual amounts.** These are set per category for the
+  month in view, from the category's Quick actions.
+  - Edit planned amount and Update actual amount are separate sheets, and
+    each owns one draft. The draft starts from the stored value and only
+    typing changes it, so a re-render cannot reset it. Save sends exactly
+    what is shown.
+  - Update actual amount starts from the category's own amount: its
+    `fixed_actual`, else a legacy row's `manual_actual`, else 0. The API adds
+    spending entries to that amount, so the entries total is never offered
+    as the starting value; saving it would count those entries twice.
+- **Add category** asks only for the name. Creating a category does not
+  take a planned amount, so the form does not offer one; it is set
+  afterwards with Edit planned amount.
+- Not migrated:
+  - the + Add menu, the planned item's detail sheet and the Settings and
+    Partner sharing pickers, which are lists of actions;
+  - the delete confirmations.
+
 ## Sheet or dialog
 
 The consumer app presents forms as bottom sheets on every width today;
@@ -237,7 +296,12 @@ its own design decision and is not part of this standard yet.
 - `pnpm --filter @mykhaya/web audit:responsive` runs the same inspector
   against a running app, signed in, across every consumer route and each
   module's create sheet. It also opens the migrated forms in filled states:
-  - Copy Event, and the Calendar event editor (Add and Edit);
+  - Copy Event, on one fixture event served in the audit's own browser
+    (`routeCopyEvent`). It is a one-off owned by the signed-in user, placed
+    inside whatever window the calendar asks for, so every viewport has an
+    event to copy whatever the date or the account's own events, and no
+    event is written;
+  - the Calendar event editor (Add and Edit);
   - the Routine, Reminder and To-do editors, an Edit, and a Reminder save
     that the audit rejects in the browser, so nothing reaches the API;
   - Notification preferences with both custom times shown, and the
@@ -255,6 +319,20 @@ its own design decision and is not part of this standard yet.
     A separate section serves Driveway as off and passes only when the
     unavailable screen renders. Any state that cannot be set up is NOT
     TESTED, never passed.
+  - Budget, on fixture data served in the audit's own browser
+    (`routeBudget`), with long names and pence amounts. Every write is
+    rejected in the browser, so no financial record is touched. It covers:
+    - Add income empty, and Edit income filled;
+    - income validation and an income failed save;
+    - Add fixed cost with validation and with a failed save;
+    - Add spending entry with validation, and Edit spending entry with a
+      failed save;
+    - planned item edit with validation;
+    - the Mark as paid sheet;
+    - an Edit planned amount failed save;
+    - Update actual amount filled, and with validation;
+    - a Set up next month failed save;
+    - Add category with validation.
   - The sign-in page's three states, each in a fresh signed-out browser:
     the password form, the password shown, and the remembered account.
     The remembered account uses a mocked local hint and a virtual WebAuthn

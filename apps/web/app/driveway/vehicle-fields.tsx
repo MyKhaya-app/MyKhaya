@@ -1,8 +1,11 @@
 "use client";
 
-import { useEffect, type KeyboardEvent, type ReactNode, type RefObject } from "react";
+import type { KeyboardEvent, ReactNode } from "react";
 import type { Member } from "@mykhaya/shared-types";
 import { FormField, FormRow } from "@/components/form-layout";
+
+// Moved to the shared form primitives; re-exported for the Driveway pages.
+export { useFocusFirstInvalid } from "@/components/form-layout";
 import { DRIVEWAY_COUNTRIES } from "./countries";
 
 // The vehicle fields shared by Add vehicle (app/driveway/add) and Edit
@@ -65,12 +68,6 @@ export function dateInputUnreadable(form: HTMLFormElement, name: string): boolea
  * marked invalid, so its error is announced with it. `attempt` increases on
  * each failed submit.
  */
-export function useFocusFirstInvalid(container: RefObject<HTMLElement | null>, attempt: number) {
-  useEffect(() => {
-    if (!attempt) return;
-    container.current?.querySelector<HTMLElement>('[aria-invalid="true"], [data-invalid-focus="true"]')?.focus();
-  }, [attempt, container]);
-}
 
 export function VehicleFields({
   values,

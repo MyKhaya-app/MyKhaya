@@ -7742,25 +7742,30 @@ button.danger,
   margin-top: .45rem;
   width: 100%;
 }
-.budget-page .budget-sheet-toggle {
+/* Checkbox rows in Budget's sheets. Not scoped to .budget-page: the + Add
+   sheets on Overview and Income render outside the page's <main>. */
+.budget-sheet-toggle {
   align-items: center;
   display: flex;
   gap: .75rem;
   justify-content: space-between;
   margin-top: .4rem;
 }
-.budget-page .budget-sheet-toggle span {
+.budget-sheet-toggle span {
   display: grid;
   gap: .1rem;
 }
-.budget-page .budget-sheet-toggle small {
+.budget-sheet-toggle small {
   color: var(--colour-muted);
 }
-.budget-page .budget-sheet-toggle input {
+.budget-sheet-toggle input {
   accent-color: var(--colour-forest);
   flex: 0 0 auto;
   height: 1.2rem;
   width: 1.2rem;
+}
+.form-layout > .budget-sheet-toggle {
+  margin-top: 0;
 }
 .budget-page .budget-destructive-link {
   background: transparent;
@@ -7774,11 +7779,6 @@ button.danger,
 }
 .budget-page .budget-delete-confirm button {
   width: 100%;
-}
-.budget-page .budget-field-hint {
-  color: var(--colour-muted);
-  font-size: .78rem;
-  margin: -.25rem 0 0;
 }
 .budget-page .budget-item-detail {
   display: grid;
