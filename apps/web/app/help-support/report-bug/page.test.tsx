@@ -90,4 +90,17 @@ describe("Report a bug", () => {
     await waitFor(() => expect(createTicket).toHaveBeenCalled());
     expect(await screen.findByText("MK-1001")).toBeInTheDocument();
   });
+
+  it("shows an empty summary and description on their own fields and sends nothing", async () => {
+    const user = userEvent.setup();
+    const createTicket = api.createSupportTicket as unknown as ReturnType<typeof vi.fn>;
+    render(<ReportBug />);
+    const summary = await screen.findByLabelText("What went wrong?");
+    expect(summary).toHaveAccessibleDescription(/0\/120/);
+    await user.click(screen.getByRole("button", { name: /send report/i }));
+    expect(await screen.findByText("Add a short summary.")).toBeInTheDocument();
+    expect(screen.getByText("Tell us what happened.")).toBeInTheDocument();
+    expect(summary).toHaveAttribute("aria-invalid", "true");
+    expect(createTicket).not.toHaveBeenCalled();
+  });
 });

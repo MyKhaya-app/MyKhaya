@@ -313,3 +313,31 @@ describe("Calendars page — Manage sharing sheet", () => {
     expect(within(row).getByRole("button", { name: "Manage sharing" })).toBeInTheDocument();
   });
 });
+
+describe("Calendars page — share invitation on the shared form layout", () => {
+  it("shows an invalid email as the Email field's error, with the invitation note as its hint, and sends nothing", async () => {
+    const dialog = await openSharingSheet();
+    const email = within(dialog).getByLabelText("Email address");
+    expect(email).toHaveAccessibleDescription(/don.t need a MyKhaya account yet/);
+    fireEvent.change(email, { target: { value: "not-an-email" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Send invitation" }));
+
+    expect(await within(dialog).findByText("Enter an email address, like name@example.com.")).toBeInTheDocument();
+    expect(email).toHaveAttribute("aria-invalid", "true");
+    expect(api.createCalendarShare).not.toHaveBeenCalled();
+  });
+
+  it("keeps showing the sharing API's error under Email", async () => {
+    (api.createCalendarShare as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new ApiError(409, "Already shared with that person"));
+    const dialog = await openSharingSheet();
+    const email = within(dialog).getByLabelText("Email address");
+    fireEvent.change(email, { target: { value: "grandma@example.com" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Send invitation" }));
+
+    await waitFor(() => expect(api.createCalendarShare).toHaveBeenCalledTimes(1));
+    expect(email).toHaveAccessibleDescription(/./);
+    expect(email).toHaveAttribute("aria-invalid", "true");
+    expect(email).toHaveValue("grandma@example.com");
+    expect(within(dialog).getByRole("button", { name: "Send invitation" })).toBeEnabled();
+  });
+});

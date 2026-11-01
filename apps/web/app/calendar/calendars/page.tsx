@@ -8,6 +8,8 @@ import { ApiError, api } from "@mykhaya/api-client";
 import { AppShellContent } from "@/components/app-shell";
 import { BottomSheet } from "@/components/bottom-sheet";
 import { FormStatus } from "@/components/form-status";
+import { FormField, FormLayout, FormSection } from "@/components/form-layout";
+import { useFormFieldErrors } from "@/components/form-field-errors";
 import { useActiveHome } from "@/components/use-active-home";
 import {
   atLimitMessage,
@@ -139,9 +141,17 @@ export default function CalendarsPage() {
   const usage = { count: items.length, limit, over_limit: limit !== null && items.length > limit };
   const atLimit = atLimitMessage(usage);
 
+  const createFields = useFormFieldErrors({
+    name: { missing: "Give the calendar a name.", blank: "Give the calendar a name." },
+  });
+  const shareFields = useFormFieldErrors({
+    email: { missing: "Enter their email address." },
+  });
+
   async function createCalendar(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!activeHomeId || busy || !newName.trim()) return;
+    if (!activeHomeId || busy) return;
+    if (!createFields.check()) return;
     setBusy(true);
     setError("");
     try {
@@ -204,7 +214,8 @@ export default function CalendarsPage() {
 
   async function shareCalendar(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!activeHomeId || !sharePanel || shareBusy || !shareEmail.trim()) return;
+    if (!activeHomeId || !sharePanel || shareBusy) return;
+    if (!shareFields.check()) return;
     setShareBusy(true);
     setShareError("");
     try {
@@ -367,18 +378,24 @@ export default function CalendarsPage() {
                 colour and tag events within a calendar rather than containing their own.
               </p>
               {canCreateCalendar(usage) ? (
-                <form onSubmit={createCalendar}>
-                  <label>
-                    Calendar name
-                    <input
-                      value={newName}
-                      onChange={(event) => setNewName(event.target.value)}
-                      maxLength={80}
-                      required
-                    />
-                  </label>
+                <FormLayout ref={createFields.formRef} onSubmit={createCalendar}>
+                  <FormField label="Calendar name" error={createFields.errors.name}>
+                    {(control) => (
+                      <input
+                        {...control}
+                        name="name"
+                        value={newName}
+                        onChange={(event) => {
+                          setNewName(event.target.value);
+                          createFields.clear("name");
+                        }}
+                        maxLength={80}
+                        required
+                      />
+                    )}
+                  </FormField>
                   <button disabled={busy}>{busy ? "Adding…" : "Add calendar"}</button>
-                </form>
+                </FormLayout>
               ) : (
                 <>
                   <p>Multiple Home calendars are included with MyKhaya Family.</p>
@@ -509,40 +526,45 @@ export default function CalendarsPage() {
               <section className="calendar-sharing-section">
                 <h3 className="eyebrow">Invite someone</h3>
                 {canShareCalendar(externalInvitesEnabled) ? (
-                  <form className="calendar-share-form" onSubmit={shareCalendar}>
-                    <label>
-                      Email address
-                      <input
-                        type="email"
-                        value={shareEmail}
-                        onChange={(event) => setShareEmail(event.target.value)}
-                        placeholder="grandma@example.com"
-                        required
-                      />
-                    </label>
-                    {shareError ? (
-                      <p className="field-error">{shareError}</p>
-                    ) : (
-                      <p className="quiet-state">
-                        They don&rsquo;t need a MyKhaya account yet — we&rsquo;ll email them an
-                        invitation.
-                      </p>
-                    )}
-                    <label>
-                      Access
-                      <select
-                        value={sharePermission}
-                        onChange={(event) =>
-                          setSharePermission(event.target.value as "view" | "manage")
-                        }
-                      >
-                        <option value="view">Can view</option>
-                        <option value="manage">Can add &amp; edit</option>
-                      </select>
-                    </label>
+                  <FormLayout className="calendar-share-form" ref={shareFields.formRef} onSubmit={shareCalendar}>
+                    {/* The sharing API's own errors stay under Email, where
+                        they were, as that field's error. */}
+                    <FormField
+                      label="Email address"
+                      hint={<>They don&rsquo;t need a MyKhaya account yet — we&rsquo;ll email them an invitation.</>}
+                      error={shareFields.errors.email ?? (shareError || undefined)}
+                    >
+                      {(control) => (
+                        <input
+                          {...control}
+                          name="email"
+                          type="email"
+                          value={shareEmail}
+                          onChange={(event) => {
+                            setShareEmail(event.target.value);
+                            shareFields.clear("email");
+                          }}
+                          placeholder="grandma@example.com"
+                          required
+                        />
+                      )}
+                    </FormField>
+                    <FormField label="Access">
+                      {(control) => (
+                        <select
+                          {...control}
+                          value={sharePermission}
+                          onChange={(event) =>
+                            setSharePermission(event.target.value as "view" | "manage")
+                          }
+                        >
+                          <option value="view">Can view</option>
+                          <option value="manage">Can add &amp; edit</option>
+                        </select>
+                      )}
+                    </FormField>
                     {labels.length > 0 && (
-                      <fieldset className="share-scope-fieldset">
-                        <legend>What to share</legend>
+                      <FormSection title="What to share" className="share-scope-fieldset">
                         <label className="check-row">
                           <input
                             type="radio"
@@ -576,12 +598,12 @@ export default function CalendarsPage() {
                             ))}
                           </fieldset>
                         )}
-                      </fieldset>
+                      </FormSection>
                     )}
                     <button disabled={shareBusy}>
                       {shareBusy ? "Sending…" : "Send invitation"}
                     </button>
-                  </form>
+                  </FormLayout>
                 ) : (
                   <>
                     <p>Sharing a calendar outside the Home is included with MyKhaya Family.</p>

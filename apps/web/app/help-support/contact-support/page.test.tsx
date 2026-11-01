@@ -91,4 +91,35 @@ describe("Contact support", () => {
     await waitFor(() => expect(createTicket).toHaveBeenCalled());
     expect(await screen.findByText("MK-1042")).toBeInTheDocument();
   });
+
+  it("shows an empty subject and message on their own fields, focuses the first and sends nothing", async () => {
+    const user = userEvent.setup();
+    const createTicket = api.createSupportTicket as unknown as ReturnType<typeof vi.fn>;
+    render(<ContactSupport />);
+    const subject = await screen.findByLabelText("Subject");
+    await user.type(screen.getByLabelText("Message"), "   ");
+    await user.click(screen.getByRole("button", { name: /send request/i }));
+    expect(await screen.findByText("Add a subject.")).toBeInTheDocument();
+    expect(screen.getByText("Add a message.")).toBeInTheDocument();
+    expect(subject).toHaveAttribute("aria-invalid", "true");
+    expect(screen.getByLabelText("Message")).toHaveAttribute("aria-invalid", "true");
+    await waitFor(() => expect(subject).toHaveFocus());
+    expect(createTicket).not.toHaveBeenCalled();
+  });
+
+  it("keeps the draft and shows the failure before the send button", async () => {
+    const user = userEvent.setup();
+    const createTicket = api.createSupportTicket as unknown as ReturnType<typeof vi.fn>;
+    createTicket.mockRejectedValue(new Error("Support is busy"));
+    render(<ContactSupport />);
+    await user.type(await screen.findByLabelText("Subject"), "Account help");
+    await user.type(screen.getByLabelText("Message"), "I need help with my account.");
+    const send = screen.getByRole("button", { name: /send request/i });
+    await user.click(send);
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent("Support is busy");
+    expect(alert.compareDocumentPosition(send) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(screen.getByLabelText("Subject")).toHaveValue("Account help");
+    expect(send).toBeEnabled();
+  });
 });

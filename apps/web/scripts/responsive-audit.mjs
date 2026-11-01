@@ -1409,6 +1409,139 @@ async function auditHomeModuleForms(page) {
   return moduleResults;
 }
 
+// The remaining consumer forms on the shared form primitives (Phase 2F):
+// Help & Support, Calendar's calendars and sharing, Calendar Tags and the
+// Members invitation. They are measured on the account's own pages, but
+// every API write (any non-GET request) is rejected in the audit's browser
+// for the whole section, so no ticket, calendar, share, tag or invitation
+// is created and no email is sent. Support is served as enabled so its forms
+// are always reachable.
+const REMAINING_FORM_ROUTES = {
+  writes: /\/api\/v1\//,
+  publicConfig: /\/api\/v1\/config\/public(\?.*)?$/,
+};
+const REMAINING_REJECTION = `The audit rejected this save on purpose. ${LONG_TEXT}`;
+
+async function routeRemainingForms(context) {
+  await context.route(REMAINING_FORM_ROUTES.publicConfig, async (route) => {
+    const response = await route.fetch();
+    const config = await response.json().catch(() => ({}));
+    await route.fulfill({ response, json: { ...config, support_enabled: true } });
+  });
+  await context.route(REMAINING_FORM_ROUTES.writes, (route) => route.request().method() === "GET"
+    ? route.fallback()
+    : route.fulfill({ status: 422, contentType: "application/json", body: JSON.stringify({ detail: REMAINING_REJECTION }) }));
+}
+
+async function auditRemainingForms(page) {
+  const remainingResults = [];
+  const scope = async () => (await page.locator(".bottom-sheet").count()) ? page.locator(".bottom-sheet").last() : page.locator("main").first();
+  const requireInvalid = async (labels, issues) => {
+    const root = await scope();
+    for (const label of labels) {
+      const field = root.getByLabel(label, { exact: true });
+      if ((await field.first().getAttribute("aria-invalid").catch(() => null)) !== "true") issues.push(`"${label}" is not marked invalid`);
+    }
+  };
+  const requireFailedSend = async (button, issues) => {
+    const root = await scope();
+    await root.locator(".notice.error", { hasText: "The audit rejected" }).first().waitFor({ timeout: 5000 }).catch(() => issues.push("The failed send was not shown in the form"));
+    if (await root.getByRole("button", { name: button }).isDisabled().catch(() => true)) issues.push(`${button} stayed disabled after the failure`);
+  };
+  const settle = (ms = 400) => page.waitForTimeout(ms);
+  const prepare = {
+    "contact support validation": ["/help-support/contact-support", async (issues) => {
+      await page.getByRole("button", { name: /Send request/ }).click({ timeout: 8000 });
+      await requireInvalid(["Subject", "Message"], issues);
+    }],
+    "contact support failed send": ["/help-support/contact-support", async (issues) => {
+      await page.getByLabel("Subject", { exact: true }).fill("The calendar shows the wrong week after changing the start day in settings");
+      await page.getByLabel("Message", { exact: true }).fill(`${LONG_TEXT} ${LONG_TEXT}`);
+      await page.getByRole("button", { name: /Send request/ }).click({ timeout: 8000 });
+      await requireFailedSend(/Send request/, issues);
+    }],
+    "report bug validation": ["/help-support/report-bug", async (issues) => {
+      await page.getByRole("button", { name: /Send report/ }).click({ timeout: 8000 });
+      await requireInvalid(["What went wrong?", "What happened?"], issues);
+    }],
+    "report bug failed send": ["/help-support/report-bug", async (issues) => {
+      await page.getByLabel("What went wrong?", { exact: true }).fill("Meal plan week view jumps back to today after saving");
+      await page.getByLabel("What happened?", { exact: true }).fill(`${LONG_TEXT} ${LONG_TEXT}`);
+      await page.getByRole("button", { name: /Send report/ }).click({ timeout: 8000 });
+      await requireFailedSend(/Send report/, issues);
+    }],
+    "add calendar validation": ["/calendar/calendars", async (issues) => {
+      await page.getByLabel("Calendar name", { exact: true }).fill("   ", { timeout: 8000 });
+      await page.getByRole("button", { name: "Add calendar" }).click();
+      await requireInvalid(["Calendar name"], issues);
+    }],
+    "calendar share invite validation": ["/calendar/calendars", async (issues) => {
+      await page.getByRole("button", { name: /Manage sharing/ }).first().click({ timeout: 8000 });
+      await settle();
+      const sheet = page.locator(".bottom-sheet").last();
+      await sheet.getByLabel("Email address", { exact: true }).fill("not-an-email");
+      await sheet.getByRole("button", { name: "Send invitation" }).click();
+      await requireInvalid(["Email address"], issues);
+    }],
+    "calendar tag create filled": ["/settings/calendar-tags", async () => {
+      await page.getByLabel("New Calendar Tag", { exact: true }).fill("Grandparents visiting", { timeout: 8000 });
+      await page.getByRole("button", { name: "Change new Calendar Tag colour" }).click();
+      await settle(200);
+    }],
+    "member invite validation": ["/settings/members", async (issues) => {
+      await page.getByRole("button", { name: /Add member/ }).first().click({ timeout: 8000 });
+      await settle();
+      await page.getByRole("button", { name: /Yes, they live here/ }).click({ timeout: 5000 });
+      await settle();
+      const root = await scope();
+      await root.getByLabel("Relationship", { exact: true }).selectOption("adult");
+      await root.getByLabel("Email", { exact: true }).fill("not-an-email");
+      await root.getByRole("button", { name: "Send invitation" }).click();
+      await requireInvalid(["Email"], issues);
+      // The layout inspector cannot see a checkbox squeezed by long text.
+      const sponsorship = root.locator('input[name="family_sponsorship"]');
+      if (await sponsorship.count()) {
+        const box = await sponsorship.boundingBox();
+        if (!box || box.width < 20) issues.push(`The Family access checkbox is ${box ? Math.round(box.width) : 0}px wide`);
+      }
+    }],
+  };
+  const states = Object.keys(prepare);
+  await routeRemainingForms(page.context());
+  try {
+    for (const viewport of viewports) {
+      for (const state of states) {
+        await page.setViewportSize({ width: viewport.width, height: viewport.height });
+        const [url, run] = prepare[state];
+        await page.goto(`${BASE}${url}`, { waitUntil: "domcontentloaded", timeout: 30000 });
+        await applyInsets(page, viewport);
+        await page.waitForLoadState("networkidle", { timeout: 5000 }).catch(() => {});
+        await page.waitForTimeout(300);
+        const issues = [];
+        try {
+          await run(issues);
+        } catch (error) {
+          issues.push(`Could not prepare the state: ${error.message.split("\n")[0]}`);
+        }
+        await page.waitForTimeout(200);
+        const inSheet = (await page.locator(".bottom-sheet").count()) > 0;
+        if (!(await (await scope()).locator(".form-layout").count())) issues.push("The form is not on the shared form layout");
+        const layout = await inspectLayout(page, viewport, inSheet);
+        issues.push(...layout.issues.map(issueText));
+        const screenshot = await capture(page, `p2f-${state}`, viewport, `p2f-${state}`);
+        remainingResults.push({ viewport: viewport.name, state, result: issues.length ? "FAIL" : "PASS", issues, screenshot, details: layout.issues.slice(0, 40) });
+        for (let attempt = 0; attempt < 3 && await page.locator(".bottom-sheet").count(); attempt += 1) {
+          await page.keyboard.press("Escape").catch(() => {});
+          await page.waitForTimeout(100);
+        }
+      }
+    }
+  } finally {
+    for (const pattern of Object.values(REMAINING_FORM_ROUTES)) await page.context().unroute(pattern);
+  }
+  return remainingResults;
+}
+
 // Driveway turned off for the Home: the overview shows that it is not
 // available, and a vehicle's pages offer no form. These states pass only when
 // the unavailable screen is what renders; they are never counted as coverage
@@ -1657,11 +1790,11 @@ async function auditCopyEventAt(page, viewport, copyResults) {
   await page.keyboard.press("Escape").catch(() => {});
 }
 
-async function writeReport(auth, copyResults, editorResults, nudgeResults, drivewayResults, drivewayDisabledResults, budgetResults, moduleResults, signInResults) {
+async function writeReport(auth, copyResults, editorResults, nudgeResults, drivewayResults, drivewayDisabledResults, budgetResults, moduleResults, remainingResults, signInResults) {
   for (const entry of results) {
     if (entry.details?.length) entry.issues.push(`DOM details: ${JSON.stringify(entry.details)}`);
   }
-  for (const entry of [...copyResults, ...editorResults, ...nudgeResults, ...drivewayResults, ...drivewayDisabledResults, ...budgetResults, ...moduleResults, ...signInResults, ...sheetResults]) {
+  for (const entry of [...copyResults, ...editorResults, ...nudgeResults, ...drivewayResults, ...drivewayDisabledResults, ...budgetResults, ...moduleResults, ...remainingResults, ...signInResults, ...sheetResults]) {
     if (entry.details?.length) entry.issues.push(`DOM details: ${JSON.stringify(entry.details)}`);
   }
   const rows = results.map((entry) => `<tr class="${entry.result.toLowerCase()}"><td>${escapeHtml(entry.route)}</td><td>${escapeHtml(entry.viewport)}</td><td>${entry.status ?? ""}</td><td>${escapeHtml(entry.result)}</td><td>${entry.issues.map(escapeHtml).join("<br>") || "—"}</td><td>${entry.screenshot ? `<img src="${escapeHtml(entry.screenshot)}" loading="lazy" alt="${escapeHtml(entry.route)} ${escapeHtml(entry.viewport)}">` : ""}</td></tr>`).join("\n");
@@ -1672,9 +1805,10 @@ async function writeReport(auth, copyResults, editorResults, nudgeResults, drive
   const drivewayDisabledRows = drivewayDisabledResults.map((entry) => `<tr class="${entry.result.toLowerCase().replaceAll(" ", "-")}"><td>${escapeHtml(entry.state)}</td><td>${escapeHtml(entry.viewport)}</td><td>${escapeHtml(entry.result)}</td><td>${entry.issues.map(escapeHtml).join("<br>") || "—"}</td><td>${entry.screenshot ? `<img src="${escapeHtml(entry.screenshot)}" loading="lazy" alt="${escapeHtml(entry.state)} ${escapeHtml(entry.viewport)}">` : ""}</td></tr>`).join("\n");
   const budgetRows = budgetResults.map((entry) => `<tr class="${entry.result.toLowerCase().replaceAll(" ", "-")}"><td>${escapeHtml(entry.state)}</td><td>${escapeHtml(entry.viewport)}</td><td>${escapeHtml(entry.result)}</td><td>${entry.issues.map(escapeHtml).join("<br>") || "—"}</td><td>${entry.screenshot ? `<img src="${escapeHtml(entry.screenshot)}" loading="lazy" alt="${escapeHtml(entry.state)} ${escapeHtml(entry.viewport)}">` : ""}</td></tr>`).join("\n");
   const moduleRows = moduleResults.map((entry) => `<tr class="${entry.result.toLowerCase().replaceAll(" ", "-")}"><td>${escapeHtml(entry.state)}</td><td>${escapeHtml(entry.viewport)}</td><td>${escapeHtml(entry.result)}</td><td>${entry.issues.map(escapeHtml).join("<br>") || "—"}</td><td>${entry.screenshot ? `<img src="${escapeHtml(entry.screenshot)}" loading="lazy" alt="${escapeHtml(entry.state)} ${escapeHtml(entry.viewport)}">` : ""}</td></tr>`).join("\n");
+  const remainingRows = remainingResults.map((entry) => `<tr class="${entry.result.toLowerCase().replaceAll(" ", "-")}"><td>${escapeHtml(entry.state)}</td><td>${escapeHtml(entry.viewport)}</td><td>${escapeHtml(entry.result)}</td><td>${entry.issues.map(escapeHtml).join("<br>") || "—"}</td><td>${entry.screenshot ? `<img src="${escapeHtml(entry.screenshot)}" loading="lazy" alt="${escapeHtml(entry.state)} ${escapeHtml(entry.viewport)}">` : ""}</td></tr>`).join("\n");
   const signInRows = signInResults.map((entry) => `<tr class="${entry.result.toLowerCase().replaceAll(" ", "-")}"><td>${escapeHtml(entry.state)}</td><td>${escapeHtml(entry.viewport)}</td><td>${escapeHtml(entry.result)}</td><td>${entry.issues.map(escapeHtml).join("<br>") || "—"}</td><td>${entry.screenshot ? `<img src="${escapeHtml(entry.screenshot)}" loading="lazy" alt="${escapeHtml(entry.state)} ${escapeHtml(entry.viewport)}">` : ""}</td></tr>`).join("\n");
   const sheetRows = sheetResults.map((entry) => `<tr class="${entry.result.toLowerCase().replaceAll(" ", "-")}"><td>${escapeHtml(entry.route)}</td><td>${escapeHtml(entry.title ?? "")}</td><td>${escapeHtml(entry.viewport)}</td><td>${escapeHtml(entry.result)}</td><td>${entry.issues.map(escapeHtml).join("<br>") || "—"}</td><td>${entry.screenshot ? `<img src="${escapeHtml(entry.screenshot)}" loading="lazy" alt="">` : ""}</td></tr>`).join("\n");
-  const html = `<!doctype html><meta charset="utf-8"><title>MyKhaya Responsive Audit</title><style>body{font:14px system-ui;margin:24px;color:#24312d}table{border-collapse:collapse;width:100%;margin:16px 0}th,td{border:1px solid #d8ded8;padding:8px;vertical-align:top;text-align:left}.pass{background:#edf7ed}.fail{background:#fff0ed}.blocked,.not-tested{background:#fff8df}img{display:block;max-width:320px;max-height:420px;border:1px solid #d8ded8}code{background:#f3f4f1;padding:2px 4px}summary{cursor:pointer}</style><h1>MyKhaya Responsive Audit</h1><p>Base URL: <code>${escapeHtml(BASE)}</code></p><p>Authentication: <strong>${auth.ok ? "PASS" : `BLOCKED — ${escapeHtml(auth.reason)}`}</strong></p><h2>Routes</h2><table><thead><tr><th>Route</th><th>Viewport</th><th>Status</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${rows}</tbody></table><h2>Create sheets</h2><table><thead><tr><th>Route</th><th>Sheet</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${sheetRows || `<tr><td colspan="6">No create sheets opened</td></tr>`}</tbody></table><h2>Calendar Copy Event</h2><table><thead><tr><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${copyRows || `<tr><td colspan="4">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Calendar event editor</h2><table><thead><tr><th>Viewport</th><th>State</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${editorRows || `<tr><td colspan="5">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Routines, Reminders and Settings forms</h2><table><thead><tr><th>Form</th><th>State</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${nudgeRows || `<tr><td colspan="6">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Driveway forms</h2><table><thead><tr><th>State</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${drivewayRows || `<tr><td colspan="5">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Driveway turned off</h2><table><thead><tr><th>State</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${drivewayDisabledRows || `<tr><td colspan="5">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Budget forms</h2><table><thead><tr><th>State</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${budgetRows || `<tr><td colspan="5">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Meal Plans, Lists and Wishlists forms</h2><table><thead><tr><th>State</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${moduleRows || `<tr><td colspan="5">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Sign-in states</h2><table><thead><tr><th>State</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${signInRows || `<tr><td colspan="5">No results</td></tr>`}</tbody></table><h2>Notes</h2><p>Chromium only. Safe areas are simulated through the --safe-* properties; this is not native WKWebView or physical-device evidence.</p><p>BLOCKED means authentication or required data was unavailable. NOT TESTED means the route rendered but the requested interactive component could not be opened. Screenshots are local artifacts under this audit directory.</p>`;
+  const html = `<!doctype html><meta charset="utf-8"><title>MyKhaya Responsive Audit</title><style>body{font:14px system-ui;margin:24px;color:#24312d}table{border-collapse:collapse;width:100%;margin:16px 0}th,td{border:1px solid #d8ded8;padding:8px;vertical-align:top;text-align:left}.pass{background:#edf7ed}.fail{background:#fff0ed}.blocked,.not-tested{background:#fff8df}img{display:block;max-width:320px;max-height:420px;border:1px solid #d8ded8}code{background:#f3f4f1;padding:2px 4px}summary{cursor:pointer}</style><h1>MyKhaya Responsive Audit</h1><p>Base URL: <code>${escapeHtml(BASE)}</code></p><p>Authentication: <strong>${auth.ok ? "PASS" : `BLOCKED — ${escapeHtml(auth.reason)}`}</strong></p><h2>Routes</h2><table><thead><tr><th>Route</th><th>Viewport</th><th>Status</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${rows}</tbody></table><h2>Create sheets</h2><table><thead><tr><th>Route</th><th>Sheet</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${sheetRows || `<tr><td colspan="6">No create sheets opened</td></tr>`}</tbody></table><h2>Calendar Copy Event</h2><table><thead><tr><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${copyRows || `<tr><td colspan="4">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Calendar event editor</h2><table><thead><tr><th>Viewport</th><th>State</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${editorRows || `<tr><td colspan="5">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Routines, Reminders and Settings forms</h2><table><thead><tr><th>Form</th><th>State</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${nudgeRows || `<tr><td colspan="6">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Driveway forms</h2><table><thead><tr><th>State</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${drivewayRows || `<tr><td colspan="5">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Driveway turned off</h2><table><thead><tr><th>State</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${drivewayDisabledRows || `<tr><td colspan="5">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Budget forms</h2><table><thead><tr><th>State</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${budgetRows || `<tr><td colspan="5">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Meal Plans, Lists and Wishlists forms</h2><table><thead><tr><th>State</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${moduleRows || `<tr><td colspan="5">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Help &amp; Support, Calendar sharing, Calendar Tags and Members forms</h2><table><thead><tr><th>State</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${remainingRows || `<tr><td colspan="5">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Sign-in states</h2><table><thead><tr><th>State</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${signInRows || `<tr><td colspan="5">No results</td></tr>`}</tbody></table><h2>Notes</h2><p>Chromium only. Safe areas are simulated through the --safe-* properties; this is not native WKWebView or physical-device evidence.</p><p>BLOCKED means authentication or required data was unavailable. NOT TESTED means the route rendered but the requested interactive component could not be opened. Screenshots are local artifacts under this audit directory.</p>`;
   await fs.writeFile(path.join(outputDir, "index.html"), html, "utf8");
 }
 
@@ -1697,9 +1831,10 @@ const drivewayResults = auth.ok ? await auditDrivewayForms(page) : [];
 const drivewayDisabledResults = auth.ok ? await auditDrivewayDisabled(page) : [];
 const budgetResults = auth.ok ? await auditBudgetForms(page) : [];
 const moduleResults = auth.ok ? await auditHomeModuleForms(page) : [];
+const remainingResults = auth.ok ? await auditRemainingForms(page) : [];
 const signInResults = await auditSignInStates(browser);
-await writeReport(auth, copyResults, editorResults, nudgeResults, drivewayResults, drivewayDisabledResults, budgetResults, moduleResults, signInResults);
+await writeReport(auth, copyResults, editorResults, nudgeResults, drivewayResults, drivewayDisabledResults, budgetResults, moduleResults, remainingResults, signInResults);
 await browser.close();
 const tally = (entries) => entries.reduce((counts, entry) => ({ ...counts, [entry.result]: (counts[entry.result] ?? 0) + 1 }), {});
-console.log(JSON.stringify({ baseUrl: BASE, outputDir, authenticated: auth.ok, authReason: auth.reason ?? null, routes: tally(results), createSheets: tally(sheetResults), copyEvent: tally(copyResults), eventEditor: tally(editorResults), nudgeForms: tally(nudgeResults), drivewayForms: tally(drivewayResults), drivewayDisabled: tally(drivewayDisabledResults), budgetForms: tally(budgetResults), moduleForms: tally(moduleResults), signIn: tally(signInResults) }, null, 2));
-process.exitCode = [...results, ...sheetResults, ...copyResults, ...editorResults, ...nudgeResults, ...drivewayResults, ...drivewayDisabledResults, ...budgetResults, ...moduleResults, ...signInResults].some((entry) => entry.result === "FAIL") || !auth.ok ? 1 : 0;
+console.log(JSON.stringify({ baseUrl: BASE, outputDir, authenticated: auth.ok, authReason: auth.reason ?? null, routes: tally(results), createSheets: tally(sheetResults), copyEvent: tally(copyResults), eventEditor: tally(editorResults), nudgeForms: tally(nudgeResults), drivewayForms: tally(drivewayResults), drivewayDisabled: tally(drivewayDisabledResults), budgetForms: tally(budgetResults), moduleForms: tally(moduleResults), remainingForms: tally(remainingResults), signIn: tally(signInResults) }, null, 2));
+process.exitCode = [...results, ...sheetResults, ...copyResults, ...editorResults, ...nudgeResults, ...drivewayResults, ...drivewayDisabledResults, ...budgetResults, ...moduleResults, ...remainingResults, ...signInResults].some((entry) => entry.result === "FAIL") || !auth.ok ? 1 : 0;

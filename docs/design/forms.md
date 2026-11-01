@@ -28,6 +28,36 @@ implementation.
 </FormField>
 ```
 
+## A new form, by default
+
+1. **Container.** In a sheet, use a `FormSheet`: primary action then
+   Cancel in the footer, and `busy` while saving so no dismissal path
+   orphans the save. On a page, use a `FormLayout` card.
+2. **Fields.** Every control sits in a `FormField` with a visible label,
+   help text as its `hint`, and its check as its `error`. Group related
+   fields in a `FormSection`, and fields that belong side by side in a
+   `FormRow` sized for its contents (see "Grouping fields").
+3. **Dates, times and money.** Dates and times go inside a `FormField`
+   (the `.consumer-date-time-control` treatment, 16px text). Money uses a
+   number input with the field's own `min` and `step="0.01"`, as Budget's
+   `BudgetAmountField` does.
+4. **Checks.** Give checked controls a `name` and their native
+   constraints. On submit, `useFormFieldErrors` shows each failure under
+   its field and moves focus to the first. A blank value is an error, never
+   a silent 0 or an empty save.
+5. **Saving.** Ignore a second submit while saving. A failed save shows in
+   the form (at the top of a sheet's form, or just before a page form's
+   button), keeps every value, and re-enables Save and Cancel.
+6. **Accessibility.** Labels are programmatic (`FormField` does this). An
+   icon-only button has an accessible name that contains any visible text.
+   Nothing is only a placeholder.
+7. **Verify.** Add the form's states to the responsive audit (empty,
+   filled with long text, validation, failed save) and run it with the
+   layout harness.
+
+Departing from this needs one of the reasons under "Coverage and
+exceptions".
+
 ## Responsive behaviour
 
 - Everything is contained: border-box, `min-width: 0` and `minmax(0, 1fr)`
@@ -160,12 +190,17 @@ The Routine, Reminder and To-do editors in Nudges
   field's `error`. Editing either field clears both. A failed save shows
   inside the editor and keeps the entered values. The browser's own 1–31
   check on Day stays, and the API remains the authority.
+- The Members invitation is migrated; see "Help & Support, Calendar
+  sharing, Calendar Tags and Members" below.
 - Not migrated:
   - Calendar settings, whose sentence-style rows ("Remind me [30 minutes]
     before events I'm attending") are their own design.
-  - Security (MFA and re-authentication), Billing and Members (invites,
-    relationships and managed-child permissions), which are outside the
-    scope of a presentation-only migration.
+  - Security (MFA, passkeys, password and re-authentication), which is
+    credential handling, not a presentation migration.
+  - Billing, which has no data-entry form: plan choices are buttons that
+    hand off to Stripe Checkout or the Customer Portal.
+  - The Members row actions (change relationship, approve a join request,
+    a child's photo), which act at once and carry permission rules.
 
 ## Driveway
 
@@ -325,6 +360,71 @@ own error (`useFormFieldErrors`). Payloads and API calls are unchanged.
   - Wishlist actions, the matched-account confirmation, the one-time guest
     link and PIN screens, and Manage sharing.
 
+## Help & Support, Calendar sharing, Calendar Tags and Members
+
+- **Help & Support** (`app/help-support/contact-support`, `report-bug`,
+  `requests/[id]`):
+  - These are page forms (`FormLayout` cards).
+  - Subject and message, or summary and description, show their own
+    errors. They used to share one banner.
+  - Report a bug's character count is its summary's `hint`. Its severity
+    choices keep their card-style radio rows inside a `FormSection`.
+  - The screenshot picker keeps its own control.
+  - A failed send shows directly before the send button and keeps the
+    draft.
+- **Calendar's calendars** (`app/calendar/calendars/page.tsx`):
+  - Add a Home calendar is a page form, so a name of spaces alone is now
+    its field's error.
+  - The share invitation inside Manage sharing is a `FormLayout`:
+    - Email address, then Access, then What to share as a `FormSection`.
+    - "They don't need a MyKhaya account yet" is Email's `hint`. The
+      sharing API's own errors are Email's `error`, where they were shown
+      before.
+  - Manage sharing stays a `BottomSheet`, not a `FormSheet`. It is a
+    management sheet: its share list, permission changes and Delete
+    calendar act at once, and the invitation is one form within it.
+- **Calendar Tags** (`components/calendar-tags-manager.tsx`):
+  - The New Calendar Tag form is a `FormLayout`.
+  - The colour swatch and picker are its specialist control.
+  - Add stays disabled until a name is typed.
+  - Renaming in the tag list is inline and stays as it is.
+- **Members invitation** (`app/settings/members/page.tsx`):
+  - A `FormLayout` whose handler still reads the email and Family access
+    from `FormData` by name, exactly as before.
+  - The relationship's explanation is Relationship's `hint`, and Email
+    shows a missing or invalid address as its error.
+  - The child-profile hand-off, the Family access row and Advanced
+    permissions keep their own markup.
+- **A check row with a title and a description**
+  (`<label class="check-row check-row-described"><input>
+  <span><strong>…</strong><small>…</small></span></label>`):
+  - Add the `check-row-described` modifier, which keeps the checkbox full
+    size beside long text and puts the title above the description.
+  - Without it, a long description squeezes the checkbox to nothing.
+- **A page form with one action and no Cancel** (the page's back link is
+  the way out):
+  - Its button stays a direct child of the form, full width, rather than
+    in `FormActions`, which is for Save beside Cancel.
+
+## Coverage and exceptions
+
+Every consumer data-entry form is on the shared primitives, except these,
+which are deliberate:
+
+| Form | Why it keeps its own layout |
+|---|---|
+| Sign-in, child sign-in, register, forgot and reset password, MFA, onboarding, waitlist | Authentication and account-creation flows: credential handling is out of scope for a presentation migration. The sign-in password adornment is still checked by the audit. |
+| Security settings (MFA, passkeys, password) | Credential and session handling. |
+| Billing | No data-entry form: plan buttons hand off to Stripe. |
+| Calendar settings | Sentence-style rows are their own design. |
+| Guest wishlist PIN (`/wishlist/share/[token]`) | A public, unauthenticated guest gate. |
+| Beta enrolment and founding-beta pages | Marketing and enrolment flows, not account data. |
+| Members row actions, calendar share acceptance, share list rows | Actions that apply at once, not forms. |
+| Inline quick-entry rows (Lists' "Add an item…", Calendar Tags' rename) | Single-field rows inside a list. |
+
+New consumer forms use the shared primitives by default. A new exception
+needs a reason that fits this table.
+
 ## Sheet or dialog
 
 The consumer app presents forms as bottom sheets on every width today;
@@ -430,6 +530,20 @@ its own design decision and is not part of this standard yet.
       an Edit item failed save, and Share with validation;
     - New list with validation, a template with several sections, a Rename
       list failed save, and Edit list item filled and with validation.
+  - The remaining forms, on the account's own pages, with every API write
+    rejected in the audit's browser for the whole section, so no ticket,
+    calendar, share, tag or invitation is created and no email is sent.
+    Support is served as enabled. It covers 8 states:
+    - Contact support and Report a bug, each with validation and with a
+      failed send;
+    - Add a Home calendar with validation, and the share invitation with
+      an invalid email;
+    - New Calendar Tag filled with its colour picker open;
+    - the Members invitation with an invalid email. This state also checks
+      that the Family access checkbox keeps its size.
+- Each route is measured after its first requests settle (network idle,
+  capped at 5 seconds), so a slow page is not measured as its loading
+  screen.
   - The sign-in page's three states, each in a fresh signed-out browser:
     the password form, the password shown, and the remembered account.
     The remembered account uses a mocked local hint and a virtual WebAuthn

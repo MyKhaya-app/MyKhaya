@@ -4784,6 +4784,19 @@ body.sheet-open {
   min-height: 24px;
   width: 24px;
 }
+/* A check row with a title and a description under it (<span><strong>
+   <small>). Without this the checkbox shrinks to nothing beside the long
+   text, and the title runs into the description. */
+.check-row-described {
+  align-items: flex-start;
+}
+.check-row-described input {
+  flex: none;
+}
+.check-row-described > span {
+  display: grid;
+  gap: 0.15rem;
+}
 /* Compact tappable member rows, replacing a bordered checkbox grid — the
    whole row is the <label>, so the tap target is the full row, not just the
    small checkbox. */

@@ -9,6 +9,7 @@ import { BottomSheet } from "@/components/bottom-sheet";
 import { CalendarColourPicker } from "@/components/calendar-colour-picker";
 import { FamilyUpsell } from "@/components/family-upsell";
 import { FormStatus } from "@/components/form-status";
+import { FormField, FormLayout } from "@/components/form-layout";
 
 // Mutually exclusive by construction, matching the pattern used on the
 // People page — one action's outcome never lingers alongside another's.
@@ -355,17 +356,20 @@ export function CalendarTagsManager({ homeId }: { homeId: string }) {
         })}
       </ul>
       {canAddMore ? (
-        <form className="label-create-form" onSubmit={createLabel}>
-          <label>
-            New Calendar Tag
-            <input
-              type="text"
-              value={newName}
-              maxLength={40}
-              placeholder="e.g. Sport"
-              onChange={(event) => setNewName(event.target.value)}
-            />
-          </label>
+        <FormLayout className="label-create-form" onSubmit={createLabel}>
+          <FormField label="New Calendar Tag">
+            {(control) => (
+              <input
+                {...control}
+                type="text"
+                value={newName}
+                maxLength={40}
+                placeholder="e.g. Sport"
+                onChange={(event) => setNewName(event.target.value)}
+              />
+            )}
+          </FormField>
+          {/* The colour swatch and picker are this form's own control. */}
           <div className="label-row-main">
             <button
               type="button"
@@ -391,7 +395,7 @@ export function CalendarTagsManager({ homeId }: { homeId: string }) {
             </div>
           )}
           <button disabled={busy || !newName.trim()}>Add Calendar Tag</button>
-        </form>
+        </FormLayout>
       ) : (
         <FamilyUpsell
           title="Add another Calendar Tag 🔒"

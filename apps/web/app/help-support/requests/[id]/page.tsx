@@ -4,6 +4,7 @@ import { FormEvent, use, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { api, ApiError, type SupportTicketResponse } from "@mykhaya/api-client";
 import { SettingsPage } from "@/components/settings-page";
+import { FormField, FormLayout } from "@/components/form-layout";
 import {
   isActiveTicketStatus,
   ticketStatusConsumerTone,
@@ -114,25 +115,27 @@ export default function SupportRequestDetail({ params }: { params: Promise<{ id:
           )}
 
           {active ? (
-            <form className="support-reply-form" onSubmit={submitReply}>
+            <FormLayout className="support-reply-form" onSubmit={submitReply}>
+              <FormField label="Add a reply">
+                {(control) => (
+                  <textarea
+                    {...control}
+                    value={reply}
+                    onChange={(event) => setReply(event.target.value)}
+                    maxLength={4000}
+                    rows={4}
+                  />
+                )}
+              </FormField>
               {replyError && (
                 <p className="notice error" role="alert">
                   {replyError}
                 </p>
               )}
-              <label>
-                Add a reply
-                <textarea
-                  value={reply}
-                  onChange={(event) => setReply(event.target.value)}
-                  maxLength={4000}
-                  rows={4}
-                />
-              </label>
               <button className="button" type="submit" disabled={sending || !reply.trim()}>
                 {sending ? "Sending…" : "Send reply"}
               </button>
-            </form>
+            </FormLayout>
           ) : (
             <section className="card details support-conversation-closed" aria-live="polite">
               <p className="muted">

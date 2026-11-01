@@ -280,6 +280,21 @@ describe("Manage members page — Adult relationship", () => {
     );
   });
 
+  it("shows an invalid email on the Email field, focuses it and sends no invitation", async () => {
+    const select = await openAddMemberSheet();
+    const user = userEvent.setup();
+    await user.selectOptions(select, "adult");
+    expect(select).toHaveAccessibleDescription(/./);
+    const email = screen.getByLabelText("Email");
+    await user.type(email, "not-an-email");
+    await user.click(screen.getByRole("button", { name: /send invitation/i }));
+
+    expect(await screen.findByText("Enter an email address, like name@example.com.")).toBeInTheDocument();
+    expect(email).toHaveAttribute("aria-invalid", "true");
+    await waitFor(() => expect(email).toHaveFocus());
+    expect(api.post).not.toHaveBeenCalledWith("/invitations", expect.anything());
+  });
+
   it("counts Adult members under the Adults filter alongside Home Admin and Partner", async () => {
     const adultMember: Member = {
       membership_id: "m4",

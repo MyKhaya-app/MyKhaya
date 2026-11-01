@@ -4,6 +4,8 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { AlertCircle, CheckCircle2, ImagePlus, Send } from "lucide-react";
 import { api, type SupportTicketResponse } from "@mykhaya/api-client";
 import { SettingsPage } from "@/components/settings-page";
+import { FormField, FormLayout } from "@/components/form-layout";
+import { useFormFieldErrors } from "@/components/form-field-errors";
 import { useActiveHome } from "@/components/use-active-home";
 import { isNativeShell, nativePlatform } from "@/components/native-runtime";
 import { useBuildInfo } from "@/components/app-version";
@@ -41,6 +43,10 @@ export default function ContactSupport() {
   const [warning, setWarning] = useState<string | null>(null);
   const [success, setSuccess] = useState<SupportTicketResponse | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const fields = useFormFieldErrors({
+    subject: { missing: "Add a subject.", blank: "Add a subject." },
+    message: { missing: "Add a message.", blank: "Add a message." },
+  });
   const platform = nativePlatform();
   const source = useMemo(() => ({
     appVersion: build?.version ?? null,
@@ -67,10 +73,7 @@ export default function ContactSupport() {
       setError("You appear to be offline. Reconnect and try again.");
       return;
     }
-    if (!subject.trim() || !message.trim()) {
-      setError("Add a subject and message before sending.");
-      return;
-    }
+    if (!fields.check()) return;
     setBusy(true);
     let diagnostics = null;
     if (includeDiagnostics) {
@@ -101,12 +104,11 @@ export default function ContactSupport() {
   if (supportEnabled === false) return <SettingsPage title="Contact support" description="Get help from the MyKhaya support team." backLink={{ href: "/help-support", label: "Help & Support" }}><section className="card details" aria-live="polite"><h2>Support unavailable</h2><p className="muted">Support requests are temporarily unavailable. Please check Service Status and try again later.</p></section></SettingsPage>;
   if (success) return <SettingsPage title="Contact support" description="Get help from the MyKhaya support team." backLink={{ href: "/help-support", label: "Help & Support" }}><section className="card details support-success" aria-live="polite"><CheckCircle2 aria-hidden="true" /><h2>We&apos;ve received your request.</h2><p className="support-reference">Reference: <strong>{success.reference}</strong></p>{warning && <p className="field-error">{warning}</p>}<a className="button" href="/help-support">Back to Help &amp; Support</a></section></SettingsPage>;
 
-  return <SettingsPage title="Contact support" description="Get help from the MyKhaya support team." backLink={{ href: "/help-support", label: "Help & Support" }}><form className="card details support-form" onSubmit={submit} noValidate>
-    {error && <p className="notice error" role="alert"><AlertCircle size={16} aria-hidden="true" />{error}</p>}
+  return <SettingsPage title="Contact support" description="Get help from the MyKhaya support team." backLink={{ href: "/help-support", label: "Help & Support" }}><FormLayout className="card details support-form" ref={fields.formRef} onSubmit={submit}>
     {warning && <p className="notice" role="status">{warning}</p>}
-    <label>Subject<input value={subject} onChange={(event) => setSubject(event.target.value)} maxLength={200} required /></label>
-    <label>Category<select value={category} onChange={(event) => setCategory(event.target.value)}>{CATEGORY_OPTIONS.map((option) => <option key={`${option.label}-${option.value}`} value={option.value}>{option.label}</option>)}</select></label>
-    <label>Message<textarea value={message} onChange={(event) => setMessage(event.target.value)} maxLength={4000} rows={7} required /></label>
+    <FormField label="Subject" error={fields.errors.subject}>{(control) => <input {...control} name="subject" value={subject} onChange={(event) => { setSubject(event.target.value); fields.clear("subject"); }} maxLength={200} required />}</FormField>
+    <FormField label="Category">{(control) => <select {...control} value={category} onChange={(event) => setCategory(event.target.value)}>{CATEGORY_OPTIONS.map((option) => <option key={`${option.label}-${option.value}`} value={option.value}>{option.label}</option>)}</select>}</FormField>
+    <FormField label="Message" error={fields.errors.message}>{(control) => <textarea {...control} name="message" value={message} onChange={(event) => { setMessage(event.target.value); fields.clear("message"); }} maxLength={4000} rows={7} required />}</FormField>
     <div className="support-file-field">
       <label htmlFor="contact-support-screenshot" className="support-file-button">
         <ImagePlus size={18} aria-hidden="true" />
@@ -138,6 +140,7 @@ export default function ContactSupport() {
     </div>
     <small>Your screenshot may include information currently visible on your screen.</small>
     <label className="check-row"><input type="checkbox" checked={includeDiagnostics} onChange={(event) => setIncludeDiagnostics(event.target.checked)} />Include diagnostics</label>
+    {error && <p className="notice error" role="alert"><AlertCircle size={16} aria-hidden="true" />{error}</p>}
     <button className="button" type="submit" disabled={busy || supportEnabled !== true || !activeHomeId}><Send size={16} aria-hidden="true" /> {busy ? "Sending…" : "Send request"}</button>
-  </form></SettingsPage>;
+  </FormLayout></SettingsPage>;
 }
