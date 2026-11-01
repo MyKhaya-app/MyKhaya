@@ -1482,6 +1482,17 @@ describe("Calendar — Recurring event scope chooser", () => {
     (api.listLabels as ReturnType<typeof vi.fn>).mockResolvedValue([]);
     (api.members as ReturnType<typeof vi.fn>).mockResolvedValue([]);
     window.confirm = vi.fn(() => true);
+    // The fixtures below are in September 2026 and each test reaches its
+    // event through the month view, which opens on "today". Pin today inside
+    // the fixtures' month, as the other blocks in this file do, so the tests
+    // do not depend on the real date. Only Date is faked: real timers keep
+    // every async query working.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-14T09:00:00Z"));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   // A moved+overridden occurrence: its canonical identity ("occurrence_start")
@@ -1792,6 +1803,71 @@ describe("Calendar — Recurring event scope chooser", () => {
 
     resolveDelete();
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Delete recurring event" })).toBeNull());
+  });
+
+  // An occurrence whose canonical identity is the last evening of a month or
+  // a year, moved into the first day of the next. Viewed on that first day,
+  // every scoped action must still name the canonical occurrence_start in
+  // the previous month or year, never the moved start_at.
+  describe.each([
+    { boundary: "month", today: "2026-11-01T09:00:00Z", canonical: "2026-10-31T18:00:00Z", moved: "2026-11-01T19:00:00Z" },
+    { boundary: "year", today: "2027-01-01T09:00:00Z", canonical: "2026-12-31T18:00:00Z", moved: "2027-01-01T19:00:00Z" },
+  ])("across a $boundary boundary", ({ today, canonical, moved }) => {
+    const crossing = () => movedOccurrence({
+      occurrence_id: `occ-${canonical}`,
+      start_at: moved,
+      end_at: moved.replace("T19:", "T20:"),
+      occurrence_start: canonical,
+    });
+
+    beforeEach(() => {
+      vi.setSystemTime(new Date(today));
+    });
+
+    // On the boundary day the event is also listed under "today", so open it
+    // from its month-view chip specifically: Month view → Day List → Event.
+    async function openFromMonthChip() {
+      const event = crossing();
+      (api.listEvents as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [event] });
+      render(<CalendarPage />);
+      await screen.findByRole("heading", { level: 1 });
+      const chip = await waitFor(() => {
+        const found = Array.from(document.querySelectorAll<HTMLElement>(".month-event")).find((element) => element.textContent?.includes(event.title));
+        if (!found) throw new Error("No month-view chip for the event");
+        return found;
+      });
+      fireEvent.click(chip);
+      const daySheet = await screen.findByRole("dialog");
+      fireEvent.click(within(daySheet).getByRole("button", { name: new RegExp(event.title) }));
+      return screen.findByRole("dialog", { name: event.title });
+    }
+
+    it.each([
+      ["This occurrence only", "occurrence"],
+      ["This and future occurrences", "future"],
+    ] as const)("'%s' sends the canonical occurrence_start", async (choice, scope) => {
+      (api.updateEvent as ReturnType<typeof vi.fn>).mockResolvedValue(crossing());
+      const view = await openFromMonthChip();
+      fireEvent.click(within(view).getByRole("button", { name: "Edit" }));
+      const editDialog = await screen.findByRole("dialog", { name: "Edit event" });
+      fireEvent.click(within(editDialog).getByRole("button", { name: /save changes/i }));
+      const chooser = await screen.findByRole("dialog", { name: "Apply changes to" });
+      fireEvent.click(within(chooser).getByRole("button", { name: choice }));
+      await waitFor(() => expect(api.updateEvent).toHaveBeenCalledTimes(1));
+      const [, , payload] = (api.updateEvent as ReturnType<typeof vi.fn>).mock.calls[0]! as [string, string, EventUpdatePayload];
+      expect(payload.scope).toBe(scope);
+      expect(payload.occurrence_start).toBe(canonical);
+      expect(payload.occurrence_start).not.toBe(moved);
+    });
+
+    it("'Delete this occurrence' sends the canonical occurrence_start", async () => {
+      const view = await openFromMonthChip();
+      fireEvent.click(within(view).getByRole("button", { name: /delete event/i }));
+      const chooser = await screen.findByRole("dialog", { name: "Delete recurring event" });
+      fireEvent.click(within(chooser).getByRole("button", { name: "Delete this occurrence" }));
+      await waitFor(() => expect(api.deleteEvent).toHaveBeenCalledTimes(1));
+      expect(api.deleteEvent).toHaveBeenCalledWith("home-1", "event-swim", "occurrence", canonical);
+    });
   });
 });
 
