@@ -73,6 +73,20 @@ exceptions".
   removes their platform appearance on every consumer surface. It does not
   reach the Platform Control Centre (`.pcc-root`), which styles its own
   controls.
+- Text controls are 16px on phones and on every touch screen, because iOS
+  zooms the whole page when a focused control is under 16px, and it stays
+  zoomed after the keyboard closes. Two shared rules do this, both with no
+  class in their selector, so a module that sizes its own controls still
+  wins:
+  - `max-width: 800px` covers phones in portrait;
+  - `(hover: none) and (pointer: coarse)` covers wider touch screens: iPhone
+    landscape, the Duo's inner screen and iPad. Without it these kept the
+    15px body size. Desktop and laptop pointers do not match it, so desktop
+    is unchanged, and it skips the Platform Control Centre.
+
+  A module rule that sets its own smaller size must add a 16px override for
+  both cases, as `.meal-filter-control select` does. The audit fails any
+  text control under 16px on a touch profile.
 
 ## Grouping fields
 
@@ -321,7 +335,13 @@ own error (`useFormFieldErrors`). Payloads and API calls are unchanged.
     another link stay in the form.
   - **Plan this meal:** Date and Meal keep their icon-in-field look
     (`.plan-meal-field`) inside shared fields, in a `10rem` row. Those
-    controls now have 16px text on phones, so iOS does not zoom them.
+    controls have 16px text on phones and on every touch screen (Phase 3
+    extended this from phones to iPhone landscape, the Duo's inner screen
+    and iPad, where they were 14.25px), so iOS does not zoom them.
+  - **Filter meals** (the planner's All meals picker, not a form): keeps
+    its small text on desktop, and is 16px on phones and touch screens
+    (`.meal-filter-control select`), so iOS no longer zooms the page when it
+    is opened. Guarded by `app/meal-plans/meal-plans-focus-zoom.test.ts`.
   - **Add ingredients to list:** a `FormSheet` around a form without
     `onSubmit`, so Enter in the new-list name does not add the
     ingredients. The ingredients are a `FormSection`.
@@ -425,6 +445,31 @@ which are deliberate:
 New consumer forms use the shared primitives by default. A new exception
 needs a reason that fits this table.
 
+### Calendar toolbar pickers
+
+The Everyone and view pickers are not forms, but they follow the same 16px
+rule. They used 0.78rem text so that Everyone, Month and Tags fitted on one
+row on a 393px phone, and iOS zoomed the page when either was opened.
+
+- On phones and touch screens (`max-width: 800px`, or
+  `(hover: none) and (pointer: coarse)`), both pickers and the Tags pill,
+  which must match them, have 16px text and 44px targets. Their row wraps
+  where the space runs out: on a 320px phone Tags moves to a second row; from
+  375px all three fit. The text never shrinks to make them fit, and a pill
+  never exceeds the row.
+- Desktop, with a fine pointer above 800px, keeps the compact 0.78rem pills.
+- Month navigation stays on its own single row above them. In the browser
+  its controls compact by the row's own width (a container query), not only
+  the viewport's, so a window just over 430px or a large safe-area inset no
+  longer cuts the month off. The native shell's rail and wide layouts size
+  that row themselves and are excluded.
+- Guarded by `app/calendar/calendar-toolbar-responsive.test.ts` and the
+  audit's Calendar toolbar section.
+
+There are no open focus-zoom defects. `KNOWN_FOCUS_ZOOM_DEFECTS` in
+`scripts/layout-inspector.mjs` is empty; an entry there is reported as an
+advisory, so add one only with a reason and a plan to remove it.
+
 ## Sheet or dialog
 
 The consumer app presents forms as bottom sheets on every width today;
@@ -477,7 +522,46 @@ its own design decision and is not part of this standard yet.
   answer, including overlaps that must still fail.
 - `pnpm --filter @mykhaya/web audit:responsive` runs the same inspector
   against a running app, signed in, across every consumer route and each
-  module's create sheet. It also opens the migrated forms in filled states:
+  module's create sheet. It has three modes:
+  - **Full** (`audit:responsive`): every route, section and viewport, one
+    browser. This is the release-readiness evidence.
+  - **Parallel** (`audit:responsive:parallel`, or `--jobs=N`): the same full
+    audit split by viewport across browser processes, each signed in
+    separately, then merged into one report. Same checks and the same
+    count; it is release evidence too.
+  - **Fast** (`audit:responsive:fast`): development feedback only, never
+    release evidence. Five representative viewports (320 phone, standard
+    iPhone, iPhone landscape, Duo inner screen, desktop), and with
+    `--changed[=REF]` only the sections and routes affected by files changed
+    since `REF` (default `HEAD`, plus untracked files). A change to shared
+    CSS, components, packages or the inspector selects every section.
+
+  `--viewports`, `--sections` and `--routes` run explicit subsets. Any run
+  that leaves something out is labelled PARTIAL or FAST in the report and
+  the summary.
+
+  The phone, Duo and iPad profiles run with Chromium touch emulation, so
+  the page sees `(hover: none) and (pointer: coarse)` as on a device. On
+  those profiles the inspector also fails any text control under 16px (iOS
+  focus zoom), except a listed known defect, which is reported as an
+  advisory under "Known defects". Desktop profiles keep a mouse pointer.
+
+  A Calendar toolbar section measures the toolbar on every viewport in two
+  states, Month and Schedule (the widest view label). Choosing a view only
+  changes the browser's local preference, and it is set back to Month. It
+  checks, at the top of the page:
+  - both pickers are at least 16px with 44px targets on touch profiles, and
+    exactly the compact desktop size on desktop profiles;
+  - the Tags pill matches the pickers, and no picker cuts off its text;
+  - every toolbar control stays inside the toolbar and the viewport, and
+    none overlap;
+  - Previous, the month and Next stay on one line, uncovered, and the month
+    is not cut off;
+  - choosing Schedule or Month shows that view.
+
+  It saves a screenshot of the toolbar alone for each state and viewport.
+
+  It also opens the migrated forms in filled states:
   - Copy Event, on one fixture event served in the audit's own browser
     (`routeCopyEvent`). It is a one-off owned by the signed-in user, placed
     inside whatever window the calendar asks for, so every viewport has an

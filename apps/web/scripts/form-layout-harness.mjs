@@ -183,15 +183,21 @@ const INSPECTOR_SELF_TESTS = [
   { name: "a toggle removed from the keyboard order fails", html: field('id="pw" type="password"', `${ADORNED} tabindex="-1" aria-label="Show password"`), expect: ["input-adornment"] },
   { name: "a toggle whose name does not match the field's state fails", html: field('id="pw" type="password"', `${ADORNED} aria-label="Hide password"`), expect: ["input-adornment"] },
   { name: "two plain overlapping inputs still fail", html: '<div style="position:relative"><input style="position:absolute;left:0;top:0;width:200px;height:40px"><input style="position:absolute;left:100px;top:10px;width:200px;height:40px"></div>', expect: ["control-overlap"] },
+  // Focus zoom: on for touch profiles only, and only for text controls.
+  { name: "a 15px select fails the focus-zoom check on a touch profile", html: '<select style="font-size:15px"><option>All meals</option></select>', options: { minimumControlFontSize: 16 }, expect: ["focus-zoom"] },
+  { name: "16px text controls and small checkboxes pass the focus-zoom check", html: '<input style="font-size:16px"><textarea style="font-size:16px"></textarea><input type="checkbox" style="font-size:10px">', options: { minimumControlFontSize: 16 }, expect: [] },
+  { name: "a known focus-zoom defect is an advisory, not a pass or a failure", html: '<label class="calendar-selector"><select style="font-size:12px"><option>Everyone</option></select></label>', options: { minimumControlFontSize: 16, knownFocusZoom: [".calendar-selector select"] }, expect: [], expectAdvisories: ["focus-zoom-known"] },
 ];
 const selfTestResults = [];
 const selfTestPage = await browser.newPage({ viewport: { width: 400, height: 300 } });
 for (const test of INSPECTOR_SELF_TESTS) {
   await selfTestPage.setContent(`<!doctype html><html><body style="margin:20px">${test.html}</body></html>`);
-  const report = await selfTestPage.evaluate(inspectLayoutInPage, {});
+  const report = await selfTestPage.evaluate(inspectLayoutInPage, test.options ?? {});
   const kinds = [...new Set(report.issues.map((issue) => issue.kind))].sort();
-  const passed = JSON.stringify(kinds) === JSON.stringify([...test.expect].sort());
-  selfTestResults.push({ name: test.name, passed, expected: test.expect, actual: kinds, issues: report.issues });
+  const advisoryKinds = [...new Set(report.advisories.map((issue) => issue.kind))].filter((kind) => kind.startsWith("focus-zoom")).sort();
+  const passed = JSON.stringify(kinds) === JSON.stringify([...test.expect].sort())
+    && JSON.stringify(advisoryKinds) === JSON.stringify([...(test.expectAdvisories ?? [])].sort());
+  selfTestResults.push({ name: test.name, passed, expected: test.expect, actual: kinds, advisories: advisoryKinds, issues: report.issues });
 }
 await browser.close();
 const selfTestFailures = selfTestResults.filter((test) => !test.passed);

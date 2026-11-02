@@ -20,8 +20,11 @@ export type LayoutInspectionOptions = {
   intendedScrollers?: string[];
   visibleHeight?: number | null;
   acceptedOverflow?: string[];
+  minimumControlFontSize?: number | null;
+  knownFocusZoom?: string[];
 };
 
 export function inspectLayoutInPage(options?: LayoutInspectionOptions): LayoutReport;
 export const INTENDED_HORIZONTAL_SCROLLERS: string[];
 export const ACCEPTED_CONTAINMENT_EXCEPTIONS: string[];
+export const KNOWN_FOCUS_ZOOM_DEFECTS: string[];

@@ -6,6 +6,20 @@
 //   E2E_EMAIL=... E2E_PASSWORD=... node scripts/responsive-audit.mjs
 //   node scripts/responsive-audit.mjs http://localhost:8089
 //
+// Modes:
+//   (default)        Full audit: every route, section and viewport. This is
+//                    the release-readiness evidence.
+//   --jobs=N         The full audit split by viewport across N browser
+//                    processes, each signed in separately. Same checks.
+//   --fast           Development feedback only, never release evidence: five
+//                    representative viewports (smallest phone, standard
+//                    iPhone, iPhone landscape, Duo inner screen, desktop).
+//   --changed[=REF]  With --fast: only the sections and routes affected by
+//                    files changed since REF (default HEAD, plus untracked
+//                    files). A change to shared CSS, components, packages or
+//                    the inspector selects everything.
+//   --viewports=a,b  --sections=a,b  --routes=/a,/b   Explicit subsets.
+//
 // The output directory is test-results/responsive-audit/<timestamp>, which is
 // ignored by git. Missing credentials or an MFA hand-off are reported as
 // BLOCKED; this script never bypasses or weakens authentication.
@@ -14,8 +28,9 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline/promises";
+import { execFileSync, spawn } from "node:child_process";
 import { chromium } from "@playwright/test";
-import { ACCEPTED_CONTAINMENT_EXCEPTIONS, inspectLayoutInPage, INTENDED_HORIZONTAL_SCROLLERS } from "./layout-inspector.mjs";
+import { ACCEPTED_CONTAINMENT_EXCEPTIONS, inspectLayoutInPage, INTENDED_HORIZONTAL_SCROLLERS, KNOWN_FOCUS_ZOOM_DEFECTS } from "./layout-inspector.mjs";
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
 const localEnvPath = path.resolve(scriptDir, "..", ".env.responsive-audit.local");
@@ -60,8 +75,13 @@ if (checkConfig) {
   }
   process.exit();
 }
+const option = (name) => process.argv.find((argument) => argument.startsWith(`--${name}=`))?.slice(name.length + 3);
+const listOption = (name) => option(name)?.split(",").map((item) => item.trim()).filter(Boolean) ?? null;
+// A child of a --jobs run writes its results into the parent's directory.
+const childDir = option("child-dir");
+const childId = option("child-id");
 const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
-const outputDir = path.resolve(
+const outputDir = childDir ? path.resolve(childDir) : path.resolve(
   process.env.RESPONSIVE_AUDIT_OUTPUT_DIR ?? path.join("test-results", "responsive-audit"),
   timestamp,
 );
@@ -112,19 +132,38 @@ const consumerRoutes = [
 // status overlay zone are the physical measurements in
 // docs/engineering/ios-engineering-standards.md section 4; the Duo viewport
 // sizes are representative of its native-layout class ranges, not measured.
-const viewports = [
-  { name: "320x568", width: 320, height: 568, insets: { top: 20 } },
-  { name: "375x667", width: 375, height: 667, insets: { top: 20 } },
-  { name: "393x852", width: 393, height: 852, insets: { top: 59, bottom: 34 } },
-  { name: "430x932", width: 430, height: 932, insets: { top: 59, bottom: 34 } },
-  { name: "852x393-landscape", width: 852, height: 393, insets: { left: 59, right: 59, bottom: 21 } },
-  { name: "duo-outer-512x740", width: 512, height: 740, insets: { top: 20, right: 93 }, overlay: { right: 93, top: 165 } },
-  { name: "duo-inner-900x740", width: 900, height: 740, insets: { top: 20, right: 93 }, overlay: { right: 93, top: 106 } },
-  { name: "768x1024", width: 768, height: 1024, insets: {} },
-  { name: "1024x768", width: 1024, height: 768, insets: {} },
+// `touch` profiles (phones, the Duo and iPad) run with touch emulation, so
+// the page sees (hover: none) and (pointer: coarse) as on the device, and
+// their text controls are held to the 16px iOS focus-zoom minimum.
+const ALL_VIEWPORTS = [
+  { name: "320x568", width: 320, height: 568, insets: { top: 20 }, touch: true },
+  { name: "375x667", width: 375, height: 667, insets: { top: 20 }, touch: true },
+  { name: "393x852", width: 393, height: 852, insets: { top: 59, bottom: 34 }, touch: true },
+  { name: "430x932", width: 430, height: 932, insets: { top: 59, bottom: 34 }, touch: true },
+  { name: "852x393-landscape", width: 852, height: 393, insets: { left: 59, right: 59, bottom: 21 }, touch: true },
+  { name: "duo-outer-512x740", width: 512, height: 740, insets: { top: 20, right: 93 }, overlay: { right: 93, top: 165 }, touch: true },
+  { name: "duo-inner-900x740", width: 900, height: 740, insets: { top: 20, right: 93 }, overlay: { right: 93, top: 106 }, touch: true },
+  { name: "768x1024", width: 768, height: 1024, insets: {}, touch: true },
+  { name: "1024x768", width: 1024, height: 768, insets: {}, touch: true },
   { name: "1280x800", width: 1280, height: 800, insets: {} },
   { name: "1440x900", width: 1440, height: 900, insets: {} },
 ];
+const FAST_VIEWPORTS = ["320x568", "393x852", "852x393-landscape", "duo-inner-900x740", "1280x800"];
+const fast = process.argv.includes("--fast");
+const changedArgument = process.argv.find((argument) => argument === "--changed" || argument.startsWith("--changed="));
+if (changedArgument && !fast) {
+  console.error("--changed is a fast-mode option: the full audit always runs every section.");
+  process.exit(2);
+}
+const requestedViewports = listOption("viewports") ?? (fast ? FAST_VIEWPORTS : null);
+const unknownViewports = (requestedViewports ?? []).filter((name) => !ALL_VIEWPORTS.some((viewport) => viewport.name === name));
+if (unknownViewports.length) {
+  console.error(`Unknown viewports: ${unknownViewports.join(", ")}`);
+  process.exit(2);
+}
+const selectedViewports = requestedViewports ? ALL_VIEWPORTS.filter((viewport) => requestedViewports.includes(viewport.name)) : ALL_VIEWPORTS;
+// Reassigned per touch group below; every section iterates this binding.
+let viewports = selectedViewports;
 
 const results = [];
 const sheetResults = [];
@@ -162,14 +201,22 @@ async function applyInsets(page, viewport) {
 // simulated system overlay. Document scroll width alone missed overflow
 // inside the clipped, independently scrolling bottom sheet.
 async function inspectLayout(page, viewport, activeSheetOnly = false) {
-  return page.evaluate(inspectLayoutInPage, {
+  const report = await page.evaluate(inspectLayoutInPage, {
     rootSelector: activeSheetOnly ? ".bottom-sheet" : null,
     checkReachability: activeSheetOnly,
     overlay: viewport.overlay ?? null,
     intendedScrollers: INTENDED_HORIZONTAL_SCROLLERS,
     acceptedOverflow: ACCEPTED_CONTAINMENT_EXCEPTIONS,
+    minimumControlFontSize: viewport.touch ? 16 : null,
+    knownFocusZoom: KNOWN_FOCUS_ZOOM_DEFECTS,
   });
+  for (const advisory of report.advisories) {
+    if (advisory.kind === "focus-zoom-known") knownDefects.add(`${advisory.element} (${advisory.fontSize}px) at ${viewport.name}`);
+  }
+  return report;
 }
+// Known defects met during the run (reported, never passed silently).
+const knownDefects = new Set();
 
 const issueText = (issue) => `${issue.kind}: ${issue.element} — ${issue.message}`;
 
@@ -192,7 +239,9 @@ async function authenticate(page) {
   await page.getByLabel("Email").fill(email);
   await page.getByLabel("Password", { exact: true }).fill(password);
   await page.getByRole("button", { name: "Sign in" }).click();
-  await page.waitForTimeout(1200);
+  // Wait for where sign-in lands rather than a fixed delay: with several
+  // browsers running at once, the redirect can take longer than a second.
+  await page.waitForURL(/\/(home|onboarding|mfa)(?:[/?]|$)/, { timeout: 30000 }).catch(() => {});
   if (page.url().includes("/mfa")) {
     const mfaCode = process.env.E2E_MFA_CODE ?? await promptForMfaCode();
     if (!mfaCode) return { ok: false, reason: "MFA challenge required; provide E2E_MFA_CODE or use an interactive terminal" };
@@ -479,6 +528,7 @@ async function auditNudgeForms(page) {
       }],
       ["/settings/profile", "profile birthday editor", async (issues) => {
         await page.locator(".profile-detail-value").getByRole("button", { name: "Edit" }).click({ timeout: 5000 });
+        await page.getByLabel("Month", { exact: true }).waitFor({ timeout: 5000 }).catch(() => {});
         await requireLabels(page, ["Month", "Day"], issues);
       }],
     ];
@@ -486,6 +536,9 @@ async function auditNudgeForms(page) {
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
       await page.goto(`${BASE}${route}`, { waitUntil: "domcontentloaded", timeout: 30000 });
       await applyInsets(page, viewport);
+      // As for route checks: let the page hydrate and load before acting, or
+      // a click on a not-yet-interactive control does nothing.
+      await page.waitForLoadState("networkidle", { timeout: 5000 }).catch(() => {});
       const issues = [];
       try {
         await prepare(issues);
@@ -1409,6 +1462,136 @@ async function auditHomeModuleForms(page) {
   return moduleResults;
 }
 
+// The Calendar toolbar (Phase 3): month navigation on one row, then the
+// Everyone and view pickers with the Tags pill on a row that wraps where the
+// space runs out. Two states per viewport: Month, and Schedule, the widest
+// view label. Choosing a view only changes this browser's local preference,
+// and it is set back to Month afterwards.
+// 0.78rem on the 15px root: the desktop pills must stay exactly as they were.
+const DESKTOP_PILL_FONT_SIZE = 11.7;
+
+function measureCalendarToolbar({ touch, desktopSize }) {
+  const issues = [];
+  const header = document.querySelector(".calendar-toolbar-compact");
+  if (!header) return ["The Calendar toolbar was not rendered"];
+  // Measured where a person reaches it, at the top of the page: Calendar
+  // scrolls itself to today, which can leave the toolbar above the viewport.
+  const scrollers = [document.scrollingElement, document.querySelector(".app-content-scroll-region")].filter(Boolean);
+  const positions = scrollers.map((element) => element.scrollTop);
+  scrollers.forEach((element) => { element.scrollTop = 0; });
+  const shown = (element) => {
+    const rect = element.getBoundingClientRect();
+    const style = getComputedStyle(element);
+    return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+  };
+  const round = (value) => Math.round(value * 10) / 10;
+  const toolbar = header.getBoundingClientRect();
+  const viewportWidth = document.documentElement.clientWidth;
+  const pickers = [["Everyone", 'select[aria-label="Filter by household member"]'], ["view", 'select[aria-label="Calendar view"]']]
+    .map(([name, selector]) => [name, header.querySelector(selector)]);
+  const tags = header.querySelector('button[aria-label="Filter by Calendar Tags"]');
+  const canvas = document.createElement("canvas").getContext("2d");
+  for (const [name, picker] of pickers) {
+    if (!picker || !shown(picker)) {
+      issues.push(`The ${name} picker is not shown`);
+      continue;
+    }
+    const style = getComputedStyle(picker);
+    const size = parseFloat(style.fontSize);
+    const rect = picker.getBoundingClientRect();
+    if (touch) {
+      if (size < 16 - 0.01) issues.push(`The ${name} picker's text is ${size}px on a touch profile (minimum 16px: iOS focus zoom)`);
+      if (rect.height < 44 - 0.5) issues.push(`The ${name} picker is ${round(rect.height)}px tall on a touch profile (minimum 44px)`);
+    } else if (Math.abs(size - desktopSize) > 0.05) {
+      issues.push(`The ${name} picker's text is ${size}px on desktop (expected the unchanged ${desktopSize}px)`);
+    }
+    // The chosen option's text must fit between the pill's padding (the
+    // chevron sits in the right padding), so nothing is cut off.
+    canvas.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+    const text = picker.options[picker.selectedIndex]?.text ?? "";
+    const room = rect.width - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight) - parseFloat(style.borderLeftWidth) - parseFloat(style.borderRightWidth);
+    if (canvas.measureText(text).width > room + 1) issues.push(`The ${name} picker cuts off "${text}" (${round(canvas.measureText(text).width)}px of text in ${round(room)}px)`);
+  }
+  if (tags && pickers[0][1] && getComputedStyle(tags).fontSize !== getComputedStyle(pickers[0][1]).fontSize) {
+    issues.push(`The Tags pill's text (${getComputedStyle(tags).fontSize}) no longer matches the pickers' (${getComputedStyle(pickers[0][1]).fontSize})`);
+  }
+  // Every control inside the toolbar and the viewport, and none overlapping.
+  const controls = [...header.querySelectorAll("button, a[href], select, input")].filter(shown);
+  for (const control of controls) {
+    const rect = control.getBoundingClientRect();
+    const name = control.getAttribute("aria-label") || control.textContent.trim() || control.tagName.toLowerCase();
+    if (rect.left < toolbar.left - 0.5 || rect.right > toolbar.right + 0.5) issues.push(`"${name}" extends outside the toolbar`);
+    if (rect.left < -0.5 || rect.right > viewportWidth + 0.5) issues.push(`"${name}" extends outside the viewport`);
+  }
+  for (let index = 0; index < controls.length; index += 1) {
+    for (let other = index + 1; other < controls.length; other += 1) {
+      if (controls[index].contains(controls[other]) || controls[other].contains(controls[index])) continue;
+      const a = controls[index].getBoundingClientRect();
+      const b = controls[other].getBoundingClientRect();
+      if (a.left < b.right - 1 && a.right > b.left + 1 && a.top < b.bottom - 1 && a.bottom > b.top + 1) {
+        issues.push(`"${controls[index].getAttribute("aria-label") || controls[index].textContent.trim()}" overlaps "${controls[other].getAttribute("aria-label") || controls[other].textContent.trim()}"`);
+      }
+    }
+  }
+  // Month navigation: Previous, the month and Next on one line, reachable.
+  const previous = header.querySelector('button[aria-label="Previous period"]');
+  const next = header.querySelector('button[aria-label="Next period"]');
+  const label = header.querySelector(".calendar-month-label");
+  for (const [name, element] of [["Previous period", previous], ["Next period", next], ["month label", label]]) {
+    if (!element || !shown(element)) {
+      issues.push(`Month navigation: ${name} is not shown`);
+      continue;
+    }
+    if (element === label) continue;
+    const rect = element.getBoundingClientRect();
+    const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+    if (!hit || (hit !== element && !element.contains(hit))) issues.push(`Month navigation: ${name} is covered by another element`);
+  }
+  const monthRow = header.querySelector(".calendar-month-row");
+  if (monthRow) {
+    const centres = [...monthRow.children].filter(shown).map((child) => { const rect = child.getBoundingClientRect(); return (rect.top + rect.bottom) / 2; });
+    if (centres.length && Math.max(...centres) - Math.min(...centres) > 4) issues.push("Month navigation wrapped onto more than one line");
+  }
+  if (label && label.scrollWidth > label.clientWidth + 1) issues.push(`The month label "${label.textContent.trim()}" is cut off`);
+  scrollers.forEach((element, index) => { element.scrollTop = positions[index]; });
+  return issues;
+}
+
+async function auditCalendarToolbar(page) {
+  const toolbarResults = [];
+  for (const viewport of viewports) {
+    for (const state of ["month", "schedule"]) {
+      await page.setViewportSize({ width: viewport.width, height: viewport.height });
+      await page.goto(`${BASE}/calendar`, { waitUntil: "domcontentloaded", timeout: 30000 });
+      await applyInsets(page, viewport);
+      await page.waitForLoadState("networkidle", { timeout: 5000 }).catch(() => {});
+      const issues = [];
+      const view = page.getByLabel("Calendar view", { exact: true });
+      try {
+        // The view picker stays hidden until the saved view is restored.
+        await view.waitFor({ state: "visible", timeout: 8000 });
+        await view.selectOption(state === "schedule" ? "agenda" : "month");
+        await page.locator(state === "schedule" ? ".agenda-view" : ".calendar-month-swipe, .calendar-month").first().waitFor({ timeout: 8000 })
+          .catch(() => issues.push(`Choosing ${state === "schedule" ? "Schedule" : "Month"} did not show that view`));
+      } catch (error) {
+        issues.push(`Could not prepare the state: ${error.message.split("\n")[0]}`);
+      }
+      await page.waitForTimeout(200);
+      issues.push(...await page.evaluate(measureCalendarToolbar, { touch: Boolean(viewport.touch), desktopSize: DESKTOP_PILL_FONT_SIZE }));
+      const layout = await inspectLayout(page, viewport);
+      issues.push(...layout.issues.map(issueText));
+      const filename = `calendar-toolbar-${state}-${viewport.name}.png`;
+      // Captured at the top of the page, as measured, not under the fixed header.
+      await page.evaluate(() => [document.scrollingElement, document.querySelector(".app-content-scroll-region")].forEach((element) => { if (element) element.scrollTop = 0; }));
+      await page.locator(".calendar-toolbar-compact").screenshot({ path: path.join(outputDir, filename) }).catch(() => issues.push("Could not capture the toolbar"));
+      screenshots.push({ filename, route: "/calendar", viewport: viewport.name });
+      toolbarResults.push({ viewport: viewport.name, state, result: issues.length ? "FAIL" : "PASS", issues, screenshot: filename, details: layout.issues.slice(0, 40) });
+      if (state === "schedule") await view.selectOption("month").catch(() => {});
+    }
+  }
+  return toolbarResults;
+}
+
 // The remaining consumer forms on the shared form primitives (Phase 2F):
 // Help & Support, Calendar's calendars and sharing, Calendar Tags and the
 // Members invitation. They are measured on the account's own pages, but
@@ -1592,7 +1775,7 @@ async function auditSignInStates(browser) {
   const states = ["password sign-in", "password shown", "remembered account"];
   for (const viewport of viewports) {
     for (const state of states) {
-      const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height } });
+      const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height }, hasTouch: Boolean(viewport.touch) });
       const page = await context.newPage();
       const issues = [];
       try {
@@ -1790,11 +1973,11 @@ async function auditCopyEventAt(page, viewport, copyResults) {
   await page.keyboard.press("Escape").catch(() => {});
 }
 
-async function writeReport(auth, copyResults, editorResults, nudgeResults, drivewayResults, drivewayDisabledResults, budgetResults, moduleResults, remainingResults, signInResults) {
+async function writeReport(auth, { copyResults, editorResults, nudgeResults, drivewayResults, drivewayDisabledResults, budgetResults, moduleResults, remainingResults, toolbarResults, signInResults }, run) {
   for (const entry of results) {
     if (entry.details?.length) entry.issues.push(`DOM details: ${JSON.stringify(entry.details)}`);
   }
-  for (const entry of [...copyResults, ...editorResults, ...nudgeResults, ...drivewayResults, ...drivewayDisabledResults, ...budgetResults, ...moduleResults, ...remainingResults, ...signInResults, ...sheetResults]) {
+  for (const entry of [...copyResults, ...editorResults, ...nudgeResults, ...drivewayResults, ...drivewayDisabledResults, ...budgetResults, ...moduleResults, ...remainingResults, ...toolbarResults, ...signInResults, ...sheetResults]) {
     if (entry.details?.length) entry.issues.push(`DOM details: ${JSON.stringify(entry.details)}`);
   }
   const rows = results.map((entry) => `<tr class="${entry.result.toLowerCase()}"><td>${escapeHtml(entry.route)}</td><td>${escapeHtml(entry.viewport)}</td><td>${entry.status ?? ""}</td><td>${escapeHtml(entry.result)}</td><td>${entry.issues.map(escapeHtml).join("<br>") || "—"}</td><td>${entry.screenshot ? `<img src="${escapeHtml(entry.screenshot)}" loading="lazy" alt="${escapeHtml(entry.route)} ${escapeHtml(entry.viewport)}">` : ""}</td></tr>`).join("\n");
@@ -1806,35 +1989,231 @@ async function writeReport(auth, copyResults, editorResults, nudgeResults, drive
   const budgetRows = budgetResults.map((entry) => `<tr class="${entry.result.toLowerCase().replaceAll(" ", "-")}"><td>${escapeHtml(entry.state)}</td><td>${escapeHtml(entry.viewport)}</td><td>${escapeHtml(entry.result)}</td><td>${entry.issues.map(escapeHtml).join("<br>") || "—"}</td><td>${entry.screenshot ? `<img src="${escapeHtml(entry.screenshot)}" loading="lazy" alt="${escapeHtml(entry.state)} ${escapeHtml(entry.viewport)}">` : ""}</td></tr>`).join("\n");
   const moduleRows = moduleResults.map((entry) => `<tr class="${entry.result.toLowerCase().replaceAll(" ", "-")}"><td>${escapeHtml(entry.state)}</td><td>${escapeHtml(entry.viewport)}</td><td>${escapeHtml(entry.result)}</td><td>${entry.issues.map(escapeHtml).join("<br>") || "—"}</td><td>${entry.screenshot ? `<img src="${escapeHtml(entry.screenshot)}" loading="lazy" alt="${escapeHtml(entry.state)} ${escapeHtml(entry.viewport)}">` : ""}</td></tr>`).join("\n");
   const remainingRows = remainingResults.map((entry) => `<tr class="${entry.result.toLowerCase().replaceAll(" ", "-")}"><td>${escapeHtml(entry.state)}</td><td>${escapeHtml(entry.viewport)}</td><td>${escapeHtml(entry.result)}</td><td>${entry.issues.map(escapeHtml).join("<br>") || "—"}</td><td>${entry.screenshot ? `<img src="${escapeHtml(entry.screenshot)}" loading="lazy" alt="${escapeHtml(entry.state)} ${escapeHtml(entry.viewport)}">` : ""}</td></tr>`).join("\n");
+  const toolbarRows = toolbarResults.map((entry) => `<tr class="${entry.result.toLowerCase().replaceAll(" ", "-")}"><td>${escapeHtml(entry.state)}</td><td>${escapeHtml(entry.viewport)}</td><td>${escapeHtml(entry.result)}</td><td>${entry.issues.map(escapeHtml).join("<br>") || "—"}</td><td>${entry.screenshot ? `<img src="${escapeHtml(entry.screenshot)}" loading="lazy" alt="Calendar toolbar ${escapeHtml(entry.state)} ${escapeHtml(entry.viewport)}">` : ""}</td></tr>`).join("\n");
   const signInRows = signInResults.map((entry) => `<tr class="${entry.result.toLowerCase().replaceAll(" ", "-")}"><td>${escapeHtml(entry.state)}</td><td>${escapeHtml(entry.viewport)}</td><td>${escapeHtml(entry.result)}</td><td>${entry.issues.map(escapeHtml).join("<br>") || "—"}</td><td>${entry.screenshot ? `<img src="${escapeHtml(entry.screenshot)}" loading="lazy" alt="${escapeHtml(entry.state)} ${escapeHtml(entry.viewport)}">` : ""}</td></tr>`).join("\n");
   const sheetRows = sheetResults.map((entry) => `<tr class="${entry.result.toLowerCase().replaceAll(" ", "-")}"><td>${escapeHtml(entry.route)}</td><td>${escapeHtml(entry.title ?? "")}</td><td>${escapeHtml(entry.viewport)}</td><td>${escapeHtml(entry.result)}</td><td>${entry.issues.map(escapeHtml).join("<br>") || "—"}</td><td>${entry.screenshot ? `<img src="${escapeHtml(entry.screenshot)}" loading="lazy" alt="">` : ""}</td></tr>`).join("\n");
-  const html = `<!doctype html><meta charset="utf-8"><title>MyKhaya Responsive Audit</title><style>body{font:14px system-ui;margin:24px;color:#24312d}table{border-collapse:collapse;width:100%;margin:16px 0}th,td{border:1px solid #d8ded8;padding:8px;vertical-align:top;text-align:left}.pass{background:#edf7ed}.fail{background:#fff0ed}.blocked,.not-tested{background:#fff8df}img{display:block;max-width:320px;max-height:420px;border:1px solid #d8ded8}code{background:#f3f4f1;padding:2px 4px}summary{cursor:pointer}</style><h1>MyKhaya Responsive Audit</h1><p>Base URL: <code>${escapeHtml(BASE)}</code></p><p>Authentication: <strong>${auth.ok ? "PASS" : `BLOCKED — ${escapeHtml(auth.reason)}`}</strong></p><h2>Routes</h2><table><thead><tr><th>Route</th><th>Viewport</th><th>Status</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${rows}</tbody></table><h2>Create sheets</h2><table><thead><tr><th>Route</th><th>Sheet</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${sheetRows || `<tr><td colspan="6">No create sheets opened</td></tr>`}</tbody></table><h2>Calendar Copy Event</h2><table><thead><tr><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${copyRows || `<tr><td colspan="4">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Calendar event editor</h2><table><thead><tr><th>Viewport</th><th>State</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${editorRows || `<tr><td colspan="5">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Routines, Reminders and Settings forms</h2><table><thead><tr><th>Form</th><th>State</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${nudgeRows || `<tr><td colspan="6">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Driveway forms</h2><table><thead><tr><th>State</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${drivewayRows || `<tr><td colspan="5">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Driveway turned off</h2><table><thead><tr><th>State</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${drivewayDisabledRows || `<tr><td colspan="5">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Budget forms</h2><table><thead><tr><th>State</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${budgetRows || `<tr><td colspan="5">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Meal Plans, Lists and Wishlists forms</h2><table><thead><tr><th>State</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${moduleRows || `<tr><td colspan="5">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Help &amp; Support, Calendar sharing, Calendar Tags and Members forms</h2><table><thead><tr><th>State</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${remainingRows || `<tr><td colspan="5">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Sign-in states</h2><table><thead><tr><th>State</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${signInRows || `<tr><td colspan="5">No results</td></tr>`}</tbody></table><h2>Notes</h2><p>Chromium only. Safe areas are simulated through the --safe-* properties; this is not native WKWebView or physical-device evidence.</p><p>BLOCKED means authentication or required data was unavailable. NOT TESTED means the route rendered but the requested interactive component could not be opened. Screenshots are local artifacts under this audit directory.</p>`;
+  const html = `<!doctype html><meta charset="utf-8"><title>MyKhaya Responsive Audit</title><style>body{font:14px system-ui;margin:24px;color:#24312d}table{border-collapse:collapse;width:100%;margin:16px 0}th,td{border:1px solid #d8ded8;padding:8px;vertical-align:top;text-align:left}.pass{background:#edf7ed}.fail{background:#fff0ed}.blocked,.not-tested{background:#fff8df}img{display:block;max-width:320px;max-height:420px;border:1px solid #d8ded8}code{background:#f3f4f1;padding:2px 4px}summary{cursor:pointer}</style><h1>MyKhaya Responsive Audit</h1><p>Mode: <strong>${run.modeName === "FULL" ? "FULL — release evidence" : `${run.modeName} — development feedback, not release evidence`}</strong>${run.jobs > 1 ? ` (${run.jobs} parallel jobs)` : ""}. Viewports: ${escapeHtml(run.viewports.join(", "))}. Sections: ${escapeHtml(run.sections.join(", "))}.${run.routeCount !== null ? ` Routes: ${run.routeCount}.` : ""} Duration: ${escapeHtml(run.duration)}.</p><p>Base URL: <code>${escapeHtml(BASE)}</code></p><p>Authentication: <strong>${auth.ok ? "PASS" : `BLOCKED — ${escapeHtml(auth.reason)}`}</strong></p>${run.blockedSections.length ? `<p><strong>Sections not run (BLOCKED):</strong></p><ul>${run.blockedSections.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>` : ""}<h2>Routes</h2><table><thead><tr><th>Route</th><th>Viewport</th><th>Status</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${rows}</tbody></table><h2>Create sheets</h2><table><thead><tr><th>Route</th><th>Sheet</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${sheetRows || `<tr><td colspan="6">No create sheets opened</td></tr>`}</tbody></table><h2>Calendar Copy Event</h2><table><thead><tr><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${copyRows || `<tr><td colspan="4">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Calendar event editor</h2><table><thead><tr><th>Viewport</th><th>State</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${editorRows || `<tr><td colspan="5">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Routines, Reminders and Settings forms</h2><table><thead><tr><th>Form</th><th>State</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${nudgeRows || `<tr><td colspan="6">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Driveway forms</h2><table><thead><tr><th>State</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${drivewayRows || `<tr><td colspan="5">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Driveway turned off</h2><table><thead><tr><th>State</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${drivewayDisabledRows || `<tr><td colspan="5">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Budget forms</h2><table><thead><tr><th>State</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${budgetRows || `<tr><td colspan="5">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Meal Plans, Lists and Wishlists forms</h2><table><thead><tr><th>State</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${moduleRows || `<tr><td colspan="5">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Help &amp; Support, Calendar sharing, Calendar Tags and Members forms</h2><table><thead><tr><th>State</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${remainingRows || `<tr><td colspan="5">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Calendar toolbar</h2><table><thead><tr><th>State</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Toolbar</th></tr></thead><tbody>${toolbarRows || `<tr><td colspan="5">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Sign-in states</h2><table><thead><tr><th>State</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${signInRows || `<tr><td colspan="5">No results</td></tr>`}</tbody></table><h2>Known defects (advisories)</h2>${run.knownDefects.length ? `<ul>${run.knownDefects.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>` : "<p>None met.</p>"}<h2>Notes</h2><p>Chromium only. Touch profiles use Chromium touch emulation, not a device. Safe areas are simulated through the --safe-* properties; this is not native WKWebView or physical-device evidence.</p><p>BLOCKED means authentication or required data was unavailable. NOT TESTED means the route rendered but the requested interactive component could not be opened. Screenshots are local artifacts under this audit directory.</p>`;
   await fs.writeFile(path.join(outputDir, "index.html"), html, "utf8");
 }
 
-await fs.mkdir(outputDir, { recursive: true });
-const browser = await chromium.launch();
-const context = await browser.newContext();
-const page = await context.newPage();
-const auth = await authenticate(page).catch((error) => ({ ok: false, reason: `Authentication error: ${error.message}` }));
-const routes = [...publicRoutes, ...consumerRoutes.filter((route) => !publicRoutes.includes(route))];
-for (const viewport of viewports) {
-  for (const route of routes) await auditRoute(page, route, viewport, auth.ok);
-  // Kept current after every viewport, so an interrupted run still leaves
-  // its measurements behind.
-  await fs.writeFile(path.join(outputDir, "results.partial.json"), JSON.stringify({ results, sheetResults }, null, 2));
+// ------------------------------------------------------------------ Run plan
+const ALL_ROUTES = [...publicRoutes, ...consumerRoutes.filter((route) => !publicRoutes.includes(route))];
+const SIGNED_IN_SECTIONS = {
+  copy: auditCopyEvent,
+  editor: auditEventEditor,
+  nudge: auditNudgeForms,
+  driveway: auditDrivewayForms,
+  "driveway-off": auditDrivewayDisabled,
+  budget: auditBudgetForms,
+  modules: auditHomeModuleForms,
+  remaining: auditRemainingForms,
+  toolbar: auditCalendarToolbar,
+};
+const ALL_SECTIONS = ["routes", ...Object.keys(SIGNED_IN_SECTIONS), "signin"];
+const RESULT_KEYS = { copy: "copyResults", editor: "editorResults", nudge: "nudgeResults", driveway: "drivewayResults", "driveway-off": "drivewayDisabledResults", budget: "budgetResults", modules: "moduleResults", remaining: "remainingResults", toolbar: "toolbarResults", signin: "signInResults" };
+
+// Which sections and routes a changed file affects (fast mode, --changed).
+// Anything shared, or not listed, selects everything: a missed dependency
+// must cost time, never coverage.
+const CHANGE_MAP = [
+  [/^apps\/web\/app\/budget\//, ["budget"], ["/budget"]],
+  [/^apps\/web\/app\/(meal-plans|lists|wish-lists)\//, ["modules"], ["/meal-plans", "/lists", "/wish-lists"]],
+  [/^apps\/web\/app\/driveway\//, ["driveway", "driveway-off"], ["/driveway", "/driveway/add"]],
+  [/^apps\/web\/app\/calendar\/calendars\//, ["remaining"], ["/calendar/calendars"]],
+  [/^apps\/web\/app\/calendar\//, ["copy", "editor", "toolbar"], ["/calendar", "/calendar/calendars", "/calendar/shared"]],
+  [/^apps\/web\/app\/settings\/(routines|reminders|routines-reminders|notifications|profile)\//, ["nudge"], ["/settings/routines", "/settings/reminders", "/settings/routines-reminders", "/settings/notifications", "/settings/profile"]],
+  [/^apps\/web\/app\/(help-support|settings\/members|settings\/calendar-tags)\//, ["remaining"], ["/help-support", "/settings/members", "/settings/calendar-tags"]],
+  [/^apps\/web\/app\/(login|register|forgot-password|reset-password)\//, ["signin"], ["/login", "/login/child", "/register", "/forgot-password", "/reset-password"]],
+];
+function changedSelection(reference) {
+  const git = (...args) => execFileSync("git", args, { cwd: scriptDir, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).split(/\r?\n/).filter(Boolean);
+  const files = [...new Set([...git("diff", "--name-only", reference), ...git("ls-files", "--others", "--exclude-standard", "--full-name")])];
+  const sections = new Set();
+  const routeSet = new Set();
+  for (const file of files) {
+    if (!file.startsWith("apps/web/") || /\.test\.[jt]sx?$/.test(file) || /^apps\/web\/(e2e|test-results)\//.test(file)) continue;
+    const match = CHANGE_MAP.find(([pattern]) => pattern.test(file));
+    if (match) {
+      match[1].forEach((section) => sections.add(section));
+      match[2].forEach((route) => routeSet.add(route));
+      continue;
+    }
+    const page = file.match(/^apps\/web\/app\/(.+)\/[^/]+\.tsx?$/);
+    const prefix = page ? `/${page[1].replace(/\/_[^/]+.*$/, "")}` : null;
+    const owned = prefix ? ALL_ROUTES.filter((route) => route === prefix || route.startsWith(`${prefix}/`)) : [];
+    if (owned.length) {
+      owned.forEach((route) => routeSet.add(route));
+      continue;
+    }
+    return { files, sections: ALL_SECTIONS, routes: ALL_ROUTES, everything: file };
+  }
+  if (routeSet.size) sections.add("routes");
+  return { files, sections: ALL_SECTIONS.filter((section) => sections.has(section)), routes: ALL_ROUTES.filter((route) => routeSet.has(route)), everything: null };
 }
-const copyResults = auth.ok ? await auditCopyEvent(page) : [];
-const editorResults = auth.ok ? await auditEventEditor(page) : [];
-const nudgeResults = auth.ok ? await auditNudgeForms(page) : [];
-const drivewayResults = auth.ok ? await auditDrivewayForms(page) : [];
-const drivewayDisabledResults = auth.ok ? await auditDrivewayDisabled(page) : [];
-const budgetResults = auth.ok ? await auditBudgetForms(page) : [];
-const moduleResults = auth.ok ? await auditHomeModuleForms(page) : [];
-const remainingResults = auth.ok ? await auditRemainingForms(page) : [];
-const signInResults = await auditSignInStates(browser);
-await writeReport(auth, copyResults, editorResults, nudgeResults, drivewayResults, drivewayDisabledResults, budgetResults, moduleResults, remainingResults, signInResults);
-await browser.close();
+
+const changed = changedArgument ? changedSelection(changedArgument.includes("=") ? changedArgument.split("=")[1] : "HEAD") : null;
+const requestedSections = listOption("sections") ?? changed?.sections ?? ALL_SECTIONS;
+const unknownSections = requestedSections.filter((section) => !ALL_SECTIONS.includes(section));
+if (unknownSections.length) {
+  console.error(`Unknown sections: ${unknownSections.join(", ")} (choose from ${ALL_SECTIONS.join(", ")})`);
+  process.exit(2);
+}
+const selectedSections = ALL_SECTIONS.filter((section) => requestedSections.includes(section));
+const selectedRoutes = listOption("routes") ?? changed?.routes ?? ALL_ROUTES;
+const unknownRoutes = selectedRoutes.filter((route) => !ALL_ROUTES.includes(route));
+if (unknownRoutes.length) {
+  // Git Bash rewrites a leading "/" into a Windows path: pass --routes=//budget there, or use PowerShell.
+  console.error(`Unknown routes: ${unknownRoutes.join(", ")} (choose from ${ALL_ROUTES.join(", ")})`);
+  process.exit(2);
+}
+// Release evidence only when nothing was left out.
+const complete = !fast && selectedViewports.length === ALL_VIEWPORTS.length && selectedSections.length === ALL_SECTIONS.length && selectedRoutes.length === ALL_ROUTES.length;
+const modeName = fast ? "FAST" : complete ? "FULL" : "PARTIAL";
+const jobs = Math.max(1, Math.min(Number(option("jobs") ?? 1) || 1, selectedViewports.length));
+const startedAt = Date.now();
+const elapsed = () => {
+  const seconds = Math.round((Date.now() - startedAt) / 1000);
+  return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+};
+if (changed) {
+  console.log(`Changed files since ${changedArgument.includes("=") ? changedArgument.split("=")[1] : "HEAD"}: ${changed.files.length}${changed.everything ? ` (shared change ${changed.everything}: every section)` : ""}`);
+  if (!selectedSections.length) {
+    console.log("No consumer UI change found: nothing to audit.");
+    process.exit(0);
+  }
+}
+
+// Sections a failed sign-in kept from running, with their viewports.
+const blockedSections = [];
+
+// --------------------------------------------------------- One process's run
+// Touch profiles and desktop profiles need separate browser contexts (touch
+// emulation is a context option), each signed in once.
+async function runViewports(browser) {
+  const sectionResults = Object.fromEntries(Object.values(RESULT_KEYS).map((key) => [key, []]));
+  let auth = { ok: true };
+  const groups = [selectedViewports.filter((viewport) => viewport.touch), selectedViewports.filter((viewport) => !viewport.touch)].filter((group) => group.length);
+  const needsSignIn = selectedSections.some((section) => section !== "signin");
+  for (const group of groups) {
+    viewports = group;
+    const context = await browser.newContext({ hasTouch: Boolean(group[0].touch) });
+    const page = await context.newPage();
+    const groupAuth = needsSignIn ? await authenticate(page).catch((error) => ({ ok: false, reason: `Authentication error: ${error.message}` })) : { ok: true };
+    if (!groupAuth.ok) {
+      auth = groupAuth;
+      // Signed-in sections cannot run without a session: listed, never
+      // passed or silently dropped from the totals.
+      const skipped = Object.keys(SIGNED_IN_SECTIONS).filter((section) => selectedSections.includes(section));
+      if (skipped.length) blockedSections.push(`${skipped.join(", ")} at ${group.map((viewport) => viewport.name).join(", ")}: ${groupAuth.reason}`);
+    }
+    if (selectedSections.includes("routes")) {
+      for (const viewport of group) {
+        for (const route of selectedRoutes) await auditRoute(page, route, viewport, groupAuth.ok);
+        // Kept current after every viewport, so an interrupted run still
+        // leaves its measurements behind.
+        await fs.writeFile(path.join(outputDir, `results${childId ? `.${childId}` : ""}.partial.json`), JSON.stringify({ results, sheetResults }, null, 2));
+      }
+    }
+    for (const [section, audit] of Object.entries(SIGNED_IN_SECTIONS)) {
+      if (selectedSections.includes(section) && groupAuth.ok) sectionResults[RESULT_KEYS[section]].push(...await audit(page));
+    }
+    if (selectedSections.includes("signin")) sectionResults.signInResults.push(...await auditSignInStates(browser));
+    await context.close();
+  }
+  viewports = selectedViewports;
+  return { auth, sectionResults };
+}
+
+// ------------------------------------------------------------ Parallel jobs
+// Each job is this script on a share of the viewports, writing its results
+// into this run's directory; this process merges them into one report.
+async function runJobs() {
+  const shares = Array.from({ length: jobs }, () => []);
+  selectedViewports.forEach((viewport, index) => shares[index % jobs].push(viewport.name));
+  const forwarded = [BASE, `--sections=${selectedSections.join(",")}`, `--routes=${selectedRoutes.join(",")}`];
+  const exits = await Promise.all(shares.map((share, index) => new Promise((resolve) => {
+    const child = spawn(process.execPath, [fileURLToPath(import.meta.url), ...forwarded, `--viewports=${share.join(",")}`, `--child-dir=${outputDir}`, `--child-id=${index + 1}`], { cwd: process.cwd(), env: process.env, stdio: ["ignore", "pipe", "pipe"] });
+    const prefix = (chunk) => chunk.toString().split(/\r?\n/).filter(Boolean).map((line) => `[job ${index + 1}] ${line}`).join("\n");
+    child.stdout.on("data", (chunk) => console.log(prefix(chunk)));
+    child.stderr.on("data", (chunk) => console.error(prefix(chunk)));
+    child.on("exit", (code) => resolve(code));
+  })));
+  let auth = { ok: true };
+  const sectionResults = Object.fromEntries(Object.values(RESULT_KEYS).map((key) => [key, []]));
+  for (let index = 0; index < jobs; index += 1) {
+    const file = path.join(outputDir, `child-${index + 1}.json`);
+    const child = JSON.parse(await fs.readFile(file, "utf8").catch(() => "null"));
+    if (!child) {
+      // A job that left no results is a failure of every check it owned.
+      auth = { ok: false, reason: `Job ${index + 1} (${shares[index].join(", ")}) exited ${exits[index]} without results` };
+      continue;
+    }
+    if (!child.auth.ok) auth = child.auth;
+    results.push(...child.results);
+    sheetResults.push(...child.sheetResults);
+    screenshots.push(...child.screenshots);
+    child.knownDefects.forEach((item) => knownDefects.add(item));
+    blockedSections.push(...child.blockedSections);
+    for (const key of Object.values(RESULT_KEYS)) sectionResults[key].push(...child.sectionResults[key]);
+    await fs.rm(file);
+  }
+  // One report order regardless of which job finished first.
+  const order = (entry) => selectedViewports.findIndex((viewport) => viewport.name === entry.viewport);
+  for (const list of [results, sheetResults, ...Object.values(sectionResults)]) list.sort((a, b) => order(a) - order(b));
+  return { auth, sectionResults };
+}
+
+await fs.mkdir(outputDir, { recursive: true });
+let run;
+if (jobs > 1 && !childDir) {
+  console.log(`${modeName} audit in ${jobs} parallel jobs: ${selectedViewports.length} viewports, sections ${selectedSections.join(", ")}`);
+  run = await runJobs();
+} else {
+  const browser = await chromium.launch();
+  run = await runViewports(browser);
+  await browser.close();
+}
+if (childDir) {
+  await fs.writeFile(path.join(outputDir, `child-${childId}.json`), JSON.stringify({ auth: run.auth, results, sheetResults, screenshots, knownDefects: [...knownDefects], blockedSections, sectionResults: run.sectionResults }));
+  process.exit(0);
+}
+const { auth, sectionResults } = run;
+await writeReport(auth, sectionResults, {
+  modeName,
+  jobs,
+  viewports: selectedViewports.map((viewport) => viewport.name),
+  sections: selectedSections,
+  routeCount: selectedSections.includes("routes") ? selectedRoutes.length : null,
+  duration: elapsed(),
+  knownDefects: [...knownDefects].sort(),
+  blockedSections,
+});
 const tally = (entries) => entries.reduce((counts, entry) => ({ ...counts, [entry.result]: (counts[entry.result] ?? 0) + 1 }), {});
-console.log(JSON.stringify({ baseUrl: BASE, outputDir, authenticated: auth.ok, authReason: auth.reason ?? null, routes: tally(results), createSheets: tally(sheetResults), copyEvent: tally(copyResults), eventEditor: tally(editorResults), nudgeForms: tally(nudgeResults), drivewayForms: tally(drivewayResults), drivewayDisabled: tally(drivewayDisabledResults), budgetForms: tally(budgetResults), moduleForms: tally(moduleResults), remainingForms: tally(remainingResults), signIn: tally(signInResults) }, null, 2));
-process.exitCode = [...results, ...sheetResults, ...copyResults, ...editorResults, ...nudgeResults, ...drivewayResults, ...drivewayDisabledResults, ...budgetResults, ...moduleResults, ...remainingResults, ...signInResults].some((entry) => entry.result === "FAIL") || !auth.ok ? 1 : 0;
+const everything = [...results, ...sheetResults, ...Object.values(sectionResults).flat()];
+console.log(JSON.stringify({
+  baseUrl: BASE,
+  outputDir,
+  mode: complete ? "full (release evidence)" : `${modeName.toLowerCase()} (development feedback, not release evidence)`,
+  jobs,
+  duration: elapsed(),
+  viewports: selectedViewports.length,
+  sections: selectedSections,
+  authenticated: auth.ok,
+  authReason: auth.reason ?? null,
+  total: tally(everything),
+  routes: tally(results),
+  createSheets: tally(sheetResults),
+  copyEvent: tally(sectionResults.copyResults),
+  eventEditor: tally(sectionResults.editorResults),
+  nudgeForms: tally(sectionResults.nudgeResults),
+  drivewayForms: tally(sectionResults.drivewayResults),
+  drivewayDisabled: tally(sectionResults.drivewayDisabledResults),
+  budgetForms: tally(sectionResults.budgetResults),
+  moduleForms: tally(sectionResults.moduleResults),
+  remainingForms: tally(sectionResults.remainingResults),
+  calendarToolbar: tally(sectionResults.toolbarResults),
+  signIn: tally(sectionResults.signInResults),
+  knownDefects: knownDefects.size,
+  blockedSections,
+}, null, 2));
+process.exitCode = everything.some((entry) => entry.result === "FAIL") || !auth.ok ? 1 : 0;

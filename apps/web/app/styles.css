@@ -3511,6 +3511,21 @@ html.native-shell .home-section-overlap {
 .details dd {
   font-weight: 700;
 }
+/* About's Web build and API build rows (development builds only): the label
+   never wraps, and the build time sits under the commit. */
+.about-build-row dt {
+  flex-shrink: 0;
+}
+.about-build-row dd {
+  min-width: 0;
+  text-align: right;
+}
+.about-build-row small {
+  color: var(--colour-muted);
+  display: block;
+  font-weight: 400;
+  margin-top: 0.15rem;
+}
 .session small {
   color: var(--colour-muted);
   display: block;
@@ -3838,11 +3853,47 @@ html.native-shell .home-section-overlap {
   }
 }
 
+/* The same compact controls, chosen by the month row's own width rather
+   than the viewport's. A browser window just wider than 430px, or one
+   narrowed by a large safe-area inset (Safari on the Duo's outer screen,
+   93px on the right), left the row less room than the rules above assume,
+   and the month label was cut off ("Novembe…"). The native shell is
+   excluded: its rail and wide layouts size this row themselves. */
+.app-shell:not(.native-shell-app) .calendar-page .calendar-month-row {
+  container: calendar-month-row / inline-size;
+}
+@container calendar-month-row (max-width: 440px) {
+  .calendar-page .calendar-month-row > .icon-button {
+    min-height: 40px;
+    min-width: 40px;
+    padding-inline: 0;
+  }
+  .calendar-page .calendar-month-row-actions {
+    flex: none;
+    gap: 0.2rem;
+    margin-left: 0;
+  }
+  .calendar-page .calendar-month-row-actions .icon-button {
+    min-height: 40px;
+    min-width: 36px;
+    padding-inline: 0;
+  }
+  .calendar-page .calendar-month-row-actions .icon-button svg {
+    height: 15px;
+    width: 15px;
+  }
+  .calendar-page .calendar-month-row-actions .calendar-add-desktop {
+    min-height: 40px;
+    padding-inline: 0.4rem;
+  }
+}
+
 @media (max-width: 400px) {
-  /* Three pills (Everyone/Month.../Tags) must stay on one row down to a
-     393px iPhone width — tighten the row gap and each pill's own padding
-     rather than shrinking the shared pill height/radius/typography (the
-     Tags selector is required to look identical to Everyone/Month). */
+  /* Tighter gaps and pill padding keep the three pills (Everyone/Month/
+     Tags) on one row for as long as the width allows; below that the row
+     wraps (see the touch-screen pill rule after .calendar-selector svg).
+     Never shrink the shared pill height/radius/typography: the Tags pill
+     must look identical to Everyone/Month, and the text stays 16px. */
   .calendar-page .calendar-selectors-row {
     gap: 0.3rem;
   }
@@ -4055,6 +4106,28 @@ html.native-shell .home-section-overlap {
   pointer-events: none;
   position: absolute;
   right: 0.5rem;
+}
+/* Phones and touch screens: iOS zooms the page when a focused control is
+   under 16px, so the Everyone and view pickers (and the Tags pill, which
+   must match them) use 16px text and a 44px touch target. At that size the
+   three pills do not always fit one row, so the row wraps where the space
+   runs out, rather than the text shrinking; each pill keeps its own width
+   and never exceeds the row. A fine, hovering pointer above 800px
+   (desktop) keeps the compact pills above. */
+@media (max-width: 800px), (hover: none) and (pointer: coarse) {
+  .calendar-page .calendar-selectors-row {
+    flex-wrap: wrap;
+  }
+  .calendar-page .calendar-selector {
+    max-width: 100%;
+    min-width: 0;
+  }
+  .calendar-page .calendar-selector select,
+  .calendar-page .calendar-selector-button {
+    font-size: 16px;
+    max-width: 100%;
+    min-height: 44px;
+  }
 }
 .sr-only {
   height: 1px;
@@ -5557,6 +5630,18 @@ body.sheet-open {
   }
 }
 
+/* iOS zooms the page when a focused text control computes under 16px.
+   Phones get 16px from the max-width: 800px rule below; a touch screen wider
+   than that (iPhone landscape, the Duo's inner screen, iPad) would otherwise
+   keep the 15px body size. Same zero-class specificity as that rule, so a
+   module rule that sizes its own controls still wins. A device with a fine,
+   hovering pointer (desktop, laptop) does not match, and the Platform
+   Control Centre keeps its own control styling. */
+@media (hover: none) and (pointer: coarse) {
+  :is(input, select, textarea):where(:not(.pcc-root *)) {
+    font-size: 16px;
+  }
+}
 /* Calendar month view is a dedicated scan surface on small screens: the grid should
    dominate the viewport, chrome above it stays minimal. Keep event strips readable;
    the day sheet carries the full detail. */
@@ -6065,6 +6150,13 @@ button.danger,
   min-height: 44px;
   padding: 0.5rem 0.7rem;
   width: auto;
+}
+/* The small text above outranks the shared 16px rules for phones and touch
+   screens, and iOS zooms the page when a focused control is under 16px. */
+@media (max-width: 800px), (hover: none) and (pointer: coarse) {
+  .meal-filter-control select {
+    font-size: 16px;
+  }
 }
 .meal-plans-today-button {
   font-size: var(--font-small);
@@ -8255,9 +8347,9 @@ button.danger,
 select.plan-meal-field-input {
   appearance: none;
 }
-/* 0.95rem above outranks the 16px phone rule for inputs, and iOS zooms the
-   page when a focused control computes under 16px. */
-@media (max-width: 800px) {
+/* 0.95rem above outranks the 16px rules for phones and touch screens, and
+   iOS zooms the page when a focused control computes under 16px. */
+@media (max-width: 800px), (hover: none) and (pointer: coarse) {
   .plan-meal-field-input {
     font-size: 16px;
   }

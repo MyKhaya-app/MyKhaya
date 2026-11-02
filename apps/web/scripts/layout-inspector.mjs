@@ -19,9 +19,13 @@
  *   intendedScrollers?: string[],
  *   visibleHeight?: number | null,
  *   acceptedOverflow?: string[],
+ *   minimumControlFontSize?: number | null,
+ *   knownFocusZoom?: string[],
  * }} options `overlay` is a system overlay zone in the top-right corner
  *   (CSS px from the right and top edges). `visibleHeight` is the usable
  *   height when a software keyboard covers the bottom of the viewport.
+ *   `minimumControlFontSize` turns on the focus-zoom check for touch
+ *   profiles; `knownFocusZoom` lists reviewed defects reported as advisories.
  */
 export function inspectLayoutInPage(options = {}) {
   const {
@@ -31,6 +35,8 @@ export function inspectLayoutInPage(options = {}) {
     intendedScrollers = [],
     visibleHeight = null,
     acceptedOverflow = [],
+    minimumControlFontSize = null,
+    knownFocusZoom = [],
   } = options;
   const TOLERANCE = 0.5;
   const viewport = { width: window.innerWidth, height: visibleHeight ?? window.innerHeight };
@@ -148,6 +154,22 @@ export function inspectLayoutInPage(options = {}) {
     const appearance = style.appearance || style.webkitAppearance;
     if (appearance !== "none" && !input.closest(".datetime-card")) {
       add("native-date-time-appearance", input, "Date/time input keeps its platform appearance (iOS intrinsic-width risk)", { appearance });
+    }
+  }
+
+  // 5b. Focus zoom. iOS zooms the whole page when a focused text control
+  // computes under 16px, and the page stays zoomed after the keyboard
+  // closes. Checked only when the caller names a minimum (touch profiles);
+  // a known defect awaiting a design decision is reported as an advisory.
+  if (minimumControlFontSize) {
+    const textControls = root.querySelectorAll('input:not([type=checkbox], [type=radio], [type=range], [type=color], [type=file], [type=hidden], [type=submit], [type=button], [type=reset], [type=image]), select, textarea');
+    for (const control of textControls) {
+      if (!visible(control) || control.disabled || control.readOnly) continue;
+      const fontSize = parseFloat(getComputedStyle(control).fontSize);
+      if (fontSize >= minimumControlFontSize - 0.01) continue;
+      const detail = { fontSize, minimum: minimumControlFontSize };
+      if (knownFocusZoom.some((selector) => control.matches(selector))) advise("focus-zoom-known", control, "Known: text under the iOS focus-zoom size, awaiting a design decision", detail);
+      else add("focus-zoom", control, `Text control is ${fontSize}px; iOS zooms the page when it is focused (minimum ${minimumControlFontSize}px)`, detail);
     }
   }
 
@@ -328,4 +350,15 @@ export const ACCEPTED_CONTAINMENT_EXCEPTIONS = [
   // The 43px opaque logo sits over the 32px cream tile of the desktop nav
   // brand mark; nothing is clipped or covered. Tidy-up candidate.
   ".desktop-nav-brand-mark > .brand",
+];
+
+/**
+ * Text controls known to sit under the iOS focus-zoom size, each awaiting a
+ * design decision. They are reported as advisories, not passed silently, and
+ * every entry is listed as an open defect in docs/design/forms.md.
+ */
+export const KNOWN_FOCUS_ZOOM_DEFECTS = [
+  // None open. The Calendar toolbar pickers were listed here until Phase 3
+  // gave them 16px text on touch screens; they are now enforced like every
+  // other control.
 ];

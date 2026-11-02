@@ -11,6 +11,8 @@
     "test": "vitest run --passWithNoTests",
     "test:e2e": "playwright test",
     "audit:responsive": "node scripts/responsive-audit.mjs",
+    "audit:responsive:parallel": "node scripts/responsive-audit.mjs --jobs=4",
+    "audit:responsive:fast": "node scripts/responsive-audit.mjs --fast --changed",
     "test:layout": "node scripts/form-layout-harness.mjs"
   },
   "dependencies": {

@@ -109,6 +109,56 @@ describe("About — browser", () => {
     await screen.findByText("Development");
   });
 
+  it("shows the web and API builds separately on a development web build", async () => {
+    vi.stubEnv("MYKHAYA_WEB_COMMIT", "78d21052949e9d0c1412a0a3bc7b37f7f4304a37");
+    vi.stubEnv("MYKHAYA_WEB_BUILD_TIME", "2026-11-01T20:57:42Z");
+    mockBuild({ version: "dev", commit: "49a6a95b25a2c4d3bae31f931ceb30d0968b893a", build_time: "2026-10-31T09:05:00Z", environment: "development", channel: "development" });
+
+    render(<About />);
+
+    const web = (await screen.findByText("Web build")).closest("div")!;
+    expect(web).toHaveTextContent(/^Web build78d21052026-11-01 20:57 UTC$/);
+    const apiRow = screen.getByText("API build").closest("div")!;
+    expect(apiRow).toHaveTextContent(/^API build49a6a952026-10-31 09:05 UTC$/);
+    vi.unstubAllEnvs();
+  });
+
+  it("keeps a local -dirty suffix on the web build", async () => {
+    vi.stubEnv("MYKHAYA_WEB_COMMIT", "78d2105-dirty");
+    vi.stubEnv("MYKHAYA_WEB_BUILD_TIME", "unknown");
+    mockBuild({ version: "dev", commit: "unknown", build_time: "unknown", environment: "development", channel: "development" });
+
+    render(<About />);
+
+    expect((await screen.findByText("Web build")).closest("div")).toHaveTextContent(/^Web build78d2105-dirtyUnknown$/);
+    expect(screen.getByText("API build").closest("div")).toHaveTextContent(/^API buildUnknownUnknown$/);
+    expect(screen.queryByText("unknown")).not.toBeInTheDocument();
+    vi.unstubAllEnvs();
+  });
+
+  it("shows no build rows on a stable web build, which inlines no commit", async () => {
+    vi.stubEnv("MYKHAYA_WEB_COMMIT", "");
+    mockBuild({ version: "0.1.0", commit: "abc", build_time: "now", environment: "production", channel: "stable" });
+
+    render(<About />);
+
+    await screen.findByText("0.1.0 (Web)");
+    expect(screen.queryByText("Web build")).not.toBeInTheDocument();
+    expect(screen.queryByText("API build")).not.toBeInTheDocument();
+    vi.unstubAllEnvs();
+  });
+
+  it("shows no build rows before the signed-in API build has loaded", async () => {
+    vi.stubEnv("MYKHAYA_WEB_COMMIT", "78d2105");
+    global.fetch = vi.fn().mockResolvedValue({ ok: false, status: 401, json: () => Promise.resolve({ detail: "Please sign in to continue." }) }) as unknown as typeof fetch;
+
+    render(<About />);
+
+    await screen.findByText("Loading…");
+    expect(screen.queryByText("Web build")).not.toBeInTheDocument();
+    vi.unstubAllEnvs();
+  });
+
   it("shows a graceful fallback, never the raw word 'unknown', when the version can't be resolved", async () => {
     mockBuild({ version: "unknown", commit: "abc", build_time: "now", environment: "production", channel: "stable" });
 
