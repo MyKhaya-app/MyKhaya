@@ -48,6 +48,11 @@ from mykhaya.billing.transitions import (
     lock_home_for_change,
     preview_subscription_change,
 )
+from mykhaya.billing.webhook_ip_security import (
+    enforce_webhook_ip_policy,
+    record_blocked_webhook_request,
+    record_monitored_webhook_request,
+)
 from mykhaya.billing.webhooks import (
     WebhookSignatureError,
     WebhookStateApplicationError,
@@ -779,6 +784,28 @@ async def stripe_webhook(
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> Response:
+    ip_decision, resolved_ip = await enforce_webhook_ip_policy(db, request, settings)
+    if ip_decision == "unavailable":
+        await log.aerror(
+            "stripe_webhook_ip_policy_unavailable",
+            request_id=getattr(request.state, "request_id", None),
+        )
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "Stripe webhook IP enforcement is unavailable until its trusted list is refreshed.",
+        )
+    if ip_decision == "block":
+        await record_blocked_webhook_request(
+            db,
+            source_ip=resolved_ip,
+            request_id=getattr(request.state, "request_id", None),
+        )
+        await db.commit()
+        await log.awarning(
+            "stripe_webhook_ip_blocked",
+            request_id=getattr(request.state, "request_id", None),
+        )
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Webhook source is not trusted.")
     config = await resolve_stripe_config(settings, db)
     if not config.configured or not config.webhook_secret:
         # Not "not found" (which would confirm/deny the route's existence to
@@ -793,6 +820,13 @@ async def stripe_webhook(
     except WebhookSignatureError as exc:
         await log.awarning("stripe_webhook_signature_rejected")
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid signature.") from exc
+
+    if ip_decision == "monitor":
+        record_monitored_webhook_request(
+            db,
+            source_ip=resolved_ip,
+            request_id=getattr(request.state, "request_id", None),
+        )
 
     try:
         outcome = await process_webhook_event(db, event, config)

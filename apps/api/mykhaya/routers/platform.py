@@ -43,6 +43,13 @@ from mykhaya.billing.reconciliation import (
     reconcile_home_subscription,
 )
 from mykhaya.billing.state import SubscriptionOwnershipMismatchError
+from mykhaya.billing.webhook_ip_security import (
+    STALE_AFTER,
+    SYNC_INTERVAL,
+    get_security_settings,
+    security_stale,
+    sync_stripe_webhook_ips,
+)
 from mykhaya.calendar_highlights import sync_holiday_source
 from mykhaya.calendar_provisioning import ensure_personal_calendar
 from mykhaya.config import Settings, get_settings
@@ -162,6 +169,8 @@ from mykhaya.models import (
     StripeMode,
     StripeWebhookEvent,
     StripeWebhookFailure,
+    StripeWebhookIpSecurityMode,
+    StripeWebhookIpSecuritySettings,
     SubscriptionPlan,
     SubscriptionProvider,
     SubscriptionStatus,
@@ -297,6 +306,8 @@ from mykhaya.platform_schemas import (
     StripeTestConnectionRequest,
     StripeTestConnectionResponse,
     StripeWebhookHealthResponse,
+    StripeWebhookIpSecurityResponse,
+    StripeWebhookIpSecurityUpdate,
     StripeWebhookSummary,
     SubscriptionDetailResponse,
     SubscriptionEventResponse,
@@ -4442,6 +4453,124 @@ async def subscriptions_webhook_health(
             for row in recent_failures
         ],
     )
+
+
+async def _stripe_webhook_ip_security_response(
+    db: AsyncSession, settings: Settings
+) -> StripeWebhookIpSecurityResponse:
+    row = await get_security_settings(db)
+    now = datetime.now(UTC)
+    blocked_24h = int(
+        await db.scalar(
+            select(func.count(SecurityEvent.id)).where(
+                SecurityEvent.event_type == "stripe_webhook_ip_blocked",
+                SecurityEvent.created_at >= now - timedelta(hours=24),
+            )
+        )
+        or 0
+    )
+    return StripeWebhookIpSecurityResponse(
+        mode=row.mode.value if row else "monitoring",
+        stale=security_stale(row, now),
+        trusted_ips=list(row.trusted_ips) if row else [],
+        sync_interval_hours=int(SYNC_INTERVAL.total_seconds() // 3600),
+        stale_after_hours=int(STALE_AFTER.total_seconds() // 3600),
+        last_sync_attempt_at=row.last_sync_attempt_at if row else None,
+        last_successful_sync_at=row.last_successful_sync_at if row else None,
+        last_sync_error=row.last_sync_error if row else None,
+        blocked_request_count=row.blocked_request_count if row else 0,
+        blocked_requests_24h=blocked_24h,
+        last_blocked_at=row.last_blocked_at if row else None,
+        proxy_trust_configured=bool(settings.trusted_proxy_cidrs),
+        source_ip_method=(
+            "socket peer; X-Forwarded-For is accepted only from configured trusted proxy CIDRs"
+        ),
+    )
+
+
+@router.get("/subscriptions/webhook-security", response_model=StripeWebhookIpSecurityResponse)
+async def subscriptions_webhook_security(
+    _: PlatformContext = Depends(require_roles(*SUPPORT)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> StripeWebhookIpSecurityResponse:
+    return await _stripe_webhook_ip_security_response(db, settings)
+
+
+@router.patch("/subscriptions/webhook-security", response_model=StripeWebhookIpSecurityResponse)
+async def update_subscriptions_webhook_security(
+    body: StripeWebhookIpSecurityUpdate,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS, PlatformRole.security)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> StripeWebhookIpSecurityResponse:
+    require_recent_auth(context, settings)
+    row = await get_security_settings(db)
+    if row is None:
+        row = StripeWebhookIpSecuritySettings()
+        db.add(row)
+        await db.flush()
+    if body.mode == "enforcement":
+        if not settings.trusted_proxy_cidrs:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "Configure trusted proxy CIDRs and verify client-IP resolution "
+                "before enabling enforcement.",
+            )
+        if security_stale(row, datetime.now(UTC)):
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "Refresh the Stripe IP feed successfully before enabling enforcement.",
+            )
+    previous_mode = row.mode.value
+    row.mode = StripeWebhookIpSecurityMode(body.mode)
+    row.updated_by_administrator_id = context.administrator.id
+    platform_audit(
+        db,
+        request,
+        context,
+        "stripe_webhook_ip_security.mode_changed",
+        "stripe_webhook_ip_security",
+        reason=body.reason,
+        previous={"mode": previous_mode},
+        new={"mode": body.mode},
+    )
+    await db.commit()
+    return await _stripe_webhook_ip_security_response(db, settings)
+
+
+@router.post(
+    "/subscriptions/webhook-security/refresh",
+    response_model=StripeWebhookIpSecurityResponse,
+)
+async def refresh_subscriptions_webhook_security(
+    body: SensitiveActionRequest,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS, PlatformRole.security)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> StripeWebhookIpSecurityResponse:
+    require_recent_auth(context, settings)
+    row, updated = await sync_stripe_webhook_ips(db, force=True)
+    platform_audit(
+        db,
+        request,
+        context,
+        "stripe_webhook_ip_security.feed_refreshed",
+        "stripe_webhook_ip_security",
+        reason=body.reason,
+        outcome="succeeded" if updated else "failure",
+        new={"ip_count": len(row.trusted_ips), "updated": updated},
+        failure_category=None if updated else "feed_sync_failed",
+    )
+    await db.commit()
+    if not updated:
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY,
+            "Stripe's IP feed could not be refreshed; the last known-good list was retained.",
+        )
+    return await _stripe_webhook_ip_security_response(db, settings)
 
 
 @router.get("/subscriptions/summary", response_model=SubscriptionSummaryResponse)

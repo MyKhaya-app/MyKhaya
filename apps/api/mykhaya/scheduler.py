@@ -7,6 +7,7 @@ from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from mykhaya.billing.webhook_ip_security import sync_stripe_webhook_ips
 from mykhaya.calendar_highlights import sync_due_holiday_sources
 from mykhaya.config import Settings, get_settings
 from mykhaya.crypto.config import validate_sensitive_key_configuration
@@ -91,6 +92,7 @@ async def run() -> None:
                 await scan_due_standalone_reminders(db, settings)
                 await scan_due_nudges(db, settings)
                 await scan_due_daily_nudge_summary(db, settings)
+                await sync_stripe_webhook_ips(db)
                 await scan_family_retention(db)
                 await sync_due_holiday_sources(db)
                 maintenance_date = datetime.now(UTC).date()

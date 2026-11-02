@@ -3521,6 +3521,40 @@ class PlatformStripeSettings(UuidTimeMixin, Base):
     )
 
 
+class StripeWebhookIpSecurityMode(StrEnum):
+    monitoring = "monitoring"
+    enforcement = "enforcement"
+
+
+class StripeWebhookIpSecuritySettings(UuidTimeMixin, Base):
+    """Environment-local Stripe webhook source-IP policy.
+
+    The row is deliberately separate from Stripe credentials: DEV and PROD have
+    independent databases/configuration, and changing this policy must never
+    change Stripe mode or signing-secret selection.
+    """
+
+    __tablename__ = "stripe_webhook_ip_security_settings"
+    mode: Mapped[StripeWebhookIpSecurityMode] = mapped_column(
+        Enum(
+            StripeWebhookIpSecurityMode,
+            name="stripe_webhook_ip_security_mode",
+            values_callable=lambda enum: [item.value for item in enum],
+        ),
+        default=StripeWebhookIpSecurityMode.monitoring,
+        server_default=StripeWebhookIpSecurityMode.monitoring.value,
+    )
+    trusted_ips: Mapped[list[str]] = mapped_column(JSON, default=list, server_default="[]")
+    last_sync_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_successful_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_sync_error: Mapped[str | None] = mapped_column(String(500))
+    blocked_request_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    last_blocked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    updated_by_administrator_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("platform_administrators.id", ondelete="SET NULL")
+    )
+
+
 class NotificationTemplate(UuidTimeMixin, Base):
     """Override-only: trusted default copy lives in code
     (mykhaya/notifications/default_templates.py). A row here exists only once a Platform

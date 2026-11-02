@@ -1104,6 +1104,26 @@ class StripeWebhookHealthResponse(BaseModel):
     paid_homes: int
 
 
+class StripeWebhookIpSecurityUpdate(SensitiveActionRequest):
+    mode: Literal["monitoring", "enforcement"]
+
+
+class StripeWebhookIpSecurityResponse(BaseModel):
+    mode: Literal["monitoring", "enforcement"]
+    stale: bool
+    trusted_ips: list[str]
+    sync_interval_hours: int
+    stale_after_hours: int
+    last_sync_attempt_at: datetime | None
+    last_successful_sync_at: datetime | None
+    last_sync_error: str | None
+    blocked_request_count: int
+    blocked_requests_24h: int
+    last_blocked_at: datetime | None
+    proxy_trust_configured: bool
+    source_ip_method: str
+
+
 class StripePriceInfo(BaseModel):
     """The actual amount this specific subscription is billed, resolved live
     from Stripe — never a hard-coded figure. None when the Home has no

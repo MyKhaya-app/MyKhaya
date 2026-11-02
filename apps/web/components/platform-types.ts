@@ -301,6 +301,22 @@ export type StripeWebhookHealth = {
   paid_homes: number;
 };
 
+export type StripeWebhookIpSecurity = {
+  mode: "monitoring" | "enforcement";
+  stale: boolean;
+  trusted_ips: string[];
+  sync_interval_hours: number;
+  stale_after_hours: number;
+  last_sync_attempt_at: string | null;
+  last_successful_sync_at: string | null;
+  last_sync_error: string | null;
+  blocked_request_count: number;
+  blocked_requests_24h: number;
+  last_blocked_at: string | null;
+  proxy_trust_configured: boolean;
+  source_ip_method: string;
+};
+
 // Platform Control Centre "Payments" area — mirrors
 // mykhaya.platform_schemas' StripeConfigurationResponse /
 // StripeModeSettingsResponse / StripeTestConnectionResponse. See
