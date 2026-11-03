@@ -10,9 +10,13 @@ from pydantic import SecretStr
 
 from mykhaya.apple_auth import (
     AppleAuthenticationError,
+    ApplePendingIdentity,
     apple_client_identifier,
     authorization_url,
     build_client_secret,
+    consume_pending_identity,
+    load_pending_identity,
+    store_pending_identity,
     verify_identity_token,
 )
 from mykhaya.auth_providers import external_auth_provider_status
@@ -151,3 +155,55 @@ async def test_invalid_signature_is_rejected(monkeypatch: pytest.MonkeyPatch) ->
     )
     with pytest.raises(AppleAuthenticationError):
         await verify_identity_token(settings, signed_token(other_private_pem), "expected-nonce")
+
+
+@pytest.mark.asyncio
+async def test_pending_apple_identity_is_opaque_single_use_and_keeps_private_relay_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from mykhaya import apple_auth
+
+    class FakeRedis:
+        values: dict[str, str] = {}
+
+        @classmethod
+        def from_url(cls, *_args, **_kwargs):
+            return cls()
+
+        async def set(self, key, value, **_kwargs):
+            self.values[key] = value
+            return True
+
+        async def get(self, key):
+            return self.values.get(key)
+
+        async def getdel(self, key):
+            return self.values.pop(key, None)
+
+        async def aclose(self):
+            return None
+
+    FakeRedis.values.clear()
+    monkeypatch.setattr(apple_auth, "Redis", FakeRedis)
+    settings = apple_settings(redis_url="redis://test")
+    transaction = "pending-transaction-1234567890"
+    await store_pending_identity(
+        settings,
+        transaction,
+        ApplePendingIdentity(
+            transaction_id=transaction,
+            subject="apple-subject",
+            provider_email="relay@privaterelay.appleid.com",
+            email_verified=True,
+            display_name="Apple User",
+            can_register=True,
+            return_path="/home",
+        ),
+    )
+    loaded = await load_pending_identity(settings, transaction)
+    assert loaded is not None
+    assert loaded.provider_email == "relay@privaterelay.appleid.com"
+    assert "id_token" not in next(iter(FakeRedis.values.values()))
+    consumed = await consume_pending_identity(settings, transaction)
+    assert consumed is not None
+    assert await consume_pending_identity(settings, transaction) is None

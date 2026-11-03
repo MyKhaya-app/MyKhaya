@@ -35,7 +35,10 @@ relay addresses are supported without using email for implicit account linking.
 The table is additive. Apple sign-in and authenticated Apple linking use the
 existing browser session issuer; native bearer, managed-child and
 platform-administrator authentication remain separate. Apple identities are
-never linked from an email match alone.
+never linked from an email match alone. An unlinked Apple callback creates a
+short-lived, single-use recovery transaction containing verified provider
+metadata only; the browser must explicitly choose existing-account linking or
+new registration before a `User` row is created.
 
 Phase 2/3 currently exposes only centralized provider configuration health. The
 deployment-only `MYKHAYA_APPLE_*` and `MYKHAYA_GOOGLE_*` settings use secret
@@ -58,4 +61,9 @@ purpose-specific HKDF/Fernet key, while email challenge codes are stored only
 as keyed hashes in short-lived, single-use database records. Both methods
 complete by consuming the pre-auth transaction and issuing the ordinary
 opaque browser session. Native bearer sessions, managed-child authentication,
-and Platform Control Centre MFA are separate flows.
+and Platform Control Centre MFA are separate flows. Browser passkey login uses
+the same completion seam as password and Apple login: when browser MFA is
+required, a passkey establishes pre-authentication but does not silently bypass
+the configured second-factor policy. Browser trusted-device renewal is blocked
+and the device revoked when a required browser MFA policy becomes active, so a
+previously issued renewal credential cannot bypass the new policy.

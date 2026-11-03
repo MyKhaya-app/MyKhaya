@@ -2,6 +2,15 @@ import type { Home, Member, User } from "@mykhaya/shared-types";
 import { ApiError } from "./errors";
 export { ApiError } from "./errors";
 
+export type BrowserAuthResult =
+  | User
+  | {
+      authentication_state: "additional_auth_required";
+      transaction_id: string;
+      destination?: string | null;
+      onboarding?: boolean;
+    };
+
 // Mirrors apps/api/mykhaya/legal_schemas.py exactly — see mykhaya.legal for
 // the backend semantics (the backend is always the source of truth for
 // which documents/versions are current; these types only describe its
@@ -566,6 +575,25 @@ export class MyKhayaClient {
     this.request<{ providers: Array<{ provider: string; enabled: boolean }> }>(
       "/auth/providers",
     );
+  appleRecoveryOptions = (transactionId: string) =>
+    this.request<{
+      can_register: boolean;
+      provider_email: string | null;
+      display_name: string;
+    }>(`/auth/apple/recovery/options?transaction_id=${encodeURIComponent(transactionId)}`);
+  appleRecoveryLink = (transactionId: string) =>
+    this.request<{ message: string }>("/auth/apple/recovery/link", {
+      method: "POST",
+      body: JSON.stringify({ transaction_id: transactionId }),
+    });
+  appleRecoveryRegister = (
+    transactionId: string,
+    body: { legal_acceptances: SignupLegalAcceptanceItem[]; platform: LegalPlatform },
+  ) =>
+    this.request<BrowserAuthResult>("/auth/apple/recovery/register", {
+      method: "POST",
+      body: JSON.stringify({ transaction_id: transactionId, ...body }),
+    });
   publicLegalDocuments = () =>
     this.request<PublicLegalDocumentSummary[]>("/legal/documents");
   publicLegalDocument = (key: string) =>
@@ -610,7 +638,7 @@ export class MyKhayaClient {
       body: "{}",
     });
   passkeyLoginVerify = (credentialJson: string) =>
-    this.request<User>("/auth/passkeys/login/verify", {
+    this.request<BrowserAuthResult>("/auth/passkeys/login/verify", {
       method: "POST",
       body: JSON.stringify({ credential_json: credentialJson }),
     });

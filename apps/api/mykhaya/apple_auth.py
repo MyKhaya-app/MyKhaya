@@ -25,6 +25,7 @@ from mykhaya.config import Settings
 APPLE_ISSUER = "https://appleid.apple.com"
 STATE_TTL_SECONDS = 600
 CLIENT_SECRET_TTL_SECONDS = 300
+PENDING_IDENTITY_TTL_SECONDS = 600
 
 
 class AppleAuthenticationError(Exception):
@@ -36,6 +37,23 @@ class AppleFlowState:
     nonce: str
     intent: str
     user_id: str | None
+    return_path: str | None
+
+
+@dataclass(frozen=True)
+class ApplePendingIdentity:
+    """Verified Apple identity awaiting an explicit account decision.
+
+    This contains provider metadata only.  Apple authorization codes and ID
+    tokens are never persisted in the recovery transaction.
+    """
+
+    transaction_id: str
+    subject: str
+    provider_email: str | None
+    email_verified: bool
+    display_name: str
+    can_register: bool
     return_path: str | None
 
 
@@ -62,6 +80,10 @@ def require_apple_configuration(settings: Settings) -> None:
 
 def _state_key(state: str) -> str:
     return f"mykhaya:auth:apple:state:{state}"
+
+
+def _pending_identity_key(transaction_id: str) -> str:
+    return f"mykhaya:auth:apple:pending:{transaction_id}"
 
 
 async def store_flow_state(settings: Settings, state: str, value: AppleFlowState) -> None:
@@ -103,6 +125,88 @@ async def consume_flow_state(settings: Settings, state: str) -> AppleFlowState:
         raise AppleAuthenticationError(
             "This Apple sign-in attempt is invalid or has expired."
         ) from exc
+
+
+async def store_pending_identity(
+    settings: Settings, transaction_id: str, value: ApplePendingIdentity
+) -> None:
+    redis = Redis.from_url(settings.redis_url, socket_timeout=2, decode_responses=True)
+    try:
+        await redis.set(
+            _pending_identity_key(transaction_id),
+            json.dumps(
+                {
+                    "subject": value.subject,
+                    "provider_email": value.provider_email,
+                    "email_verified": value.email_verified,
+                    "display_name": value.display_name,
+                    "can_register": value.can_register,
+                    "return_path": value.return_path,
+                }
+            ),
+            ex=PENDING_IDENTITY_TTL_SECONDS,
+            nx=True,
+        )
+    finally:
+        await redis.aclose()
+
+
+async def load_pending_identity(
+    settings: Settings, transaction_id: str
+) -> ApplePendingIdentity | None:
+    if not transaction_id or len(transaction_id) > 256:
+        return None
+    redis = Redis.from_url(settings.redis_url, socket_timeout=2, decode_responses=True)
+    try:
+        raw = await redis.get(_pending_identity_key(transaction_id))
+    finally:
+        await redis.aclose()
+    if raw is None:
+        return None
+    try:
+        payload = json.loads(raw)
+        return ApplePendingIdentity(
+            transaction_id=transaction_id,
+            subject=str(payload["subject"]),
+            provider_email=(
+                str(payload["provider_email"]) if payload.get("provider_email") else None
+            ),
+            email_verified=bool(payload.get("email_verified", False)),
+            display_name=str(payload.get("display_name") or "Apple user"),
+            can_register=bool(payload.get("can_register", False)),
+            return_path=(str(payload["return_path"]) if payload.get("return_path") else None),
+        )
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+        return None
+
+
+async def consume_pending_identity(
+    settings: Settings, transaction_id: str
+) -> ApplePendingIdentity | None:
+    if not transaction_id or len(transaction_id) > 256:
+        return None
+    redis = Redis.from_url(settings.redis_url, socket_timeout=2, decode_responses=True)
+    try:
+        raw = await redis.getdel(_pending_identity_key(transaction_id))
+    finally:
+        await redis.aclose()
+    if raw is None:
+        return None
+    try:
+        payload = json.loads(raw)
+        return ApplePendingIdentity(
+            transaction_id=transaction_id,
+            subject=str(payload["subject"]),
+            provider_email=(
+                str(payload["provider_email"]) if payload.get("provider_email") else None
+            ),
+            email_verified=bool(payload.get("email_verified", False)),
+            display_name=str(payload.get("display_name") or "Apple user"),
+            can_register=bool(payload.get("can_register", False)),
+            return_path=(str(payload["return_path"]) if payload.get("return_path") else None),
+        )
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+        return None
 
 
 def build_client_secret(settings: Settings, now: int | None = None) -> str:

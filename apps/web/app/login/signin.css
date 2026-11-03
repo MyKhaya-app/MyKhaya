@@ -329,3 +329,8 @@
     margin-top: 0;
   }
 }
+.signin-recovery-actions {
+  display: grid;
+  gap: 0.6rem;
+  margin-top: 0.9rem;
+}
