@@ -40,6 +40,29 @@ MYKHAYA_APPLE_REDIRECT_URI=https://<public-host>/api/v1/auth/apple/callback
 the browser redirects. The client ID fallback is retained for deployments that
 already use `MYKHAYA_APPLE_CLIENT_ID`, but a web Services ID is preferred.
 
+## Native callback separation
+
+Browser Apple sign-in always uses the HTTPS callback above and a browser
+session. Native flows use the existing platform-specific paths:
+
+- iOS Apple uses the native AuthenticationServices assertion directly.
+- Android Apple uses the HTTPS callback and then the configured native return
+  URI (`MYKHAYA_NATIVE_APPLE_RETURN_URI`).
+
+Set the return URI separately in each environment, for example
+`mykhaya://auth/callback` for DEV iOS and
+`app.mykhaya.mobile://auth/callback` for DEV Android. Production must use its
+distinct registered schemes, such as `mykhaya-prod://auth/callback` and
+`app.mykhaya.mobile.prod://auth/callback`.
+
+The API records the native platform, environment and transaction together; it
+does not infer the platform from the URI. A native app generates a fresh
+high-entropy redemption verifier before starting authentication, keeps it in
+memory, and never puts it in a callback URI. The API stores only its SHA-256
+hash and requires the verifier for exchange, recovery and MFA redemption.
+Transactions expire and are single-use. Losing the app's in-memory verifier
+therefore fails safely without issuing a session.
+
 ## Troubleshooting and rollback
 
 - A disabled or incomplete provider reports Apple as unavailable and leaves

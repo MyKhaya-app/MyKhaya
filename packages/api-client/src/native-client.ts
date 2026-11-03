@@ -31,7 +31,7 @@ const PUBLIC_GET_PATH_SHAPES = [
 const PUBLIC_GET_TOKEN_QUERY_PATHS = new Set(["/invitations/preview", "/calendar-shares/preview"]);
 const TOKEN_QUERY = /^token=[A-Za-z0-9_-]{1,500}$/;
 const PUBLIC_GET_TRANSACTION_QUERY_PATHS = new Set(["/auth/mobile/mfa/options"]);
-const TRANSACTION_QUERY = /^transaction_id=[A-Za-z0-9_-]{20,256}$/;
+const TRANSACTION_QUERY = /^transaction_id=[A-Za-z0-9_-]{20,256}&redemption_verifier=[A-Za-z0-9_-]{32,256}$/;
 /** Public POSTs: exact paths, no query. The waitlist is rate-limited per
  * client IP server-side (enforce_rate_limit "beta-waitlist", 10/hour). */
 const PUBLIC_POST_PATHS = new Set([
@@ -299,9 +299,10 @@ export class NativeMyKhayaClient {
   async startExternal(
     provider: "apple" | "google",
     platform: "ios" | "android",
+    redemptionVerifier: string,
     intent: "login" | "link" = "login",
   ): Promise<{ transaction_id: string; nonce: string; provider: "apple" | "google"; client_id: string | null }> {
-    const body = { provider, platform, intent };
+    const body = { provider, platform, intent, redemption_verifier: redemptionVerifier };
     if (intent === "link") {
       return this.request("/auth/mobile/external/start", {
         method: "POST",
@@ -311,19 +312,19 @@ export class NativeMyKhayaClient {
     return this.postUnauthenticated("/auth/mobile/external/start", body);
   }
 
-  externalBrowserStart(provider: "apple" | "google", platform: "ios" | "android", returnUri: string) {
-    return this.postUnauthenticated<{ authorization_url: string }>(
+  externalBrowserStart(provider: "apple" | "google", platform: "ios" | "android", returnUri: string, redemptionVerifier: string) {
+    return this.postUnauthenticated<{ authorization_url: string; transaction_id: string }>(
       "/auth/mobile/external/browser/start",
-      { provider, platform, return_uri: returnUri },
+      { provider, platform, return_uri: returnUri, redemption_verifier: redemptionVerifier },
     );
   }
 
-  async externalRedeem(transactionId: string) {
+  async externalRedeem(transactionId: string, redemptionVerifier: string) {
     const result = await this.postUnauthenticated<
       (User & { session_token?: string; device_token?: string })
       | { authentication_state: "account_choice"; transaction_id: string; provider: "apple" | "google"; provider_email: string | null; display_name: string; can_register: boolean }
       | { authentication_state: "additional_auth_required"; transaction_id: string; provider: "apple" | "google" }
-    >("/auth/mobile/external/redeem", { transaction_id: transactionId });
+    >("/auth/mobile/external/redeem", { transaction_id: transactionId, redemption_verifier: redemptionVerifier });
     if ("session_token" in result && result.session_token) {
       const { session_token, device_token, ...user } = result;
       await this.store.set({ token: session_token, deviceToken: device_token });
@@ -335,6 +336,7 @@ export class NativeMyKhayaClient {
   async exchangeExternal(
     transactionId: string,
     identityToken: string,
+    redemptionVerifier: string,
   ): Promise<
     | User
     | { authentication_state: "account_choice"; transaction_id: string; provider: "apple" | "google"; provider_email: string | null; display_name: string; can_register: boolean }
@@ -354,6 +356,7 @@ export class NativeMyKhayaClient {
     }>("/auth/mobile/external/exchange", {
       transaction_id: transactionId,
       identity_token: identityToken,
+      redemption_verifier: redemptionVerifier,
     });
     if (result.session_token) {
       const { session_token, device_token, ...user } = result as User & { session_token: string; device_token?: string };
@@ -363,10 +366,10 @@ export class NativeMyKhayaClient {
     return result as never;
   }
 
-  externalRecoveryLink(transactionId: string): Promise<{ message: string }> {
+  externalRecoveryLink(transactionId: string, redemptionVerifier: string): Promise<{ message: string }> {
     return this.request("/auth/mobile/external/recovery/link", {
       method: "POST",
-      body: JSON.stringify({ transaction_id: transactionId }),
+      body: JSON.stringify({ transaction_id: transactionId, redemption_verifier: redemptionVerifier }),
     });
   }
 
@@ -375,6 +378,7 @@ export class NativeMyKhayaClient {
     display_name?: string;
     legal_acceptances: { document_key: string; document_version_id: string }[];
     platform: "ios" | "android";
+    redemption_verifier: string;
   }): Promise<User | { authentication_state: "additional_auth_required"; transaction_id: string; provider: "apple" | "google" }> {
     const result = await this.postUnauthenticated<User & { session_token?: string; device_token?: string; authentication_state?: "additional_auth_required"; transaction_id?: string; provider?: "apple" | "google" }>(
       "/auth/mobile/external/recovery/register",
@@ -386,30 +390,30 @@ export class NativeMyKhayaClient {
     return user;
   }
 
-  nativeMfaOptions(transactionId: string) {
+  nativeMfaOptions(transactionId: string, redemptionVerifier: string) {
     return this.getUnauthenticated<{
       methods: ("totp" | "email")[];
       destination?: string;
       policy: "optional" | "required";
       enrolment_required: boolean;
       preferred_method: "totp" | "email" | null;
-    }>(`/auth/mobile/mfa/options?transaction_id=${encodeURIComponent(transactionId)}`);
+    }>(`/auth/mobile/mfa/options?transaction_id=${encodeURIComponent(transactionId)}&redemption_verifier=${encodeURIComponent(redemptionVerifier)}`);
   }
 
-  nativeMfaStart(transactionId: string, method: "totp" | "email") {
+  nativeMfaStart(transactionId: string, method: "totp" | "email", redemptionVerifier: string) {
     return this.postUnauthenticated<{
       method: "totp" | "email";
       destination?: string;
       provisioning_uri?: string;
       manual_key?: string;
       enrolling: boolean;
-    }>("/auth/mobile/mfa/start", { transaction_id: transactionId, method });
+    }>("/auth/mobile/mfa/start", { transaction_id: transactionId, method, redemption_verifier: redemptionVerifier });
   }
 
-  async nativeMfaVerify(transactionId: string, method: "totp" | "email", code: string): Promise<User> {
+  async nativeMfaVerify(transactionId: string, method: "totp" | "email", code: string, redemptionVerifier: string): Promise<User> {
     const result = await this.postUnauthenticated<User & { session_token: string; device_token?: string }>(
       "/auth/mobile/mfa/verify",
-      { transaction_id: transactionId, method, code },
+      { transaction_id: transactionId, method, code, redemption_verifier: redemptionVerifier },
     );
     const { session_token, device_token, ...user } = result;
     await this.store.set({ token: session_token, deviceToken: device_token });

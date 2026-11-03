@@ -113,12 +113,14 @@ from mykhaya.native_external_auth import (
     consume_native_external_pending,
     consume_native_external_transaction,
     consume_native_mfa_transaction,
+    hash_redemption_verifier,
     load_native_external_pending,
     load_native_mfa_transaction,
     new_native_external_transaction,
     store_native_external_pending,
     store_native_external_transaction,
     store_native_mfa_transaction,
+    verify_redemption_verifier,
 )
 from mykhaya.notifications.engine import notify
 from mykhaya.notifications.templates import render_notification_email
@@ -163,6 +165,8 @@ from mykhaya.schemas import (
     NativeExternalStartRequest,
     NativeExternalStartResponse,
     NativeMfaContinuationResponse,
+    NativeMfaStartRequest,
+    NativeMfaVerifyRequest,
     PasskeyAuthenticationVerifyRequest,
     PasskeyOptionsResponse,
     PasskeyRegistrationVerifyRequest,
@@ -731,6 +735,29 @@ def _safe_return_path(value: str | None) -> str | None:
     return None
 
 
+def _native_browser_return_uri(
+    settings: Settings, provider: ExternalIdentityProvider, platform: str
+) -> str:
+    """Return the only supported browser-mediated native callback.
+
+    iOS Apple and Android Google use their native SDK boundaries. Android
+    Apple and iOS Google use the system browser, so those are the only
+    provider/platform pairs accepted by this endpoint.
+    """
+    if provider == ExternalIdentityProvider.apple and platform == "android":
+        value = settings.native_apple_return_uri
+    elif provider == ExternalIdentityProvider.google and platform == "ios":
+        value = settings.native_google_return_uri
+    else:
+        value = None
+    if not value:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "This native browser sign-in callback is not configured.",
+        )
+    return value
+
+
 def _apple_redirect(settings: Settings, suffix: str) -> RedirectResponse:
     return RedirectResponse(
         f"{settings.public_web_url.rstrip('/')}/login?{suffix}",
@@ -1096,14 +1123,24 @@ async def apple_callback(
         )
 
         if flow.native_return_uri:
+            if (
+                flow.native_platform is None
+                or flow.native_environment != settings.environment
+                or flow.native_transaction_id is None
+                or flow.native_redemption_verifier_hash is None
+                or _native_browser_return_uri(
+                    settings, ExternalIdentityProvider.apple, flow.native_platform
+                )
+                != flow.native_return_uri
+            ):
+                raise AppleAuthenticationError("This native callback is invalid.")
             if identity is None and not provider_email:
                 raise AppleAuthenticationError("Apple did not provide an email for this account.")
             policy = await evaluate_signup_policy(db, settings)
-            transaction_id = secrets.token_urlsafe(32)
             await store_native_external_pending(
                 settings,
                 NativeExternalPendingIdentity(
-                    transaction_id=transaction_id,
+                    transaction_id=flow.native_transaction_id,
                     provider=ExternalIdentityProvider.apple,
                     subject=subject,
                     provider_email=provider_email,
@@ -1114,14 +1151,13 @@ async def apple_callback(
                     and policy.normal_path
                     and not policy.invitation_required
                     and policy.domain_allowed(provider_email),
-                    platform="ios"
-                    if flow.native_return_uri == settings.native_apple_return_uri
-                    else "android",
+                    platform=flow.native_platform,
+                    redemption_verifier_hash=flow.native_redemption_verifier_hash,
                 ),
             )
             await db.commit()
             return RedirectResponse(
-                f"{flow.native_return_uri}?transaction={transaction_id}&provider=apple",
+                f"{flow.native_return_uri}?transaction={flow.native_transaction_id}&provider=apple",
                 status_code=status.HTTP_303_SEE_OTHER,
             )
 
@@ -1538,12 +1574,22 @@ async def google_callback(
             db, ExternalIdentityProvider.google, subject, for_update=True
         )
         if flow.native_return_uri:
+            if (
+                flow.native_platform is None
+                or flow.native_environment != settings.environment
+                or flow.native_transaction_id is None
+                or flow.native_redemption_verifier_hash is None
+                or _native_browser_return_uri(
+                    settings, ExternalIdentityProvider.google, flow.native_platform
+                )
+                != flow.native_return_uri
+            ):
+                raise GoogleAuthenticationError("This native callback is invalid.")
             policy = await evaluate_signup_policy(db, settings)
-            transaction_id = secrets.token_urlsafe(32)
             await store_native_external_pending(
                 settings,
                 NativeExternalPendingIdentity(
-                    transaction_id=transaction_id,
+                    transaction_id=flow.native_transaction_id,
                     provider=ExternalIdentityProvider.google,
                     subject=subject,
                     provider_email=provider_email,
@@ -1553,14 +1599,13 @@ async def google_callback(
                     and policy.normal_path
                     and not policy.invitation_required
                     and policy.domain_allowed(provider_email),
-                    platform="ios"
-                    if flow.native_return_uri == settings.native_google_return_uri
-                    else "android",
+                    platform=flow.native_platform,
+                    redemption_verifier_hash=flow.native_redemption_verifier_hash,
                 ),
             )
             await db.commit()
             return RedirectResponse(
-                f"{flow.native_return_uri}?transaction={transaction_id}&provider=google",
+                f"{flow.native_return_uri}?transaction={flow.native_transaction_id}&provider=google",
                 status_code=status.HTTP_303_SEE_OTHER,
             )
         if flow.intent == "link":
@@ -2696,6 +2741,14 @@ async def mobile_external_start(
 ) -> NativeExternalStartResponse:
     require_secure_transport(request, settings)
     provider = ExternalIdentityProvider(body.provider)
+    if (provider, body.platform) not in {
+        (ExternalIdentityProvider.apple, "ios"),
+        (ExternalIdentityProvider.google, "android"),
+    }:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "This provider must use the system-browser native flow on this platform.",
+        )
     if provider == ExternalIdentityProvider.apple and not settings.apple_sign_in_enabled:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "This sign-in method is unavailable.")
     if provider == ExternalIdentityProvider.google and not settings.google_sign_in_enabled:
@@ -2726,6 +2779,7 @@ async def mobile_external_start(
         intent=body.intent,
         user_id=user_id,
         platform=body.platform,
+        redemption_verifier=body.redemption_verifier,
         apple_nonce_hash=provider == ExternalIdentityProvider.apple,
     )
     await store_native_external_transaction(settings, tx)
@@ -2745,11 +2799,8 @@ async def mobile_external_browser_start(
     settings: Settings = Depends(get_settings),
 ) -> NativeExternalBrowserStartResponse:
     require_secure_transport(request, settings)
-    expected_return_uri = (
-        settings.native_apple_return_uri
-        if body.provider == "apple"
-        else settings.native_google_return_uri
-    )
+    provider = ExternalIdentityProvider(body.provider)
+    expected_return_uri = _native_browser_return_uri(settings, provider, body.platform)
     if not expected_return_uri or body.return_uri != expected_return_uri:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST,
@@ -2757,6 +2808,8 @@ async def mobile_external_browser_start(
         )
     state = secrets.token_urlsafe(32)
     nonce = secrets.token_urlsafe(32)
+    transaction_id = secrets.token_urlsafe(32)
+    redemption_verifier_hash = hash_redemption_verifier(body.redemption_verifier)
     if body.provider == "apple":
         require_apple_configuration(settings)
         await store_flow_state(
@@ -2768,6 +2821,10 @@ async def mobile_external_browser_start(
                 user_id=None,
                 return_path=None,
                 native_return_uri=body.return_uri,
+                native_platform=body.platform,
+                native_environment=settings.environment,
+                native_transaction_id=transaction_id,
+                native_redemption_verifier_hash=redemption_verifier_hash,
             ),
         )
         url = authorization_url(settings, state, nonce)
@@ -2784,12 +2841,19 @@ async def mobile_external_browser_start(
                 user_id=None,
                 return_path=None,
                 native_return_uri=body.return_uri,
+                native_platform=body.platform,
+                native_environment=settings.environment,
+                native_transaction_id=transaction_id,
+                native_redemption_verifier_hash=redemption_verifier_hash,
             ),
         )
         url = google_authorization_url(settings, state, nonce, verifier)
     audit(db, request, "native.external_login_started", target_type="external_identity")
     await db.commit()
-    return NativeExternalBrowserStartResponse(authorization_url=url)
+    return NativeExternalBrowserStartResponse(
+        authorization_url=url,
+        transaction_id=transaction_id,
+    )
 
 
 @router.post(
@@ -2818,6 +2882,10 @@ async def mobile_external_exchange(
             status.HTTP_400_BAD_REQUEST, "This sign-in attempt is invalid or has expired."
         )
     if tx.environment != settings.environment:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "This sign-in attempt is invalid or has expired."
+        )
+    if not verify_redemption_verifier(body.redemption_verifier, tx.redemption_verifier_hash):
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST, "This sign-in attempt is invalid or has expired."
         )
@@ -2897,6 +2965,7 @@ async def mobile_external_exchange(
                 user_id=str(user.id),
                 provider=tx.provider,
                 platform=tx.platform,
+                redemption_verifier_hash=tx.redemption_verifier_hash,
             )
             await store_native_mfa_transaction(settings, mfa_transaction)
             return NativeMfaContinuationResponse(
@@ -2940,6 +3009,7 @@ async def mobile_external_exchange(
             display_name=display_name,
             can_register=can_register,
             platform=tx.platform,
+            redemption_verifier_hash=tx.redemption_verifier_hash,
         ),
     )
     return NativeExternalRecoveryResponse(
@@ -2969,6 +3039,10 @@ async def mobile_external_redeem(
     pending = await load_native_external_pending(settings, body.transaction_id)
     if pending is None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "This sign-in attempt has expired.")
+    if not verify_redemption_verifier(body.redemption_verifier, pending.redemption_verifier_hash):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "This sign-in attempt is invalid or has expired."
+        )
     identity = await find_external_identity(db, pending.provider, pending.subject, for_update=True)
     if identity is None:
         return NativeExternalRecoveryResponse(
@@ -2998,6 +3072,7 @@ async def mobile_external_redeem(
             user_id=str(user.id),
             provider=pending.provider,
             platform=pending.platform,
+            redemption_verifier_hash=pending.redemption_verifier_hash,
         )
         await store_native_mfa_transaction(settings, mfa_transaction)
         await db.commit()
@@ -3036,6 +3111,10 @@ async def mobile_external_recovery_link(
     pending = await consume_native_external_pending(settings, body.transaction_id)
     if pending is None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "This sign-in attempt has expired.")
+    if not verify_redemption_verifier(body.redemption_verifier, pending.redemption_verifier_hash):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "This sign-in attempt is invalid or has expired."
+        )
     try:
         await link_external_identity(
             db,
@@ -3074,6 +3153,10 @@ async def mobile_external_recovery_register(
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             "This provider identity must be linked to an existing account.",
+        )
+    if not verify_redemption_verifier(body.redemption_verifier, pending.redemption_verifier_hash):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "This sign-in attempt is invalid or has expired."
         )
     resolved = await validate_signup_acceptances(
         db, [(item.document_key, item.document_version_id) for item in body.legal_acceptances]
@@ -3132,6 +3215,7 @@ async def mobile_external_recovery_register(
             user_id=str(user.id),
             provider=pending.provider,
             platform=pending.platform,
+            redemption_verifier_hash=pending.redemption_verifier_hash,
         )
         await store_native_mfa_transaction(settings, mfa_transaction)
         await db.commit()
@@ -3155,6 +3239,7 @@ async def mobile_external_recovery_register(
 @router.get("/mobile/mfa/options", response_model=MfaOptionsResponse)
 async def mobile_mfa_options(
     transaction_id: str,
+    redemption_verifier: str,
     request: Request,
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
@@ -3163,6 +3248,10 @@ async def mobile_mfa_options(
     state = await load_native_mfa_transaction(settings, transaction_id)
     if state is None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "This sign-in attempt has expired.")
+    if not verify_redemption_verifier(redemption_verifier, state.redemption_verifier_hash):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "This sign-in attempt is invalid or has expired."
+        )
     user = await db.get(User, uuid.UUID(state.user_id))
     if user is None or not user.is_active:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "This sign-in attempt is invalid.")
@@ -3184,7 +3273,7 @@ async def mobile_mfa_options(
 
 @router.post("/mobile/mfa/start", response_model=MfaStartResponse)
 async def mobile_mfa_start(
-    body: MfaStartRequest,
+    body: NativeMfaStartRequest,
     request: Request,
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
@@ -3193,6 +3282,10 @@ async def mobile_mfa_start(
     state = await load_native_mfa_transaction(settings, body.transaction_id)
     if state is None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "This sign-in attempt has expired.")
+    if not verify_redemption_verifier(body.redemption_verifier, state.redemption_verifier_hash):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "This sign-in attempt is invalid or has expired."
+        )
     user = await db.get(User, uuid.UUID(state.user_id))
     if user is None or not user.is_active:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "This sign-in attempt is invalid.")
@@ -3274,7 +3367,7 @@ async def mobile_mfa_start(
 
 @router.post("/mobile/mfa/verify", response_model=MobileSessionResponse)
 async def mobile_mfa_verify(
-    body: MfaVerifyRequest,
+    body: NativeMfaVerifyRequest,
     request: Request,
     response: Response,
     db: AsyncSession = Depends(get_db),
@@ -3284,6 +3377,10 @@ async def mobile_mfa_verify(
     state = await consume_native_mfa_transaction(settings, body.transaction_id)
     if state is None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "This sign-in attempt has expired.")
+    if not verify_redemption_verifier(body.redemption_verifier, state.redemption_verifier_hash):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "This sign-in attempt is invalid or has expired."
+        )
     user = await db.get(User, uuid.UUID(state.user_id), with_for_update=True)
     if user is None or not user.is_active:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "This sign-in attempt is invalid.")

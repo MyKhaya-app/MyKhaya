@@ -6,6 +6,7 @@ from datetime import UTC, datetime
 from uuid import uuid4
 
 import pytest
+from fastapi import HTTPException
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
@@ -37,6 +38,8 @@ def native_settings():
             "apple_native_client_id": "app.mykhaya.dev",
             "google_sign_in_enabled": True,
             "google_native_client_id": "1234567890-native.apps.googleusercontent.com",
+            "native_apple_return_uri": "app.mykhaya.mobile://auth/callback",
+            "native_google_return_uri": "mykhaya://auth/callback",
         }
     )
     app.dependency_overrides[get_settings] = lambda: settings
@@ -48,6 +51,7 @@ def native_settings():
 async def test_native_link_is_explicit_and_single_use(
     client: AsyncClient, native_settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    verifier = "v" * 64
     email = f"native-link-{datetime.now(UTC).strftime('%H%M%S%f')}@example.com"
     await register_and_verify(client, email, "Native Link User")
     login = await client.post(
@@ -68,7 +72,12 @@ async def test_native_link_is_explicit_and_single_use(
     started = await client.post(
         "/api/v1/auth/mobile/external/start",
         headers=bearer(token),
-        json={"provider": "apple", "intent": "link", "platform": "ios"},
+        json={
+            "provider": "apple",
+            "intent": "link",
+            "platform": "ios",
+            "redemption_verifier": verifier,
+        },
     )
     assert started.status_code == 200, started.text
     exchanged = await client.post(
@@ -77,6 +86,7 @@ async def test_native_link_is_explicit_and_single_use(
         json={
             "transaction_id": started.json()["transaction_id"],
             "identity_token": "synthetic-identity-token-12345",
+            "redemption_verifier": verifier,
         },
     )
     assert exchanged.status_code == 200, exchanged.text
@@ -87,6 +97,7 @@ async def test_native_link_is_explicit_and_single_use(
         json={
             "transaction_id": started.json()["transaction_id"],
             "identity_token": "synthetic-identity-token-12345",
+            "redemption_verifier": verifier,
         },
     )
     assert replay.status_code == 400
@@ -103,6 +114,7 @@ async def test_native_link_is_explicit_and_single_use(
 async def test_native_new_registration_creates_one_user_after_explicit_choice(
     client: AsyncClient, native_settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    verifier = "v" * 64
     subject = f"native-register-{uuid4().hex}"
 
     async def verify(_settings, _token, _nonce, _audience=None):
@@ -111,13 +123,19 @@ async def test_native_new_registration_creates_one_user_after_explicit_choice(
     monkeypatch.setattr(auth_router, "verify_identity_token", verify)
     before = await client.post(
         "/api/v1/auth/mobile/external/start",
-        json={"provider": "apple", "intent": "login", "platform": "ios"},
+        json={
+            "provider": "apple",
+            "intent": "login",
+            "platform": "ios",
+            "redemption_verifier": verifier,
+        },
     )
     exchanged = await client.post(
         "/api/v1/auth/mobile/external/exchange",
         json={
             "transaction_id": before.json()["transaction_id"],
             "identity_token": "synthetic-identity-token-12345",
+            "redemption_verifier": verifier,
         },
     )
     assert exchanged.status_code == 200
@@ -131,6 +149,7 @@ async def test_native_new_registration_creates_one_user_after_explicit_choice(
             "display_name": "Native New User",
             "legal_acceptances": [],
             "platform": "ios",
+            "redemption_verifier": verifier,
         },
     )
     assert registered.status_code == 200, registered.text
@@ -188,9 +207,15 @@ async def test_concurrent_native_claims_leave_one_provider_owner() -> None:
 async def test_native_transaction_rejects_cross_environment_redemption(
     client: AsyncClient, native_settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
+    verifier = "v" * 64
     started = await client.post(
         "/api/v1/auth/mobile/external/start",
-        json={"provider": "apple", "intent": "login", "platform": "ios"},
+        json={
+            "provider": "apple",
+            "intent": "login",
+            "platform": "ios",
+            "redemption_verifier": verifier,
+        },
     )
     assert started.status_code == 200
     transaction = NativeExternalTransaction(
@@ -203,6 +228,7 @@ async def test_native_transaction_rejects_cross_environment_redemption(
         intent="login",
         user_id=None,
         platform="ios",
+        redemption_verifier_hash="wrong-hash",
     )
     async def consume(_settings, _transaction_id):
         return transaction
@@ -221,6 +247,60 @@ async def test_native_transaction_rejects_cross_environment_redemption(
         json={
             "transaction_id": transaction.transaction_id,
             "identity_token": "synthetic-identity-token-12345",
+            "redemption_verifier": verifier,
+        },
+    )
+    assert exchanged.status_code == 400
+    assert verify_called is False
+
+
+def test_native_browser_callback_mapping_is_explicit(native_settings) -> None:
+    assert (
+        auth_router._native_browser_return_uri(
+            native_settings, ExternalIdentityProvider.apple, "android"
+        )
+        == native_settings.native_apple_return_uri
+    )
+    assert (
+        auth_router._native_browser_return_uri(
+            native_settings, ExternalIdentityProvider.google, "ios"
+        )
+        == native_settings.native_google_return_uri
+    )
+    with pytest.raises(HTTPException):
+        auth_router._native_browser_return_uri(
+            native_settings, ExternalIdentityProvider.apple, "ios"
+        )
+
+
+@pytest.mark.asyncio
+async def test_native_exchange_rejects_wrong_redemption_verifier_before_provider_validation(
+    client: AsyncClient, native_settings, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    started = await client.post(
+        "/api/v1/auth/mobile/external/start",
+        json={
+            "provider": "apple",
+            "intent": "login",
+            "platform": "ios",
+            "redemption_verifier": "v" * 64,
+        },
+    )
+    assert started.status_code == 200, started.text
+    verify_called = False
+
+    async def verify(*_args, **_kwargs):
+        nonlocal verify_called
+        verify_called = True
+        return {"sub": "must-not-be-reached"}
+
+    monkeypatch.setattr(auth_router, "verify_identity_token", verify)
+    exchanged = await client.post(
+        "/api/v1/auth/mobile/external/exchange",
+        json={
+            "transaction_id": started.json()["transaction_id"],
+            "identity_token": "synthetic-identity-token-12345",
+            "redemption_verifier": "w" * 64,
         },
     )
     assert exchanged.status_code == 400
