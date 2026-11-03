@@ -284,6 +284,60 @@ class MobileDeviceRenewRequest(StrictModel):
     device_token: str = Field(min_length=30, max_length=500)
 
 
+class NativeExternalStartRequest(StrictModel):
+    provider: Literal["apple", "google"]
+    intent: Literal["login", "link"] = "login"
+    platform: Literal["ios", "android"]
+
+
+class NativeExternalStartResponse(BaseModel):
+    transaction_id: str
+    nonce: str
+    provider: Literal["apple", "google"]
+    client_id: str | None = None
+
+
+class NativeExternalBrowserStartRequest(StrictModel):
+    provider: Literal["apple", "google"]
+    platform: Literal["ios", "android"]
+    return_uri: str = Field(min_length=8, max_length=300)
+
+
+class NativeExternalBrowserStartResponse(BaseModel):
+    authorization_url: str
+
+
+class NativeExternalExchangeRequest(StrictModel):
+    transaction_id: str = Field(min_length=20, max_length=256)
+    identity_token: str = Field(min_length=20, max_length=20000)
+
+
+class NativeExternalRecoveryResponse(BaseModel):
+    authentication_state: Literal["account_choice"]
+    transaction_id: str
+    provider: Literal["apple", "google"]
+    provider_email: str | None = None
+    display_name: str
+    can_register: bool
+
+
+class NativeMfaContinuationResponse(BaseModel):
+    authentication_state: Literal["additional_auth_required"]
+    transaction_id: str
+    provider: Literal["apple", "google"]
+
+
+class NativeExternalLinkRequest(StrictModel):
+    transaction_id: str = Field(min_length=20, max_length=256)
+
+
+class NativeExternalRegisterRequest(StrictModel):
+    transaction_id: str = Field(min_length=20, max_length=256)
+    display_name: str | None = Field(default=None, min_length=1, max_length=100)
+    legal_acceptances: list[SignupLegalAcceptanceItem] = Field(default_factory=list)
+    platform: Literal["ios", "android"]
+
+
 class GroupCreate(StrictModel):
     name: str = Field(min_length=1, max_length=100)
     onboarding_key: str | None = Field(default=None, min_length=20, max_length=64)
@@ -1010,6 +1064,7 @@ class EventCopyDestination(StrictModel):
 
 class EventCopyRequest(StrictModel):
     """Dates are local calendar dates in the source event's timezone."""
+
     destinations: list[EventCopyDestination] | None = Field(
         default=None, min_length=1, max_length=31
     )

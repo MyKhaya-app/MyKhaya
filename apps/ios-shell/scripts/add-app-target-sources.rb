@@ -16,6 +16,7 @@ FILES = %w[
   WidgetBridgePlugin.swift
   SystemSettingsPlugin.swift
   NativePushEnvironmentPlugin.swift
+  NativeExternalAuthPlugin.swift
   MainViewController.swift
 ].freeze
 # WidgetSnapshot.swift/WidgetSnapshotStore.swift used to be copied here as

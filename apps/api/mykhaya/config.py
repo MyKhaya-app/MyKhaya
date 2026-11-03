@@ -138,18 +138,22 @@ class Settings(BaseSettings):
     # implement a provider ceremony.
     apple_sign_in_enabled: bool = False
     apple_client_id: str | None = None
+    apple_native_client_id: str | None = None
     apple_service_id: str | None = None
     apple_team_id: str | None = None
     apple_key_id: str | None = None
     apple_private_key: SecretStr | None = None
     apple_redirect_uri: str | None = None
+    native_apple_return_uri: str | None = None
     apple_authorize_url: str = "https://appleid.apple.com/auth/authorize"
     apple_token_url: str = "https://appleid.apple.com/auth/token"  # noqa: S105 — a URL
     apple_jwks_url: str = "https://appleid.apple.com/auth/keys"
     google_sign_in_enabled: bool = False
     google_client_id: str | None = None
+    google_native_client_id: str | None = None
     google_client_secret: SecretStr | None = None
     google_redirect_uri: str | None = None
+    native_google_return_uri: str | None = None
     google_authorize_url: str = "https://accounts.google.com/o/oauth2/v2/auth"
     google_token_url: str = "https://oauth2.googleapis.com/token"  # noqa: S105 — a URL
     google_jwks_url: str = "https://www.googleapis.com/oauth2/v3/certs"

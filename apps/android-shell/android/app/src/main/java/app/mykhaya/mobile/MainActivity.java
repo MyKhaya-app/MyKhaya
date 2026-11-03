@@ -12,6 +12,7 @@ public class MainActivity extends BridgeActivity {
         // Capacitor bridge's own init — see SystemSettingsPlugin's own
         // comment for what this plugin does and why it exists.
         registerPlugin(SystemSettingsPlugin.class);
+        registerPlugin(NativeExternalAuthPlugin.class);
         super.onCreate(savedInstanceState);
         // Idempotent — see NotificationChannels' own comment for why this
         // set exists and must stay in sync with the backend's FCM sender.

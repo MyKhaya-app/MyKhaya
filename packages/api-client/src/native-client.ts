@@ -30,9 +30,21 @@ const PUBLIC_GET_PATH_SHAPES = [
 /** Public previews that take their token as the one and only query value. */
 const PUBLIC_GET_TOKEN_QUERY_PATHS = new Set(["/invitations/preview", "/calendar-shares/preview"]);
 const TOKEN_QUERY = /^token=[A-Za-z0-9_-]{1,500}$/;
+const PUBLIC_GET_TRANSACTION_QUERY_PATHS = new Set(["/auth/mobile/mfa/options"]);
+const TRANSACTION_QUERY = /^transaction_id=[A-Za-z0-9_-]{20,256}$/;
 /** Public POSTs: exact paths, no query. The waitlist is rate-limited per
  * client IP server-side (enforce_rate_limit "beta-waitlist", 10/hour). */
-const PUBLIC_POST_PATHS = new Set(["/public/beta/waitlist"]);
+const PUBLIC_POST_PATHS = new Set([
+  "/public/beta/waitlist",
+  "/auth/mobile/external/start",
+  "/auth/mobile/external/browser/start",
+  "/auth/mobile/external/exchange",
+  "/auth/mobile/external/redeem",
+  "/auth/mobile/external/recovery/register",
+  "/auth/mobile/mfa/options",
+  "/auth/mobile/mfa/start",
+  "/auth/mobile/mfa/verify",
+]);
 
 /** Whether `path` (as passed to `request()`, relative to `/api/v1`) is an
  * allowlisted public endpoint. The path must already be canonical: dot
@@ -51,6 +63,7 @@ export function isPublicNativeEndpoint(path: string, method: string = "GET"): bo
   if (new URL(pathname, "https://canonical.invalid").pathname !== pathname) return false;
   if (verb === "POST") return queryStart === -1 && PUBLIC_POST_PATHS.has(pathname);
   if (PUBLIC_GET_TOKEN_QUERY_PATHS.has(pathname)) return TOKEN_QUERY.test(query);
+  if (PUBLIC_GET_TRANSACTION_QUERY_PATHS.has(pathname)) return TRANSACTION_QUERY.test(query);
   if (queryStart !== -1) return false;
   return PUBLIC_GET_PATHS.has(pathname) || PUBLIC_GET_PATH_SHAPES.some((shape) => shape.test(pathname));
 }
@@ -263,6 +276,10 @@ export class NativeMyKhayaClient {
     }
   }
 
+  private getUnauthenticated<T>(path: string): Promise<T> {
+    return this.publicRequest<T>(path, { method: "GET" });
+  }
+
   /** Adult sign-in — native equivalent of the browser's POST /auth/login,
    * wired to POST /auth/mobile/login instead. Stores the returned session
    * token (and long-lived device/renewal token — see native-session-store's
@@ -274,6 +291,126 @@ export class NativeMyKhayaClient {
     const result = await this.postUnauthenticated<
       User & { session_token: string; device_token?: string }
     >("/auth/mobile/login", { email, password });
+    const { session_token, device_token, ...user } = result;
+    await this.store.set({ token: session_token, deviceToken: device_token });
+    return user;
+  }
+
+  async startExternal(
+    provider: "apple" | "google",
+    platform: "ios" | "android",
+    intent: "login" | "link" = "login",
+  ): Promise<{ transaction_id: string; nonce: string; provider: "apple" | "google"; client_id: string | null }> {
+    const body = { provider, platform, intent };
+    if (intent === "link") {
+      return this.request("/auth/mobile/external/start", {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+    }
+    return this.postUnauthenticated("/auth/mobile/external/start", body);
+  }
+
+  externalBrowserStart(provider: "apple" | "google", platform: "ios" | "android", returnUri: string) {
+    return this.postUnauthenticated<{ authorization_url: string }>(
+      "/auth/mobile/external/browser/start",
+      { provider, platform, return_uri: returnUri },
+    );
+  }
+
+  async externalRedeem(transactionId: string) {
+    const result = await this.postUnauthenticated<
+      (User & { session_token?: string; device_token?: string })
+      | { authentication_state: "account_choice"; transaction_id: string; provider: "apple" | "google"; provider_email: string | null; display_name: string; can_register: boolean }
+      | { authentication_state: "additional_auth_required"; transaction_id: string; provider: "apple" | "google" }
+    >("/auth/mobile/external/redeem", { transaction_id: transactionId });
+    if ("session_token" in result && result.session_token) {
+      const { session_token, device_token, ...user } = result;
+      await this.store.set({ token: session_token, deviceToken: device_token });
+      return user;
+    }
+    return result;
+  }
+
+  async exchangeExternal(
+    transactionId: string,
+    identityToken: string,
+  ): Promise<
+    | User
+    | { authentication_state: "account_choice"; transaction_id: string; provider: "apple" | "google"; provider_email: string | null; display_name: string; can_register: boolean }
+    | { authentication_state: "additional_auth_required"; transaction_id: string; provider: "apple" | "google" }
+    | { message: string }
+  > {
+    const result = await this.postUnauthenticated<{
+      session_token?: string;
+      device_token?: string;
+      authentication_state?: "account_choice";
+      transaction_id?: string;
+      provider?: "apple" | "google";
+      provider_email?: string | null;
+      display_name?: string;
+      can_register?: boolean;
+      message?: string;
+    }>("/auth/mobile/external/exchange", {
+      transaction_id: transactionId,
+      identity_token: identityToken,
+    });
+    if (result.session_token) {
+      const { session_token, device_token, ...user } = result as User & { session_token: string; device_token?: string };
+      await this.store.set({ token: session_token, deviceToken: device_token });
+      return user;
+    }
+    return result as never;
+  }
+
+  externalRecoveryLink(transactionId: string): Promise<{ message: string }> {
+    return this.request("/auth/mobile/external/recovery/link", {
+      method: "POST",
+      body: JSON.stringify({ transaction_id: transactionId }),
+    });
+  }
+
+  async externalRecoveryRegister(body: {
+    transaction_id: string;
+    display_name?: string;
+    legal_acceptances: { document_key: string; document_version_id: string }[];
+    platform: "ios" | "android";
+  }): Promise<User | { authentication_state: "additional_auth_required"; transaction_id: string; provider: "apple" | "google" }> {
+    const result = await this.postUnauthenticated<User & { session_token?: string; device_token?: string; authentication_state?: "additional_auth_required"; transaction_id?: string; provider?: "apple" | "google" }>(
+      "/auth/mobile/external/recovery/register",
+      body,
+    );
+    if (!result.session_token) return result as { authentication_state: "additional_auth_required"; transaction_id: string; provider: "apple" | "google" };
+    const { session_token, device_token, ...user } = result as User & { session_token: string; device_token?: string };
+    await this.store.set({ token: session_token, deviceToken: device_token });
+    return user;
+  }
+
+  nativeMfaOptions(transactionId: string) {
+    return this.getUnauthenticated<{
+      methods: ("totp" | "email")[];
+      destination?: string;
+      policy: "optional" | "required";
+      enrolment_required: boolean;
+      preferred_method: "totp" | "email" | null;
+    }>(`/auth/mobile/mfa/options?transaction_id=${encodeURIComponent(transactionId)}`);
+  }
+
+  nativeMfaStart(transactionId: string, method: "totp" | "email") {
+    return this.postUnauthenticated<{
+      method: "totp" | "email";
+      destination?: string;
+      provisioning_uri?: string;
+      manual_key?: string;
+      enrolling: boolean;
+    }>("/auth/mobile/mfa/start", { transaction_id: transactionId, method });
+  }
+
+  async nativeMfaVerify(transactionId: string, method: "totp" | "email", code: string): Promise<User> {
+    const result = await this.postUnauthenticated<User & { session_token: string; device_token?: string }>(
+      "/auth/mobile/mfa/verify",
+      { transaction_id: transactionId, method, code },
+    );
     const { session_token, device_token, ...user } = result;
     await this.store.set({ token: session_token, deviceToken: device_token });
     return user;
