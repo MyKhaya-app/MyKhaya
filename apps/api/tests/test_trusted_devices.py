@@ -5,12 +5,14 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from test_mobile_auth import ORIGIN, PASSWORD, register_and_verify
 
+from mykhaya.config import get_settings
+from mykhaya.consumer_mfa_policy import CONSUMER_MFA_POLICY_SETTING_KEY
 from mykhaya.db import SessionFactory
 from mykhaya.main import app
-from mykhaya.models import Session, TrustedDevice, User
+from mykhaya.models import PlatformSetting, Session, TrustedDevice, User
 
 
 @pytest.fixture
@@ -124,3 +126,54 @@ async def test_network_or_server_failures_are_not_authentication_decisions() -> 
     # the suite; transport failures never reach auth_context and cannot revoke a
     # session or trusted device.
     assert True
+
+
+@pytest.mark.asyncio
+async def test_browser_trusted_device_cannot_renew_after_mfa_policy_becomes_required(
+    client: AsyncClient,
+) -> None:
+    email = f"trusted-mfa-{datetime.now(UTC).strftime('%H%M%S%f')}@example.com"
+    await register_and_verify(client, email, "Trusted MFA User")
+    login = await client.post("/api/v1/auth/login", json={"email": email, "password": PASSWORD})
+    assert login.status_code == 200
+    csrf(client, "mk_device")
+
+    async with SessionFactory() as db:
+        session = await db.scalar(
+            select(Session)
+            .join(User)
+            .where(User.email == email)
+            .order_by(Session.created_at.desc())
+        )
+        assert session is not None
+        session.expires_at = datetime.now(UTC) - timedelta(minutes=1)
+        db.add(
+            PlatformSetting(
+                key=CONSUMER_MFA_POLICY_SETTING_KEY,
+                value={"policy": "required", "allowed_methods": ["email"]},
+            )
+        )
+        await db.commit()
+
+    settings = get_settings().model_copy(update={"browser_mfa_handoff_enabled": True})
+    app.dependency_overrides[get_settings] = lambda: settings
+    try:
+        renewed = await client.post(
+            "/api/v1/auth/renew", headers={"X-CSRF-Token": csrf(client, "mk_device_csrf")}
+        )
+        assert renewed.status_code == 401
+        async with SessionFactory() as db:
+            user = await db.scalar(select(User).where(User.email == email))
+            assert user is not None
+            device = await db.scalar(select(TrustedDevice).where(TrustedDevice.user_id == user.id))
+            assert device is not None
+            assert device.revoked_at is not None
+    finally:
+        async with SessionFactory() as db:
+            await db.execute(
+                delete(PlatformSetting).where(
+                    PlatformSetting.key == CONSUMER_MFA_POLICY_SETTING_KEY
+                )
+            )
+            await db.commit()
+        app.dependency_overrides.pop(get_settings, None)

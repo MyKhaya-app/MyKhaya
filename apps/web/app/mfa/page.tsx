@@ -23,6 +23,7 @@ export default function MfaPage() {
   const router = useRouter();
   const params = useSearchParams();
   const transaction = params.get("transaction") ?? "";
+  const appleLinkTransaction = params.get("apple_link_transaction");
   const { setAuthenticatedUser } = useAuth();
   const [options, setOptions] = useState<Options | null>(null);
   const [method, setMethod] = useState<Method>("email");
@@ -107,6 +108,9 @@ export default function MfaPage() {
         code,
       });
       await setAuthenticatedUser(user);
+      if (appleLinkTransaction) {
+        await api.appleRecoveryLink(appleLinkTransaction);
+      }
       router.push(options?.onboarding ? "/onboarding" : "/home");
     } catch (reason) {
       if (reason instanceof ApiError && reason.status === 400 && /sign-in attempt has expired/i.test(reason.message)) {

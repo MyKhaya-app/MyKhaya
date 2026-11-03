@@ -7,17 +7,22 @@ import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy import delete, func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from webauthn.helpers import base64url_to_bytes, bytes_to_base64url
 
 from mykhaya.apple_auth import (
     AppleAuthenticationError,
     AppleFlowState,
+    ApplePendingIdentity,
     authorization_url,
     consume_flow_state,
+    consume_pending_identity,
     exchange_code,
+    load_pending_identity,
     require_apple_configuration,
     store_flow_state,
+    store_pending_identity,
     verify_identity_token,
 )
 from mykhaya.audit import audit
@@ -93,6 +98,8 @@ from mykhaya.platform_mfa import (
 from mykhaya.platform_runtime import email_verification_required, evaluate_signup_policy
 from mykhaya.rate_limit import enforce_rate_limit
 from mykhaya.schemas import (
+    AppleRecoveryOptionsResponse,
+    AppleRecoveryRequest,
     AuthContinuationResponse,
     ChildLoginRequest,
     ConsumerMfaStatusResponse,
@@ -759,6 +766,186 @@ async def apple_link_start(
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
 
 
+@router.get("/apple/recovery/options", response_model=AppleRecoveryOptionsResponse)
+async def apple_recovery_options(
+    transaction_id: str,
+    settings: Settings = Depends(get_settings),
+) -> AppleRecoveryOptionsResponse:
+    pending = await load_pending_identity(settings, transaction_id)
+    if pending is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This Apple sign-in attempt has expired.")
+    return AppleRecoveryOptionsResponse(
+        can_register=pending.can_register,
+        provider_email=pending.provider_email,
+        display_name=pending.display_name,
+    )
+
+
+@router.post(
+    "/apple/recovery/link",
+    response_model=MessageResponse,
+)
+async def apple_recovery_link(
+    body: AppleRecoveryRequest,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> MessageResponse:
+    require_fresh_adult_auth(auth)
+    pending = await consume_pending_identity(settings, body.transaction_id)
+    if pending is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This Apple sign-in attempt has expired.")
+    current = await db.get(User, auth.user.id, with_for_update=True)
+    if current is None or not current.is_active:
+        raise HTTPException(
+            status.HTTP_401_UNAUTHORIZED, "Your sign-in session is no longer valid."
+        )
+    identity = await db.scalar(
+        select(ExternalIdentity)
+        .where(
+            ExternalIdentity.provider == ExternalIdentityProvider.apple,
+            ExternalIdentity.provider_subject == pending.subject,
+        )
+        .with_for_update()
+    )
+    if identity is not None and identity.user_id != current.id:
+        audit(
+            db,
+            request,
+            "APPLE_IDENTITY_LINK_FAILED",
+            current.id,
+            target_type="external_identity",
+        )
+        await db.commit()
+        raise HTTPException(status.HTTP_409_CONFLICT, "This Apple identity is already linked.")
+    if identity is None:
+        identity = ExternalIdentity(
+            user_id=current.id,
+            provider=ExternalIdentityProvider.apple,
+            provider_subject=pending.subject,
+            provider_email=pending.provider_email,
+            provider_email_verified=pending.email_verified,
+            last_used_at=datetime.now(UTC),
+        )
+        db.add(identity)
+    else:
+        identity.last_used_at = datetime.now(UTC)
+    audit(db, request, "APPLE_IDENTITY_LINKED", current.id, target_type="external_identity")
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "This Apple identity was linked by another request. Please retry sign-in.",
+        ) from None
+    return MessageResponse(message="Apple sign-in has been linked to your account.")
+
+
+@router.post(
+    "/apple/recovery/register",
+    response_model=UserResponse | AuthContinuationResponse,
+)
+async def apple_recovery_register(
+    body: AppleRecoveryRequest,
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> UserResponse | AuthContinuationResponse:
+    pending = await load_pending_identity(settings, body.transaction_id)
+    if pending is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This Apple sign-in attempt has expired.")
+    if not pending.can_register or not pending.provider_email:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "This Apple identity must be linked to an existing account.",
+        )
+    policy = await evaluate_signup_policy(db, settings)
+    if (
+        not policy.normal_path
+        or policy.invitation_required
+        or not policy.domain_allowed(pending.provider_email)
+    ):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "New accounts cannot be created with Apple right now.",
+        )
+    resolved_legal_acceptances = await validate_signup_acceptances(
+        db,
+        [(item.document_key, item.document_version_id) for item in body.legal_acceptances],
+    )
+    pending = await consume_pending_identity(settings, body.transaction_id)
+    if pending is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This Apple sign-in attempt has expired.")
+    existing = await db.scalar(
+        select(User).where(User.email == normalise_email(pending.provider_email)).with_for_update()
+    )
+    if existing is not None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "An account already uses this email. Sign in and link Apple instead.",
+        )
+    identity = await db.scalar(
+        select(ExternalIdentity)
+        .where(
+            ExternalIdentity.provider == ExternalIdentityProvider.apple,
+            ExternalIdentity.provider_subject == pending.subject,
+        )
+        .with_for_update()
+    )
+    if identity is not None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "This Apple identity is already linked.")
+    user = User(
+        email=normalise_email(pending.provider_email),
+        display_name=pending.display_name,
+        email_verified_at=datetime.now(UTC) if pending.email_verified else None,
+    )
+    db.add(user)
+    await db.flush()
+    for resolved in resolved_legal_acceptances:
+        record_type = (
+            LegalRecordType.user_acceptance
+            if resolved.document.action_verb == LegalActionVerb.accept
+            else LegalRecordType.user_acknowledgement
+        )
+        db.add(
+            LegalAcceptance(
+                record_type=record_type,
+                document_version_id=resolved.version.id,
+                user_id=user.id,
+                context=LegalAcceptanceContext.signup,
+                platform=body.platform,
+                ip_address=resolve_client_ip(request, settings),
+                user_agent=request.headers.get("user-agent", "")[:300] or None,
+            )
+        )
+    db.add(
+        ExternalIdentity(
+            user_id=user.id,
+            provider=ExternalIdentityProvider.apple,
+            provider_subject=pending.subject,
+            provider_email=pending.provider_email,
+            provider_email_verified=pending.email_verified,
+            last_used_at=datetime.now(UTC),
+        )
+    )
+    result = await complete_browser_authentication(
+        db,
+        response,
+        request,
+        user,
+        settings,
+        method="apple",
+        destination=pending.return_path or "/onboarding",
+        onboarding=True,
+    )
+    audit(db, request, "APPLE_IDENTITY_REGISTERED", user.id, target_type="external_identity")
+    await db.commit()
+    return result
+
+
 @router.delete("/apple/link")
 async def unlink_apple_identity(
     request: Request,
@@ -880,56 +1067,43 @@ async def apple_callback(
             identity.provider_email_verified = email_verified or identity.provider_email_verified
             identity.last_used_at = datetime.now(UTC)
         else:
-            # An email match is never an implicit identity link. The user must
-            # first sign in to the canonical account and then start the
-            # authenticated link ceremony above.
+            # An email match is never an implicit identity link. Keep the
+            # verified provider identity in a short-lived, single-use recovery
+            # transaction and require an explicit account decision. This is
+            # essential for Apple private-relay addresses, which may not match
+            # the user's existing MyKhaya email at all.
             existing = (
                 await db.scalar(select(User).where(User.email == provider_email))
                 if provider_email
                 else None
             )
-            if existing is not None:
-                _apple_audit_failure(db, request, existing.id)
-                await db.commit()
-                return _apple_redirect(settings, "apple=link_required")
             if not provider_email:
                 raise AppleAuthenticationError("Apple did not provide an email for this account.")
-            # Apple creates a brand-new account, so it is subject to the same
-            # signup policy as password registration. It carries no Home/Beta
-            # invitation and is not the Founding Beta path, so it is available
-            # only while ordinary signup is open and not invitation-gated.
             policy = await evaluate_signup_policy(db, settings)
-            if (
-                not policy.normal_path
-                or policy.invitation_required
-                or not policy.domain_allowed(provider_email)
-            ):
-                _apple_audit_failure(db, request)
-                await db.commit()
-                return _apple_redirect(settings, "apple=registration_unavailable")
-            linked_user = User(
-                email=provider_email,
-                display_name=_apple_name(user),
-                email_verified_at=datetime.now(UTC) if email_verified else None,
-            )
-            db.add(linked_user)
-            await db.flush()
-            db.add(
-                ExternalIdentity(
-                    user_id=linked_user.id,
-                    provider=ExternalIdentityProvider.apple,
-                    provider_subject=subject,
+            pending_transaction = secrets.token_urlsafe(32)
+            await store_pending_identity(
+                settings,
+                pending_transaction,
+                ApplePendingIdentity(
+                    transaction_id=pending_transaction,
+                    subject=subject,
                     provider_email=provider_email,
-                    provider_email_verified=email_verified,
-                    last_used_at=datetime.now(UTC),
-                )
+                    email_verified=email_verified,
+                    display_name=_apple_name(user),
+                    can_register=(
+                        existing is None
+                        and policy.normal_path
+                        and not policy.invitation_required
+                        and policy.domain_allowed(provider_email)
+                    ),
+                    return_path=flow.return_path,
+                ),
             )
-            audit(
-                db,
-                request,
-                "APPLE_IDENTITY_LINKED",
-                linked_user.id,
-                target_type="external_identity",
+            audit(db, request, "APPLE_RECOVERY_CREATED", target_type="external_identity")
+            await db.commit()
+            return _apple_redirect(
+                settings,
+                f"apple=choose&transaction={pending_transaction}",
             )
 
         has_home = await db.scalar(
@@ -1571,7 +1745,9 @@ async def passkey_login_options(
     return PasskeyOptionsResponse(options_json=options_json)
 
 
-@router.post("/passkeys/login/verify", response_model=UserResponse)
+@router.post(
+    "/passkeys/login/verify", response_model=UserResponse | AuthContinuationResponse
+)
 async def passkey_login_verify(
     body: PasskeyAuthenticationVerifyRequest,
     request: Request,
@@ -1619,17 +1795,18 @@ async def passkey_login_verify(
     now = datetime.now(UTC)
     row.sign_count = new_sign_count
     row.last_used_at = now
-    session = await issue_family_session(
+    result = await complete_browser_authentication(
         db,
         response,
         request,
         user,
         settings,
-        SessionKind.adult,
-        fresh_auth_at=now,
+        method="passkey",
+        destination="/home",
     )
-    user.last_login_at = now
-    user.last_activity_at = now
+    if isinstance(result, UserResponse):
+        user.last_login_at = now
+        user.last_activity_at = now
     audit(
         db,
         request,
@@ -1644,7 +1821,7 @@ async def passkey_login_verify(
         path="/",
         domain=settings.cookie_domain,
     )
-    return user_response(user, session)
+    return result
 
 
 @router.get("/passkeys", response_model=list[PasskeyResponse])
@@ -1911,6 +2088,29 @@ async def renew(
         )
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Please sign in to continue.")
     user, device = pair
+
+    if device.kind == SessionKind.adult:
+        policy = await _resolve_browser_mfa_policy(db, user.id, settings)
+        if policy.enforcement_enabled and policy.required:
+            device.revoked_at = now
+            audit(
+                db,
+                request,
+                "session.renewal_blocked_mfa_required",
+                user.id,
+                target_type="trusted_device",
+                target_id=device.id,
+            )
+            await db.commit()
+            _auth_diag(
+                request,
+                "RENEW_FAILED",
+                result="MFA_REQUIRED",
+                user_id=str(user.id),
+                device_id=str(device.id),
+                status_code=401,
+            )
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Please sign in to continue.")
 
     if device.kind == SessionKind.managed_child:
         child_active = await db.scalar(

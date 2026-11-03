@@ -1,0 +1,305 @@
+"""Database-backed Apple account-recovery and linking regressions."""
+
+import asyncio
+from collections.abc import AsyncIterator
+from datetime import UTC, datetime
+from urllib.parse import parse_qs, urlparse
+from uuid import uuid4
+
+import pytest
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy import func, select
+from test_mobile_auth import ORIGIN, PASSWORD, csrf_header, register_and_verify
+
+from mykhaya.apple_auth import AppleFlowState, ApplePendingIdentity
+from mykhaya.db import SessionFactory
+from mykhaya.main import app
+from mykhaya.models import (
+    ExternalIdentity,
+    ExternalIdentityProvider,
+    Group,
+    HomeSubscription,
+    Membership,
+    User,
+)
+from mykhaya.routers import auth as auth_router
+
+
+@pytest.fixture
+async def client() -> AsyncIterator[AsyncClient]:
+    async with AsyncClient(
+        transport=ASGITransport(app=app), base_url=ORIGIN, headers={"Origin": ORIGIN}
+    ) as value:
+        yield value
+
+
+@pytest.fixture
+def fake_apple_callback(monkeypatch: pytest.MonkeyPatch):
+    pending: dict[str, ApplePendingIdentity] = {}
+    subject = f"apple-recovery-{uuid4().hex}"
+    provider_email = f"relay-{uuid4().hex}@privaterelay.appleid.com"
+
+    async def consume_flow_state(_settings, _state: str) -> AppleFlowState:
+        return AppleFlowState(nonce="nonce", intent="login", user_id=None, return_path=None)
+
+    async def exchange_code(_settings, _code: str) -> str:
+        return "verified-id-token"
+
+    async def verify_identity_token(_settings, _token: str, _nonce: str) -> dict[str, object]:
+        return {
+            "sub": subject,
+            "email": provider_email,
+            "email_verified": True,
+        }
+
+    async def store_pending(_settings, transaction_id: str, value: ApplePendingIdentity) -> None:
+        pending[transaction_id] = value
+
+    async def load_pending(_settings, transaction_id: str) -> ApplePendingIdentity | None:
+        return pending.get(transaction_id)
+
+    async def consume_pending(_settings, transaction_id: str) -> ApplePendingIdentity | None:
+        return pending.pop(transaction_id, None)
+
+    monkeypatch.setattr(auth_router, "consume_flow_state", consume_flow_state)
+    monkeypatch.setattr(auth_router, "exchange_code", exchange_code)
+    monkeypatch.setattr(auth_router, "verify_identity_token", verify_identity_token)
+    monkeypatch.setattr(auth_router, "store_pending_identity", store_pending)
+    monkeypatch.setattr(auth_router, "load_pending_identity", load_pending)
+    monkeypatch.setattr(auth_router, "consume_pending_identity", consume_pending)
+    return pending, subject
+
+
+@pytest.mark.asyncio
+async def test_hide_my_email_requires_explicit_link_and_creates_no_duplicate_user(
+    client: AsyncClient, fake_apple_callback
+) -> None:
+    _pending, subject = fake_apple_callback
+    email = f"apple-existing-{datetime.now(UTC).strftime('%H%M%S%f')}@example.com"
+    await register_and_verify(client, email, "Existing Apple User")
+    async with SessionFactory() as db:
+        before = await db.scalar(select(func.count()).select_from(User))
+
+    callback = await client.get(
+        "/api/v1/auth/apple/callback?state=state&code=code", follow_redirects=False
+    )
+    assert callback.status_code == 303
+    location = callback.headers["location"]
+    assert "apple=choose" in location
+    transaction = parse_qs(urlparse(location).query)["transaction"][0]
+    options = await client.get(f"/api/v1/auth/apple/recovery/options?transaction_id={transaction}")
+    assert options.status_code == 200
+    assert options.json()["can_register"] is True
+
+    login = await client.post("/api/v1/auth/login", json={"email": email, "password": PASSWORD})
+    assert login.status_code == 200
+    linked = await client.post(
+        "/api/v1/auth/apple/recovery/link",
+        headers=csrf_header(client),
+        json={"transaction_id": transaction},
+    )
+    assert linked.status_code == 200, linked.text
+
+    async with SessionFactory() as db:
+        after = await db.scalar(select(func.count()).select_from(User))
+        identity = await db.scalar(
+            select(ExternalIdentity).where(
+                ExternalIdentity.provider_subject == subject
+            )
+        )
+        user = await db.scalar(select(User).where(User.email == email))
+        assert after == before
+        assert identity is not None and user is not None and identity.user_id == user.id
+
+
+@pytest.mark.asyncio
+async def test_explicit_new_apple_registration_creates_one_user_and_identity(
+    client: AsyncClient, fake_apple_callback
+) -> None:
+    _pending, subject = fake_apple_callback
+    callback = await client.get(
+        "/api/v1/auth/apple/callback?state=state&code=code", follow_redirects=False
+    )
+    transaction = parse_qs(urlparse(callback.headers["location"]).query)["transaction"][0]
+    provider_email = _pending[transaction].provider_email
+    registered = await client.post(
+        "/api/v1/auth/apple/recovery/register", json={"transaction_id": transaction}
+    )
+    assert registered.status_code == 200, registered.text
+    async with SessionFactory() as db:
+        users = (
+            await db.scalars(select(User).where(User.email == provider_email))
+        ).all()
+        identities = (
+            await db.scalars(
+                select(ExternalIdentity).where(
+                    ExternalIdentity.provider == ExternalIdentityProvider.apple,
+                    ExternalIdentity.provider_subject == subject,
+                )
+            )
+        ).all()
+        assert len(users) == 1
+        assert len(identities) == 1
+
+
+@pytest.mark.asyncio
+async def test_exact_email_match_cannot_choose_new_apple_registration(
+    client: AsyncClient, fake_apple_callback, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _pending, subject = fake_apple_callback
+    email = f"apple-existing-{datetime.now(UTC).strftime('%H%M%S%f')}@example.com"
+    await register_and_verify(client, email, "Existing Relay User")
+    async def verify_existing_email(_settings, _token: str, _nonce: str) -> dict[str, object]:
+        return {
+            "sub": subject,
+            "email": email,
+            "email_verified": True,
+        }
+    monkeypatch.setattr(auth_router, "verify_identity_token", verify_existing_email)
+    callback = await client.get(
+        "/api/v1/auth/apple/callback?state=state&code=code", follow_redirects=False
+    )
+    transaction = parse_qs(urlparse(callback.headers["location"]).query)["transaction"][0]
+    options = await client.get(f"/api/v1/auth/apple/recovery/options?transaction_id={transaction}")
+    assert options.json()["can_register"] is False
+    rejected = await client.post(
+        "/api/v1/auth/apple/recovery/register", json={"transaction_id": transaction}
+    )
+    assert rejected.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_apple_recovery_link_rejects_identity_owned_by_another_user(
+    client: AsyncClient, fake_apple_callback
+) -> None:
+    _pending, subject = fake_apple_callback
+    first = f"apple-owner-{datetime.now(UTC).strftime('%H%M%S%f')}@example.com"
+    second = f"apple-other-{datetime.now(UTC).strftime('%H%M%S%f')}@example.com"
+    await register_and_verify(client, first, "Apple Owner")
+    async with SessionFactory() as db:
+        owner = await db.scalar(select(User).where(User.email == first))
+        assert owner is not None
+        db.add(
+            ExternalIdentity(
+                user_id=owner.id,
+                provider=ExternalIdentityProvider.apple,
+                provider_subject=subject,
+                provider_email="relay@privaterelay.appleid.com",
+                provider_email_verified=True,
+            )
+        )
+        await db.commit()
+    await register_and_verify(client, second, "Apple Other")
+    login = await client.post("/api/v1/auth/login", json={"email": second, "password": PASSWORD})
+    assert login.status_code == 200
+    transaction_id = "link-transaction-12345678901234567890"
+    _pending[transaction_id] = ApplePendingIdentity(
+        transaction_id=transaction_id,
+        subject=subject,
+        provider_email="relay@privaterelay.appleid.com",
+        email_verified=True,
+        display_name="Apple User",
+        can_register=False,
+        return_path=None,
+    )
+    rejected = await client.post(
+        "/api/v1/auth/apple/recovery/link",
+        headers=csrf_header(client),
+        json={"transaction_id": transaction_id},
+    )
+    assert rejected.status_code == 409
+
+
+@pytest.mark.asyncio
+async def test_concurrent_apple_claim_has_one_owner_and_preserves_tenancy(
+    client: AsyncClient, fake_apple_callback
+) -> None:
+    pending, subject = fake_apple_callback
+    first = f"apple-race-one-{datetime.now(UTC).strftime('%H%M%S%f')}@example.com"
+    second = f"apple-race-two-{datetime.now(UTC).strftime('%H%M%S%f')}@example.com"
+    await register_and_verify(client, first, "Apple Race One")
+
+    second_client = AsyncClient(
+        transport=ASGITransport(app=app), base_url=ORIGIN, headers={"Origin": ORIGIN}
+    )
+    try:
+        await register_and_verify(second_client, second, "Apple Race Two")
+        first_login = await client.post(
+            "/api/v1/auth/login", json={"email": first, "password": PASSWORD}
+        )
+        second_login = await second_client.post(
+            "/api/v1/auth/login", json={"email": second, "password": PASSWORD}
+        )
+        assert first_login.status_code == 200
+        assert second_login.status_code == 200
+
+        async with SessionFactory() as db:
+            before = {
+                User: await db.scalar(select(func.count()).select_from(User)),
+                Group: await db.scalar(select(func.count()).select_from(Group)),
+                Membership: await db.scalar(select(func.count()).select_from(Membership)),
+                HomeSubscription: await db.scalar(
+                    select(func.count()).select_from(HomeSubscription)
+                ),
+            }
+
+        tx_one = "apple-race-transaction-one-1234567890"
+        tx_two = "apple-race-transaction-two-1234567890"
+        pending[tx_one] = ApplePendingIdentity(
+            transaction_id=tx_one,
+            subject=subject,
+            provider_email="relay-race@privaterelay.appleid.com",
+            email_verified=True,
+            display_name="Apple Race",
+            can_register=False,
+            return_path=None,
+        )
+        pending[tx_two] = ApplePendingIdentity(
+            transaction_id=tx_two,
+            subject=subject,
+            provider_email="relay-race@privaterelay.appleid.com",
+            email_verified=True,
+            display_name="Apple Race",
+            can_register=False,
+            return_path=None,
+        )
+        results = await asyncio.gather(
+            client.post(
+                "/api/v1/auth/apple/recovery/link",
+                headers=csrf_header(client),
+                json={"transaction_id": tx_one},
+            ),
+            second_client.post(
+                "/api/v1/auth/apple/recovery/link",
+                headers=csrf_header(second_client),
+                json={"transaction_id": tx_two},
+            ),
+        )
+        assert sorted(response.status_code for response in results) == [200, 409]
+
+        async with SessionFactory() as db:
+            identities = (
+                await db.scalars(
+                    select(ExternalIdentity).where(
+                        ExternalIdentity.provider == ExternalIdentityProvider.apple,
+                        ExternalIdentity.provider_subject == subject,
+                    )
+                )
+            ).all()
+            assert len(identities) == 1
+            assert identities[0].user_id in {
+                await db.scalar(select(User.id).where(User.email == first)),
+                await db.scalar(select(User.id).where(User.email == second)),
+            }
+            assert await db.scalar(select(func.count()).select_from(User)) == before[User]
+            assert await db.scalar(select(func.count()).select_from(Group)) == before[Group]
+            assert (
+                await db.scalar(select(func.count()).select_from(Membership))
+                == before[Membership]
+            )
+            assert (
+                await db.scalar(select(func.count()).select_from(HomeSubscription))
+                == before[HomeSubscription]
+            )
+    finally:
+        await second_client.aclose()

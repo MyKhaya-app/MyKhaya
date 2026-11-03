@@ -4,7 +4,7 @@ import { FormEvent, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Eye, EyeOff } from "lucide-react";
-import { api, ApiError } from "@mykhaya/api-client";
+import { api, ApiError, type PublicLegalDocumentSummary } from "@mykhaya/api-client";
 import type { User } from "@mykhaya/shared-types";
 import { Avatar } from "@/components/avatar";
 import { AuthBrandPanel, AuthCard } from "@/components/auth-card";
@@ -44,6 +44,7 @@ export default function Login() {
   const betaInvitation = params.get("beta_invitation");
   const calendarShare = params.get("calendar_share");
   const appleResult = params.get("apple");
+  const appleTransaction = params.get("transaction");
   const mfaExpired = params.get("mfa_error") === "expired";
   const { setAuthenticatedUser } = useAuth();
   // Set by AppShell when it bounces an expired/invalid session to /login —
@@ -81,6 +82,17 @@ export default function Login() {
       source_group_name: string;
     } | null>(null),
     [appleEnabled, setAppleEnabled] = useState(false),
+    [appleRecovery, setAppleRecovery] = useState<{
+      can_register: boolean;
+      provider_email: string | null;
+      display_name: string;
+    } | null>(null),
+    [appleLinking, setAppleLinking] = useState(false),
+    [appleRegistrationRequested, setAppleRegistrationRequested] = useState(false),
+    [appleLegalDocuments, setAppleLegalDocuments] = useState<PublicLegalDocumentSummary[]>([]),
+    [appleLegalChecked, setAppleLegalChecked] = useState<Record<string, boolean>>({}),
+    [appleLegalLoading, setAppleLegalLoading] = useState(false),
+    [appleLegalLoadFailed, setAppleLegalLoadFailed] = useState(false),
     [passwordVisible, setPasswordVisible] = useState(false),
     // undefined while loading, null if it failed: both show the normal card.
     [signupState, setSignupState] = useState<SignupStateValue>(undefined);
@@ -113,6 +125,21 @@ export default function Login() {
       }
     });
   }, []);
+
+  useEffect(() => {
+    if (appleResult !== "choose" || !appleTransaction) return;
+    setAppleLegalLoading(true);
+    Promise.all([api.appleRecoveryOptions(appleTransaction), api.publicLegalDocuments()])
+      .then(([options, documents]) => {
+        setAppleRecovery(options);
+        setAppleLegalDocuments(documents);
+      })
+      .catch(() => {
+        setAppleLegalLoadFailed(true);
+        setError("This Apple sign-in attempt or its legal documents have expired. Please try again.");
+      })
+      .finally(() => setAppleLegalLoading(false));
+  }, [appleResult, appleTransaction]);
 
   useEffect(() => {
     if (!invitation) return;
@@ -233,6 +260,10 @@ export default function Login() {
       const options = await api.passkeyLoginOptions();
       const credential = await authenticateWithPasskey(options.options_json);
       const user = await api.passkeyLoginVerify(JSON.stringify(credential));
+      if ("authentication_state" in user) {
+        router.push(`/mfa?transaction=${encodeURIComponent(user.transaction_id)}`);
+        return;
+      }
       await afterSignedIn(user);
     } catch (err) {
       if (passkeyWasCancelled(err)) {
@@ -274,8 +305,14 @@ export default function Login() {
         ? await nativeLogin(email, password)
         : await api.post<BrowserAuthResult>("/auth/login", { email, password });
       if ("authentication_state" in result) {
-        router.push(`/mfa?transaction=${encodeURIComponent(result.transaction_id)}`);
+        const linkQuery = appleLinking && appleTransaction
+          ? `&apple_link_transaction=${encodeURIComponent(appleTransaction)}`
+          : "";
+        router.push(`/mfa?transaction=${encodeURIComponent(result.transaction_id)}${linkQuery}`);
         return;
+      }
+      if (appleLinking && appleTransaction) {
+        await api.appleRecoveryLink(appleTransaction);
       }
       await afterSignedIn(result);
     } catch (err) {
@@ -306,6 +343,45 @@ export default function Login() {
       );
     } finally {
       signInInFlight.current = false;
+      setBusy(false);
+    }
+  }
+
+  async function registerWithApple() {
+    if (!appleTransaction) return;
+    const requiredLegal = appleLegalDocuments.filter(
+      (document) =>
+        document.audience === "adult" &&
+        document.acceptance_required &&
+        document.action_verb === "accept" &&
+        document.scope === "global",
+    );
+    if (
+      appleLegalLoading ||
+      appleLegalLoadFailed ||
+      requiredLegal.some((document) => !document.current_version_id || !appleLegalChecked[document.key])
+    ) {
+      setError("Please review and confirm the required legal documents before continuing.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      const result = await api.appleRecoveryRegister(appleTransaction, {
+        legal_acceptances: requiredLegal.map((document) => ({
+          document_key: document.key,
+          document_version_id: document.current_version_id!,
+        })),
+        platform: "web",
+      });
+      if ("authentication_state" in result) {
+        router.push(`/mfa?transaction=${encodeURIComponent(result.transaction_id)}`);
+        return;
+      }
+      await afterSignedIn(result);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "We couldn't create your account with Apple.");
+    } finally {
       setBusy(false);
     }
   }
@@ -379,6 +455,76 @@ export default function Login() {
             <p className="notice">
               Sign in with your existing account first. Apple can then be linked from your security settings.
             </p>
+          )}
+          {appleResult === "choose" && appleTransaction && (
+            <section className="notice" aria-labelledby="apple-recovery-heading">
+              <h2 id="apple-recovery-heading">Continue with Apple</h2>
+              <p>
+                Apple sign-in is ready. Choose whether to connect it to an existing MyKhaya
+                account or create a new account. We will not merge accounts automatically.
+              </p>
+              <div className="signin-recovery-actions">
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => setAppleLinking(true)}
+                  disabled={busy}
+                >
+                  Link to an existing account
+                </button>
+                {appleRecovery?.can_register && (
+                  <button
+                    type="button"
+                    className="tertiary"
+                    onClick={() => setAppleRegistrationRequested(true)}
+                    disabled={busy}
+                  >
+                    Create a new account
+                  </button>
+                )}
+              </div>
+              {appleRegistrationRequested && appleRecovery?.can_register && (
+                <div className="auth-legal-consent">
+                  <p><strong>Before you create your account</strong></p>
+                  <p className="muted">Please review and accept the current Terms and Privacy documents.</p>
+                  {appleLegalDocuments
+                    .filter(
+                      (document) =>
+                        document.audience === "adult" &&
+                        document.acceptance_required &&
+                        document.action_verb === "accept" &&
+                        document.scope === "global",
+                    )
+                    .map((document) => (
+                      <label className="check-row" key={document.key}>
+                        <input
+                          type="checkbox"
+                          checked={appleLegalChecked[document.key] === true}
+                          onChange={(event) =>
+                            setAppleLegalChecked((current) => ({
+                              ...current,
+                              [document.key]: event.target.checked,
+                            }))
+                          }
+                        />
+                        <span>
+                          I accept the <Link href={`/legal/${document.key}`}>{document.display_name}</Link>{" "}
+                          (version {document.current_version ?? "current"})
+                        </span>
+                      </label>
+                    ))}
+                  <button type="button" onClick={() => void registerWithApple()} disabled={busy || appleLegalLoading}>
+                    {busy ? "Creating account…" : "Accept and create account"}
+                  </button>
+                </div>
+              )}
+              {appleLinking && (
+                <p>
+                  Sign in below with your existing MyKhaya email and password. Apple will be
+                  linked only after that authentication succeeds.
+                </p>
+              )}
+            </section>
           )}
           {appleResult === "registration_unavailable" && (
             <p className="notice">
