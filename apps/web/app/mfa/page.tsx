@@ -24,6 +24,7 @@ export default function MfaPage() {
   const params = useSearchParams();
   const transaction = params.get("transaction") ?? "";
   const appleLinkTransaction = params.get("apple_link_transaction");
+  const googleLinkTransaction = params.get("google_link_transaction");
   const { setAuthenticatedUser } = useAuth();
   const [options, setOptions] = useState<Options | null>(null);
   const [method, setMethod] = useState<Method>("email");
@@ -110,6 +111,9 @@ export default function MfaPage() {
       await setAuthenticatedUser(user);
       if (appleLinkTransaction) {
         await api.appleRecoveryLink(appleLinkTransaction);
+      }
+      if (googleLinkTransaction) {
+        await api.googleRecoveryLink(googleLinkTransaction);
       }
       router.push(options?.onboarding ? "/onboarding" : "/home");
     } catch (reason) {

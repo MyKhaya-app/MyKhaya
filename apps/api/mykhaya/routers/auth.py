@@ -66,6 +66,21 @@ from mykhaya.founding_beta import (
     current_programme,
     invitation_token_hash,
 )
+from mykhaya.google_auth import (
+    GoogleAuthenticationError,
+    GoogleFlowState,
+    GooglePendingIdentity,
+    require_google_configuration,
+)
+from mykhaya.google_auth import authorization_url as google_authorization_url
+from mykhaya.google_auth import consume_flow_state as consume_google_flow_state
+from mykhaya.google_auth import consume_pending_identity as consume_google_pending_identity
+from mykhaya.google_auth import exchange_code as exchange_google_code
+from mykhaya.google_auth import load_pending_identity as load_google_pending_identity
+from mykhaya.google_auth import new_code_verifier as new_google_code_verifier
+from mykhaya.google_auth import store_flow_state as store_google_flow_state
+from mykhaya.google_auth import store_pending_identity as store_google_pending_identity
+from mykhaya.google_auth import verify_identity_token as verify_google_identity_token
 from mykhaya.legal import validate_signup_acceptances
 from mykhaya.models import (
     ActionToken,
@@ -114,6 +129,8 @@ from mykhaya.schemas import (
     ConsumerMfaStatusResponse,
     ExternalIdentityResponse,
     ForgotRequest,
+    GoogleRecoveryOptionsResponse,
+    GoogleRecoveryRequest,
     LoginRequest,
     MessageResponse,
     MfaOptionsResponse,
@@ -168,6 +185,7 @@ PASSKEY_LOGIN_COOKIE = "mk_passkey_challenge"
 PASSKEY_CHALLENGE_TTL_SECONDS = 300
 FRESH_AUTH_WINDOW = timedelta(minutes=10)
 APPLE_LOGIN_ERROR = "apple=error"
+GOOGLE_LOGIN_ERROR = "google=error"
 
 
 async def complete_browser_authentication(
@@ -705,6 +723,20 @@ def _apple_settings_redirect(settings: Settings, suffix: str) -> RedirectRespons
     )
 
 
+def _google_redirect(settings: Settings, suffix: str) -> RedirectResponse:
+    return RedirectResponse(
+        f"{settings.public_web_url.rstrip('/')}/login?{suffix}",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+def _google_settings_redirect(settings: Settings, suffix: str) -> RedirectResponse:
+    return RedirectResponse(
+        f"{settings.public_web_url.rstrip('/')}/settings/security?{suffix}",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
 def _apple_audit_failure(
     db: AsyncSession, request: Request, user_id: uuid.UUID | None = None
 ) -> None:
@@ -728,6 +760,13 @@ def _apple_name(raw: str | None) -> str:
     except (TypeError, ValueError, json.JSONDecodeError):
         pass
     return "Apple user"
+
+
+def _google_name(claims: dict[str, object]) -> str:
+    value = claims.get("name")
+    if isinstance(value, str) and value.strip():
+        return " ".join(value.split())[:100]
+    return "Google user"
 
 
 @router.get("/apple/start")
@@ -867,6 +906,7 @@ async def apple_recovery_link(
             status.HTTP_409_CONFLICT, "This Apple identity is already linked."
         ) from None
     audit(db, request, "APPLE_IDENTITY_LINKED", current.id, target_type="external_identity")
+    audit(db, request, "GOOGLE_IDENTITY_LINKED", current.id, target_type="external_identity")
     try:
         await db.commit()
     except IntegrityError:
@@ -1178,6 +1218,355 @@ async def apple_callback(
         if flow is not None and flow.intent == "link":
             return _apple_settings_redirect(settings, "apple=error")
         return _apple_redirect(settings, APPLE_LOGIN_ERROR)
+
+
+@router.get("/google/start")
+async def google_login_start(
+    request: Request,
+    next_path: str | None = None,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> RedirectResponse:
+    try:
+        require_google_configuration(settings)
+        state = secrets.token_urlsafe(32)
+        nonce = secrets.token_urlsafe(32)
+        verifier = new_google_code_verifier()
+        await store_google_flow_state(
+            settings,
+            state,
+            GoogleFlowState(
+                nonce=nonce,
+                code_verifier=verifier,
+                intent="login",
+                user_id=None,
+                return_path=_safe_return_path(next_path),
+            ),
+        )
+        audit(db, request, "GOOGLE_LOGIN_STARTED", target_type="external_identity")
+        await db.commit()
+        return RedirectResponse(
+            google_authorization_url(settings, state, nonce, verifier),
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+    except GoogleAuthenticationError as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+
+
+@router.post("/google/link/start")
+async def google_link_start(
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, str]:
+    require_fresh_adult_auth(auth)
+    try:
+        require_google_configuration(settings)
+        state = secrets.token_urlsafe(32)
+        nonce = secrets.token_urlsafe(32)
+        verifier = new_google_code_verifier()
+        await store_google_flow_state(
+            settings,
+            state,
+            GoogleFlowState(
+                nonce=nonce,
+                code_verifier=verifier,
+                intent="link",
+                user_id=str(auth.user.id),
+                return_path=None,
+            ),
+        )
+        audit(db, request, "GOOGLE_LOGIN_STARTED", auth.user.id, target_type="external_identity")
+        await db.commit()
+        return {"authorization_url": google_authorization_url(settings, state, nonce, verifier)}
+    except GoogleAuthenticationError as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+
+
+@router.get("/google/recovery/options", response_model=GoogleRecoveryOptionsResponse)
+async def google_recovery_options(
+    transaction_id: str, settings: Settings = Depends(get_settings)
+) -> GoogleRecoveryOptionsResponse:
+    pending = await load_google_pending_identity(settings, transaction_id)
+    if pending is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This Google sign-in attempt has expired.")
+    return GoogleRecoveryOptionsResponse(
+        can_register=pending.can_register,
+        provider_email=pending.provider_email,
+        display_name=pending.display_name,
+    )
+
+
+@router.post("/google/recovery/link", response_model=MessageResponse)
+async def google_recovery_link(
+    body: GoogleRecoveryRequest,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> MessageResponse:
+    require_fresh_adult_auth(auth)
+    pending = await consume_google_pending_identity(settings, body.transaction_id)
+    if pending is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This Google sign-in attempt has expired.")
+    current = await db.get(User, auth.user.id, with_for_update=True)
+    if current is None or not current.is_active:
+        raise HTTPException(
+            status.HTTP_401_UNAUTHORIZED, "Your sign-in session is no longer valid."
+        )
+    try:
+        await link_external_identity(
+            db,
+            request,
+            user_id=current.id,
+            provider=ExternalIdentityProvider.google,
+            provider_subject=pending.subject,
+            provider_email=pending.provider_email,
+            provider_email_verified=pending.email_verified,
+        )
+    except ExternalIdentityOwnershipConflict:
+        await db.rollback()
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "This Google identity is already linked."
+        ) from None
+    audit(db, request, "GOOGLE_IDENTITY_LINKED", current.id, target_type="external_identity")
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "This Google identity was linked by another request."
+        ) from None
+    return MessageResponse(message="Google sign-in has been linked to your account.")
+
+
+@router.post("/google/recovery/register", response_model=UserResponse | AuthContinuationResponse)
+async def google_recovery_register(
+    body: GoogleRecoveryRequest,
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> UserResponse | AuthContinuationResponse:
+    pending = await load_google_pending_identity(settings, body.transaction_id)
+    if pending is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This Google sign-in attempt has expired.")
+    if not pending.can_register or not pending.email_verified:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "This Google identity must be linked to an existing account."
+        )
+    policy = await evaluate_signup_policy(db, settings)
+    if (
+        not policy.normal_path
+        or policy.invitation_required
+        or not policy.domain_allowed(pending.provider_email)
+    ):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, "New accounts cannot be created with Google right now."
+        )
+    resolved_legal_acceptances = await validate_signup_acceptances(
+        db, [(item.document_key, item.document_version_id) for item in body.legal_acceptances]
+    )
+    pending = await consume_google_pending_identity(settings, body.transaction_id)
+    if pending is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This Google sign-in attempt has expired.")
+    existing = await db.scalar(
+        select(User).where(User.email == normalise_email(pending.provider_email)).with_for_update()
+    )
+    if existing is not None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "An account already uses this email. Sign in and link Google instead.",
+        )
+    identity = await find_external_identity(
+        db, ExternalIdentityProvider.google, pending.subject, for_update=True
+    )
+    if identity is not None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "This Google identity is already linked.")
+    user = User(
+        email=normalise_email(pending.provider_email),
+        display_name=pending.display_name,
+        email_verified_at=datetime.now(UTC),
+    )
+    db.add(user)
+    await db.flush()
+    for resolved in resolved_legal_acceptances:
+        record_type = (
+            LegalRecordType.user_acceptance
+            if resolved.document.action_verb == LegalActionVerb.accept
+            else LegalRecordType.user_acknowledgement
+        )
+        db.add(
+            LegalAcceptance(
+                record_type=record_type,
+                document_version_id=resolved.version.id,
+                user_id=user.id,
+                context=LegalAcceptanceContext.signup,
+                platform=body.platform,
+                ip_address=resolve_client_ip(request, settings),
+                user_agent=request.headers.get("user-agent", "")[:300] or None,
+            )
+        )
+    await link_external_identity(
+        db,
+        request,
+        user_id=user.id,
+        provider=ExternalIdentityProvider.google,
+        provider_subject=pending.subject,
+        provider_email=pending.provider_email,
+        provider_email_verified=pending.email_verified,
+    )
+    result = await complete_browser_authentication(
+        db,
+        response,
+        request,
+        user,
+        settings,
+        method="google",
+        destination=pending.return_path or "/onboarding",
+        onboarding=True,
+    )
+    audit(db, request, "GOOGLE_IDENTITY_REGISTERED", user.id, target_type="external_identity")
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "This Google identity is already linked."
+        ) from None
+    return result
+
+
+@router.delete("/google/link")
+async def unlink_google_identity(
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> dict[str, str]:
+    require_fresh_adult_auth(auth)
+    try:
+        await unlink_external_identity(
+            db, request, user_id=auth.user.id, provider=ExternalIdentityProvider.google
+        )
+    except ExternalIdentityNotFound:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No Google identity is linked.") from None
+    except LastAuthenticationMethodError:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "Add another sign-in method before unlinking Google."
+        ) from None
+    audit(db, request, "GOOGLE_IDENTITY_UNLINKED", auth.user.id, target_type="external_identity")
+    await db.commit()
+    return {"message": "Google sign-in has been unlinked."}
+
+
+@router.get("/google/callback")
+async def google_callback(
+    request: Request,
+    state: str | None = None,
+    code: str | None = None,
+    error: str | None = None,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> Response:
+    flow: GoogleFlowState | None = None
+    try:
+        if not state or len(state) > 512:
+            raise GoogleAuthenticationError("Invalid Google sign-in state.")
+        flow = await consume_google_flow_state(settings, state)
+        if error:
+            raise GoogleAuthenticationError("Google sign-in was cancelled.")
+        if not code:
+            raise GoogleAuthenticationError("Google sign-in did not return an authorization code.")
+        token = await exchange_google_code(settings, code, flow.code_verifier)
+        claims = await verify_google_identity_token(settings, token, flow.nonce)
+        subject = str(claims["sub"])
+        provider_email = str(claims["email"]).strip().casefold()
+        identity = await find_external_identity(
+            db, ExternalIdentityProvider.google, subject, for_update=True
+        )
+        if flow.intent == "link":
+            linked_user, _session = await current_user(request, db, settings)
+            if flow.user_id != str(linked_user.id):
+                raise GoogleAuthenticationError("This Google linking attempt is invalid.")
+            await link_external_identity(
+                db,
+                request,
+                user_id=linked_user.id,
+                provider=ExternalIdentityProvider.google,
+                provider_subject=subject,
+                provider_email=provider_email,
+                provider_email_verified=True,
+            )
+            await db.commit()
+            return _google_settings_redirect(settings, "google=linked")
+        if identity is not None:
+            linked_user = await db.get(User, identity.user_id, with_for_update=True)
+            if linked_user is None or not linked_user.is_active:
+                raise GoogleAuthenticationError("Google sign-in could not be completed.")
+            await touch_external_identity(
+                db, identity=identity, provider_email=provider_email, provider_email_verified=True
+            )
+        else:
+            existing = await db.scalar(select(User).where(User.email == provider_email))
+            policy = await evaluate_signup_policy(db, settings)
+            transaction_id = secrets.token_urlsafe(32)
+            await store_google_pending_identity(
+                settings,
+                transaction_id,
+                GooglePendingIdentity(
+                    transaction_id=transaction_id,
+                    subject=subject,
+                    provider_email=provider_email,
+                    email_verified=True,
+                    display_name=_google_name(claims),
+                    can_register=existing is None
+                    and policy.normal_path
+                    and not policy.invitation_required
+                    and policy.domain_allowed(provider_email),
+                    return_path=flow.return_path,
+                ),
+            )
+            audit(db, request, "GOOGLE_RECOVERY_CREATED", target_type="external_identity")
+            await db.commit()
+            return _google_redirect(settings, f"google=choose&transaction={transaction_id}")
+        has_home = await db.scalar(
+            select(Membership.id).where(Membership.user_id == linked_user.id)
+        )
+        destination = flow.return_path or ("/home" if has_home else "/onboarding")
+        response = RedirectResponse(
+            f"{settings.public_web_url.rstrip('/')}{destination}",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+        result = await complete_browser_authentication(
+            db,
+            response,
+            request,
+            linked_user,
+            settings,
+            method="google",
+            destination=destination,
+            onboarding=has_home is None,
+        )
+        if isinstance(result, AuthContinuationResponse):
+            response = _google_redirect(
+                settings, f"auth=additional&transaction={result.transaction_id}"
+            )
+        audit(db, request, "GOOGLE_LOGIN_SUCCESS", linked_user.id, target_type="external_identity")
+        await db.commit()
+        return response
+    except HTTPException:
+        await db.rollback()
+        if flow is not None and flow.intent == "link":
+            return _google_settings_redirect(settings, GOOGLE_LOGIN_ERROR)
+        raise
+    except Exception as exc:
+        await db.rollback()
+        if flow is not None and flow.intent == "link":
+            return _google_settings_redirect(settings, GOOGLE_LOGIN_ERROR)
+        if isinstance(exc, GoogleAuthenticationError):
+            return _google_redirect(settings, GOOGLE_LOGIN_ERROR)
+        return _google_redirect(settings, GOOGLE_LOGIN_ERROR)
 
 
 @router.get("/providers")
@@ -1772,9 +2161,7 @@ async def passkey_login_options(
     return PasskeyOptionsResponse(options_json=options_json)
 
 
-@router.post(
-    "/passkeys/login/verify", response_model=UserResponse | AuthContinuationResponse
-)
+@router.post("/passkeys/login/verify", response_model=UserResponse | AuthContinuationResponse)
 async def passkey_login_verify(
     body: PasskeyAuthenticationVerifyRequest,
     request: Request,

@@ -40,7 +40,7 @@ def test_apple_status_is_enabled_only_when_complete_and_explicitly_enabled() -> 
     assert status.public_dict().get("apple_private_key") is None
 
 
-def test_google_remains_disabled_even_when_configuration_is_present() -> None:
+def test_google_is_disabled_when_configuration_is_present_but_not_enabled() -> None:
     settings = Settings(
         secret_key="test-only-secret-key-never-used-in-production-1234",
         google_client_id="google-client-id",
@@ -51,3 +51,17 @@ def test_google_remains_disabled_even_when_configuration_is_present() -> None:
     assert status.state == "disabled"
     assert status.enabled is False
     assert status.credential_configured is True
+
+
+def test_google_status_is_enabled_only_when_complete_and_explicitly_enabled() -> None:
+    settings = Settings(
+        secret_key="test-only-secret-key-never-used-in-production-1234",
+        google_sign_in_enabled=True,
+        google_client_id="google-client-id",
+        google_client_secret=SecretStr("fake-google-secret-for-test-only"),
+    )
+    status = external_auth_provider_statuses(settings)[1]
+
+    assert status.state == "enabled"
+    assert status.enabled is True
+    assert status.redirect_uri.endswith("/api/v1/auth/google/callback")

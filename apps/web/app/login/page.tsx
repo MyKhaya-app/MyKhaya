@@ -45,6 +45,8 @@ export default function Login() {
   const calendarShare = params.get("calendar_share");
   const appleResult = params.get("apple");
   const appleTransaction = params.get("transaction");
+  const googleResult = params.get("google");
+  const googleTransaction = params.get("transaction");
   const mfaExpired = params.get("mfa_error") === "expired";
   const { setAuthenticatedUser } = useAuth();
   // Set by AppShell when it bounces an expired/invalid session to /login —
@@ -93,6 +95,18 @@ export default function Login() {
     [appleLegalChecked, setAppleLegalChecked] = useState<Record<string, boolean>>({}),
     [appleLegalLoading, setAppleLegalLoading] = useState(false),
     [appleLegalLoadFailed, setAppleLegalLoadFailed] = useState(false),
+    [googleEnabled, setGoogleEnabled] = useState(false),
+    [googleRecovery, setGoogleRecovery] = useState<{
+      can_register: boolean;
+      provider_email: string | null;
+      display_name: string;
+    } | null>(null),
+    [googleLinking, setGoogleLinking] = useState(false),
+    [googleRegistrationRequested, setGoogleRegistrationRequested] = useState(false),
+    [googleLegalDocuments, setGoogleLegalDocuments] = useState<PublicLegalDocumentSummary[]>([]),
+    [googleLegalChecked, setGoogleLegalChecked] = useState<Record<string, boolean>>({}),
+    [googleLegalLoading, setGoogleLegalLoading] = useState(false),
+    [googleLegalLoadFailed, setGoogleLegalLoadFailed] = useState(false),
     [passwordVisible, setPasswordVisible] = useState(false),
     // undefined while loading, null if it failed: both show the normal card.
     [signupState, setSignupState] = useState<SignupStateValue>(undefined);
@@ -142,6 +156,21 @@ export default function Login() {
   }, [appleResult, appleTransaction]);
 
   useEffect(() => {
+    if (googleResult !== "choose" || !googleTransaction) return;
+    setGoogleLegalLoading(true);
+    Promise.all([api.googleRecoveryOptions(googleTransaction), api.publicLegalDocuments()])
+      .then(([options, documents]) => {
+        setGoogleRecovery(options);
+        setGoogleLegalDocuments(documents);
+      })
+      .catch(() => {
+        setGoogleLegalLoadFailed(true);
+        setError("This Google sign-in attempt or its legal documents have expired. Please try again.");
+      })
+      .finally(() => setGoogleLegalLoading(false));
+  }, [googleResult, googleTransaction]);
+
+  useEffect(() => {
     if (!invitation) return;
     api
       .previewInvitation(invitation)
@@ -162,11 +191,15 @@ export default function Login() {
     api
       .authProviders()
       .then((result) =>
-        setAppleEnabled(
-          result.providers.some((item) => item.provider === "apple" && item.enabled),
-        ),
+        {
+          setAppleEnabled(result.providers.some((item) => item.provider === "apple" && item.enabled));
+          setGoogleEnabled(result.providers.some((item) => item.provider === "google" && item.enabled));
+        },
       )
-      .catch(() => setAppleEnabled(false));
+      .catch(() => {
+        setAppleEnabled(false);
+        setGoogleEnabled(false);
+      });
   }, []);
 
   useEffect(() => {
@@ -198,6 +231,11 @@ export default function Login() {
   function startAppleSignIn() {
     const query = next ? `?next_path=${encodeURIComponent(next)}` : "";
     window.location.assign(`/api/v1/auth/apple/start${query}`);
+  }
+
+  function startGoogleSignIn() {
+    const query = next ? `?next_path=${encodeURIComponent(next)}` : "";
+    window.location.assign(`/api/v1/auth/google/start${query}`);
   }
 
   async function afterSignedIn(user: User) {
@@ -307,12 +345,17 @@ export default function Login() {
       if ("authentication_state" in result) {
         const linkQuery = appleLinking && appleTransaction
           ? `&apple_link_transaction=${encodeURIComponent(appleTransaction)}`
-          : "";
+          : googleLinking && googleTransaction
+            ? `&google_link_transaction=${encodeURIComponent(googleTransaction)}`
+            : "";
         router.push(`/mfa?transaction=${encodeURIComponent(result.transaction_id)}${linkQuery}`);
         return;
       }
       if (appleLinking && appleTransaction) {
         await api.appleRecoveryLink(appleTransaction);
+      }
+      if (googleLinking && googleTransaction) {
+        await api.googleRecoveryLink(googleTransaction);
       }
       await afterSignedIn(result);
     } catch (err) {
@@ -381,6 +424,34 @@ export default function Login() {
       await afterSignedIn(result);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "We couldn't create your account with Apple.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function registerWithGoogle() {
+    if (!googleTransaction) return;
+    const requiredLegal = googleLegalDocuments.filter(
+      (document) => document.audience === "adult" && document.acceptance_required && document.action_verb === "accept" && document.scope === "global",
+    );
+    if (googleLegalLoading || googleLegalLoadFailed || requiredLegal.some((document) => !document.current_version_id || !googleLegalChecked[document.key])) {
+      setError("Please review and confirm the required legal documents before continuing.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      const result = await api.googleRecoveryRegister(googleTransaction, {
+        legal_acceptances: requiredLegal.map((document) => ({ document_key: document.key, document_version_id: document.current_version_id! })),
+        platform: "web",
+      });
+      if ("authentication_state" in result) {
+        router.push(`/mfa?transaction=${encodeURIComponent(result.transaction_id)}`);
+        return;
+      }
+      await afterSignedIn(result);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "We couldn't create your account with Google.");
     } finally {
       setBusy(false);
     }
@@ -534,6 +605,31 @@ export default function Login() {
           {appleResult === "error" && (
             <p className="notice">Apple sign-in could not be completed. Please try again or use your password.</p>
           )}
+          {googleResult === "choose" && googleTransaction && (
+            <section className="notice" aria-labelledby="google-recovery-heading">
+              <h2 id="google-recovery-heading">Continue with Google</h2>
+              <p>Google sign-in is ready. Choose an existing MyKhaya account or create a new one. We will not merge accounts automatically.</p>
+              <div className="signin-recovery-actions">
+                <button type="button" className="secondary" onClick={() => setGoogleLinking(true)} disabled={busy}>Link to an existing account</button>
+                {googleRecovery?.can_register && <button type="button" className="tertiary" onClick={() => setGoogleRegistrationRequested(true)} disabled={busy}>Create a new account</button>}
+              </div>
+              {googleRegistrationRequested && googleRecovery?.can_register && (
+                <div className="auth-legal-consent">
+                  <p><strong>Before you create your account</strong></p>
+                  <p className="muted">Please review and accept the current Terms and Privacy documents.</p>
+                  {googleLegalDocuments.filter((document) => document.audience === "adult" && document.acceptance_required && document.action_verb === "accept" && document.scope === "global").map((document) => (
+                    <label className="check-row" key={document.key}>
+                      <input type="checkbox" checked={googleLegalChecked[document.key] === true} onChange={(event) => setGoogleLegalChecked((current) => ({ ...current, [document.key]: event.target.checked }))} />
+                      <span>I accept the <Link href={`/legal/${document.key}`}>{document.display_name}</Link> (version {document.current_version ?? "current"})</span>
+                    </label>
+                  ))}
+                  <button type="button" onClick={() => void registerWithGoogle()} disabled={busy || googleLegalLoading}>{busy ? "Creating account…" : "Accept and create account"}</button>
+                </div>
+              )}
+              {googleLinking && <p>Sign in below with your existing MyKhaya email and password. Google will be linked only after that authentication succeeds.</p>}
+            </section>
+          )}
+          {googleResult === "error" && <p className="notice">Google sign-in could not be completed. Please try again or use your password.</p>}
           <form className="signin-form" onSubmit={submit}>
             <div className="signin-field">
               <label htmlFor="signin-email">Email</label>
@@ -582,6 +678,11 @@ export default function Login() {
           {appleEnabled && (
             <button type="button" className="apple-sign-in" onClick={startAppleSignIn} disabled={busy}>
               Continue with Apple
+            </button>
+          )}
+          {googleEnabled && (
+            <button type="button" className="google-sign-in" onClick={startGoogleSignIn} disabled={busy}>
+              Continue with Google
             </button>
           )}
           <Link href="/forgot-password" className="signin-link signin-forgot">

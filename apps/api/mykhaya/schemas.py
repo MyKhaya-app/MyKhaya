@@ -104,6 +104,18 @@ class AppleRecoveryOptionsResponse(BaseModel):
     display_name: str
 
 
+class GoogleRecoveryRequest(StrictModel):
+    transaction_id: str = Field(min_length=20, max_length=256)
+    legal_acceptances: list[SignupLegalAcceptanceItem] = Field(default_factory=list)
+    platform: LegalPlatform = LegalPlatform.web
+
+
+class GoogleRecoveryOptionsResponse(BaseModel):
+    can_register: bool
+    provider_email: EmailStr | None = None
+    display_name: str
+
+
 class MfaStartRequest(StrictModel):
     transaction_id: str = Field(min_length=20, max_length=256)
     method: Literal["totp", "email"]

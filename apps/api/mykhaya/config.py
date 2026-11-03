@@ -149,6 +149,10 @@ class Settings(BaseSettings):
     google_sign_in_enabled: bool = False
     google_client_id: str | None = None
     google_client_secret: SecretStr | None = None
+    google_redirect_uri: str | None = None
+    google_authorize_url: str = "https://accounts.google.com/o/oauth2/v2/auth"
+    google_token_url: str = "https://oauth2.googleapis.com/token"  # noqa: S105 — a URL
+    google_jwks_url: str = "https://www.googleapis.com/oauth2/v3/certs"
     # Stripe billing (Phase 3) — deliberately environment-only, unlike SMTP/push,
     # which also support a Platform-Admin-managed DB override. A payment
     # provider's credentials are rotated through infrastructure, not typed into
