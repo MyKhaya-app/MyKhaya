@@ -49,7 +49,8 @@ own OAuth state, nonce, code exchange, JWT validation and recovery-transaction
 storage; a future Google ceremony can use the same identity service without
 introducing a second account-linking policy.
 
-Phase 2/3 currently exposes only centralized provider configuration health. The
+Phase 3 exposes Apple web sign-in, explicit recovery choices and authenticated
+Sign-in Methods management. Phase 4 will add Google web sign-in. The
 deployment-only `MYKHAYA_APPLE_*` and `MYKHAYA_GOOGLE_*` settings use secret
 typed fields where applicable; no provider secret is stored in
 `platform_settings` or returned by an API. The provider-status routes and PCC

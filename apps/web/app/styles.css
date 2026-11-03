@@ -774,6 +774,29 @@ textarea {
   justify-content: space-between;
   padding: 0.85rem 0;
 }
+.security-signin-method {
+  align-items: flex-start;
+  border-top: 1px solid var(--platform-line);
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+  padding: 0.85rem 0;
+}
+.security-signin-method > div {
+  display: grid;
+  gap: 0.2rem;
+  min-width: 0;
+}
+.security-signin-method span {
+  color: var(--cc-neutral);
+  font-size: 0.9rem;
+}
+@media (max-width: 600px) {
+  .security-signin-method {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}
 .security-mfa-status div {
   display: grid;
   gap: 0.2rem;

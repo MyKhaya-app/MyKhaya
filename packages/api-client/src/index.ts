@@ -594,6 +594,23 @@ export class MyKhayaClient {
       method: "POST",
       body: JSON.stringify({ transaction_id: transactionId, ...body }),
     });
+  externalIdentities = () =>
+    this.request<{
+      password_available: boolean;
+      identities: {
+        provider: "apple" | "google";
+        provider_email: string | null;
+        provider_email_verified: boolean;
+        linked_at: string;
+        last_used_at: string | null;
+      }[];
+    }>("/auth/identities");
+  appleLinkStart = () =>
+    this.request<{ authorization_url: string }>("/auth/apple/link/start", {
+      method: "POST",
+      body: "{}",
+    });
+  appleUnlink = () => this.request<void>("/auth/apple/link", { method: "DELETE" });
   publicLegalDocuments = () =>
     this.request<PublicLegalDocumentSummary[]>("/legal/documents");
   publicLegalDocument = (key: string) =>

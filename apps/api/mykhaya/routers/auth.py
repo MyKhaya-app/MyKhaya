@@ -72,6 +72,7 @@ from mykhaya.models import (
     AuthIdentity,
     BetaPendingRegistration,
     ChildProfile,
+    ExternalIdentity,
     ExternalIdentityProvider,
     Group,
     HouseholdRelationship,
@@ -111,6 +112,7 @@ from mykhaya.schemas import (
     AuthContinuationResponse,
     ChildLoginRequest,
     ConsumerMfaStatusResponse,
+    ExternalIdentityResponse,
     ForgotRequest,
     LoginRequest,
     MessageResponse,
@@ -132,6 +134,7 @@ from mykhaya.schemas import (
     RegistrationResponse,
     ResetRequest,
     SessionResponse,
+    SignInMethodsResponse,
     TokenRequest,
     TrustedDeviceResponse,
     UserResponse,
@@ -695,6 +698,13 @@ def _apple_redirect(settings: Settings, suffix: str) -> RedirectResponse:
     )
 
 
+def _apple_settings_redirect(settings: Settings, suffix: str) -> RedirectResponse:
+    return RedirectResponse(
+        f"{settings.public_web_url.rstrip('/')}/settings/security?{suffix}",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
 def _apple_audit_failure(
     db: AsyncSession, request: Request, user_id: uuid.UUID | None = None
 ) -> None:
@@ -772,6 +782,35 @@ async def apple_link_start(
         return {"authorization_url": authorization_url(settings, state, nonce, "email name")}
     except AppleAuthenticationError as exc:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+
+
+@router.get("/identities", response_model=SignInMethodsResponse)
+async def authenticated_external_identities(
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> list[ExternalIdentityResponse]:
+    require_adult_session(auth)
+    password_available = await db.scalar(
+        select(AuthIdentity.id).where(AuthIdentity.user_id == auth.user.id)
+    )
+    identities = await db.scalars(
+        select(ExternalIdentity)
+        .where(ExternalIdentity.user_id == auth.user.id)
+        .order_by(ExternalIdentity.linked_at.asc())
+    )
+    return SignInMethodsResponse(
+        password_available=password_available is not None,
+        identities=[
+            ExternalIdentityResponse(
+                provider=identity.provider.value,
+                provider_email=identity.provider_email,
+                provider_email_verified=identity.provider_email_verified,
+                linked_at=identity.linked_at,
+                last_used_at=identity.last_used_at,
+            )
+            for identity in identities
+        ],
+    )
 
 
 @router.get("/apple/recovery/options", response_model=AppleRecoveryOptionsResponse)
@@ -1035,7 +1074,7 @@ async def apple_callback(
                     status.HTTP_409_CONFLICT,
                     "This Apple identity was linked by another request. Please retry sign-in.",
                 ) from None
-            return _apple_redirect(settings, "apple=linked")
+            return _apple_settings_redirect(settings, "apple=linked")
 
         if identity is not None:
             candidate = await db.get(User, identity.user_id, with_for_update=True)
@@ -1116,6 +1155,8 @@ async def apple_callback(
         return session_response
     except HTTPException:
         await db.rollback()
+        if flow is not None and flow.intent == "link":
+            return _apple_settings_redirect(settings, "apple=error")
         raise
     except Exception as exc:
         await db.rollback()
@@ -1131,7 +1172,11 @@ async def apple_callback(
         audit(db, request, action, user_id, target_type="external_identity")
         await db.commit()
         if isinstance(exc, AppleAuthenticationError):
+            if flow is not None and flow.intent == "link":
+                return _apple_settings_redirect(settings, "apple=error")
             return _apple_redirect(settings, APPLE_LOGIN_ERROR)
+        if flow is not None and flow.intent == "link":
+            return _apple_settings_redirect(settings, "apple=error")
         return _apple_redirect(settings, APPLE_LOGIN_ERROR)
 
 
