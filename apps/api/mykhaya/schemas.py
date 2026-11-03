@@ -170,6 +170,19 @@ class ReauthenticateRequest(StrictModel):
     password: str = Field(min_length=1, max_length=128)
 
 
+class ExternalIdentityResponse(BaseModel):
+    provider: Literal["apple", "google"]
+    provider_email: EmailStr | None = None
+    provider_email_verified: bool
+    linked_at: datetime
+    last_used_at: datetime | None = None
+
+
+class SignInMethodsResponse(BaseModel):
+    password_available: bool
+    identities: list[ExternalIdentityResponse]
+
+
 class TokenRequest(StrictModel):
     token: str = Field(min_length=30, max_length=500)
 
@@ -974,14 +987,20 @@ class EventCopyDestination(StrictModel):
     def validate_times(self) -> "EventCopyDestination":
         if (self.start_time is None) != (self.end_time is None):
             raise ValueError("Start and end times must be provided together")
-        if self.start_time is not None and self.end_time is not None and self.end_time <= self.start_time:
+        if (
+            self.start_time is not None
+            and self.end_time is not None
+            and self.end_time <= self.start_time
+        ):
             raise ValueError("End time must be after start time")
         return self
 
 
 class EventCopyRequest(StrictModel):
     """Dates are local calendar dates in the source event's timezone."""
-    destinations: list[EventCopyDestination] | None = Field(default=None, min_length=1, max_length=31)
+    destinations: list[EventCopyDestination] | None = Field(
+        default=None, min_length=1, max_length=31
+    )
     # Kept for clients released before independent destination rows existed.
     destination_dates: list[date] = Field(default_factory=list, max_length=31)
     start_time: clock_time | None = None
@@ -1002,7 +1021,11 @@ class EventCopyRequest(StrictModel):
         if self.destinations is None:
             if (self.start_time is None) != (self.end_time is None):
                 raise ValueError("Start and end times must be provided together")
-            if self.start_time is not None and self.end_time is not None and self.end_time <= self.start_time:
+            if (
+                self.start_time is not None
+                and self.end_time is not None
+                and self.end_time <= self.start_time
+            ):
                 raise ValueError("End time must be after start time")
         return self
 

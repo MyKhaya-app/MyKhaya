@@ -13,6 +13,7 @@ import Security from "./page";
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ replace: vi.fn(), push: vi.fn() }),
   usePathname: () => "/settings/security",
+  useSearchParams: () => new URLSearchParams(),
 }));
 
 function freeHome(): Home {
@@ -44,6 +45,9 @@ vi.mock("@mykhaya/api-client", async (importOriginal) => {
     ...actual,
     api: {
       ...actual.api,
+      externalIdentities: vi.fn(),
+      appleLinkStart: vi.fn(),
+      appleUnlink: vi.fn(),
       me: vi.fn(),
       homes: vi.fn(),
       devices: vi.fn(),
@@ -143,6 +147,10 @@ beforeEach(() => {
   (api.me as ReturnType<typeof vi.fn>).mockResolvedValue(meResponse);
   (bootstrapNativeSession as ReturnType<typeof vi.fn>).mockResolvedValue(meResponse);
   (api.devices as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+  (api.externalIdentities as ReturnType<typeof vi.fn>).mockResolvedValue({
+    password_available: true,
+    identities: [],
+  });
   (api.passkeys as ReturnType<typeof vi.fn>).mockResolvedValue([]);
   (api.mfaStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
     required: false,
@@ -155,6 +163,43 @@ beforeEach(() => {
 });
 
 describe("Security — browser passkeys, not enrolled on this device", () => {
+  it("shows provider-neutral sign-in methods and starts Apple linking", async () => {
+    (api.appleLinkStart as ReturnType<typeof vi.fn>).mockResolvedValue({
+      authorization_url: "https://appleid.apple.com/auth/authorize?state=test",
+    });
+    const user = userEvent.setup();
+    render(<Security />);
+
+    await screen.findByText("Sign-in methods");
+    expect(screen.getByText("Email and password")).toBeInTheDocument();
+    expect(screen.getByText("Apple")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Connect" }));
+
+    expect(api.appleLinkStart).toHaveBeenCalled();
+  });
+
+  it("disconnects Apple only after confirmation", async () => {
+    (api.externalIdentities as ReturnType<typeof vi.fn>).mockResolvedValue({
+      password_available: true,
+      identities: [{
+          provider: "apple",
+          provider_email: "relay@privaterelay.appleid.com",
+          provider_email_verified: true,
+          linked_at: "2026-01-01T00:00:00Z",
+          last_used_at: "2026-01-02T00:00:00Z",
+        }],
+    });
+    (api.appleUnlink as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+    vi.spyOn(window, "confirm").mockReturnValue(true);
+    const user = userEvent.setup();
+    render(<Security />);
+
+    await screen.findByText("relay@privaterelay.appleid.com");
+    await user.click(screen.getByRole("button", { name: "Disconnect" }));
+    expect(api.appleUnlink).toHaveBeenCalled();
+    await screen.findByText("Apple sign-in has been disconnected.");
+  });
+
   it("shows a generic Add passkey action inside the MFA card", async () => {
     render(<Security />);
 

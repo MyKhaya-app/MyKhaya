@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import type { FormEvent } from "react";
+import { useSearchParams } from "next/navigation";
 import { api, ApiError } from "@mykhaya/api-client";
 import QRCode from "qrcode";
 import type { Passkey } from "@mykhaya/shared-types";
@@ -40,8 +41,16 @@ type MfaStatus = {
 };
 
 type TotpSetup = { provisioning_uri: string; manual_key: string };
+type ExternalIdentity = {
+  provider: "apple" | "google";
+  provider_email: string | null;
+  provider_email_verified: boolean;
+  linked_at: string;
+  last_used_at: string | null;
+};
 
 export default function Security() {
+  const params = useSearchParams();
   const [devices, setDevices] = useState<Device[]>([]);
   const [passkeys, setPasskeys] = useState<Passkey[]>([]);
   const [error, setError] = useState("");
@@ -62,12 +71,23 @@ export default function Security() {
   const [reauthPassword, setReauthPassword] = useState("");
   const [reauthBusy, setReauthBusy] = useState(false);
   const [reauthNeeded, setReauthNeeded] = useState(false);
+  const [identities, setIdentities] = useState<ExternalIdentity[]>([]);
+  const [passwordAvailable, setPasswordAvailable] = useState(false);
+  const [accountEmail, setAccountEmail] = useState<string | null>(null);
+  const [identityBusy, setIdentityBusy] = useState(false);
 
   const native = isNativeShell();
 
   useEffect(() => {
     api.devices().then(setDevices).catch(() => setError("Could not load your signed-in devices."));
     api.passkeys().then(setPasskeys).catch(() => setError("Could not load your biometric sign-in status."));
+    if (!native) {
+      api.me().then((user) => setAccountEmail(user.email)).catch(() => {});
+      api.externalIdentities().then((result) => {
+        setIdentities(result.identities);
+        setPasswordAvailable(result.password_available);
+      }).catch(() => setError("Could not load your sign-in methods."));
+    }
     // Browser WebAuthn feature-detection only — the native shell renders
     // QuickSignIn (native Face ID/Touch ID, no WebAuthn involved) instead
     // of this passkey card below, and must never invoke
@@ -147,6 +167,33 @@ export default function Security() {
       setMfaError(cause instanceof ApiError ? cause.message : "We couldn't verify your identity.");
     } finally {
       setReauthBusy(false);
+    }
+  }
+
+  async function connectApple() {
+    setIdentityBusy(true);
+    setError("");
+    try {
+      const result = await api.appleLinkStart();
+      window.location.assign(result.authorization_url);
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : "Could not start Apple sign-in.");
+      setIdentityBusy(false);
+    }
+  }
+
+  async function disconnectApple() {
+    if (!window.confirm("Disconnect Apple sign-in from this MyKhaya account?")) return;
+    setIdentityBusy(true);
+    setError("");
+    try {
+      await api.appleUnlink();
+      setIdentities((value) => value.filter((identity) => identity.provider !== "apple"));
+      setMessage("Apple sign-in has been disconnected.");
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : "Could not disconnect Apple sign-in.");
+    } finally {
+      setIdentityBusy(false);
     }
   }
 
@@ -275,6 +322,51 @@ export default function Security() {
 
   return (
     <SettingsPage title="Security">
+      {!native && <section className="card details" aria-labelledby="sign-in-methods-heading">
+        <h2 id="sign-in-methods-heading">Sign-in methods</h2>
+        <p className="muted">Choose the secure ways you can access your MyKhaya account.</p>
+        <div className="security-signin-method">
+          <div>
+            <strong>Email and password</strong>
+            <span className="security-mfa-detail">{accountEmail ?? "Your account email"}</span>
+            <span>{passwordAvailable ? "Connected" : "Unavailable"}</span>
+          </div>
+          <span className={passwordAvailable ? "security-mfa-preferred" : "muted"}>{passwordAvailable ? "Connected" : "Unavailable"}</span>
+        </div>
+        {(["apple", "google"] as const).map((provider) => {
+          const identity = identities.find((item) => item.provider === provider);
+          const label = provider === "apple" ? "Apple" : "Google";
+          return (
+            <div className="security-signin-method" key={provider}>
+              <div>
+                <strong>{label}</strong>
+                {identity?.provider_email && (
+                  <span className="security-mfa-detail">{identity.provider_email}</span>
+                )}
+                <span>{identity ? `Connected ${new Date(identity.linked_at).toLocaleDateString()}` : "Not connected"}</span>
+                {identity?.last_used_at && <span>Last used {new Date(identity.last_used_at).toLocaleDateString()}</span>}
+              </div>
+              {!native && provider === "apple" && (
+                identity ? (
+                  <button className="secondary" disabled={identityBusy} onClick={() => void disconnectApple()}>
+                    {identityBusy ? "Disconnecting…" : "Disconnect"}
+                  </button>
+                ) : (
+                  <button className="secondary" disabled={identityBusy} onClick={() => void connectApple()}>
+                    {identityBusy ? "Connecting…" : "Connect"}
+                  </button>
+                )
+              )}
+            </div>
+          );
+        })}
+        {params.get("apple") === "linked" && (
+          <p className="notice" role="status">Apple sign-in is now connected.</p>
+        )}
+        {params.get("apple") === "error" && (
+          <p className="notice error" role="alert">Apple sign-in could not be connected. Please try again.</p>
+        )}
+      </section>}
       {!native && mfaStatus && (
         <section className="card details" aria-labelledby="browser-mfa-heading">
           <h2 id="browser-mfa-heading">Multi-factor authentication</h2>

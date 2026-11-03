@@ -99,6 +99,11 @@ async def test_hide_my_email_requires_explicit_link_and_creates_no_duplicate_use
         json={"transaction_id": transaction},
     )
     assert linked.status_code == 200, linked.text
+    methods = await client.get("/api/v1/auth/identities")
+    assert methods.status_code == 200, methods.text
+    assert methods.json()["password_available"] is True
+    assert methods.json()["identities"][0]["provider"] == "apple"
+    assert "provider_subject" not in methods.json()["identities"][0]
 
     async with SessionFactory() as db:
         after = await db.scalar(select(func.count()).select_from(User))
