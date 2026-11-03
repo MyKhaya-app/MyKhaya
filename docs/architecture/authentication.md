@@ -40,6 +40,15 @@ short-lived, single-use recovery transaction containing verified provider
 metadata only; the browser must explicitly choose existing-account linking or
 new registration before a `User` row is created.
 
+Database ownership, provider-subject lookup, metadata refresh, linking,
+concurrency conflict handling and safe unlinking live in the provider-neutral
+`mykhaya.external_identities` service. Provider boundaries supply only a
+verified stable subject and provider metadata. Unlinking refuses to remove a
+user's final usable password, passkey or external identity. Apple retains its
+own OAuth state, nonce, code exchange, JWT validation and recovery-transaction
+storage; a future Google ceremony can use the same identity service without
+introducing a second account-linking policy.
+
 Phase 2/3 currently exposes only centralized provider configuration health. The
 deployment-only `MYKHAYA_APPLE_*` and `MYKHAYA_GOOGLE_*` settings use secret
 typed fields where applicable; no provider secret is stored in
