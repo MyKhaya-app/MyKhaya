@@ -197,6 +197,33 @@ export default function Security() {
     }
   }
 
+  async function connectGoogle() {
+    setIdentityBusy(true);
+    setError("");
+    try {
+      const result = await api.googleLinkStart();
+      window.location.assign(result.authorization_url);
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : "Could not start Google sign-in.");
+      setIdentityBusy(false);
+    }
+  }
+
+  async function disconnectGoogle() {
+    if (!window.confirm("Disconnect Google sign-in from this MyKhaya account?")) return;
+    setIdentityBusy(true);
+    setError("");
+    try {
+      await api.googleUnlink();
+      setIdentities((value) => value.filter((identity) => identity.provider !== "google"));
+      setMessage("Google sign-in has been disconnected.");
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : "Could not disconnect Google sign-in.");
+    } finally {
+      setIdentityBusy(false);
+    }
+  }
+
   async function choosePreferred(method: "totp" | "email") {
     setMfaBusy(true);
     setMfaError("");
@@ -346,13 +373,13 @@ export default function Security() {
                 <span>{identity ? `Connected ${new Date(identity.linked_at).toLocaleDateString()}` : "Not connected"}</span>
                 {identity?.last_used_at && <span>Last used {new Date(identity.last_used_at).toLocaleDateString()}</span>}
               </div>
-              {!native && provider === "apple" && (
+              {!native && (
                 identity ? (
-                  <button className="secondary" disabled={identityBusy} onClick={() => void disconnectApple()}>
+                  <button className="secondary" disabled={identityBusy} onClick={() => void (provider === "apple" ? disconnectApple() : disconnectGoogle())}>
                     {identityBusy ? "Disconnecting…" : "Disconnect"}
                   </button>
                 ) : (
-                  <button className="secondary" disabled={identityBusy} onClick={() => void connectApple()}>
+                  <button className="secondary" disabled={identityBusy} onClick={() => void (provider === "apple" ? connectApple() : connectGoogle())}>
                     {identityBusy ? "Connecting…" : "Connect"}
                   </button>
                 )
@@ -365,6 +392,12 @@ export default function Security() {
         )}
         {params.get("apple") === "error" && (
           <p className="notice error" role="alert">Apple sign-in could not be connected. Please try again.</p>
+        )}
+        {params.get("google") === "linked" && (
+          <p className="notice" role="status">Google sign-in is now connected.</p>
+        )}
+        {params.get("google") === "error" && (
+          <p className="notice error" role="alert">Google sign-in could not be connected. Please try again.</p>
         )}
       </section>}
       {!native && mfaStatus && (

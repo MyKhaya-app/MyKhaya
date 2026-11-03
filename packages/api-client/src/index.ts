@@ -594,6 +594,25 @@ export class MyKhayaClient {
       method: "POST",
       body: JSON.stringify({ transaction_id: transactionId, ...body }),
     });
+  googleRecoveryOptions = (transactionId: string) =>
+    this.request<{
+      can_register: boolean;
+      provider_email: string | null;
+      display_name: string;
+    }>(`/auth/google/recovery/options?transaction_id=${encodeURIComponent(transactionId)}`);
+  googleRecoveryLink = (transactionId: string) =>
+    this.request<{ message: string }>("/auth/google/recovery/link", {
+      method: "POST",
+      body: JSON.stringify({ transaction_id: transactionId }),
+    });
+  googleRecoveryRegister = (
+    transactionId: string,
+    body: { legal_acceptances: SignupLegalAcceptanceItem[]; platform: LegalPlatform },
+  ) =>
+    this.request<BrowserAuthResult>("/auth/google/recovery/register", {
+      method: "POST",
+      body: JSON.stringify({ transaction_id: transactionId, ...body }),
+    });
   externalIdentities = () =>
     this.request<{
       password_available: boolean;
@@ -611,6 +630,12 @@ export class MyKhayaClient {
       body: "{}",
     });
   appleUnlink = () => this.request<void>("/auth/apple/link", { method: "DELETE" });
+  googleLinkStart = () =>
+    this.request<{ authorization_url: string }>("/auth/google/link/start", {
+      method: "POST",
+      body: "{}",
+    });
+  googleUnlink = () => this.request<void>("/auth/google/link", { method: "DELETE" });
   publicLegalDocuments = () =>
     this.request<PublicLegalDocumentSummary[]>("/legal/documents");
   publicLegalDocument = (key: string) =>

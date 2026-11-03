@@ -36,6 +36,9 @@ vi.mock("@mykhaya/api-client", async (importOriginal) => {
       publicLegalDocuments: vi.fn(),
       appleRecoveryLink: vi.fn(),
       appleRecoveryRegister: vi.fn(),
+      googleRecoveryOptions: vi.fn(),
+      googleRecoveryLink: vi.fn(),
+      googleRecoveryRegister: vi.fn(),
     },
   };
 });
@@ -165,6 +168,31 @@ describe("Login — Apple recovery choice", () => {
       legal_acceptances: [{ document_key: "terms", document_version_id: "terms-v1" }],
       platform: "web",
     });
+  });
+});
+
+describe("Login — Google recovery choice", () => {
+  it("requires an explicit existing-account choice before linking Google", async () => {
+    searchParams = new URLSearchParams("google=choose&transaction=google-tx-1");
+    (api.googleRecoveryOptions as ReturnType<typeof vi.fn>).mockResolvedValue({
+      can_register: true,
+      provider_email: "person@gmail.com",
+      display_name: "Google User",
+    });
+    (api.publicLegalDocuments as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    (api.post as ReturnType<typeof vi.fn>).mockResolvedValue(user);
+    (api.googleRecoveryLink as ReturnType<typeof vi.fn>).mockResolvedValue({ message: "linked" });
+    const typist = userEvent.setup();
+    render(<Login />);
+
+    await screen.findByRole("heading", { name: "Continue with Google" });
+    await typist.click(screen.getByRole("button", { name: /link to an existing account/i }));
+    await typist.type(screen.getByLabelText("Email"), "existing@example.com");
+    await typist.type(screen.getByLabelText("Password"), "correct-password");
+    await typist.click(screen.getByRole("button", { name: /^sign in$/i }));
+
+    expect(api.googleRecoveryLink).toHaveBeenCalledWith("google-tx-1");
+    expect(api.googleRecoveryRegister).not.toHaveBeenCalled();
   });
 });
 

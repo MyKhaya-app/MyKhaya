@@ -48,6 +48,8 @@ vi.mock("@mykhaya/api-client", async (importOriginal) => {
       externalIdentities: vi.fn(),
       appleLinkStart: vi.fn(),
       appleUnlink: vi.fn(),
+      googleLinkStart: vi.fn(),
+      googleUnlink: vi.fn(),
       me: vi.fn(),
       homes: vi.fn(),
       devices: vi.fn(),
@@ -173,7 +175,7 @@ describe("Security — browser passkeys, not enrolled on this device", () => {
     await screen.findByText("Sign-in methods");
     expect(screen.getByText("Email and password")).toBeInTheDocument();
     expect(screen.getByText("Apple")).toBeInTheDocument();
-    await user.click(screen.getByRole("button", { name: "Connect" }));
+    await user.click(screen.getAllByRole("button", { name: "Connect" })[0]!);
 
     expect(api.appleLinkStart).toHaveBeenCalled();
   });
@@ -198,6 +200,19 @@ describe("Security — browser passkeys, not enrolled on this device", () => {
     await user.click(screen.getByRole("button", { name: "Disconnect" }));
     expect(api.appleUnlink).toHaveBeenCalled();
     await screen.findByText("Apple sign-in has been disconnected.");
+  });
+
+  it("starts Google linking from the provider-neutral sign-in methods card", async () => {
+    (api.googleLinkStart as ReturnType<typeof vi.fn>).mockResolvedValue({
+      authorization_url: "https://accounts.google.com/o/oauth2/v2/auth?state=test",
+    });
+    const user = userEvent.setup();
+    render(<Security />);
+
+    await screen.findByText("Google");
+    await user.click(screen.getAllByRole("button", { name: "Connect" })[1]!);
+
+    expect(api.googleLinkStart).toHaveBeenCalled();
   });
 
   it("shows a generic Add passkey action inside the MFA card", async () => {

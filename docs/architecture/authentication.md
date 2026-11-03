@@ -50,13 +50,16 @@ storage; a future Google ceremony can use the same identity service without
 introducing a second account-linking policy.
 
 Phase 3 exposes Apple web sign-in, explicit recovery choices and authenticated
-Sign-in Methods management. Phase 4 will add Google web sign-in. The
+Sign-in Methods management. Phase 4 adds Google web sign-in through the same
+provider-neutral identity, recovery, legal-consent, MFA and session-completion
+boundaries. The
 deployment-only `MYKHAYA_APPLE_*` and `MYKHAYA_GOOGLE_*` settings use secret
 typed fields where applicable; no provider secret is stored in
 `platform_settings` or returned by an API. The provider-status routes and PCC
 Authentication & Security view do not expose provider secrets. Apple is enabled
 only when its deployment configuration is complete and the server-side
-ceremony is explicitly enabled; Google remains framework/configuration-only.
+ceremony is explicitly enabled; Google is enabled only when its deployment
+configuration is complete and explicitly enabled.
 The default Apple callback is
 `{MYKHAYA_PUBLIC_WEB_URL}/api/v1/auth/apple/callback`; deployments may set
 `MYKHAYA_APPLE_REDIRECT_URI` when their registered Apple Service ID uses a

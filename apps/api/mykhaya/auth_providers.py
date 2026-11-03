@@ -65,17 +65,22 @@ def _apple_status(settings: Settings) -> ExternalAuthProviderStatus:
 
 
 def _google_status(settings: Settings) -> ExternalAuthProviderStatus:
-    configured = bool(settings.google_client_id and settings.google_client_secret)
+    redirect_uri = settings.google_redirect_uri or (
+        f"{settings.public_web_url.rstrip('/')}/api/v1/auth/google/callback"
+    )
+    configured = bool(settings.google_client_id and settings.google_client_secret and redirect_uri)
     state: ProviderState = "disabled" if configured else "not_configured"
+    if settings.google_sign_in_enabled and configured:
+        state = "enabled"
     return ExternalAuthProviderStatus(
         provider="google",
         state=state,
         configured=configured,
         framework_available=True,
         client_identifier=settings.google_client_id,
-        redirect_uri=None,
+        redirect_uri=redirect_uri,
         credential_configured=bool(settings.google_client_secret),
-        enabled=False,
+        enabled=state == "enabled",
     )
 
 
