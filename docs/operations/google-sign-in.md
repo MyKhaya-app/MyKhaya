@@ -29,6 +29,30 @@ uses Google's OIDC issuer, token endpoint and JWKS endpoint by default. These
 endpoints are deployment configuration overrides for testing only; production
 must use Google's documented endpoints.
 
+## Native callback separation
+
+Browser Google sign-in always uses the HTTPS callback above and a browser
+session. Native flows use the existing platform-specific paths:
+
+- Android Google uses Credential Manager and exchanges a validated native
+  assertion directly.
+- iOS Google uses the HTTPS callback and then the configured native return URI
+  (`MYKHAYA_NATIVE_GOOGLE_RETURN_URI`).
+
+Set the return URI separately in each environment, for example
+`mykhaya://auth/callback` for DEV iOS and
+`app.mykhaya.mobile://auth/callback` for DEV Android. Production must use its
+distinct registered schemes, such as `mykhaya-prod://auth/callback` and
+`app.mykhaya.mobile.prod://auth/callback`.
+
+The API records the native platform, environment and transaction together; it
+does not infer the platform from the URI. A native app generates a fresh
+high-entropy redemption verifier before starting authentication, keeps it in
+memory, and never puts it in a callback URI. The API stores only its SHA-256
+hash and requires the verifier for exchange, recovery and MFA redemption.
+Transactions expire and are single-use. Losing the app's in-memory verifier
+therefore fails safely without issuing a session.
+
 Google identity ownership is keyed only by the verified OIDC `sub` claim.
 Email is verified and retained as provider metadata, but is never used for
 automatic account linking or merging.

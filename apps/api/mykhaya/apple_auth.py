@@ -39,6 +39,10 @@ class AppleFlowState:
     user_id: str | None
     return_path: str | None
     native_return_uri: str | None = None
+    native_platform: str | None = None
+    native_environment: str | None = None
+    native_transaction_id: str | None = None
+    native_redemption_verifier_hash: str | None = None
 
 
 @dataclass(frozen=True)
@@ -99,6 +103,10 @@ async def store_flow_state(settings: Settings, state: str, value: AppleFlowState
                     "user_id": value.user_id,
                     "return_path": value.return_path,
                     "native_return_uri": value.native_return_uri,
+                    "native_platform": value.native_platform,
+                    "native_environment": value.native_environment,
+                    "native_transaction_id": value.native_transaction_id,
+                    "native_redemption_verifier_hash": value.native_redemption_verifier_hash,
                 }
             ),
             ex=STATE_TTL_SECONDS,
@@ -124,6 +132,18 @@ async def consume_flow_state(settings: Settings, state: str) -> AppleFlowState:
             return_path=str(parsed["return_path"]) if parsed.get("return_path") else None,
             native_return_uri=str(parsed["native_return_uri"])
             if parsed.get("native_return_uri")
+            else None,
+            native_platform=str(parsed["native_platform"])
+            if parsed.get("native_platform")
+            else None,
+            native_environment=str(parsed["native_environment"])
+            if parsed.get("native_environment")
+            else None,
+            native_transaction_id=str(parsed["native_transaction_id"])
+            if parsed.get("native_transaction_id")
+            else None,
+            native_redemption_verifier_hash=str(parsed["native_redemption_verifier_hash"])
+            if parsed.get("native_redemption_verifier_hash")
             else None,
         )
     except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:

@@ -145,6 +145,14 @@ class MfaVerifyRequest(StrictModel):
         return value
 
 
+class NativeMfaStartRequest(MfaStartRequest):
+    redemption_verifier: str = Field(min_length=32, max_length=256)
+
+
+class NativeMfaVerifyRequest(MfaVerifyRequest):
+    redemption_verifier: str = Field(min_length=32, max_length=256)
+
+
 class MfaOptionsResponse(BaseModel):
     methods: list[Literal["totp", "email"]]
     destination: str | None = None
@@ -288,6 +296,7 @@ class NativeExternalStartRequest(StrictModel):
     provider: Literal["apple", "google"]
     intent: Literal["login", "link"] = "login"
     platform: Literal["ios", "android"]
+    redemption_verifier: str = Field(min_length=32, max_length=256)
 
 
 class NativeExternalStartResponse(BaseModel):
@@ -301,15 +310,18 @@ class NativeExternalBrowserStartRequest(StrictModel):
     provider: Literal["apple", "google"]
     platform: Literal["ios", "android"]
     return_uri: str = Field(min_length=8, max_length=300)
+    redemption_verifier: str = Field(min_length=32, max_length=256)
 
 
 class NativeExternalBrowserStartResponse(BaseModel):
     authorization_url: str
+    transaction_id: str
 
 
 class NativeExternalExchangeRequest(StrictModel):
     transaction_id: str = Field(min_length=20, max_length=256)
     identity_token: str = Field(min_length=20, max_length=20000)
+    redemption_verifier: str = Field(min_length=32, max_length=256)
 
 
 class NativeExternalRecoveryResponse(BaseModel):
@@ -329,6 +341,7 @@ class NativeMfaContinuationResponse(BaseModel):
 
 class NativeExternalLinkRequest(StrictModel):
     transaction_id: str = Field(min_length=20, max_length=256)
+    redemption_verifier: str = Field(min_length=32, max_length=256)
 
 
 class NativeExternalRegisterRequest(StrictModel):
@@ -336,6 +349,7 @@ class NativeExternalRegisterRequest(StrictModel):
     display_name: str | None = Field(default=None, min_length=1, max_length=100)
     legal_acceptances: list[SignupLegalAcceptanceItem] = Field(default_factory=list)
     platform: Literal["ios", "android"]
+    redemption_verifier: str = Field(min_length=32, max_length=256)
 
 
 class GroupCreate(StrictModel):

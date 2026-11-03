@@ -30,6 +30,7 @@ class NativeExternalTransaction:
     intent: str
     user_id: str | None
     platform: str
+    redemption_verifier_hash: str
 
 
 @dataclass(frozen=True)
@@ -42,6 +43,7 @@ class NativeExternalPendingIdentity:
     display_name: str
     can_register: bool
     platform: str
+    redemption_verifier_hash: str
 
 
 @dataclass(frozen=True)
@@ -50,6 +52,15 @@ class NativeMfaTransaction:
     user_id: str
     provider: ExternalIdentityProvider
     platform: str
+    redemption_verifier_hash: str
+
+
+def hash_redemption_verifier(verifier: str) -> str:
+    return hashlib.sha256(verifier.encode("utf-8")).hexdigest()
+
+
+def verify_redemption_verifier(verifier: str, expected_hash: str) -> bool:
+    return secrets.compare_digest(hash_redemption_verifier(verifier), expected_hash)
 
 
 def new_native_external_transaction(
@@ -60,6 +71,7 @@ def new_native_external_transaction(
     intent: str,
     user_id: str | None,
     platform: str,
+    redemption_verifier: str,
     apple_nonce_hash: bool = False,
 ) -> NativeExternalTransaction:
     raw_nonce = secrets.token_urlsafe(32)
@@ -74,6 +86,7 @@ def new_native_external_transaction(
         intent=intent,
         user_id=user_id,
         platform=platform,
+        redemption_verifier_hash=hash_redemption_verifier(redemption_verifier),
     )
 
 
@@ -105,6 +118,7 @@ async def store_native_external_transaction(
                     "intent": value.intent,
                     "user_id": value.user_id,
                     "platform": value.platform,
+                    "redemption_verifier_hash": value.redemption_verifier_hash,
                 }
             ),
             ex=TRANSACTION_TTL_SECONDS,
@@ -117,11 +131,25 @@ async def store_native_external_transaction(
 async def consume_native_external_transaction(
     settings: Settings, transaction_id: str
 ) -> NativeExternalTransaction | None:
+    return await _read_native_external_transaction(settings, transaction_id, consume=True)
+
+
+async def load_native_external_transaction(
+    settings: Settings, transaction_id: str
+) -> NativeExternalTransaction | None:
+    return await _read_native_external_transaction(settings, transaction_id, consume=False)
+
+
+async def _read_native_external_transaction(
+    settings: Settings, transaction_id: str, *, consume: bool
+) -> NativeExternalTransaction | None:
     if not transaction_id or len(transaction_id) > 256:
         return None
     redis = Redis.from_url(settings.redis_url, socket_timeout=2, decode_responses=True)
     try:
-        raw = await redis.getdel(_key(transaction_id))
+        raw = await (
+            redis.getdel(_key(transaction_id)) if consume else redis.get(_key(transaction_id))
+        )
     finally:
         await redis.aclose()
     if not raw:
@@ -138,6 +166,7 @@ async def consume_native_external_transaction(
             intent=str(value["intent"]),
             user_id=str(value["user_id"]) if value.get("user_id") else None,
             platform=str(value["platform"]),
+            redemption_verifier_hash=str(value["redemption_verifier_hash"]),
         )
     except (KeyError, TypeError, ValueError, json.JSONDecodeError):
         return None
@@ -159,6 +188,7 @@ async def store_native_external_pending(
                     "display_name": value.display_name,
                     "can_register": value.can_register,
                     "platform": value.platform,
+                    "redemption_verifier_hash": value.redemption_verifier_hash,
                 }
             ),
             ex=TRANSACTION_TTL_SECONDS,
@@ -191,6 +221,7 @@ async def consume_native_external_pending(
             display_name=str(value.get("display_name") or "MyKhaya user"),
             can_register=bool(value.get("can_register", False)),
             platform=str(value["platform"]),
+            redemption_verifier_hash=str(value["redemption_verifier_hash"]),
         )
     except (KeyError, TypeError, ValueError, json.JSONDecodeError):
         return None
@@ -219,6 +250,7 @@ async def load_native_external_pending(
             display_name=str(value.get("display_name") or "MyKhaya user"),
             can_register=bool(value.get("can_register", False)),
             platform=str(value["platform"]),
+            redemption_verifier_hash=str(value["redemption_verifier_hash"]),
         )
     except (KeyError, TypeError, ValueError, json.JSONDecodeError):
         return None
@@ -234,6 +266,7 @@ async def store_native_mfa_transaction(settings: Settings, value: NativeMfaTrans
                     "user_id": value.user_id,
                     "provider": value.provider.value,
                     "platform": value.platform,
+                    "redemption_verifier_hash": value.redemption_verifier_hash,
                 }
             ),
             ex=TRANSACTION_TTL_SECONDS,
@@ -278,6 +311,7 @@ async def _read_native_mfa_transaction(
             user_id=str(value["user_id"]),
             provider=ExternalIdentityProvider(str(value["provider"])),
             platform=str(value["platform"]),
+            redemption_verifier_hash=str(value["redemption_verifier_hash"]),
         )
     except (KeyError, TypeError, ValueError, json.JSONDecodeError):
         return None

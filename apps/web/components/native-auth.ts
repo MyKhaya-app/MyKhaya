@@ -44,6 +44,27 @@ let sharedStore: NativeSessionStore | undefined;
 let sharedClient: NativeMyKhayaClient | undefined;
 let lastNativeLoginDiagnostic: string | null = null;
 let offerBiometricAfterLogin = false;
+const nativeRedemptionVerifiers = new Map<string, string>();
+
+function newNativeRedemptionVerifier(): string {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("");
+}
+
+function redemptionVerifierFor(transactionId: string): string {
+  const verifier = nativeRedemptionVerifiers.get(transactionId);
+  if (!verifier) throw new Error("The native sign-in attempt is no longer available.");
+  return verifier;
+}
+
+function retainNativeRedemptionVerifier(transactionId: string, verifier: string): void {
+  nativeRedemptionVerifiers.set(transactionId, verifier);
+}
+
+function finishNativeRedemption(transactionId: string): void {
+  nativeRedemptionVerifiers.delete(transactionId);
+}
 
 function biometricDebug(event: string, fields: Record<string, unknown> = {}): void {
   console.info("[BIOMETRIC DEBUG]", event, fields);
@@ -247,7 +268,10 @@ export async function nativeExternalStart(
 ): Promise<{ transaction_id: string; nonce: string; provider: "apple" | "google"; client_id: string | null }> {
   const platform = nativePlatform();
   if (platform !== "ios" && platform !== "android") throw new Error("Native provider sign-in is unavailable.");
-  return client().startExternal(provider, platform, intent);
+  const verifier = newNativeRedemptionVerifier();
+  const result = await client().startExternal(provider, platform, verifier, intent);
+  retainNativeRedemptionVerifier(result.transaction_id, verifier);
+  return result;
 }
 
 export async function nativeExternalAssertion(
@@ -260,24 +284,34 @@ export async function nativeExternalAssertion(
   return NativeExternalAuth.signInGoogle({ nonce, client_id: clientId });
 }
 
-export function nativeExternalExchange(transactionId: string, identityToken: string) {
-  return client().exchangeExternal(transactionId, identityToken);
+export async function nativeExternalExchange(transactionId: string, identityToken: string) {
+  const verifier = redemptionVerifierFor(transactionId);
+  const result = await client().exchangeExternal(transactionId, identityToken, verifier);
+  if ("id" in result) finishNativeRedemption(transactionId);
+  else if ("transaction_id" in result) retainNativeRedemptionVerifier(result.transaction_id, verifier);
+  return result;
 }
 
-export function nativeExternalRecoveryLink(transactionId: string) {
-  return client().externalRecoveryLink(transactionId);
+export async function nativeExternalRecoveryLink(transactionId: string) {
+  const result = await client().externalRecoveryLink(transactionId, redemptionVerifierFor(transactionId));
+  finishNativeRedemption(transactionId);
+  return result;
 }
 
-export function nativeExternalRecoveryRegister(body: {
+export async function nativeExternalRecoveryRegister(body: {
   transaction_id: string;
   display_name?: string;
   legal_acceptances: { document_key: string; document_version_id: string }[];
   platform: "ios" | "android";
-}) {
-  return client().externalRecoveryRegister(body);
+}): Promise<User | { authentication_state: "additional_auth_required"; transaction_id: string; provider: "apple" | "google" }> {
+  const verifier = redemptionVerifierFor(body.transaction_id);
+  const result = await client().externalRecoveryRegister({ ...body, redemption_verifier: verifier });
+  if ("id" in result) finishNativeRedemption(body.transaction_id);
+  else retainNativeRedemptionVerifier(result.transaction_id, verifier);
+  return result;
 }
 
-export function nativeExternalBrowserStart(provider: "apple" | "google") {
+export async function nativeExternalBrowserStart(provider: "apple" | "google") {
   const platform = nativePlatform();
   if (platform !== "ios" && platform !== "android") throw new Error("Native provider sign-in is unavailable.");
   const host = typeof window === "undefined" ? "" : window.location.hostname;
@@ -285,21 +319,30 @@ export function nativeExternalBrowserStart(provider: "apple" | "google") {
   const returnUri = platform === "ios"
     ? `${production ? "mykhaya-prod" : "mykhaya"}://auth/callback`
     : `${production ? "app.mykhaya.mobile.prod" : "app.mykhaya.mobile"}://auth/callback`;
-  return client().externalBrowserStart(provider, platform, returnUri);
+  const verifier = newNativeRedemptionVerifier();
+  const result = await client().externalBrowserStart(provider, platform, returnUri, verifier);
+  retainNativeRedemptionVerifier(result.transaction_id, verifier);
+  return result;
 }
 
-export function nativeExternalRedeem(transactionId: string) {
-  return client().externalRedeem(transactionId);
+export async function nativeExternalRedeem(transactionId: string) {
+  const result = await client().externalRedeem(transactionId, redemptionVerifierFor(transactionId));
+  if ("id" in result) finishNativeRedemption(transactionId);
+  else if ("transaction_id" in result) retainNativeRedemptionVerifier(result.transaction_id, redemptionVerifierFor(transactionId));
+  return result;
 }
 
 export function nativeMfaOptions(transactionId: string) {
-  return client().nativeMfaOptions(transactionId);
+  return client().nativeMfaOptions(transactionId, redemptionVerifierFor(transactionId));
 }
 
 export function nativeMfaStart(transactionId: string, method: "totp" | "email") {
-  return client().nativeMfaStart(transactionId, method);
+  return client().nativeMfaStart(transactionId, method, redemptionVerifierFor(transactionId));
 }
 
 export function nativeMfaVerify(transactionId: string, method: "totp" | "email", code: string) {
-  return client().nativeMfaVerify(transactionId, method, code);
+  return client().nativeMfaVerify(transactionId, method, code, redemptionVerifierFor(transactionId)).then((user) => {
+    finishNativeRedemption(transactionId);
+    return user;
+  });
 }

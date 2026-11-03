@@ -40,6 +40,10 @@ class GoogleFlowState:
     user_id: str | None
     return_path: str | None
     native_return_uri: str | None = None
+    native_platform: str | None = None
+    native_environment: str | None = None
+    native_transaction_id: str | None = None
+    native_redemption_verifier_hash: str | None = None
 
 
 @dataclass(frozen=True)
@@ -134,6 +138,18 @@ async def consume_flow_state(settings: Settings, state: str) -> GoogleFlowState:
             return_path=str(data["return_path"]) if data.get("return_path") else None,
             native_return_uri=str(data["native_return_uri"])
             if data.get("native_return_uri")
+            else None,
+            native_platform=str(data["native_platform"])
+            if data.get("native_platform")
+            else None,
+            native_environment=str(data["native_environment"])
+            if data.get("native_environment")
+            else None,
+            native_transaction_id=str(data["native_transaction_id"])
+            if data.get("native_transaction_id")
+            else None,
+            native_redemption_verifier_hash=str(data["native_redemption_verifier_hash"])
+            if data.get("native_redemption_verifier_hash")
             else None,
         )
     except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
