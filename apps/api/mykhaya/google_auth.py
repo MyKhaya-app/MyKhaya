@@ -39,6 +39,7 @@ class GoogleFlowState:
     intent: str
     user_id: str | None
     return_path: str | None
+    native_return_uri: str | None = None
 
 
 @dataclass(frozen=True)
@@ -131,6 +132,9 @@ async def consume_flow_state(settings: Settings, state: str) -> GoogleFlowState:
             intent=str(data["intent"]),
             user_id=str(data["user_id"]) if data.get("user_id") else None,
             return_path=str(data["return_path"]) if data.get("return_path") else None,
+            native_return_uri=str(data["native_return_uri"])
+            if data.get("native_return_uri")
+            else None,
         )
     except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
         raise GoogleAuthenticationError(
@@ -167,7 +171,7 @@ async def exchange_code(settings: Settings, code: str, verifier: str) -> str:
 
 
 async def verify_identity_token(
-    settings: Settings, identity_token: str, nonce: str
+    settings: Settings, identity_token: str, nonce: str, expected_audience: str | None = None
 ) -> dict[str, Any]:
     if not identity_token or len(identity_token) > 20000:
         raise GoogleAuthenticationError("Google sign-in could not be verified.")
@@ -178,8 +182,9 @@ async def verify_identity_token(
         claims = jwt.decode(identity_token, JsonWebKey.import_key_set(response.json()))
         claims.validate()
         audience = claims.get("aud")
-        valid_audience = audience == settings.google_client_id or (
-            isinstance(audience, list) and settings.google_client_id in audience
+        required_audience = expected_audience or settings.google_client_id
+        valid_audience = audience == required_audience or (
+            isinstance(audience, list) and required_audience in audience
         )
         if claims.get("iss") not in (GOOGLE_ISSUER, "accounts.google.com") or not valid_audience:
             raise GoogleAuthenticationError("Google sign-in could not be verified.")

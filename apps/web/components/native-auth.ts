@@ -12,6 +12,7 @@ import { setBiometricSignInEnabled } from "./native-biometric-preference";
 import { authenticateWithBiometrics, getBiometricCapability, isBiometricCancellation } from "./native-biometric";
 import { markUnlocked } from "./native-app-lock";
 import { clearWidgetSnapshot, syncWidgetSnapshot } from "./widget-bridge";
+import { NativeExternalAuth, type NativeProviderAssertion } from "./native-external-auth";
 
 export class NativeBiometricUnlockError extends Error {
   readonly code: string;
@@ -238,4 +239,67 @@ export async function nativeLogout(): Promise<void> {
  * null (session cannot be silently restored; fall back to Login). */
 export function nativeRenewSession(): Promise<User> {
   return client().renew();
+}
+
+export async function nativeExternalStart(
+  provider: "apple" | "google",
+  intent: "login" | "link" = "login",
+): Promise<{ transaction_id: string; nonce: string; provider: "apple" | "google"; client_id: string | null }> {
+  const platform = nativePlatform();
+  if (platform !== "ios" && platform !== "android") throw new Error("Native provider sign-in is unavailable.");
+  return client().startExternal(provider, platform, intent);
+}
+
+export async function nativeExternalAssertion(
+  provider: "apple" | "google",
+  nonce: string,
+  clientId: string | null,
+): Promise<NativeProviderAssertion> {
+  if (provider === "apple") return NativeExternalAuth.signInApple({ nonce });
+  if (!clientId) throw new Error("Google sign-in is not configured for this environment.");
+  return NativeExternalAuth.signInGoogle({ nonce, client_id: clientId });
+}
+
+export function nativeExternalExchange(transactionId: string, identityToken: string) {
+  return client().exchangeExternal(transactionId, identityToken);
+}
+
+export function nativeExternalRecoveryLink(transactionId: string) {
+  return client().externalRecoveryLink(transactionId);
+}
+
+export function nativeExternalRecoveryRegister(body: {
+  transaction_id: string;
+  display_name?: string;
+  legal_acceptances: { document_key: string; document_version_id: string }[];
+  platform: "ios" | "android";
+}) {
+  return client().externalRecoveryRegister(body);
+}
+
+export function nativeExternalBrowserStart(provider: "apple" | "google") {
+  const platform = nativePlatform();
+  if (platform !== "ios" && platform !== "android") throw new Error("Native provider sign-in is unavailable.");
+  const host = typeof window === "undefined" ? "" : window.location.hostname;
+  const production = host === "mykhaya.app";
+  const returnUri = platform === "ios"
+    ? `${production ? "mykhaya-prod" : "mykhaya"}://auth/callback`
+    : `${production ? "app.mykhaya.mobile.prod" : "app.mykhaya.mobile"}://auth/callback`;
+  return client().externalBrowserStart(provider, platform, returnUri);
+}
+
+export function nativeExternalRedeem(transactionId: string) {
+  return client().externalRedeem(transactionId);
+}
+
+export function nativeMfaOptions(transactionId: string) {
+  return client().nativeMfaOptions(transactionId);
+}
+
+export function nativeMfaStart(transactionId: string, method: "totp" | "email") {
+  return client().nativeMfaStart(transactionId, method);
+}
+
+export function nativeMfaVerify(transactionId: string, method: "totp" | "email", code: string) {
+  return client().nativeMfaVerify(transactionId, method, code);
 }

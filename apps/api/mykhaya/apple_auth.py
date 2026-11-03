@@ -38,6 +38,7 @@ class AppleFlowState:
     intent: str
     user_id: str | None
     return_path: str | None
+    native_return_uri: str | None = None
 
 
 @dataclass(frozen=True)
@@ -97,6 +98,7 @@ async def store_flow_state(settings: Settings, state: str, value: AppleFlowState
                     "intent": value.intent,
                     "user_id": value.user_id,
                     "return_path": value.return_path,
+                    "native_return_uri": value.native_return_uri,
                 }
             ),
             ex=STATE_TTL_SECONDS,
@@ -120,6 +122,9 @@ async def consume_flow_state(settings: Settings, state: str) -> AppleFlowState:
             intent=str(parsed["intent"]),
             user_id=str(parsed["user_id"]) if parsed.get("user_id") else None,
             return_path=str(parsed["return_path"]) if parsed.get("return_path") else None,
+            native_return_uri=str(parsed["native_return_uri"])
+            if parsed.get("native_return_uri")
+            else None,
         )
     except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
         raise AppleAuthenticationError(
@@ -277,7 +282,7 @@ async def exchange_code(settings: Settings, code: str) -> str:
 
 
 async def verify_identity_token(
-    settings: Settings, identity_token: str, nonce: str
+    settings: Settings, identity_token: str, nonce: str, expected_audience: str | None = None
 ) -> dict[str, Any]:
     if not identity_token or len(identity_token) > 20000:
         raise AppleAuthenticationError("Apple sign-in could not be verified.")
@@ -292,11 +297,11 @@ async def verify_identity_token(
         audience = claims.get("aud")
         subject = claims.get("sub")
         token_nonce = claims.get("nonce")
-        expected_audience = apple_client_identifier(settings)
+        required_audience = expected_audience or apple_client_identifier(settings)
         if issuer != APPLE_ISSUER:
             raise AppleAuthenticationError("Apple sign-in could not be verified.")
-        valid_audience = audience == expected_audience or (
-            isinstance(audience, list) and expected_audience in audience
+        valid_audience = audience == required_audience or (
+            isinstance(audience, list) and required_audience in audience
         )
         if not valid_audience:
             raise AppleAuthenticationError("Apple sign-in could not be verified.")
