@@ -52,6 +52,15 @@ from mykhaya.consumer_mfa_policy import (
 )
 from mykhaya.db import get_db
 from mykhaya.dependencies import AuthContext, auth_context, require_adult_session
+from mykhaya.external_identities import (
+    ExternalIdentityNotFound,
+    ExternalIdentityOwnershipConflict,
+    LastAuthenticationMethodError,
+    find_external_identity,
+    link_external_identity,
+    touch_external_identity,
+    unlink_external_identity,
+)
 from mykhaya.founding_beta import (
     beta_invitation_valid,
     current_programme,
@@ -63,7 +72,6 @@ from mykhaya.models import (
     AuthIdentity,
     BetaPendingRegistration,
     ChildProfile,
-    ExternalIdentity,
     ExternalIdentityProvider,
     Group,
     HouseholdRelationship,
@@ -801,36 +809,24 @@ async def apple_recovery_link(
         raise HTTPException(
             status.HTTP_401_UNAUTHORIZED, "Your sign-in session is no longer valid."
         )
-    identity = await db.scalar(
-        select(ExternalIdentity)
-        .where(
-            ExternalIdentity.provider == ExternalIdentityProvider.apple,
-            ExternalIdentity.provider_subject == pending.subject,
-        )
-        .with_for_update()
-    )
-    if identity is not None and identity.user_id != current.id:
-        audit(
+    try:
+        await link_external_identity(
             db,
             request,
-            "APPLE_IDENTITY_LINK_FAILED",
-            current.id,
-            target_type="external_identity",
-        )
-        await db.commit()
-        raise HTTPException(status.HTTP_409_CONFLICT, "This Apple identity is already linked.")
-    if identity is None:
-        identity = ExternalIdentity(
             user_id=current.id,
             provider=ExternalIdentityProvider.apple,
             provider_subject=pending.subject,
             provider_email=pending.provider_email,
             provider_email_verified=pending.email_verified,
-            last_used_at=datetime.now(UTC),
         )
-        db.add(identity)
-    else:
-        identity.last_used_at = datetime.now(UTC)
+    except ExternalIdentityOwnershipConflict:
+        audit(
+            db, request, "APPLE_IDENTITY_LINK_FAILED", current.id, target_type="external_identity"
+        )
+        await db.commit()
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "This Apple identity is already linked."
+        ) from None
     audit(db, request, "APPLE_IDENTITY_LINKED", current.id, target_type="external_identity")
     try:
         await db.commit()
@@ -887,13 +883,8 @@ async def apple_recovery_register(
             status.HTTP_409_CONFLICT,
             "An account already uses this email. Sign in and link Apple instead.",
         )
-    identity = await db.scalar(
-        select(ExternalIdentity)
-        .where(
-            ExternalIdentity.provider == ExternalIdentityProvider.apple,
-            ExternalIdentity.provider_subject == pending.subject,
-        )
-        .with_for_update()
+    identity = await find_external_identity(
+        db, ExternalIdentityProvider.apple, pending.subject, for_update=True
     )
     if identity is not None:
         raise HTTPException(status.HTTP_409_CONFLICT, "This Apple identity is already linked.")
@@ -921,15 +912,14 @@ async def apple_recovery_register(
                 user_agent=request.headers.get("user-agent", "")[:300] or None,
             )
         )
-    db.add(
-        ExternalIdentity(
-            user_id=user.id,
-            provider=ExternalIdentityProvider.apple,
-            provider_subject=pending.subject,
-            provider_email=pending.provider_email,
-            provider_email_verified=pending.email_verified,
-            last_used_at=datetime.now(UTC),
-        )
+    await link_external_identity(
+        db,
+        request,
+        user_id=user.id,
+        provider=ExternalIdentityProvider.apple,
+        provider_subject=pending.subject,
+        provider_email=pending.provider_email,
+        provider_email_verified=pending.email_verified,
     )
     result = await complete_browser_authentication(
         db,
@@ -953,31 +943,20 @@ async def unlink_apple_identity(
     db: AsyncSession = Depends(get_db),
 ) -> dict[str, str]:
     require_fresh_adult_auth(auth)
-    identity = await db.scalar(
-        select(ExternalIdentity)
-        .where(
-            ExternalIdentity.user_id == auth.user.id,
-            ExternalIdentity.provider == ExternalIdentityProvider.apple,
+    try:
+        await unlink_external_identity(
+            db,
+            request,
+            user_id=auth.user.id,
+            provider=ExternalIdentityProvider.apple,
         )
-        .with_for_update()
-    )
-    if identity is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "No Apple identity is linked.")
-    password_identity = await db.scalar(
-        select(AuthIdentity.id).where(AuthIdentity.user_id == auth.user.id)
-    )
-    other_external_identity = await db.scalar(
-        select(ExternalIdentity.id).where(
-            ExternalIdentity.user_id == auth.user.id,
-            ExternalIdentity.id != identity.id,
-        )
-    )
-    if password_identity is None and other_external_identity is None:
+    except ExternalIdentityNotFound:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No Apple identity is linked.") from None
+    except LastAuthenticationMethodError:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             "Add another sign-in method before unlinking Apple.",
-        )
-    await db.delete(identity)
+        ) from None
     audit(db, request, "APPLE_IDENTITY_UNLINKED", auth.user.id, target_type="external_identity")
     await db.commit()
     return {"message": "Apple sign-in has been unlinked."}
@@ -1011,43 +990,36 @@ async def apple_callback(
         )
         email_verified = claims.get("email_verified") in (True, "true", "1")
 
-        identity = await db.scalar(
-            select(ExternalIdentity)
-            .where(
-                ExternalIdentity.provider == ExternalIdentityProvider.apple,
-                ExternalIdentity.provider_subject == subject,
-            )
-            .with_for_update()
+        identity = await find_external_identity(
+            db, ExternalIdentityProvider.apple, subject, for_update=True
         )
 
         if flow.intent == "link":
             linked_user, _session = await current_user(request, db, settings)
             if flow.user_id != str(linked_user.id):
                 raise AppleAuthenticationError("This Apple linking attempt is invalid.")
-            if identity is not None:
-                if identity.user_id != linked_user.id:
-                    audit(
-                        db,
-                        request,
-                        "APPLE_IDENTITY_LINK_FAILED",
-                        linked_user.id,
-                        target_type="external_identity",
-                    )
-                    await db.commit()
-                    raise HTTPException(
-                        status.HTTP_409_CONFLICT, "This Apple identity is already linked."
-                    )
-                identity.last_used_at = datetime.now(UTC)
-            else:
-                identity = ExternalIdentity(
+            try:
+                await link_external_identity(
+                    db,
+                    request,
                     user_id=linked_user.id,
                     provider=ExternalIdentityProvider.apple,
                     provider_subject=subject,
                     provider_email=provider_email,
                     provider_email_verified=email_verified,
-                    last_used_at=datetime.now(UTC),
                 )
-                db.add(identity)
+            except ExternalIdentityOwnershipConflict:
+                audit(
+                    db,
+                    request,
+                    "APPLE_IDENTITY_LINK_FAILED",
+                    linked_user.id,
+                    target_type="external_identity",
+                )
+                await db.commit()
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT, "This Apple identity is already linked."
+                ) from None
             audit(
                 db,
                 request,
@@ -1055,7 +1027,14 @@ async def apple_callback(
                 linked_user.id,
                 target_type="external_identity",
             )
-            await db.commit()
+            try:
+                await db.commit()
+            except IntegrityError:
+                await db.rollback()
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT,
+                    "This Apple identity was linked by another request. Please retry sign-in.",
+                ) from None
             return _apple_redirect(settings, "apple=linked")
 
         if identity is not None:
@@ -1063,9 +1042,12 @@ async def apple_callback(
             if candidate is None or not candidate.is_active:
                 raise AppleAuthenticationError("Apple sign-in could not be completed.")
             linked_user = candidate
-            identity.provider_email = provider_email or identity.provider_email
-            identity.provider_email_verified = email_verified or identity.provider_email_verified
-            identity.last_used_at = datetime.now(UTC)
+            await touch_external_identity(
+                db,
+                identity=identity,
+                provider_email=provider_email,
+                provider_email_verified=email_verified,
+            )
         else:
             # An email match is never an implicit identity link. Keep the
             # verified provider identity in a short-lived, single-use recovery
