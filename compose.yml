@@ -173,6 +173,12 @@ services:
         MYKHAYA_APNS_KEY_ID: "",
         MYKHAYA_APNS_BUNDLE_ID: "",
         MYKHAYA_APNS_PRIVATE_KEY: "",
+        # Migrations never authenticate with Apple and do not receive the
+        # optional Apple secret mount. Blank inherited values so Settings
+        # cannot attempt to load a host-only key path.
+        MYKHAYA_APPLE_SIGN_IN_ENABLED: "false",
+        MYKHAYA_APPLE_PRIVATE_KEY: "",
+        MYKHAYA_APPLE_PRIVATE_KEY_FILE: "",
       }
     command: ["alembic", "upgrade", "head"]
     depends_on: { postgres: { condition: service_healthy } }
@@ -196,6 +202,11 @@ services:
       MYKHAYA_APNS_KEY_ID: ""
       MYKHAYA_APNS_BUNDLE_ID: ""
       MYKHAYA_APNS_PRIVATE_KEY: ""
+      # The isolated test service also has no Apple secret mount. Keep
+      # provider configuration disabled and explicit when .env enables Apple.
+      MYKHAYA_APPLE_SIGN_IN_ENABLED: "false"
+      MYKHAYA_APPLE_PRIVATE_KEY: ""
+      MYKHAYA_APPLE_PRIVATE_KEY_FILE: ""
       # Raised from the original 100/300 once the full suite's total
       # register+login volume (now several hundred, following Phase 3's
       # Stripe billing tests, each doing a full register/verify/login/create-Home
