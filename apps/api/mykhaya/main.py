@@ -212,6 +212,16 @@ def _is_home_migration_upload(request: Request) -> bool:
     return request.method == "POST" and request.url.path == "/api/v1/platform/home-migration/upload"
 
 
+def _is_apple_form_post_callback(request: Request) -> bool:
+    """Apple submits the provider form without MyKhaya's CSRF cookie/header.
+
+    This is deliberately limited to the exact callback path and POST method.
+    The callback still requires a valid, single-use Redis state before it
+    exchanges the authorization code or changes any account/session state.
+    """
+    return request.method == "POST" and request.url.path == "/api/v1/auth/apple/callback"
+
+
 @app.middleware("http")
 async def security_and_limits(
     request: Request, call_next: Callable[[Request], Awaitable[Response]]
@@ -221,7 +231,11 @@ async def security_and_limits(
     started = time.monotonic()
     if request.method not in {"GET", "HEAD", "OPTIONS"}:
         origin = request.headers.get("origin")
-        if origin and origin not in settings.cors_origins:
+        if (
+            origin
+            and origin not in settings.cors_origins
+            and not _is_apple_form_post_callback(request)
+        ):
             return JSONResponse(
                 {"detail": "Request origin is not allowed"}, status_code=status.HTTP_403_FORBIDDEN
             )

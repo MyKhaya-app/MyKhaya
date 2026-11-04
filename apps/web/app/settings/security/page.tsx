@@ -75,6 +75,7 @@ export default function Security() {
   const [passwordAvailable, setPasswordAvailable] = useState(false);
   const [accountEmail, setAccountEmail] = useState<string | null>(null);
   const [identityBusy, setIdentityBusy] = useState(false);
+  const appleLinkTransaction = params.get("apple") === "link_required" ? params.get("transaction") : null;
 
   const native = isNativeShell();
 
@@ -99,6 +100,29 @@ export default function Security() {
     biometricSignInAvailable().then(setBiometricAvailable);
     setLabelText(biometricLabel());
   }, [native]);
+
+  useEffect(() => {
+    if (native || !appleLinkTransaction) return;
+    let active = true;
+    setIdentityBusy(true);
+    setError("");
+    void api.appleRecoveryLink(appleLinkTransaction)
+      .then(async () => {
+        if (!active) return;
+        setMessage("Apple sign-in is now connected.");
+        const result = await api.externalIdentities();
+        if (active) setIdentities(result.identities);
+      })
+      .catch((cause) => {
+        if (active) setError(cause instanceof ApiError ? cause.message : "Could not connect Apple sign-in.");
+      })
+      .finally(() => {
+        if (active) setIdentityBusy(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [appleLinkTransaction, native]);
 
   async function setupAuthenticator() {
     setMfaBusy(true);
@@ -389,6 +413,9 @@ export default function Security() {
         })}
         {params.get("apple") === "linked" && (
           <p className="notice" role="status">Apple sign-in is now connected.</p>
+        )}
+        {params.get("apple") === "link_required" && identityBusy && (
+          <p className="notice" role="status">Finishing Apple sign-in connection…</p>
         )}
         {params.get("apple") === "error" && (
           <p className="notice error" role="alert">Apple sign-in could not be connected. Please try again.</p>

@@ -60,6 +60,7 @@ class ApplePendingIdentity:
     display_name: str
     can_register: bool
     return_path: str | None
+    intended_user_id: str | None = None
 
 
 def apple_client_identifier(settings: Settings) -> str:
@@ -167,6 +168,7 @@ async def store_pending_identity(
                     "display_name": value.display_name,
                     "can_register": value.can_register,
                     "return_path": value.return_path,
+                    "intended_user_id": value.intended_user_id,
                 }
             ),
             ex=PENDING_IDENTITY_TTL_SECONDS,
@@ -200,6 +202,9 @@ async def load_pending_identity(
             display_name=str(payload.get("display_name") or "Apple user"),
             can_register=bool(payload.get("can_register", False)),
             return_path=(str(payload["return_path"]) if payload.get("return_path") else None),
+            intended_user_id=(
+                str(payload["intended_user_id"]) if payload.get("intended_user_id") else None
+            ),
         )
     except (KeyError, TypeError, ValueError, json.JSONDecodeError):
         return None
@@ -229,6 +234,9 @@ async def consume_pending_identity(
             display_name=str(payload.get("display_name") or "Apple user"),
             can_register=bool(payload.get("can_register", False)),
             return_path=(str(payload["return_path"]) if payload.get("return_path") else None),
+            intended_user_id=(
+                str(payload["intended_user_id"]) if payload.get("intended_user_id") else None
+            ),
         )
     except (KeyError, TypeError, ValueError, json.JSONDecodeError):
         return None
@@ -266,7 +274,10 @@ def authorization_url(
         urlencode(
             {
                 'response_type': 'code',
-                'response_mode': 'query',
+                # Apple requires form_post whenever name or email is requested.
+                # Keep the scopes: the first authorization may contain the
+                # user's display name and Apple relay address in the form body.
+                'response_mode': 'form_post',
                 'client_id': apple_client_identifier(settings),
                 'redirect_uri': apple_redirect_uri(settings),
                 'scope': scope,

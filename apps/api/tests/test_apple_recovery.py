@@ -80,8 +80,15 @@ async def test_hide_my_email_requires_explicit_link_and_creates_no_duplicate_use
     async with SessionFactory() as db:
         before = await db.scalar(select(func.count()).select_from(User))
 
-    callback = await client.get(
-        "/api/v1/auth/apple/callback?state=state&code=code", follow_redirects=False
+    callback = await client.post(
+        "/api/v1/auth/apple/callback",
+        data={
+            "state": "state",
+            "code": "code",
+            "user": '{"name":{"firstName":"Apple","lastName":"User"}}',
+        },
+        headers={"Origin": "https://appleid.apple.com"},
+        follow_redirects=False,
     )
     assert callback.status_code == 303
     location = callback.headers["location"]
@@ -115,6 +122,59 @@ async def test_hide_my_email_requires_explicit_link_and_creates_no_duplicate_use
         user = await db.scalar(select(User).where(User.email == email))
         assert after == before
         assert identity is not None and user is not None and identity.user_id == user.id
+
+
+@pytest.mark.asyncio
+async def test_existing_apple_link_survives_cross_site_form_post_without_session_cookie(
+    client: AsyncClient, fake_apple_callback, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pending, subject = fake_apple_callback
+    email = f"apple-link-{datetime.now(UTC).strftime('%H%M%S%f')}@example.com"
+    await register_and_verify(client, email, "Apple Link User")
+    login = await client.post("/api/v1/auth/login", json={"email": email, "password": PASSWORD})
+    assert login.status_code == 200
+    async with SessionFactory() as db:
+        user = await db.scalar(select(User).where(User.email == email))
+        assert user is not None
+        user_id = str(user.id)
+
+    async def consume_link_state(_settings, _state: str) -> AppleFlowState:
+        return AppleFlowState(nonce="nonce", intent="link", user_id=user_id, return_path=None)
+
+    monkeypatch.setattr(auth_router, "consume_flow_state", consume_link_state)
+    callback_client = AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url=ORIGIN,
+        headers={"Origin": "https://appleid.apple.com"},
+    )
+    try:
+        callback = await callback_client.post(
+            "/api/v1/auth/apple/callback",
+            data={"state": "state", "code": "code"},
+            follow_redirects=False,
+        )
+    finally:
+        await callback_client.aclose()
+    assert callback.status_code == 303
+    query = parse_qs(urlparse(callback.headers["location"]).query)
+    assert query["apple"] == ["link_required"]
+    transaction = query["transaction"][0]
+    assert pending[transaction].intended_user_id == user_id
+
+    linked = await client.post(
+        "/api/v1/auth/apple/recovery/link",
+        headers=csrf_header(client),
+        json={"transaction_id": transaction},
+    )
+    assert linked.status_code == 200, linked.text
+    async with SessionFactory() as db:
+        identity = await db.scalar(
+            select(ExternalIdentity).where(
+                ExternalIdentity.provider == ExternalIdentityProvider.apple,
+                ExternalIdentity.provider_subject == subject,
+            )
+        )
+        assert identity is not None and str(identity.user_id) == user_id
 
 
 @pytest.mark.asyncio
