@@ -4,6 +4,8 @@ Provider callbacks are intentionally not covered because they are not enabled
 until a later phase has deployment credentials and callback configuration.
 """
 
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ec
 from pydantic import SecretStr
 
 from mykhaya.auth_providers import external_auth_provider_statuses
@@ -22,13 +24,18 @@ def test_provider_status_defaults_fail_closed_without_credentials() -> None:
 
 
 def test_apple_status_is_enabled_only_when_complete_and_explicitly_enabled() -> None:
+    private = ec.generate_private_key(ec.SECP256R1()).private_bytes(
+        serialization.Encoding.PEM,
+        serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption(),
+    ).decode()
     settings = Settings(
         secret_key="test-only-secret-key-never-used-in-production-1234",
         apple_sign_in_enabled=True,
         apple_service_id="com.example.web",
         apple_team_id="TEAM123",
         apple_key_id="KEY123",
-        apple_private_key=SecretStr("fake-private-key-for-test-only"),
+        apple_private_key=SecretStr(private),
     )
     status = external_auth_provider_statuses(settings)[0]
 

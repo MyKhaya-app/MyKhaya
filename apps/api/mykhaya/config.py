@@ -2,9 +2,12 @@ import os
 from email.utils import parseaddr
 from functools import lru_cache
 from ipaddress import ip_network
+from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
 
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ec import SECP256R1, EllipticCurvePrivateKey
 from pydantic import Field, SecretStr, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -143,6 +146,7 @@ class Settings(BaseSettings):
     apple_team_id: str | None = None
     apple_key_id: str | None = None
     apple_private_key: SecretStr | None = None
+    apple_private_key_file: str | None = None
     apple_redirect_uri: str | None = None
     native_apple_return_uri: str | None = None
     apple_authorize_url: str = "https://appleid.apple.com/auth/authorize"
@@ -402,6 +406,90 @@ class Settings(BaseSettings):
                 "MYKHAYA_FIELD_ENCRYPTION_KEYS / MYKHAYA_BLIND_INDEX_KEYS are a development/test "
                 "fallback only. Production must supply sensitive-field keyrings as mounted files."
             )
+        return self
+
+    @model_validator(mode="after")
+    def resolve_apple_private_key(self) -> "Settings":
+        """Load and validate the Apple signing key from exactly one source.
+
+        The file source is intentionally opt-in. This keeps existing deployments
+        startable when Apple sign-in is disabled and the optional secret mount is
+        absent, while still failing closed when an operator explicitly configures
+        a bad or conflicting key source.
+        """
+        env_key = (
+            self.apple_private_key.get_secret_value().strip() if self.apple_private_key else ""
+        )
+        key_file = (self.apple_private_key_file or "").strip()
+        if env_key and key_file:
+            raise ValueError(
+                "MYKHAYA_APPLE_PRIVATE_KEY and MYKHAYA_APPLE_PRIVATE_KEY_FILE must not both "
+                "be configured"
+            )
+        if key_file:
+            path = Path(key_file)
+            try:
+                if not path.is_file():
+                    raise ValueError("not a regular file")
+                file_key = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeError, ValueError) as exc:
+                raise ValueError(
+                    "MYKHAYA_APPLE_PRIVATE_KEY_FILE is missing or inaccessible"
+                ) from exc
+            env_key = file_key.strip()
+            self.apple_private_key = SecretStr(file_key)
+        if env_key:
+            source = (
+                "MYKHAYA_APPLE_PRIVATE_KEY_FILE" if key_file else "MYKHAYA_APPLE_PRIVATE_KEY"
+            )
+            self._validate_apple_private_key(
+                env_key,
+                source=source,
+            )
+        return self
+
+    @staticmethod
+    def _validate_apple_private_key(value: str, *, source: str) -> None:
+        try:
+            key = serialization.load_pem_private_key(value.encode("utf-8"), password=None)
+        except (TypeError, ValueError, UnicodeError) as exc:
+            raise ValueError(
+                f"{source} must contain an unencrypted P-256 PEM key"
+            ) from exc
+        if not isinstance(key, EllipticCurvePrivateKey) or not isinstance(key.curve, SECP256R1):
+            raise ValueError(
+                f"{source} must contain an unencrypted P-256 PEM key"
+            )
+
+    @model_validator(mode="after")
+    def validate_production_fcm_configuration(self) -> "Settings":
+        """Keep production FCM on the production Firebase project.
+
+        FCM is deployment-only configuration. A production process may be
+        started with delivery disabled, but it must never be allowed to start
+        a configured sender against a DEV project or with an incomplete PEM.
+        The values themselves are deliberately never included in the error.
+        """
+        if self.environment != "production":
+            return self
+
+        if self.fcm_project_id and self.fcm_project_id != "mykhaya-prod":
+            raise ValueError(
+                "MYKHAYA_FCM_PROJECT_ID must be mykhaya-prod in production"
+            )
+
+        if self.fcm_delivery_configured:
+            if not (self.fcm_project_id and self.fcm_client_email and self.fcm_private_key):
+                raise ValueError(
+                    "Production FCM delivery requires project ID, client email, and private key"
+                )
+            pem = self.fcm_private_key.get_secret_value().replace("\\n", "\n").strip()
+            if not (
+                pem.startswith("-----BEGIN PRIVATE KEY-----")
+                and pem.endswith("-----END PRIVATE KEY-----")
+            ):
+                raise ValueError("MYKHAYA_FCM_PRIVATE_KEY must contain a PKCS#8 PEM key")
+
         return self
 
     @field_validator("cookie_secure")

@@ -24,13 +24,20 @@ from mykhaya.config import Settings
 
 
 def apple_settings(private_key: str | None = None, **overrides: Any) -> Settings:
+    if private_key is None:
+        private = ec.generate_private_key(ec.SECP256R1())
+        private_key = private.private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        ).decode()
     values: dict[str, Any] = {
         "secret_key": "test-only-secret-key-never-used-in-production-1234",
         "apple_sign_in_enabled": True,
         "apple_service_id": "com.example.web",
         "apple_team_id": "TEAM123",
         "apple_key_id": "KEY123",
-        "apple_private_key": SecretStr(private_key or "not-a-real-key"),
+        "apple_private_key": SecretStr(private_key),
         "public_web_url": "http://localhost:8080",
     }
     values.update(overrides)
