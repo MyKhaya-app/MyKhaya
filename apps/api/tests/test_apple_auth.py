@@ -106,6 +106,8 @@ def test_authorization_url_contains_state_nonce_and_exact_redirect() -> None:
     settings = apple_settings()
     url = authorization_url(settings, "state-value", "nonce-value")
     assert "client_id=com.example.web" in url
+    assert "response_mode=form_post" in url
+    assert "scope=name+email" in url
     assert "state=state-value" in url
     assert "nonce=nonce-value" in url
     assert "redirect_uri=http%3A%2F%2Flocalhost%3A8080%2Fapi%2Fv1%2Fauth%2Fapple%2Fcallback" in url

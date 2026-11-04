@@ -2,6 +2,7 @@ import json
 import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
+from urllib.parse import parse_qs
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -793,17 +794,18 @@ def _apple_audit_failure(
 
 
 def _apple_name(raw: str | None) -> str:
-    if not raw:
+    if not raw or len(raw) > 8192:
         return "Apple user"
     try:
         parsed = json.loads(raw)
         name = parsed.get("name") if isinstance(parsed, dict) else None
         if isinstance(name, dict):
-            value = " ".join(
-                str(name.get(part, "")).strip()
-                for part in ("firstName", "lastName")
-                if name.get(part)
-            )
+            parts = []
+            for part in ("firstName", "lastName"):
+                value = name.get(part)
+                if isinstance(value, str) and value.strip():
+                    parts.append(" ".join(value.split())[:100])
+            value = " ".join(parts)
             if value:
                 return value[:100]
     except (TypeError, ValueError, json.JSONDecodeError):
@@ -928,6 +930,11 @@ async def apple_recovery_link(
     settings: Settings = Depends(get_settings),
 ) -> MessageResponse:
     require_fresh_adult_auth(auth)
+    pending = await load_pending_identity(settings, body.transaction_id)
+    if pending is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This Apple sign-in attempt has expired.")
+    if pending.intended_user_id and pending.intended_user_id != str(auth.user.id):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "This Apple linking attempt is invalid.")
     pending = await consume_pending_identity(settings, body.transaction_id)
     if pending is None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "This Apple sign-in attempt has expired.")
@@ -1090,13 +1097,21 @@ async def unlink_apple_identity(
     return {"message": "Apple sign-in has been unlinked."}
 
 
-@router.get("/apple/callback")
-async def apple_callback(
+def _apple_form_value(fields: dict[str, list[str]], name: str) -> str | None:
+    values = fields.get(name)
+    if not values:
+        return None
+    if len(values) != 1:
+        raise AppleAuthenticationError("Invalid Apple sign-in response.")
+    return values[0]
+
+
+async def _apple_callback(
     request: Request,
-    state: str | None = None,
-    code: str | None = None,
-    error: str | None = None,
-    user: str | None = None,
+    state: str | None,
+    code: str | None,
+    error: str | None,
+    user: str | None,
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> Response:
@@ -1162,47 +1177,27 @@ async def apple_callback(
             )
 
         if flow.intent == "link":
-            linked_user, _session = await current_user(request, db, settings)
-            if flow.user_id != str(linked_user.id):
+            if not flow.user_id:
                 raise AppleAuthenticationError("This Apple linking attempt is invalid.")
-            try:
-                await link_external_identity(
-                    db,
-                    request,
-                    user_id=linked_user.id,
-                    provider=ExternalIdentityProvider.apple,
-                    provider_subject=subject,
+            pending_transaction = secrets.token_urlsafe(32)
+            await store_pending_identity(
+                settings,
+                pending_transaction,
+                ApplePendingIdentity(
+                    transaction_id=pending_transaction,
+                    subject=subject,
                     provider_email=provider_email,
-                    provider_email_verified=email_verified,
-                )
-            except ExternalIdentityOwnershipConflict:
-                audit(
-                    db,
-                    request,
-                    "APPLE_IDENTITY_LINK_FAILED",
-                    linked_user.id,
-                    target_type="external_identity",
-                )
-                await db.commit()
-                raise HTTPException(
-                    status.HTTP_409_CONFLICT, "This Apple identity is already linked."
-                ) from None
-            audit(
-                db,
-                request,
-                "APPLE_IDENTITY_LINKED",
-                linked_user.id,
-                target_type="external_identity",
+                    email_verified=email_verified,
+                    display_name=_apple_name(user),
+                    can_register=False,
+                    return_path=None,
+                    intended_user_id=flow.user_id,
+                ),
             )
-            try:
-                await db.commit()
-            except IntegrityError:
-                await db.rollback()
-                raise HTTPException(
-                    status.HTTP_409_CONFLICT,
-                    "This Apple identity was linked by another request. Please retry sign-in.",
-                ) from None
-            return _apple_settings_redirect(settings, "apple=linked")
+            await db.commit()
+            return _apple_settings_redirect(
+                settings, f"apple=link_required&transaction={pending_transaction}"
+            )
 
         if identity is not None:
             candidate = await db.get(User, identity.user_id, with_for_update=True)
@@ -1306,6 +1301,46 @@ async def apple_callback(
         if flow is not None and flow.intent == "link":
             return _apple_settings_redirect(settings, "apple=error")
         return _apple_redirect(settings, APPLE_LOGIN_ERROR)
+
+
+@router.get("/apple/callback")
+async def apple_callback_get(
+    request: Request,
+    state: str | None = None,
+    code: str | None = None,
+    error: str | None = None,
+    user: str | None = None,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> Response:
+    # Retain GET only for compatibility with previously-issued authorization
+    # attempts. New authorization requests always use Apple's form_post mode.
+    return await _apple_callback(request, state, code, error, user, db, settings)
+
+
+@router.post("/apple/callback")
+async def apple_callback_post(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> Response:
+    content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    if content_type != "application/x-www-form-urlencoded":
+        raise HTTPException(
+            status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, "Invalid Apple response format."
+        )
+    try:
+        body = await request.body()
+        fields = parse_qs(body.decode("utf-8"), keep_blank_values=True, max_num_fields=8)
+        state = _apple_form_value(fields, "state")
+        code = _apple_form_value(fields, "code")
+        error = _apple_form_value(fields, "error")
+        user = _apple_form_value(fields, "user")
+    except (UnicodeDecodeError, ValueError, AppleAuthenticationError) as exc:
+        if isinstance(exc, AppleAuthenticationError):
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid Apple response format.") from exc
+    return await _apple_callback(request, state, code, error, user, db, settings)
 
 
 @router.get("/google/start")

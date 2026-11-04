@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { Home, Passkey } from "@mykhaya/shared-types";
 import Security from "./page";
@@ -10,10 +10,12 @@ import Security from "./page";
 // credentials-first UX (that lives behind the secondary <details> disclosure
 // only when more than one device has enrolled).
 
+const searchParamsState = vi.hoisted(() => ({ value: new URLSearchParams() }));
+
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ replace: vi.fn(), push: vi.fn() }),
   usePathname: () => "/settings/security",
-  useSearchParams: () => new URLSearchParams(),
+  useSearchParams: () => searchParamsState.value,
 }));
 
 function freeHome(): Home {
@@ -47,6 +49,7 @@ vi.mock("@mykhaya/api-client", async (importOriginal) => {
       ...actual.api,
       externalIdentities: vi.fn(),
       appleLinkStart: vi.fn(),
+      appleRecoveryLink: vi.fn(),
       appleUnlink: vi.fn(),
       googleLinkStart: vi.fn(),
       googleUnlink: vi.fn(),
@@ -146,6 +149,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   window.localStorage.clear();
   nativeShell = false;
+  searchParamsState.value = new URLSearchParams();
   (api.me as ReturnType<typeof vi.fn>).mockResolvedValue(meResponse);
   (bootstrapNativeSession as ReturnType<typeof vi.fn>).mockResolvedValue(meResponse);
   (api.devices as ReturnType<typeof vi.fn>).mockResolvedValue([]);
@@ -178,6 +182,27 @@ describe("Security — browser passkeys, not enrolled on this device", () => {
     await user.click(screen.getAllByRole("button", { name: "Connect" })[0]!);
 
     expect(api.appleLinkStart).toHaveBeenCalled();
+  });
+
+  it("completes an Apple link after the provider form-post returns without cookies", async () => {
+    searchParamsState.value = new URLSearchParams("apple=link_required&transaction=apple-link-tx");
+    (api.appleRecoveryLink as ReturnType<typeof vi.fn>).mockResolvedValue({ message: "linked" });
+    (api.externalIdentities as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce({ password_available: true, identities: [] })
+      .mockResolvedValueOnce({
+        password_available: true,
+        identities: [{
+          provider: "apple",
+          provider_email: null,
+          provider_email_verified: true,
+          linked_at: "2026-01-01T00:00:00Z",
+          last_used_at: null,
+        }],
+      });
+    render(<Security />);
+
+    await waitFor(() => expect(api.appleRecoveryLink).toHaveBeenCalledWith("apple-link-tx"));
+    expect(await screen.findByText("Apple sign-in is now connected.")).toBeInTheDocument();
   });
 
   it("disconnects Apple only after confirmation", async () => {
