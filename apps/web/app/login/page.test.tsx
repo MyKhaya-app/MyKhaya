@@ -10,9 +10,10 @@ import Login from "./page";
 // another way" as the only route back to the plain form.
 
 const push = vi.fn();
+const replace = vi.fn();
 let searchParams = new URLSearchParams();
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ push, replace: vi.fn() }),
+  useRouter: () => ({ push, replace }),
   useSearchParams: () => searchParams,
 }));
 
@@ -267,6 +268,24 @@ describe("Login — biometric sign-in previously enrolled on this device", () =>
     expect(screen.getByRole("button", { name: /sign in another way/i })).toBeInTheDocument();
     expect(screen.queryByLabelText("Email")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Password")).not.toBeInTheDocument();
+  });
+
+  it("prioritises social MFA continuation over the remembered biometric screen", async () => {
+    searchParams = new URLSearchParams("auth=additional&transaction=social-mfa");
+    render(<Login />);
+
+    expect(screen.queryByText("Anthony")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Email")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Password")).not.toBeInTheDocument();
+    await waitFor(() => expect(replace).toHaveBeenCalledWith("/mfa?transaction=social-mfa"));
+  });
+
+  it("does not send a native shell into browser MFA continuation", async () => {
+    nativeShell = true;
+    searchParams = new URLSearchParams("auth=additional&transaction=social-mfa");
+    render(<Login />);
+
+    await waitFor(() => expect(replace).toHaveBeenCalledWith("/login?mfa_error=expired"));
   });
 
   it('"Sign in another way" reveals the normal email/password form', async () => {

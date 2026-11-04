@@ -59,6 +59,8 @@ export default function Login() {
   const beta = params.get("beta") === "1";
   const betaInvitation = params.get("beta_invitation");
   const calendarShare = params.get("calendar_share");
+  const additionalAuth = params.get("auth") === "additional";
+  const additionalTransaction = additionalAuth ? params.get("transaction") : null;
   const appleResult = params.get("apple");
   const appleTransaction = params.get("transaction");
   const googleResult = params.get("google");
@@ -88,7 +90,9 @@ export default function Login() {
     // the separate, already-native Settings → Security → Quick Sign-In
     // feature). This screen's biometric-first flow is the browser/PWA
     // WebAuthn passkey path; the native shell must never attempt it.
-    [showBiometric, setShowBiometric] = useState(() => !isNativeShell() && getBiometricHint() !== null),
+    [showBiometric, setShowBiometric] = useState(
+      () => !isNativeShell() && !additionalAuth && !mfaExpired && getBiometricHint() !== null,
+    ),
     [biometricLabelText, setBiometricLabelText] = useState("biometrics"),
     [inviteContext, setInviteContext] = useState<{
       group_name: string;
@@ -143,6 +147,19 @@ export default function Login() {
     [signupState, setSignupState] = useState<SignupStateValue>(undefined);
 
   const hint = getBiometricHint();
+
+  useEffect(() => {
+    if (!additionalAuth) return;
+    if (isNativeShell()) {
+      router.replace("/login?mfa_error=expired");
+      return;
+    }
+    if (additionalTransaction) {
+      router.replace(`/mfa?transaction=${encodeURIComponent(additionalTransaction)}`);
+    } else {
+      router.replace("/login?mfa_error=expired");
+    }
+  }, [additionalAuth, additionalTransaction, router]);
 
   // Reads the hint itself (rather than closing over the `hint` above) so
   // this effect has no dependency on a value that gets a fresh object
@@ -621,6 +638,14 @@ export default function Login() {
     } finally {
       setBusy(false);
     }
+  }
+
+  if (additionalAuth) {
+    return (
+      <AuthCard title="Continue signing in" intro="Taking you to the required verification step…">
+        <p className="muted">Please wait while we securely continue your sign-in.</p>
+      </AuthCard>
+    );
   }
 
   if (showBiometric && hint) {
