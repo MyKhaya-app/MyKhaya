@@ -1,4 +1,4 @@
-# Apple Sign-In Web Configuration
+# Apple Sign-In Configuration
 
 This runbook enables the browser Apple flow for one environment. Configure DEV
 and PROD as separate Apple registrations and separate MyKhaya deployments; do
@@ -30,15 +30,81 @@ Set these only in the environment's secret/configuration store:
 ```text
 MYKHAYA_APPLE_SIGN_IN_ENABLED=true
 MYKHAYA_APPLE_SERVICE_ID=<environment Services ID>
+MYKHAYA_APPLE_NATIVE_CLIENT_ID=<environment iOS App ID / client ID>
 MYKHAYA_APPLE_TEAM_ID=<Team ID>
 MYKHAYA_APPLE_KEY_ID=<Key ID>
-MYKHAYA_APPLE_PRIVATE_KEY=<secret .p8 contents>
 MYKHAYA_APPLE_REDIRECT_URI=https://<public-host>/api/v1/auth/apple/callback
+MYKHAYA_NATIVE_APPLE_RETURN_URI=<Android native return URI>
 ```
 
 `MYKHAYA_PUBLIC_WEB_URL` must match the public origin used by the callback and
-the browser redirects. The client ID fallback is retained for deployments that
-already use `MYKHAYA_APPLE_CLIENT_ID`, but a web Services ID is preferred.
+the browser redirects. `MYKHAYA_APPLE_SERVICE_ID` is the preferred web client
+identifier. `MYKHAYA_APPLE_CLIENT_ID` remains a backward-compatible fallback
+when the Services ID is unset; do not configure both as competing web clients.
+`MYKHAYA_APPLE_NATIVE_CLIENT_ID` is separate and is required for native iOS
+Apple assertions.
+
+The signing key must come from exactly one of these sources:
+
+```text
+# Backward-compatible environment source; actual multiline PEM contents.
+MYKHAYA_APPLE_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----
+...
+-----END PRIVATE KEY-----"
+
+# Preferred file source; the API reads the PEM contents, never returns the path
+# contents, and never serializes the key.
+MYKHAYA_APPLE_PRIVATE_KEY_FILE=/run/secrets/mykhaya-apple/apple-sign-in.p8
+```
+
+The file must be an unencrypted PKCS#8 PEM containing an EC P-256 private key.
+Literal `\n` characters are not converted for this Apple setting; use real PEM
+line breaks. The API rejects missing, unreadable, malformed, invalid or
+conflicting key sources before Apple signing can be enabled. Apple remains
+disabled by default when `MYKHAYA_APPLE_SIGN_IN_ENABLED` is unset or false.
+
+## DEV file placement and Compose mount
+
+The Compose API tier mounts the optional host directory
+`${MYKHAYA_APPLE_KEY_HOST_DIR:-./secrets/apple}` read-only at
+`/run/secrets/mykhaya-apple`. The directory may be absent when Apple is
+disabled; Compose creates an empty directory for the optional mount and the API
+does not read a key unless `MYKHAYA_APPLE_PRIVATE_KEY_FILE` is set.
+
+For DEV, create the file on the deployment host, outside the repository when
+possible:
+
+```text
+/etc/mykhaya/dev/apple/apple-sign-in.p8
+```
+
+Set the host-side Compose variable and API setting:
+
+```dotenv
+MYKHAYA_APPLE_KEY_HOST_DIR=/etc/mykhaya/dev/apple
+MYKHAYA_APPLE_PRIVATE_KEY_FILE=/run/secrets/mykhaya-apple/apple-sign-in.p8
+```
+
+The host directory must be owned by the deployment account/root as appropriate,
+with directory mode `0700` and key-file mode `0600`. The container must be able
+to read the file using the API process UID; do not make the key world-readable
+and do not place it in the image, repository, backup set, logs or web bundle.
+The container mount is read-only, and the application container filesystem is
+also read-only.
+
+For the confirmed DEV registration, the values are:
+
+```dotenv
+MYKHAYA_APPLE_SERVICE_ID=app.mykhaya.auth.dev
+MYKHAYA_APPLE_NATIVE_CLIENT_ID=app.mykhaya.mobile
+MYKHAYA_APPLE_TEAM_ID=M86392YDLQ
+MYKHAYA_APPLE_KEY_ID=JS8D8TTA92
+MYKHAYA_APPLE_REDIRECT_URI=https://dev.mykhaya.app/api/v1/auth/apple/callback
+MYKHAYA_NATIVE_APPLE_RETURN_URI=app.mykhaya.mobile://auth/callback
+```
+
+`MYKHAYA_APPLE_CLIENT_ID` may remain unset for this configuration because the
+Services ID is present.
 
 ## Native callback separation
 
@@ -68,10 +134,30 @@ therefore fails safely without issuing a session.
 - A disabled or incomplete provider reports Apple as unavailable and leaves
   password sign-in usable.
 - A callback mismatch means the exact callback URL is not registered for the
-  same Services ID; correct Apple Developer configuration and restart the
-  deployment.
+  same Services ID; correct Apple Developer configuration and restart the API
+  deployment. A configuration change requires an API restart/redeploy, but no
+  web rebuild or native app rebuild when native identifiers and URL schemes are
+  unchanged.
 - A cancelled, expired or failed flow is single-use and can be retried from
   the login or Security page.
 - If Apple must be disabled, set `MYKHAYA_APPLE_SIGN_IN_ENABLED=false` and
   restart the affected environment. Existing linked identities and account
   data are preserved; disabling the provider does not unlink or delete them.
+
+## Rotation and rollback
+
+1. Place the replacement DEV `.p8` beside the current file with mode `0600`.
+2. Validate it with the API configuration check before changing the active
+   filename. Never print the key or copy it into `.env`.
+3. Replace the file atomically on the host, preserving ownership and mode.
+4. Restart the API and check `/api/v1/auth/providers`; a complete but disabled
+   configuration reports `state: "disabled"`, while enabled configuration
+   reports `state: "enabled"`.
+5. Exercise a disposable DEV Apple flow and monitor only safe status/error
+   diagnostics.
+
+To roll back, restore the previous file atomically and restart the API. If the
+provider must be stopped immediately, set
+`MYKHAYA_APPLE_SIGN_IN_ENABLED=false` and restart; existing identities remain
+untouched. Remove retired key files only after the replacement has been
+verified and any operational retention requirement is satisfied.
