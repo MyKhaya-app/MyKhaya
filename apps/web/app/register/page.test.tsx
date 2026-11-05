@@ -1,7 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import Register, { socialRegistrationStartUrl } from "./page";
+import Register from "./page";
+import { socialRegistrationStartUrl } from "./registration-urls";
 
 const { push, post, publicLegalDocuments, publicSignupState, authProviders, nativeRegister, nativeShellState, searchParams } = vi.hoisted(() => ({
   push: vi.fn(),
