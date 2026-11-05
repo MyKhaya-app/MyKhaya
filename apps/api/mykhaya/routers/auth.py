@@ -353,6 +353,7 @@ async def browser_mfa_options(
     return MfaOptionsResponse(
         methods=methods,
         destination=_masked_email(user.email),
+        primary_auth_method=_state.method,
         onboarding=_state.onboarding,
         policy="required" if policy.required else "optional",
         policy_source=policy.source,
@@ -3299,6 +3300,7 @@ async def mobile_mfa_options(
     return MfaOptionsResponse(
         methods=methods,
         destination=_masked_email(user.email),
+        primary_auth_method=state.provider.value,
         policy="required" if policy.required else "optional",
         policy_source=policy.source,
         enrolment_required=not bool(active & allowed),
