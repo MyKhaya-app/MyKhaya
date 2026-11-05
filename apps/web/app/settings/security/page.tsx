@@ -1,5 +1,5 @@
 "use client";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import type { FormEvent, ReactNode } from "react";
 import { useSearchParams } from "next/navigation";
 import { api, ApiError } from "@mykhaya/api-client";
@@ -20,10 +20,6 @@ import {
 } from "@/components/passkey-client";
 import { isNativeShell } from "@/components/native-runtime";
 import { QuickSignIn } from "@/components/quick-sign-in";
-import { nativeExternalAssertion, nativeExternalBrowserStart, nativeExternalExchange, nativeExternalRedeem, nativeExternalStart } from "@/components/native-auth";
-import { nativePlatform } from "@/components/native-runtime";
-import { App } from "@capacitor/app";
-import { Browser } from "@capacitor/browser";
 
 type Device = {
   id: string;
@@ -103,7 +99,6 @@ export default function Security() {
   const [passwordAvailable, setPasswordAvailable] = useState(false);
   const [accountEmail, setAccountEmail] = useState<string | null>(null);
   const [identityBusy, setIdentityBusy] = useState(false);
-  const nativeLinkTransaction = useRef<string | null>(null);
   const appleLinkTransaction = params.get("apple") === "link_required" ? params.get("transaction") : null;
 
   const native = isNativeShell();
@@ -111,11 +106,13 @@ export default function Security() {
   useEffect(() => {
     api.devices().then(setDevices).catch(() => setError("Could not load your signed-in devices."));
     api.passkeys().then(setPasskeys).catch(() => setError("Could not load your biometric sign-in status."));
-    api.me().then((user) => setAccountEmail(user.email)).catch(() => {});
-    api.externalIdentities().then((result) => {
-      setIdentities(result.identities);
-      setPasswordAvailable(result.password_available);
-    }).catch(() => setError("Could not load your sign-in methods."));
+    if (!native) {
+      api.me().then((user) => setAccountEmail(user.email)).catch(() => {});
+      api.externalIdentities().then((result) => {
+        setIdentities(result.identities);
+        setPasswordAvailable(result.password_available);
+      }).catch(() => setError("Could not load your sign-in methods."));
+    }
     // Browser WebAuthn feature-detection only — the native shell renders
     // QuickSignIn (native Face ID/Touch ID, no WebAuthn involved) instead
     // of this passkey card below, and must never invoke
@@ -126,32 +123,6 @@ export default function Security() {
     api.mfaStatus().then(setMfaStatus).catch(() => setError("Could not load your browser MFA status."));
     biometricSignInAvailable().then(setBiometricAvailable);
     setLabelText(biometricLabel());
-  }, [native]);
-
-  useEffect(() => {
-    if (!native) return;
-    let active = true;
-    const listener = App.addListener("appUrlOpen", ({ url }) => {
-      const expectedScheme = nativePlatform() === "ios"
-        ? (window.location.hostname === "mykhaya.app" ? "mykhaya-prod" : "mykhaya")
-        : (window.location.hostname === "mykhaya.app" ? "app.mykhaya.mobile.prod" : "app.mykhaya.mobile");
-      let parsed: URL;
-      try { parsed = new URL(url); } catch { return; }
-      if (parsed.protocol !== `${expectedScheme}:` || parsed.hostname !== "auth" || parsed.pathname !== "/callback") return;
-      const transactionId = parsed.searchParams.get("transaction");
-      if (!transactionId || transactionId !== nativeLinkTransaction.current) return;
-      void nativeExternalRedeem(transactionId)
-        .then(async (result) => {
-          if (!active) return;
-          if (!("message" in result)) throw new Error("The provider link did not complete.");
-          setMessage(result.message);
-          const refreshed = await api.externalIdentities();
-          if (active) setIdentities(refreshed.identities);
-        })
-        .catch((cause) => { if (active) setError(cause instanceof ApiError ? cause.message : "Could not connect the provider."); })
-        .finally(() => { if (active) { nativeLinkTransaction.current = null; setIdentityBusy(false); } });
-    });
-    return () => { active = false; void listener.then((handle) => handle.remove()); };
   }, [native]);
 
   useEffect(() => {
@@ -248,7 +219,6 @@ export default function Security() {
   }
 
   async function connectApple() {
-    if (native) return linkNativeProvider("apple");
     setIdentityBusy(true);
     setError("");
     try {
@@ -276,7 +246,6 @@ export default function Security() {
   }
 
   async function connectGoogle() {
-    if (native) return linkNativeProvider("google");
     setIdentityBusy(true);
     setError("");
     try {
@@ -284,32 +253,6 @@ export default function Security() {
       window.location.assign(result.authorization_url);
     } catch (cause) {
       setError(cause instanceof ApiError ? cause.message : "Could not start Google sign-in.");
-      setIdentityBusy(false);
-    }
-  }
-
-  async function linkNativeProvider(provider: "apple" | "google") {
-    setIdentityBusy(true);
-    setError("");
-    try {
-      const platform = nativePlatform();
-      const useBrowser = (provider === "google" && platform === "ios") || (provider === "apple" && platform === "android");
-      if (useBrowser) {
-        const result = await nativeExternalBrowserStart(provider, "link");
-        nativeLinkTransaction.current = result.transaction_id;
-        await Browser.open({ url: result.authorization_url });
-        return;
-      }
-      const started = await nativeExternalStart(provider, "link");
-      const assertion = await nativeExternalAssertion(provider, started.nonce, started.client_id);
-      const result = await nativeExternalExchange(started.transaction_id, assertion.identity_token);
-      if (!("message" in result)) throw new Error("The provider link did not complete.");
-      setMessage(result.message);
-      const refreshed = await api.externalIdentities();
-      setIdentities(refreshed.identities);
-      setIdentityBusy(false);
-    } catch (cause) {
-      setError(cause instanceof ApiError ? cause.message : "Could not connect the provider.");
       setIdentityBusy(false);
     }
   }
@@ -454,7 +397,7 @@ export default function Security() {
 
   return (
     <SettingsPage title="Security">
-      <section className="card details" aria-labelledby="sign-in-methods-heading">
+      {!native && <section className="card details" aria-labelledby="sign-in-methods-heading">
         <h2 id="sign-in-methods-heading">Sign-in methods</h2>
         <p className="muted">Choose the secure ways you can access your MyKhaya account.</p>
         <div className="security-signin-method">
@@ -485,7 +428,8 @@ export default function Security() {
                 <StatusBadge tone={identity ? "success" : "neutral"}>
                   {identity ? "Connected" : "Not connected"}
                 </StatusBadge>
-                {identity ? (
+                {!native && (
+                identity ? (
                   <button className="secondary" disabled={identityBusy} onClick={() => void (provider === "apple" ? disconnectApple() : disconnectGoogle())}>
                     {identityBusy ? "Disconnecting…" : "Disconnect"}
                   </button>
@@ -493,6 +437,7 @@ export default function Security() {
                   <button className="secondary" disabled={identityBusy} onClick={() => void (provider === "apple" ? connectApple() : connectGoogle())}>
                     {identityBusy ? "Connecting…" : "Connect"}
                   </button>
+                )
                 )}
               </div>
             </div>
@@ -513,7 +458,7 @@ export default function Security() {
         {params.get("google") === "error" && (
           <p className="notice error" role="alert">Google sign-in could not be connected. Please try again.</p>
         )}
-      </section>
+      </section>}
       {!native && mfaStatus && (
         <section className="card details" aria-labelledby="browser-mfa-heading">
           <h2 id="browser-mfa-heading">Multi-factor authentication</h2>
