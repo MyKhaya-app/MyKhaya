@@ -31,6 +31,7 @@ vi.mock("@mykhaya/api-client", async (importOriginal) => {
     api: {
       ...actual.api,
       me: vi.fn(),
+      externalIdentities: vi.fn(),
       members: vi.fn(),
       uploadAvatar: vi.fn(),
       removeAvatar: vi.fn(),
@@ -90,6 +91,10 @@ beforeEach(() => {
   vi.clearAllMocks();
   nativeShell = false;
   (api.me as ReturnType<typeof vi.fn>).mockResolvedValue({ ...BASE_USER });
+  (api.externalIdentities as ReturnType<typeof vi.fn>).mockResolvedValue({
+    password_available: true,
+    identities: [],
+  });
   (api.members as ReturnType<typeof vi.fn>).mockResolvedValue([
     { user_id: "u1", relationship: "home_admin", colour: "sage" },
   ]);
@@ -332,6 +337,29 @@ describe("Profile — avatar upload", () => {
 // controls and Save/Cancel are only ever present while explicitly editing
 // the birthday, never shown by default.
 describe("Profile — Account details summary", () => {
+  it("shows authenticated sign-in method status and links to Security", async () => {
+    (api.externalIdentities as ReturnType<typeof vi.fn>).mockResolvedValue({
+      password_available: true,
+      identities: [{
+        provider: "apple",
+        provider_email: "relay@privaterelay.appleid.com",
+        provider_email_verified: true,
+        linked_at: "2026-01-01T00:00:00Z",
+        last_used_at: null,
+      }],
+    });
+    render(<Profile />);
+
+    expect(await screen.findByRole("heading", { name: "Sign-in methods" })).toBeInTheDocument();
+    expect(screen.getByText("Apple ID")).toBeInTheDocument();
+    expect(screen.getByText("Connected")).toBeInTheDocument();
+    expect(screen.getByText("Not connected")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /manage sign-in methods/i })).toHaveAttribute(
+      "href",
+      "/settings/security#sign-in-methods-heading",
+    );
+  });
+
   it("shows Name, Email with verified status, Home role and Birthday as plain read-only rows, with no Save/Cancel visible", async () => {
     (api.me as ReturnType<typeof vi.fn>).mockResolvedValue({
       ...BASE_USER,

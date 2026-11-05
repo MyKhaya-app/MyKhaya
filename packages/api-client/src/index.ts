@@ -588,7 +588,7 @@ export class MyKhayaClient {
     });
   appleRecoveryRegister = (
     transactionId: string,
-    body: { legal_acceptances: SignupLegalAcceptanceItem[]; platform: LegalPlatform },
+    body: { legal_acceptances: SignupLegalAcceptanceItem[]; platform: LegalPlatform; beta?: boolean; beta_invitation_token?: string | null },
   ) =>
     this.request<BrowserAuthResult>("/auth/apple/recovery/register", {
       method: "POST",
@@ -607,7 +607,7 @@ export class MyKhayaClient {
     });
   googleRecoveryRegister = (
     transactionId: string,
-    body: { legal_acceptances: SignupLegalAcceptanceItem[]; platform: LegalPlatform },
+    body: { legal_acceptances: SignupLegalAcceptanceItem[]; platform: LegalPlatform; beta?: boolean; beta_invitation_token?: string | null },
   ) =>
     this.request<BrowserAuthResult>("/auth/google/recovery/register", {
       method: "POST",

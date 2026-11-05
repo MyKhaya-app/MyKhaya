@@ -96,6 +96,8 @@ class AppleRecoveryRequest(StrictModel):
     transaction_id: str = Field(min_length=20, max_length=256)
     legal_acceptances: list[SignupLegalAcceptanceItem] = Field(default_factory=list)
     platform: LegalPlatform = LegalPlatform.web
+    beta: bool = False
+    beta_invitation_token: str | None = Field(default=None, min_length=32, max_length=500)
 
 
 class AppleRecoveryOptionsResponse(BaseModel):
@@ -108,6 +110,8 @@ class GoogleRecoveryRequest(StrictModel):
     transaction_id: str = Field(min_length=20, max_length=256)
     legal_acceptances: list[SignupLegalAcceptanceItem] = Field(default_factory=list)
     platform: LegalPlatform = LegalPlatform.web
+    beta: bool = False
+    beta_invitation_token: str | None = Field(default=None, min_length=32, max_length=500)
 
 
 class GoogleRecoveryOptionsResponse(BaseModel):
@@ -309,6 +313,7 @@ class NativeExternalStartResponse(BaseModel):
 
 class NativeExternalBrowserStartRequest(StrictModel):
     provider: Literal["apple", "google"]
+    intent: Literal["login", "link"] = "login"
     platform: Literal["ios", "android"]
     return_uri: str = Field(min_length=8, max_length=300)
     redemption_verifier: str = Field(min_length=32, max_length=256)

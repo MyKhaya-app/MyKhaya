@@ -13,15 +13,19 @@ from test_mobile_auth import ORIGIN, PASSWORD, csrf_header, register_and_verify
 
 from mykhaya.apple_auth import AppleFlowState, ApplePendingIdentity
 from mykhaya.db import SessionFactory
+from mykhaya.google_auth import GooglePendingIdentity
 from mykhaya.main import app
 from mykhaya.models import (
+    BetaPendingRegistration,
     ExternalIdentity,
     ExternalIdentityProvider,
     Group,
     HomeSubscription,
     Membership,
+    SignupMode,
     User,
 )
+from mykhaya.platform_runtime import SignupPolicy
 from mykhaya.routers import auth as auth_router
 
 
@@ -368,3 +372,220 @@ async def test_concurrent_apple_claim_has_one_owner_and_preserves_tenancy(
             )
     finally:
         await second_client.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "provider", [ExternalIdentityProvider.apple, ExternalIdentityProvider.google]
+)
+async def test_social_beta_rejects_disabled_beta_path(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch, provider: ExternalIdentityProvider
+) -> None:
+    transaction = f"social-beta-disabled-{provider.value}-{uuid4().hex}"
+    email = f"social-beta-{provider.value}-{uuid4().hex}@example.com"
+    if provider is ExternalIdentityProvider.apple:
+        pending = ApplePendingIdentity(
+            transaction_id=transaction,
+            subject=f"subject-{uuid4().hex}",
+            provider_email=email,
+            email_verified=True,
+            display_name="Apple Beta User",
+            can_register=True,
+            return_path="/register?beta=1",
+        )
+        async def load_pending(*_args):
+            return pending
+
+        monkeypatch.setattr(auth_router, "load_pending_identity", load_pending)
+        endpoint = "/api/v1/auth/apple/recovery/register"
+    else:
+        pending = GooglePendingIdentity(
+            transaction_id=transaction,
+            subject=f"subject-{uuid4().hex}",
+            provider_email=email,
+            email_verified=True,
+            display_name="Google Beta User",
+            can_register=True,
+            return_path="/register?beta=1",
+        )
+        async def load_pending(*_args):
+            return pending
+
+        monkeypatch.setattr(auth_router, "load_google_pending_identity", load_pending)
+        endpoint = "/api/v1/auth/google/recovery/register"
+
+    async def policy(*_args, **_kwargs):
+        return SignupPolicy(
+            mode=SignupMode.normal,
+            open=True,
+            normal_path=True,
+            beta_path=False,
+            invitation_required=False,
+            allowed_domains=(),
+        )
+
+    monkeypatch.setattr(auth_router, "evaluate_signup_policy", policy)
+    response = await client.post(
+        endpoint,
+        json={
+            "transaction_id": transaction,
+            "beta": True,
+            "beta_invitation_token": "i" * 40,
+            "legal_acceptances": [],
+        },
+    )
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "provider", [ExternalIdentityProvider.apple, ExternalIdentityProvider.google]
+)
+async def test_social_beta_rejects_invalid_invitation(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch, provider: ExternalIdentityProvider
+) -> None:
+    transaction = f"social-beta-invite-{provider.value}-{uuid4().hex}"
+    email = f"social-beta-invite-{provider.value}-{uuid4().hex}@example.com"
+    if provider is ExternalIdentityProvider.apple:
+        pending = ApplePendingIdentity(
+            transaction_id=transaction,
+            subject=f"subject-{uuid4().hex}",
+            provider_email=email,
+            email_verified=True,
+            display_name="Apple Beta User",
+            can_register=True,
+            return_path="/register?beta=1",
+        )
+        async def load_pending(*_args):
+            return pending
+
+        monkeypatch.setattr(auth_router, "load_pending_identity", load_pending)
+        endpoint = "/api/v1/auth/apple/recovery/register"
+    else:
+        pending = GooglePendingIdentity(
+            transaction_id=transaction,
+            subject=f"subject-{uuid4().hex}",
+            provider_email=email,
+            email_verified=True,
+            display_name="Google Beta User",
+            can_register=True,
+            return_path="/register?beta=1",
+        )
+        async def load_pending(*_args):
+            return pending
+
+        monkeypatch.setattr(auth_router, "load_google_pending_identity", load_pending)
+        endpoint = "/api/v1/auth/google/recovery/register"
+
+    async def policy(*_args, **_kwargs):
+        return SignupPolicy(
+            mode=SignupMode.mixed,
+            open=True,
+            normal_path=True,
+            beta_path=True,
+            invitation_required=True,
+            allowed_domains=(),
+        )
+
+    async def invalid_invitation(*_args, **_kwargs):
+        return False
+
+    monkeypatch.setattr(auth_router, "evaluate_signup_policy", policy)
+    monkeypatch.setattr(auth_router, "beta_invitation_valid", invalid_invitation)
+    response = await client.post(
+        endpoint,
+        json={
+            "transaction_id": transaction,
+            "beta": True,
+            "beta_invitation_token": "i" * 40,
+            "legal_acceptances": [],
+        },
+    )
+    assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "provider", [ExternalIdentityProvider.apple, ExternalIdentityProvider.google]
+)
+async def test_social_beta_accepts_valid_invited_registration(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch, provider: ExternalIdentityProvider
+) -> None:
+    transaction = f"social-beta-valid-{provider.value}-{uuid4().hex}"
+    email = f"social-beta-valid-{provider.value}-{uuid4().hex}@example.com"
+    subject = f"subject-{uuid4().hex}"
+    if provider is ExternalIdentityProvider.apple:
+        pending = ApplePendingIdentity(
+            transaction_id=transaction,
+            subject=subject,
+            provider_email=email,
+            email_verified=True,
+            display_name="Apple Beta User",
+            can_register=True,
+            return_path="/register?beta=1",
+        )
+        async def load_pending(*_args):
+            return pending
+
+        async def consume_pending(*_args):
+            return pending
+
+        monkeypatch.setattr(auth_router, "load_pending_identity", load_pending)
+        monkeypatch.setattr(auth_router, "consume_pending_identity", consume_pending)
+        endpoint = "/api/v1/auth/apple/recovery/register"
+    else:
+        pending = GooglePendingIdentity(
+            transaction_id=transaction,
+            subject=subject,
+            provider_email=email,
+            email_verified=True,
+            display_name="Google Beta User",
+            can_register=True,
+            return_path="/register?beta=1",
+        )
+        async def load_pending(*_args):
+            return pending
+
+        async def consume_pending(*_args):
+            return pending
+
+        monkeypatch.setattr(auth_router, "load_google_pending_identity", load_pending)
+        monkeypatch.setattr(auth_router, "consume_google_pending_identity", consume_pending)
+        endpoint = "/api/v1/auth/google/recovery/register"
+
+    async def policy(*_args, **_kwargs):
+        return SignupPolicy(
+            mode=SignupMode.mixed,
+            open=True,
+            normal_path=True,
+            beta_path=True,
+            invitation_required=True,
+            allowed_domains=(),
+        )
+
+    async def valid_invitation(*_args, **_kwargs):
+        return True
+
+    monkeypatch.setattr(auth_router, "evaluate_signup_policy", policy)
+    monkeypatch.setattr(auth_router, "beta_invitation_valid", valid_invitation)
+    response = await client.post(
+        endpoint,
+        json={
+            "transaction_id": transaction,
+            "beta": True,
+            "beta_invitation_token": "i" * 40,
+            "legal_acceptances": [],
+        },
+    )
+    assert response.status_code == 200, response.text
+    async with SessionFactory() as db:
+        user = await db.scalar(select(User).where(User.email == email))
+        pending_intent = await db.scalar(
+            select(BetaPendingRegistration).where(BetaPendingRegistration.user_id == user.id)
+        ) if user is not None else None
+        identity = await db.scalar(
+            select(ExternalIdentity).where(ExternalIdentity.provider_subject == subject)
+        )
+        assert user is not None
+        assert pending_intent is not None
+        assert identity is not None and identity.user_id == user.id

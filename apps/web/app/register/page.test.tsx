@@ -3,11 +3,12 @@ import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import Register from "./page";
 
-const { push, post, publicLegalDocuments, publicSignupState, nativeRegister, nativeShellState, searchParams } = vi.hoisted(() => ({
+const { push, post, publicLegalDocuments, publicSignupState, authProviders, nativeRegister, nativeShellState, searchParams } = vi.hoisted(() => ({
   push: vi.fn(),
   post: vi.fn(),
   publicLegalDocuments: vi.fn(),
   publicSignupState: vi.fn(),
+  authProviders: vi.fn(),
   nativeRegister: vi.fn(),
   nativeShellState: { value: false },
   searchParams: { value: "" },
@@ -36,6 +37,7 @@ vi.mock("@mykhaya/api-client", async (importOriginal) => {
       post,
       publicLegalDocuments,
       publicSignupState,
+      authProviders,
     },
   };
 });
@@ -56,6 +58,7 @@ beforeEach(() => {
     waitlist_available: false,
     joinable_count: null,
   });
+  authProviders.mockResolvedValue({ providers: [] });
 });
 
 const termsDocument = {

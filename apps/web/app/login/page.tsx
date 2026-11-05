@@ -58,6 +58,7 @@ export default function Login() {
   const invitation = params.get("invitation");
   const beta = params.get("beta") === "1";
   const betaInvitation = params.get("beta_invitation");
+  const social = params.get("social");
   const calendarShare = params.get("calendar_share");
   const additionalAuth = params.get("auth") === "additional";
   const additionalTransaction = additionalAuth ? params.get("transaction") : null;
@@ -147,6 +148,11 @@ export default function Login() {
     [signupState, setSignupState] = useState<SignupStateValue>(undefined);
 
   const hint = getBiometricHint();
+
+  useEffect(() => {
+    if (!isNativeShell() || (social !== "apple" && social !== "google") || appleResult || googleResult) return;
+    void startNativeProvider(social);
+  }, [social, appleResult, googleResult]);
 
   useEffect(() => {
     if (!additionalAuth) return;
@@ -293,6 +299,7 @@ export default function Login() {
           const result = await nativeExternalRedeem(transaction);
           if (disposed) return;
           if ("id" in result) await afterSignedIn(result);
+          else if ("message" in result) throw new Error(result.message);
           else if (result.authentication_state === "account_choice") setNativeRecovery(result);
           else {
             setNativeMfaTransaction(result.transaction_id);
@@ -599,6 +606,7 @@ export default function Login() {
           document_version_id: document.current_version_id!,
         })),
         platform: "web",
+        ...(beta ? { beta: true, beta_invitation_token: betaInvitation } : {}),
       });
       if ("authentication_state" in result) {
         router.push(`/mfa?transaction=${encodeURIComponent(result.transaction_id)}`);
@@ -627,6 +635,7 @@ export default function Login() {
       const result = await api.googleRecoveryRegister(googleTransaction, {
         legal_acceptances: requiredLegal.map((document) => ({ document_key: document.key, document_version_id: document.current_version_id! })),
         platform: "web",
+        ...(beta ? { beta: true, beta_invitation_token: betaInvitation } : {}),
       });
       if ("authentication_state" in result) {
         router.push(`/mfa?transaction=${encodeURIComponent(result.transaction_id)}`);

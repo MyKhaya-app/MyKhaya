@@ -83,6 +83,7 @@ export function isPublicNativeEndpoint(path: string, method: string = "GET"): bo
  * URL, and this class performs no logging of its own.
  */
 export class NativeMyKhayaClient {
+  private readonly linkTransactions = new Set<string>();
   constructor(
     private readonly baseUrl: string,
     private readonly store: NativeSessionStore,
@@ -304,27 +305,44 @@ export class NativeMyKhayaClient {
   ): Promise<{ transaction_id: string; nonce: string; provider: "apple" | "google"; client_id: string | null }> {
     const body = { provider, platform, intent, redemption_verifier: redemptionVerifier };
     if (intent === "link") {
-      return this.request("/auth/mobile/external/start", {
+      return this.request<{ transaction_id: string; nonce: string; provider: "apple" | "google"; client_id: string | null }>("/auth/mobile/external/start", {
         method: "POST",
         body: JSON.stringify(body),
-      });
+      }).then((result) => { this.linkTransactions.add(result.transaction_id); return result; });
     }
     return this.postUnauthenticated("/auth/mobile/external/start", body);
   }
 
-  externalBrowserStart(provider: "apple" | "google", platform: "ios" | "android", returnUri: string, redemptionVerifier: string) {
+  externalBrowserStart(provider: "apple" | "google", platform: "ios" | "android", returnUri: string, redemptionVerifier: string, intent: "login" | "link" = "login") {
+    const body = { provider, platform, intent, return_uri: returnUri, redemption_verifier: redemptionVerifier };
+    if (intent === "link") {
+      return this.request<{ authorization_url: string; transaction_id: string }>(
+        "/auth/mobile/external/browser/start",
+        { method: "POST", body: JSON.stringify(body) },
+      ).then((result) => { this.linkTransactions.add(result.transaction_id); return result; });
+    }
     return this.postUnauthenticated<{ authorization_url: string; transaction_id: string }>(
       "/auth/mobile/external/browser/start",
-      { provider, platform, return_uri: returnUri, redemption_verifier: redemptionVerifier },
+      body,
     );
   }
 
   async externalRedeem(transactionId: string, redemptionVerifier: string) {
-    const result = await this.postUnauthenticated<
+    const body = { transaction_id: transactionId, redemption_verifier: redemptionVerifier };
+    const result = await (this.linkTransactions.has(transactionId)
+      ? this.request<
+          (User & { session_token?: string; device_token?: string })
+          | { authentication_state: "account_choice"; transaction_id: string; provider: "apple" | "google"; provider_email: string | null; display_name: string; can_register: boolean }
+          | { authentication_state: "additional_auth_required"; transaction_id: string; provider: "apple" | "google" }
+          | { message: string }
+        >("/auth/mobile/external/redeem", { method: "POST", body: JSON.stringify(body) })
+      : this.postUnauthenticated<
       (User & { session_token?: string; device_token?: string })
       | { authentication_state: "account_choice"; transaction_id: string; provider: "apple" | "google"; provider_email: string | null; display_name: string; can_register: boolean }
       | { authentication_state: "additional_auth_required"; transaction_id: string; provider: "apple" | "google" }
-    >("/auth/mobile/external/redeem", { transaction_id: transactionId, redemption_verifier: redemptionVerifier });
+      | { message: string }
+    >("/auth/mobile/external/redeem", body));
+    this.linkTransactions.delete(transactionId);
     if ("session_token" in result && result.session_token) {
       const { session_token, device_token, ...user } = result;
       await this.store.set({ token: session_token, deviceToken: device_token });
@@ -343,7 +361,24 @@ export class NativeMyKhayaClient {
     | { authentication_state: "additional_auth_required"; transaction_id: string; provider: "apple" | "google" }
     | { message: string }
   > {
-    const result = await this.postUnauthenticated<{
+    const body = {
+      transaction_id: transactionId,
+      identity_token: identityToken,
+      redemption_verifier: redemptionVerifier,
+    };
+    const result = await (this.linkTransactions.has(transactionId)
+      ? this.request<{
+          session_token?: string;
+          device_token?: string;
+          authentication_state?: "account_choice";
+          transaction_id?: string;
+          provider?: "apple" | "google";
+          provider_email?: string | null;
+          display_name?: string;
+          can_register?: boolean;
+          message?: string;
+        }>("/auth/mobile/external/exchange", { method: "POST", body: JSON.stringify(body) })
+      : this.postUnauthenticated<{
       session_token?: string;
       device_token?: string;
       authentication_state?: "account_choice";
@@ -353,11 +388,8 @@ export class NativeMyKhayaClient {
       display_name?: string;
       can_register?: boolean;
       message?: string;
-    }>("/auth/mobile/external/exchange", {
-      transaction_id: transactionId,
-      identity_token: identityToken,
-      redemption_verifier: redemptionVerifier,
-    });
+    }>("/auth/mobile/external/exchange", body));
+    this.linkTransactions.delete(transactionId);
     if (result.session_token) {
       const { session_token, device_token, ...user } = result as User & { session_token: string; device_token?: string };
       await this.store.set({ token: session_token, deviceToken: device_token });

@@ -3,7 +3,7 @@ import { ChangeEvent, FormEvent, useCallback, useEffect, useRef, useState } from
 import type { Member, User } from "@mykhaya/shared-types";
 import type { ColourKey } from "@mykhaya/design-tokens";
 import { api, ApiError } from "@mykhaya/api-client";
-import { Bell, Camera, ChevronRight, Home, Shield, Trash2, UserRound } from "lucide-react";
+import { Apple, Bell, Camera, ChevronRight, Globe, Home, KeyRound, Mail, Shield, Trash2, UserRound } from "lucide-react";
 import Link from "next/link";
 import { Avatar } from "@/components/avatar";
 import { ColourSwatchPicker } from "@/components/colour-swatch-picker";
@@ -33,6 +33,13 @@ import {
 const DAYS_IN_MONTH = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
 
 type BirthdayErrors = { month?: string; day?: string; form?: string };
+type SignInIdentity = {
+  provider: "apple" | "google";
+  provider_email: string | null;
+  provider_email_verified: boolean;
+  linked_at: string;
+  last_used_at: string | null;
+};
 
 function birthdayFieldErrors(month: number | null, day: number | null, monthName: (month: number) => string): BirthdayErrors {
   if (month === null && day === null) return {};
@@ -73,6 +80,10 @@ function birthdayLabel(user: User | null) {
 export default function Profile() {
   const { activeHomeId, activeHome } = useActiveHome();
   const [user, setUser] = useState<User | null>(null);
+  const [signInMethods, setSignInMethods] = useState<{
+    password_available: boolean;
+    identities: SignInIdentity[];
+  } | null>(null);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
@@ -89,6 +100,7 @@ export default function Profile() {
 
   useEffect(() => {
     api.me().then(setUser);
+    api.externalIdentities().then(setSignInMethods).catch(() => setSignInMethods(null));
   }, []);
 
   useEffect(() => {
@@ -407,6 +419,29 @@ export default function Profile() {
               {colourError}
             </p>
           )}
+        </section>
+      )}
+
+      {user && signInMethods && (
+        <section className="card profile-signin-methods" aria-labelledby="profile-signin-methods-heading">
+          <div className="profile-section-heading">
+            <div>
+              <h2 id="profile-signin-methods-heading">Sign-in methods</h2>
+              <p className="muted">Manage how you sign in to MyKhaya.</p>
+            </div>
+            <KeyRound size={22} aria-hidden="true" />
+          </div>
+          <div className="profile-signin-summary" aria-label="Sign-in method status">
+            <div><Mail size={18} aria-hidden="true" /><span>Email and password</span><span className={`security-status-badge security-status-badge-${signInMethods.password_available ? "success" : "neutral"}`}>{signInMethods.password_available ? "Enabled" : "Not enabled"}</span></div>
+            {(["apple", "google"] as const).map((provider) => {
+              const identity = signInMethods.identities.find((item) => item.provider === provider);
+              const Icon = provider === "apple" ? Apple : Globe;
+              return <div key={provider}><Icon size={18} aria-hidden="true" /><span>{provider === "apple" ? "Apple ID" : "Google"}</span><span className={`security-status-badge security-status-badge-${identity ? "success" : "neutral"}`}>{identity ? "Connected" : "Not connected"}</span></div>;
+            })}
+          </div>
+          <Link className="button secondary profile-signin-manage" href="/settings/security#sign-in-methods-heading">
+            Manage sign-in methods <ChevronRight size={17} aria-hidden="true" />
+          </Link>
         </section>
       )}
 

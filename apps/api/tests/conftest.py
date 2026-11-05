@@ -14,6 +14,10 @@ os.environ.setdefault(
     "MYKHAYA_CORS_ORIGINS",
     '["http://localhost:8080", "http://admin.localhost:8080"]',
 )
+# Pytest must be independent of a developer's compose/.env file. In
+# particular, the hosted-style admin URL used by a local shell must not leak
+# into the isolated test settings and create a false CORS configuration error.
+os.environ["MYKHAYA_ADMIN_URL"] = "http://admin.localhost:8080"
 
 
 from collections.abc import AsyncIterator  # noqa: E402

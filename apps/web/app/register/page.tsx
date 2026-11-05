@@ -64,6 +64,15 @@ export default function Register() {
   const [signupState, setSignupState] = useState<PublicSignupState | null>(null),
     [signupStateLoaded, setSignupStateLoaded] = useState(false),
     [maintenance, setMaintenance] = useState(false);
+  const [socialProviders, setSocialProviders] = useState({ apple: false, google: false });
+  useEffect(() => {
+    api.authProviders().then((result) => {
+      setSocialProviders({
+        apple: result.providers.some((item) => item.provider === "apple" && item.enabled),
+        google: result.providers.some((item) => item.provider === "google" && item.enabled),
+      });
+    }).catch(() => setSocialProviders({ apple: false, google: false }));
+  }, []);
   useEffect(() => {
     // Display-only: the API enforces registration regardless. A failed lookup
     // never blocks the form — the server's own rejection is the authority.
@@ -73,6 +82,16 @@ export default function Register() {
       .catch((cause) => setMaintenance(isMaintenanceError(cause)))
       .finally(() => setSignupStateLoaded(true));
   }, []);
+  function startSocialRegistration(provider: "apple" | "google") {
+    const context = betaRequested
+      ? `/register?beta=1${betaInvitation ? `&beta_invitation=${encodeURIComponent(betaInvitation)}` : ""}`
+      : "/register";
+    if (isNativeShell()) {
+      router.push(`/login?social=${provider}${betaRequested ? `&beta=1${betaInvitation ? `&beta_invitation=${encodeURIComponent(betaInvitation)}` : ""}` : ""}`);
+      return;
+    }
+    window.location.assign(`/api/v1/${provider}/start?next_path=${encodeURIComponent(context)}`);
+  }
   useEffect(() => {
     api
       .publicLegalDocuments()
@@ -255,6 +274,23 @@ export default function Register() {
           You’re registering for the MyKhaya Founding Beta. After verifying your email, you’ll
           complete your Beta enrolment and receive complimentary Ultimate access.
         </p>
+      )}
+      {(socialProviders.apple || socialProviders.google) && !invitation && !calendarShare && (
+        <div className="auth-social-registration">
+          <div className="auth-social-actions">
+            {socialProviders.apple && (
+              <button type="button" className="apple-sign-in" onClick={() => startSocialRegistration("apple")} disabled={busy}>
+                {betaRequested ? "Join Beta with Apple" : "Continue with Apple"}
+              </button>
+            )}
+            {socialProviders.google && (
+              <button type="button" className="google-sign-in" onClick={() => startSocialRegistration("google")} disabled={busy}>
+                {betaRequested ? "Join Beta with Google" : "Continue with Google"}
+              </button>
+            )}
+          </div>
+          <div className="auth-divider" role="separator"><span>{betaRequested ? "or join Beta with email" : "or create your account with email"}</span></div>
+        </div>
       )}
       {!inviteContext && !shareContext && intent && intent.plan !== "free" && (
         <p className="notice success">
