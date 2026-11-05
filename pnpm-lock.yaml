@@ -38,6 +38,9 @@ importers:
       '@capacitor/app':
         specifier: 8.1.1
         version: 8.1.1(@capacitor/core@8.5.1)
+      '@capacitor/browser':
+        specifier: 8.0.4
+        version: 8.0.4(@capacitor/core@8.5.1)
       '@capacitor/core':
         specifier: 8.5.1
         version: 8.5.1
