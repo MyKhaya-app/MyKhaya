@@ -184,6 +184,47 @@ describe("Security — browser passkeys, not enrolled on this device", () => {
     expect(api.appleLinkStart).toHaveBeenCalled();
   });
 
+  it("shows one status badge per provider and keeps long addresses contained", async () => {
+    (api.me as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ...meResponse,
+      email: "a.very.long.account.address+family.notifications@example.mykhaya.test",
+    });
+    (api.externalIdentities as ReturnType<typeof vi.fn>).mockResolvedValue({
+      password_available: true,
+      identities: [{
+        provider: "google",
+        provider_email: "a.very.long.provider.address+family@example.com",
+        provider_email_verified: true,
+        linked_at: "2026-01-01T00:00:00Z",
+        last_used_at: "2026-01-02T00:00:00Z",
+      }],
+    });
+    render(<Security />);
+
+    expect(await screen.findByText("a.very.long.provider.address+family@example.com")).toBeInTheDocument();
+    expect(screen.getAllByText("Connected")).toHaveLength(2);
+    expect(screen.getAllByText("Not connected")).toHaveLength(1);
+    expect(screen.getByText(/Linked/)).toBeInTheDocument();
+  });
+
+  it("explains mandatory browser MFA and marks the preferred method", async () => {
+    (api.mfaStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
+      required: true,
+      allowed_methods: ["totp", "email"],
+      email_available: true,
+      email_destination: "a***@example.com",
+      totp_enabled: true,
+      can_disable_totp: false,
+      usable_methods: ["totp", "email"],
+      preferred_method: "email",
+    });
+    render(<Security />);
+
+    expect(await screen.findByText(/including when using Apple or Google/i)).toBeInTheDocument();
+    expect(screen.getByText("Preferred")).toBeInTheDocument();
+    expect(screen.getByText(/required by your sign-in policy/i)).toBeInTheDocument();
+  });
+
   it("completes an Apple link after the provider form-post returns without cookies", async () => {
     searchParamsState.value = new URLSearchParams("apple=link_required&transaction=apple-link-tx");
     (api.appleRecoveryLink as ReturnType<typeof vi.fn>).mockResolvedValue({ message: "linked" });

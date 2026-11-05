@@ -796,12 +796,14 @@ textarea {
 .security-signin-method {
   align-items: flex-start;
   border-top: 1px solid var(--platform-line);
-  display: flex;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
   gap: 1rem;
-  justify-content: space-between;
+  min-width: 0;
   padding: 0.85rem 0;
 }
-.security-signin-method > div {
+.security-signin-method > div,
+.security-row-copy {
   display: grid;
   gap: 0.2rem;
   min-width: 0;
@@ -810,10 +812,59 @@ textarea {
   color: var(--cc-neutral);
   font-size: 0.9rem;
 }
+.security-provider-icon {
+  align-items: center;
+  background: var(--platform-soft);
+  border-radius: 0.75rem;
+  color: var(--platform-green);
+  display: inline-flex;
+  height: 2.5rem;
+  justify-content: center;
+  width: 2.5rem;
+}
+.security-provider-icon-apple {
+  background: var(--colour-cream-light);
+  color: var(--colour-slate);
+}
+.security-provider-icon-google {
+  background: var(--colour-cream-light);
+  color: var(--colour-terracotta);
+}
+.security-row-actions {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  justify-content: flex-end;
+}
+.security-status-badge {
+  border-radius: 999px;
+  display: inline-flex;
+  font-size: 0.78rem !important;
+  font-weight: 700;
+  line-height: 1.2;
+  padding: 0.3rem 0.65rem;
+  white-space: nowrap;
+}
+.security-status-badge-success {
+  background: var(--platform-soft);
+  color: var(--platform-green) !important;
+}
+.security-status-badge-neutral {
+  background: var(--colour-cream-light);
+  color: var(--cc-neutral) !important;
+}
+.security-row-copy .security-mfa-detail {
+  overflow-wrap: anywhere;
+}
 @media (max-width: 600px) {
   .security-signin-method {
-    align-items: stretch;
-    flex-direction: column;
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .security-signin-method > .security-status-badge,
+  .security-signin-method > .security-row-actions {
+    grid-column: 2;
+    justify-self: start;
   }
 }
 .security-mfa-status div {
@@ -863,6 +914,36 @@ textarea {
   justify-content: space-between;
   padding: 0 0 0.85rem;
 }
+.security-passkey-disclosure {
+  border-top: 1px solid var(--platform-line);
+  margin-top: 0.35rem;
+  padding-top: 0.75rem;
+}
+.security-passkey-disclosure summary {
+  color: var(--platform-green);
+  cursor: pointer;
+  font-weight: 700;
+  min-height: 2.75rem;
+  padding: 0.65rem 0;
+}
+.security-passkey-row,
+.security-device-row {
+  align-items: center;
+  gap: 0.85rem;
+  min-width: 0;
+}
+.security-passkey-row {
+  border-top: 1px solid var(--platform-line);
+  padding: 0.75rem 0 0;
+}
+.security-device-row {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+}
+.security-device-icon {
+  color: var(--platform-green);
+  flex: 0 0 auto;
+}
 @media (max-width: 600px) {
   .security-mfa-status,
   .security-mfa-passkey-device {
@@ -870,6 +951,26 @@ textarea {
     flex-direction: column;
   }
   .security-mfa-method-actions {
+    justify-content: flex-start;
+  }
+  .security-row-actions {
+    justify-content: flex-start;
+  }
+  .security-device-row {
+    align-items: start;
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .security-device-row > button {
+    grid-column: 2;
+    justify-self: start;
+  }
+  .security-passkey-row {
+    align-items: start;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+  }
+  .security-passkey-row .settings-inline-actions {
+    grid-column: 2;
     justify-content: flex-start;
   }
 }
