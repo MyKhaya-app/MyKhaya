@@ -156,6 +156,7 @@ class NativeMfaVerifyRequest(MfaVerifyRequest):
 class MfaOptionsResponse(BaseModel):
     methods: list[Literal["totp", "email"]]
     destination: str | None = None
+    primary_auth_method: str | None = None
     onboarding: bool = False
     policy: Literal["optional", "required"] = "required"
     policy_source: str = "platform"

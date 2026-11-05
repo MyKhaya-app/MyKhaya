@@ -30,7 +30,12 @@ vi.mock("qrcode", () => ({
 const get = api.get as ReturnType<typeof vi.fn>;
 const post = api.post as ReturnType<typeof vi.fn>;
 
-const emailOptions = { methods: ["email"], destination: "a***@example.com", onboarding: false };
+const emailOptions = {
+  methods: ["email"],
+  destination: "a***@example.com",
+  primary_auth_method: "password",
+  onboarding: false,
+};
 const totpOptions = { methods: ["totp"], destination: null, onboarding: false };
 const emailStart = { method: "email", destination: "a***@example.com", enrolling: false };
 const totpStart = {
@@ -57,6 +62,20 @@ describe("browser MFA continuation", () => {
     expect(screen.getByRole("heading", { name: /verify it/i })).toBeInTheDocument();
   });
 
+  it.each([
+    ["apple", "You've successfully signed in with Apple."],
+    ["google", "You've successfully signed in with Google."],
+    ["password", "For your security, we need to verify your identity before continuing."],
+    ["passkey", "You've successfully signed in with your passkey."],
+    ["unknown", "For your security, we need to verify your identity before continuing."],
+  ])("uses provider-aware copy for %s MFA", async (primaryAuthMethod, message) => {
+    get.mockResolvedValue({ ...emailOptions, primary_auth_method: primaryAuthMethod });
+    render(<MfaPage />);
+
+    expect(await screen.findByText(new RegExp(message))).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /security check|verify it's you/i })).toBeInTheDocument();
+  });
+
   it("starts the only available method automatically", async () => {
     render(<MfaPage />);
 
@@ -65,7 +84,7 @@ describe("browser MFA continuation", () => {
       transaction_id: "valid-transaction",
       method: "email",
     });
-    expect(screen.getByRole("button", { name: /resend code in 30s/i })).toBeDisabled();
+    expect(screen.getByRole("button", { name: /resend verification code in 30s/i })).toBeDisabled();
   });
 
   it("returns directly to login when the transaction is missing", async () => {
@@ -90,7 +109,7 @@ describe("browser MFA continuation", () => {
     render(<MfaPage />);
 
     await screen.findByText(/verify it/i);
-    await screen.findByText(/sent a verification code/i);
+    await screen.findByText(/verification code has been requested/i);
     fireEvent.change(screen.getByLabelText("Verification code"), { target: { value: "123456" } });
     fireEvent.click(screen.getByRole("button", { name: "Verify" }));
 
@@ -111,7 +130,7 @@ describe("browser MFA continuation", () => {
       .mockRejectedValueOnce(new ApiError(401, "That verification code is invalid."));
     render(<MfaPage />);
 
-    await screen.findByText(/sent a verification code/i);
+    await screen.findByText(/verification code has been requested/i);
     fireEvent.change(screen.getByLabelText("Verification code"), { target: { value: "123456" } });
     fireEvent.click(screen.getByRole("button", { name: "Verify" }));
 

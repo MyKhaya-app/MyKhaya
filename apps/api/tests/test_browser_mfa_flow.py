@@ -183,6 +183,7 @@ async def test_email_mfa_handoff_has_no_session_before_success(
 
         options = await client.get(f"/api/v1/auth/mfa/options?transaction_id={transaction}")
         assert options.status_code == 200
+        assert options.json()["primary_auth_method"] == "password"
         start = await client.post(
             "/api/v1/auth/mfa/start",
             json={"transaction_id": transaction, "method": "email"},
