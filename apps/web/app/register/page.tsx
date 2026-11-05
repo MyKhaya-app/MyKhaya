@@ -26,6 +26,10 @@ const LEGAL_PAGE_BY_KEY: Record<string, string> = {
   founding_beta_terms: "/legal/founding-beta-terms",
 };
 
+export function socialRegistrationStartUrl(provider: "apple" | "google", context: string) {
+  return `/api/v1/auth/${provider}/start?next_path=${encodeURIComponent(context)}`;
+}
+
 export default function Register() {
   const router = useRouter(),
     params = useSearchParams();
@@ -90,7 +94,7 @@ export default function Register() {
       router.push(`/login?social=${provider}${betaRequested ? `&beta=1${betaInvitation ? `&beta_invitation=${encodeURIComponent(betaInvitation)}` : ""}` : ""}`);
       return;
     }
-    window.location.assign(`/api/v1/${provider}/start?next_path=${encodeURIComponent(context)}`);
+    window.location.assign(socialRegistrationStartUrl(provider, context));
   }
   useEffect(() => {
     api

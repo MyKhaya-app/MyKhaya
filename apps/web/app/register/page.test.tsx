@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import Register from "./page";
+import Register, { socialRegistrationStartUrl } from "./page";
 
 const { push, post, publicLegalDocuments, publicSignupState, authProviders, nativeRegister, nativeShellState, searchParams } = vi.hoisted(() => ({
   push: vi.fn(),
@@ -148,6 +148,41 @@ describe("registration transport", () => {
     })));
     expect(nativeRegister).not.toHaveBeenCalled();
     expect(push).toHaveBeenCalledWith("/verify-email");
+  });
+});
+
+describe("social registration OAuth start paths", () => {
+  beforeEach(() => {
+    authProviders.mockResolvedValue({
+      providers: [
+        { provider: "apple", enabled: true },
+        { provider: "google", enabled: true },
+      ],
+    });
+  });
+
+  it.each([
+    ["Apple", "apple"],
+    ["Google", "google"],
+  ])("uses the auth-prefixed %s OAuth route for standard registration", async (_label, provider) => {
+    expect(socialRegistrationStartUrl(provider as "apple" | "google", "/register")).toBe(
+      `/api/v1/auth/${provider}/start?next_path=%2Fregister`,
+    );
+  });
+
+  it.each([
+    ["Apple", "apple"],
+    ["Google", "google"],
+  ])("preserves Beta context on the %s OAuth route", async (_label, provider) => {
+    const token = "i".repeat(40);
+    expect(
+      socialRegistrationStartUrl(
+        provider as "apple" | "google",
+        `/register?beta=1&beta_invitation=${token}`,
+      ),
+    ).toBe(
+      `/api/v1/auth/${provider}/start?next_path=${encodeURIComponent(`/register?beta=1&beta_invitation=${token}`)}`,
+    );
   });
 });
 
