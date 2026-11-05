@@ -1,10 +1,11 @@
 "use client";
-import { useEffect, useState } from "react";
-import type { FormEvent } from "react";
+import { useEffect, useRef, useState } from "react";
+import type { FormEvent, ReactNode } from "react";
 import { useSearchParams } from "next/navigation";
 import { api, ApiError } from "@mykhaya/api-client";
 import QRCode from "qrcode";
 import type { Passkey } from "@mykhaya/shared-types";
+import { Apple, Globe, KeyRound, Laptop, Mail, Monitor, Smartphone } from "lucide-react";
 import { SettingsPage } from "@/components/settings-page";
 import {
   biometricLabel,
@@ -19,6 +20,10 @@ import {
 } from "@/components/passkey-client";
 import { isNativeShell } from "@/components/native-runtime";
 import { QuickSignIn } from "@/components/quick-sign-in";
+import { nativeExternalAssertion, nativeExternalBrowserStart, nativeExternalExchange, nativeExternalRedeem, nativeExternalStart } from "@/components/native-auth";
+import { nativePlatform } from "@/components/native-runtime";
+import { App } from "@capacitor/app";
+import { Browser } from "@capacitor/browser";
 
 type Device = {
   id: string;
@@ -49,6 +54,29 @@ type ExternalIdentity = {
   last_used_at: string | null;
 };
 
+function ProviderIcon({ provider }: { provider: "email" | "apple" | "google" }) {
+  const Icon = provider === "email" ? Mail : provider === "apple" ? Apple : Globe;
+  return (
+    <span className={`security-provider-icon security-provider-icon-${provider}`} aria-hidden="true">
+      <Icon size={20} strokeWidth={1.8} />
+    </span>
+  );
+}
+
+function StatusBadge({ children, tone = "neutral" }: { children: ReactNode; tone?: "success" | "neutral" }) {
+  return <span className={`security-status-badge security-status-badge-${tone}`}>{children}</span>;
+}
+
+function DeviceIcon({ platform }: { platform: string }) {
+  const value = platform.toLowerCase();
+  const Icon = value.includes("phone") || value.includes("ios") || value.includes("android")
+    ? Smartphone
+    : value.includes("mac") || value.includes("windows") || value.includes("linux")
+      ? Laptop
+      : Monitor;
+  return <Icon className="security-device-icon" size={20} strokeWidth={1.75} aria-hidden="true" />;
+}
+
 export default function Security() {
   const params = useSearchParams();
   const [devices, setDevices] = useState<Device[]>([]);
@@ -75,6 +103,7 @@ export default function Security() {
   const [passwordAvailable, setPasswordAvailable] = useState(false);
   const [accountEmail, setAccountEmail] = useState<string | null>(null);
   const [identityBusy, setIdentityBusy] = useState(false);
+  const nativeLinkTransaction = useRef<string | null>(null);
   const appleLinkTransaction = params.get("apple") === "link_required" ? params.get("transaction") : null;
 
   const native = isNativeShell();
@@ -82,13 +111,11 @@ export default function Security() {
   useEffect(() => {
     api.devices().then(setDevices).catch(() => setError("Could not load your signed-in devices."));
     api.passkeys().then(setPasskeys).catch(() => setError("Could not load your biometric sign-in status."));
-    if (!native) {
-      api.me().then((user) => setAccountEmail(user.email)).catch(() => {});
-      api.externalIdentities().then((result) => {
-        setIdentities(result.identities);
-        setPasswordAvailable(result.password_available);
-      }).catch(() => setError("Could not load your sign-in methods."));
-    }
+    api.me().then((user) => setAccountEmail(user.email)).catch(() => {});
+    api.externalIdentities().then((result) => {
+      setIdentities(result.identities);
+      setPasswordAvailable(result.password_available);
+    }).catch(() => setError("Could not load your sign-in methods."));
     // Browser WebAuthn feature-detection only — the native shell renders
     // QuickSignIn (native Face ID/Touch ID, no WebAuthn involved) instead
     // of this passkey card below, and must never invoke
@@ -99,6 +126,32 @@ export default function Security() {
     api.mfaStatus().then(setMfaStatus).catch(() => setError("Could not load your browser MFA status."));
     biometricSignInAvailable().then(setBiometricAvailable);
     setLabelText(biometricLabel());
+  }, [native]);
+
+  useEffect(() => {
+    if (!native) return;
+    let active = true;
+    const listener = App.addListener("appUrlOpen", ({ url }) => {
+      const expectedScheme = nativePlatform() === "ios"
+        ? (window.location.hostname === "mykhaya.app" ? "mykhaya-prod" : "mykhaya")
+        : (window.location.hostname === "mykhaya.app" ? "app.mykhaya.mobile.prod" : "app.mykhaya.mobile");
+      let parsed: URL;
+      try { parsed = new URL(url); } catch { return; }
+      if (parsed.protocol !== `${expectedScheme}:` || parsed.hostname !== "auth" || parsed.pathname !== "/callback") return;
+      const transactionId = parsed.searchParams.get("transaction");
+      if (!transactionId || transactionId !== nativeLinkTransaction.current) return;
+      void nativeExternalRedeem(transactionId)
+        .then(async (result) => {
+          if (!active) return;
+          if (!("message" in result)) throw new Error("The provider link did not complete.");
+          setMessage(result.message);
+          const refreshed = await api.externalIdentities();
+          if (active) setIdentities(refreshed.identities);
+        })
+        .catch((cause) => { if (active) setError(cause instanceof ApiError ? cause.message : "Could not connect the provider."); })
+        .finally(() => { if (active) { nativeLinkTransaction.current = null; setIdentityBusy(false); } });
+    });
+    return () => { active = false; void listener.then((handle) => handle.remove()); };
   }, [native]);
 
   useEffect(() => {
@@ -195,6 +248,7 @@ export default function Security() {
   }
 
   async function connectApple() {
+    if (native) return linkNativeProvider("apple");
     setIdentityBusy(true);
     setError("");
     try {
@@ -222,6 +276,7 @@ export default function Security() {
   }
 
   async function connectGoogle() {
+    if (native) return linkNativeProvider("google");
     setIdentityBusy(true);
     setError("");
     try {
@@ -229,6 +284,32 @@ export default function Security() {
       window.location.assign(result.authorization_url);
     } catch (cause) {
       setError(cause instanceof ApiError ? cause.message : "Could not start Google sign-in.");
+      setIdentityBusy(false);
+    }
+  }
+
+  async function linkNativeProvider(provider: "apple" | "google") {
+    setIdentityBusy(true);
+    setError("");
+    try {
+      const platform = nativePlatform();
+      const useBrowser = (provider === "google" && platform === "ios") || (provider === "apple" && platform === "android");
+      if (useBrowser) {
+        const result = await nativeExternalBrowserStart(provider, "link");
+        nativeLinkTransaction.current = result.transaction_id;
+        await Browser.open({ url: result.authorization_url });
+        return;
+      }
+      const started = await nativeExternalStart(provider, "link");
+      const assertion = await nativeExternalAssertion(provider, started.nonce, started.client_id);
+      const result = await nativeExternalExchange(started.transaction_id, assertion.identity_token);
+      if (!("message" in result)) throw new Error("The provider link did not complete.");
+      setMessage(result.message);
+      const refreshed = await api.externalIdentities();
+      setIdentities(refreshed.identities);
+      setIdentityBusy(false);
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : "Could not connect the provider.");
       setIdentityBusy(false);
     }
   }
@@ -373,32 +454,38 @@ export default function Security() {
 
   return (
     <SettingsPage title="Security">
-      {!native && <section className="card details" aria-labelledby="sign-in-methods-heading">
+      <section className="card details" aria-labelledby="sign-in-methods-heading">
         <h2 id="sign-in-methods-heading">Sign-in methods</h2>
         <p className="muted">Choose the secure ways you can access your MyKhaya account.</p>
         <div className="security-signin-method">
-          <div>
+          <ProviderIcon provider="email" />
+          <div className="security-row-copy">
             <strong>Email and password</strong>
             <span className="security-mfa-detail">{accountEmail ?? "Your account email"}</span>
-            <span>{passwordAvailable ? "Connected" : "Unavailable"}</span>
           </div>
-          <span className={passwordAvailable ? "security-mfa-preferred" : "muted"}>{passwordAvailable ? "Connected" : "Unavailable"}</span>
+          <StatusBadge tone={passwordAvailable ? "success" : "neutral"}>
+            {passwordAvailable ? "Connected" : "Not connected"}
+          </StatusBadge>
         </div>
         {(["apple", "google"] as const).map((provider) => {
           const identity = identities.find((item) => item.provider === provider);
           const label = provider === "apple" ? "Apple" : "Google";
           return (
             <div className="security-signin-method" key={provider}>
-              <div>
+              <ProviderIcon provider={provider} />
+              <div className="security-row-copy">
                 <strong>{label}</strong>
                 {identity?.provider_email && (
                   <span className="security-mfa-detail">{identity.provider_email}</span>
                 )}
-                <span>{identity ? `Connected ${new Date(identity.linked_at).toLocaleDateString()}` : "Not connected"}</span>
+                {identity && <span>Linked {new Date(identity.linked_at).toLocaleDateString()}</span>}
                 {identity?.last_used_at && <span>Last used {new Date(identity.last_used_at).toLocaleDateString()}</span>}
               </div>
-              {!native && (
-                identity ? (
+              <div className="security-row-actions">
+                <StatusBadge tone={identity ? "success" : "neutral"}>
+                  {identity ? "Connected" : "Not connected"}
+                </StatusBadge>
+                {identity ? (
                   <button className="secondary" disabled={identityBusy} onClick={() => void (provider === "apple" ? disconnectApple() : disconnectGoogle())}>
                     {identityBusy ? "Disconnecting…" : "Disconnect"}
                   </button>
@@ -406,8 +493,8 @@ export default function Security() {
                   <button className="secondary" disabled={identityBusy} onClick={() => void (provider === "apple" ? connectApple() : connectGoogle())}>
                     {identityBusy ? "Connecting…" : "Connect"}
                   </button>
-                )
-              )}
+                )}
+              </div>
             </div>
           );
         })}
@@ -426,23 +513,23 @@ export default function Security() {
         {params.get("google") === "error" && (
           <p className="notice error" role="alert">Google sign-in could not be connected. Please try again.</p>
         )}
-      </section>}
+      </section>
       {!native && mfaStatus && (
         <section className="card details" aria-labelledby="browser-mfa-heading">
           <h2 id="browser-mfa-heading">Multi-factor authentication</h2>
           <p className="muted">
             {mfaStatus.required
-              ? "Multi-factor authentication is required when signing in through a web browser."
+              ? "Multi-factor authentication is required when signing in through a web browser, including when using Apple or Google."
               : "Browser sign-in can use an additional verification step."}
           </p>
           <div className="security-mfa-status">
-            <div>
+            <div className="security-row-copy">
               <strong>Authenticator app</strong>
               <span className="security-mfa-detail">Use codes from your authenticator app.</span>
               <span>{mfaStatus.totp_enabled ? "Set up" : "Not set up"}</span>
             </div>
             <div className="security-mfa-method-actions">
-              {multipleMfaMethods && mfaStatus.preferred_method === "totp" && <span className="security-mfa-preferred">Preferred</span>}
+              {multipleMfaMethods && mfaStatus.preferred_method === "totp" && <StatusBadge tone="success">Preferred</StatusBadge>}
               {multipleMfaMethods && mfaStatus.preferred_method !== "totp" && usableMfaMethods.includes("totp") && (
                 <button className="tertiary security-mfa-prefer" disabled={mfaBusy} onClick={() => void choosePreferred("totp")}>Make preferred</button>
               )}
@@ -468,14 +555,14 @@ export default function Security() {
           )}
           {mfaError && <p className="notice error" role="alert">{mfaError}</p>}
           <div className="security-mfa-status">
-            <div>
+            <div className="security-row-copy">
               <strong>Email verification</strong>
               <span className="security-mfa-detail">{mfaStatus.email_available ? (mfaStatus.email_destination ?? "Verified account email") : "No verified email address available"}</span>
               <span>{mfaStatus.email_available ? "Available for browser MFA" : "Unavailable for browser MFA"}</span>
             </div>
             {mfaStatus.email_available && (
               <div className="security-mfa-method-actions">
-                {multipleMfaMethods && mfaStatus.preferred_method === "email" && <span className="security-mfa-preferred">Preferred</span>}
+                {multipleMfaMethods && mfaStatus.preferred_method === "email" && <StatusBadge tone="success">Preferred</StatusBadge>}
                 {multipleMfaMethods && mfaStatus.preferred_method !== "email" && usableMfaMethods.includes("email") && (
                   <button className="tertiary security-mfa-prefer" disabled={mfaBusy} onClick={() => void choosePreferred("email")}>Make preferred</button>
                 )}
@@ -493,13 +580,13 @@ export default function Security() {
           {!native && (
             <div className="security-mfa-passkeys">
               <div className="security-mfa-status">
-                <div>
+                <div className="security-row-copy">
                   <strong>Passkeys</strong>
                   <span className="security-mfa-detail">Use a passkey to sign in securely in supported browsers and devices.</span>
                   <span>{passkeys.length} {passkeys.length === 1 ? "passkey" : "passkeys"} set up</span>
                 </div>
                 <div className="security-mfa-method-actions">
-                  {thisDevicePasskey ? <span className="security-mfa-preferred">This device</span> : biometricAvailable && (
+                  {thisDevicePasskey ? <StatusBadge tone="success">This device</StatusBadge> : biometricAvailable && (
                     <button className="secondary" disabled={biometricBusy} onClick={() => void enableBiometricSignIn()}>
                       {biometricBusy ? "Setting up…" : "Add passkey"}
                     </button>
@@ -516,11 +603,12 @@ export default function Security() {
               )}
               {passkeyError && <p className="notice error" role="alert">{passkeyError}</p>}
               {otherPasskeys.length > 0 && (
-                <details>
-                  <summary>{otherPasskeys.length === 1 ? "1 other browser passkey" : `${otherPasskeys.length} other browser passkeys`}</summary>
+                <details className="security-passkey-disclosure">
+                  <summary>{otherPasskeys.length === 1 ? "Manage 1 other browser passkey" : `Manage ${otherPasskeys.length} other browser passkeys`}</summary>
                   {otherPasskeys.map((passkey) => (
-                    <div className="session" key={passkey.id}>
-                      <div><strong>{passkey.label}</strong><small>Added {new Date(passkey.created_at).toLocaleDateString()}{passkey.last_used_at && ` · Last used ${new Date(passkey.last_used_at).toLocaleDateString()}`}</small></div>
+                    <div className="session security-passkey-row" key={passkey.id}>
+                      <KeyRound className="security-device-icon" size={20} strokeWidth={1.75} aria-hidden="true" />
+                      <div className="security-row-copy"><strong>{passkey.label}</strong><small>Added {new Date(passkey.created_at).toLocaleDateString()}{passkey.last_used_at && ` · Last used ${new Date(passkey.last_used_at).toLocaleDateString()}`}</small></div>
                       <span className="settings-inline-actions"><button className="tertiary" onClick={() => void renamePasskey(passkey)}>Rename</button><button className="secondary" onClick={() => void revokeOtherPasskey(passkey)}>Remove</button></span>
                     </div>
                   ))}
@@ -603,8 +691,9 @@ export default function Security() {
       <section className="card details" id="devices">
         <h2>Signed-in devices</h2>
         {devices.map((device) => (
-          <div className="session" key={device.id}>
-            <div>
+          <div className="session security-device-row" key={device.id}>
+            <DeviceIcon platform={device.platform} />
+            <div className="security-row-copy">
               <strong>{device.device_name}</strong>
               <small>
                 {device.current ? "This device · " : ""}

@@ -18,7 +18,7 @@ from mykhaya.db import SessionFactory
 from mykhaya.external_identities import link_external_identity
 from mykhaya.main import app
 from mykhaya.models import ExternalIdentity, ExternalIdentityProvider, User
-from mykhaya.native_external_auth import NativeExternalTransaction
+from mykhaya.native_external_auth import NativeExternalPendingIdentity, NativeExternalTransaction
 from mykhaya.routers import auth as auth_router
 
 
@@ -305,3 +305,44 @@ async def test_native_exchange_rejects_wrong_redemption_verifier_before_provider
     )
     assert exchanged.status_code == 400
     assert verify_called is False
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("intended_user_id", [None, "not-a-user-id"])
+async def test_native_link_rejects_missing_or_malformed_intended_user_binding(
+    client: AsyncClient,
+    native_settings,
+    monkeypatch: pytest.MonkeyPatch,
+    intended_user_id: str | None,
+) -> None:
+    email = f"native-binding-{uuid4().hex}@example.com"
+    await register_and_verify(client, email, "Native Binding User")
+    login = await client.post(
+        "/api/v1/auth/mobile/login", json={"email": email, "password": PASSWORD}
+    )
+    assert login.status_code == 200
+    token = login.json()["session_token"]
+    pending = NativeExternalPendingIdentity(
+        transaction_id="binding-test-transaction",
+        provider=ExternalIdentityProvider.apple,
+        subject="binding-test-subject",
+        provider_email="relay@privaterelay.appleid.com",
+        email_verified=True,
+        display_name="Binding Test",
+        can_register=False,
+        platform="ios",
+        redemption_verifier_hash=auth_router.hash_redemption_verifier("v" * 64),
+        intended_user_id=intended_user_id,
+        intent="link",
+    )
+
+    async def load_pending(_settings, _transaction_id):
+        return pending
+
+    monkeypatch.setattr(auth_router, "load_native_external_pending", load_pending)
+    response = await client.post(
+        "/api/v1/auth/mobile/external/recovery/link",
+        headers=bearer(token),
+        json={"transaction_id": pending.transaction_id, "redemption_verifier": "v" * 64},
+    )
+    assert response.status_code in {400, 403}

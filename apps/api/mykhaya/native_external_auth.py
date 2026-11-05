@@ -31,6 +31,7 @@ class NativeExternalTransaction:
     user_id: str | None
     platform: str
     redemption_verifier_hash: str
+    intended_user_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -44,6 +45,8 @@ class NativeExternalPendingIdentity:
     can_register: bool
     platform: str
     redemption_verifier_hash: str
+    intended_user_id: str | None = None
+    intent: str = "login"
 
 
 @dataclass(frozen=True)
@@ -85,6 +88,7 @@ def new_native_external_transaction(
         environment=environment,
         intent=intent,
         user_id=user_id,
+        intended_user_id=user_id if intent == "link" else None,
         platform=platform,
         redemption_verifier_hash=hash_redemption_verifier(redemption_verifier),
     )
@@ -119,6 +123,7 @@ async def store_native_external_transaction(
                     "user_id": value.user_id,
                     "platform": value.platform,
                     "redemption_verifier_hash": value.redemption_verifier_hash,
+                    "intended_user_id": value.intended_user_id,
                 }
             ),
             ex=TRANSACTION_TTL_SECONDS,
@@ -167,6 +172,9 @@ async def _read_native_external_transaction(
             user_id=str(value["user_id"]) if value.get("user_id") else None,
             platform=str(value["platform"]),
             redemption_verifier_hash=str(value["redemption_verifier_hash"]),
+            intended_user_id=(
+                str(value["intended_user_id"]) if value.get("intended_user_id") else None
+            ),
         )
     except (KeyError, TypeError, ValueError, json.JSONDecodeError):
         return None
@@ -189,6 +197,8 @@ async def store_native_external_pending(
                     "can_register": value.can_register,
                     "platform": value.platform,
                     "redemption_verifier_hash": value.redemption_verifier_hash,
+                    "intended_user_id": value.intended_user_id,
+                    "intent": value.intent,
                 }
             ),
             ex=TRANSACTION_TTL_SECONDS,
@@ -222,6 +232,10 @@ async def consume_native_external_pending(
             can_register=bool(value.get("can_register", False)),
             platform=str(value["platform"]),
             redemption_verifier_hash=str(value["redemption_verifier_hash"]),
+            intended_user_id=(
+                str(value["intended_user_id"]) if value.get("intended_user_id") else None
+            ),
+            intent=str(value.get("intent") or "login"),
         )
     except (KeyError, TypeError, ValueError, json.JSONDecodeError):
         return None

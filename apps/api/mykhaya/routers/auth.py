@@ -2,7 +2,7 @@ import json
 import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
-from urllib.parse import parse_qs
+from urllib.parse import parse_qs, quote
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -781,6 +781,20 @@ def _google_redirect(settings: Settings, suffix: str) -> RedirectResponse:
     )
 
 
+def _social_registration_context(return_path: str | None) -> str:
+    """Carry only the signed-in registration intent through provider choice."""
+    if not return_path or not return_path.startswith("/register?"):
+        return ""
+    query = parse_qs(return_path.split("?", 1)[1], keep_blank_values=False)
+    if query.get("beta") != ["1"]:
+        return ""
+    invitation = query.get("beta_invitation", [None])[0]
+    suffix = "&beta=1"
+    if invitation:
+        suffix += f"&beta_invitation={quote(invitation, safe='')}"
+    return suffix
+
+
 def _google_settings_redirect(settings: Settings, suffix: str) -> RedirectResponse:
     return RedirectResponse(
         f"{settings.public_web_url.rstrip('/')}/settings/security?{suffix}",
@@ -995,11 +1009,15 @@ async def apple_recovery_register(
             "This Apple identity must be linked to an existing account.",
         )
     policy = await evaluate_signup_policy(db, settings)
-    if (
-        not policy.normal_path
-        or policy.invitation_required
-        or not policy.domain_allowed(pending.provider_email)
-    ):
+    if body.beta:
+        beta_allowed = policy.beta_path and (
+            not policy.invitation_required
+            or bool(body.beta_invitation_token)
+            and await beta_invitation_valid(db, body.beta_invitation_token, pending.provider_email)
+        )
+    else:
+        beta_allowed = policy.normal_path and not policy.invitation_required
+    if not beta_allowed or not policy.domain_allowed(pending.provider_email):
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
             "New accounts cannot be created with Apple right now.",
@@ -1042,7 +1060,11 @@ async def apple_recovery_register(
                 record_type=record_type,
                 document_version_id=resolved.version.id,
                 user_id=user.id,
-                context=LegalAcceptanceContext.signup,
+                context=(
+                    LegalAcceptanceContext.beta_registration
+                    if body.beta
+                    else LegalAcceptanceContext.signup
+                ),
                 platform=body.platform,
                 ip_address=resolve_client_ip(request, settings),
                 user_agent=request.headers.get("user-agent", "")[:300] or None,
@@ -1057,6 +1079,21 @@ async def apple_recovery_register(
         provider_email=pending.provider_email,
         provider_email_verified=pending.email_verified,
     )
+    if body.beta:
+        programme = await current_programme(db)
+        db.add(
+            BetaPendingRegistration(
+                user_id=user.id,
+                programme_id=programme.id,
+                token_hash=hash_secret(
+                    secrets.token_urlsafe(32), settings.secret_key.get_secret_value()
+                ),
+                invitation_token_hash=invitation_token_hash(body.beta_invitation_token)
+                if body.beta_invitation_token
+                else None,
+                expires_at=datetime.now(UTC) + timedelta(days=BETA_INTENT_TTL_DAYS),
+            )
+        )
     result = await complete_browser_authentication(
         db,
         response,
@@ -1169,6 +1206,8 @@ async def _apple_callback(
                     and policy.domain_allowed(provider_email),
                     platform=flow.native_platform,
                     redemption_verifier_hash=flow.native_redemption_verifier_hash,
+                    intended_user_id=flow.user_id if flow.intent == "link" else None,
+                    intent=flow.intent,
                 ),
             )
             await db.commit()
@@ -1225,6 +1264,7 @@ async def _apple_callback(
             if not provider_email:
                 raise AppleAuthenticationError("Apple did not provide an email for this account.")
             policy = await evaluate_signup_policy(db, settings)
+            beta_registration = bool(_social_registration_context(flow.return_path))
             pending_transaction = secrets.token_urlsafe(32)
             await store_pending_identity(
                 settings,
@@ -1237,8 +1277,10 @@ async def _apple_callback(
                     display_name=_apple_name(user),
                     can_register=(
                         existing is None
-                        and policy.normal_path
-                        and not policy.invitation_required
+                        and (
+                            (policy.beta_path if beta_registration else policy.normal_path)
+                            and (beta_registration or not policy.invitation_required)
+                        )
                         and policy.domain_allowed(provider_email)
                     ),
                     return_path=flow.return_path,
@@ -1248,7 +1290,7 @@ async def _apple_callback(
             await db.commit()
             return _apple_redirect(
                 settings,
-                f"apple=choose&transaction={pending_transaction}",
+                f"apple=choose&transaction={pending_transaction}{_social_registration_context(flow.return_path)}",
             )
 
         has_home = await db.scalar(
@@ -1481,11 +1523,15 @@ async def google_recovery_register(
             status.HTTP_409_CONFLICT, "This Google identity must be linked to an existing account."
         )
     policy = await evaluate_signup_policy(db, settings)
-    if (
-        not policy.normal_path
-        or policy.invitation_required
-        or not policy.domain_allowed(pending.provider_email)
-    ):
+    if body.beta:
+        beta_allowed = policy.beta_path and (
+            not policy.invitation_required
+            or bool(body.beta_invitation_token)
+            and await beta_invitation_valid(db, body.beta_invitation_token, pending.provider_email)
+        )
+    else:
+        beta_allowed = policy.normal_path and not policy.invitation_required
+    if not beta_allowed or not policy.domain_allowed(pending.provider_email):
         raise HTTPException(
             status.HTTP_403_FORBIDDEN, "New accounts cannot be created with Google right now."
         )
@@ -1526,7 +1572,11 @@ async def google_recovery_register(
                 record_type=record_type,
                 document_version_id=resolved.version.id,
                 user_id=user.id,
-                context=LegalAcceptanceContext.signup,
+                context=(
+                    LegalAcceptanceContext.beta_registration
+                    if body.beta
+                    else LegalAcceptanceContext.signup
+                ),
                 platform=body.platform,
                 ip_address=resolve_client_ip(request, settings),
                 user_agent=request.headers.get("user-agent", "")[:300] or None,
@@ -1541,6 +1591,21 @@ async def google_recovery_register(
         provider_email=pending.provider_email,
         provider_email_verified=pending.email_verified,
     )
+    if body.beta:
+        programme = await current_programme(db)
+        db.add(
+            BetaPendingRegistration(
+                user_id=user.id,
+                programme_id=programme.id,
+                token_hash=hash_secret(
+                    secrets.token_urlsafe(32), settings.secret_key.get_secret_value()
+                ),
+                invitation_token_hash=invitation_token_hash(body.beta_invitation_token)
+                if body.beta_invitation_token
+                else None,
+                expires_at=datetime.now(UTC) + timedelta(days=BETA_INTENT_TTL_DAYS),
+            )
+        )
     result = await complete_browser_authentication(
         db,
         response,
@@ -1637,6 +1702,8 @@ async def google_callback(
                     and policy.domain_allowed(provider_email),
                     platform=flow.native_platform,
                     redemption_verifier_hash=flow.native_redemption_verifier_hash,
+                    intended_user_id=flow.user_id if flow.intent == "link" else None,
+                    intent=flow.intent,
                 ),
             )
             await db.commit()
@@ -1669,6 +1736,7 @@ async def google_callback(
         else:
             existing = await db.scalar(select(User).where(User.email == provider_email))
             policy = await evaluate_signup_policy(db, settings)
+            beta_registration = bool(_social_registration_context(flow.return_path))
             transaction_id = secrets.token_urlsafe(32)
             await store_google_pending_identity(
                 settings,
@@ -1680,15 +1748,20 @@ async def google_callback(
                     email_verified=True,
                     display_name=_google_name(claims),
                     can_register=existing is None
-                    and policy.normal_path
-                    and not policy.invitation_required
+                    and (
+                        (policy.beta_path if beta_registration else policy.normal_path)
+                        and (beta_registration or not policy.invitation_required)
+                    )
                     and policy.domain_allowed(provider_email),
                     return_path=flow.return_path,
                 ),
             )
             audit(db, request, "GOOGLE_RECOVERY_CREATED", target_type="external_identity")
             await db.commit()
-            return _google_redirect(settings, f"google=choose&transaction={transaction_id}")
+            return _google_redirect(
+                settings,
+                f"google=choose&transaction={transaction_id}{_social_registration_context(flow.return_path)}",
+            )
         has_home = await db.scalar(
             select(Membership.id).where(Membership.user_id == linked_user.id)
         )
@@ -2842,6 +2915,16 @@ async def mobile_external_browser_start(
             status.HTTP_400_BAD_REQUEST,
             "This native callback is not registered for the environment.",
         )
+    user_id: str | None = None
+    if body.intent == "link":
+        auth = await auth_context(request, db, settings)
+        require_adult_session(auth)
+        if (
+            auth.session.fresh_auth_at is None
+            or auth.session.fresh_auth_at < datetime.now(UTC) - FRESH_AUTH_WINDOW
+        ):
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "Fresh authentication is required.")
+        user_id = str(auth.user.id)
     state = secrets.token_urlsafe(32)
     nonce = secrets.token_urlsafe(32)
     transaction_id = secrets.token_urlsafe(32)
@@ -2853,8 +2936,8 @@ async def mobile_external_browser_start(
             state,
             AppleFlowState(
                 nonce=nonce,
-                intent="login",
-                user_id=None,
+                intent=body.intent,
+                user_id=user_id,
                 return_path=None,
                 native_return_uri=body.return_uri,
                 native_platform=body.platform,
@@ -2873,8 +2956,8 @@ async def mobile_external_browser_start(
             GoogleFlowState(
                 nonce=nonce,
                 code_verifier=verifier,
-                intent="login",
-                user_id=None,
+                intent=body.intent,
+                user_id=user_id,
                 return_path=None,
                 native_return_uri=body.return_uri,
                 native_platform=body.platform,
@@ -3080,6 +3163,39 @@ async def mobile_external_redeem(
             status.HTTP_400_BAD_REQUEST, "This sign-in attempt is invalid or has expired."
         )
     identity = await find_external_identity(db, pending.provider, pending.subject, for_update=True)
+    if pending.intended_user_id is not None:
+        auth = await auth_context(request, db, settings)
+        require_adult_session(auth)
+        if str(auth.user.id) != pending.intended_user_id:
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN, "This linking attempt belongs to another session."
+            )
+        if identity is not None and identity.user_id != auth.user.id:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT, "This provider identity is already linked."
+            )
+        consumed = await consume_native_external_pending(settings, body.transaction_id)
+        if consumed is None:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "This sign-in attempt has expired.")
+        try:
+            await link_external_identity(
+                db,
+                request,
+                user_id=auth.user.id,
+                provider=pending.provider,
+                provider_subject=pending.subject,
+                provider_email=pending.provider_email,
+                provider_email_verified=pending.email_verified,
+            )
+            await db.commit()
+        except (ExternalIdentityOwnershipConflict, IntegrityError):
+            await db.rollback()
+            raise HTTPException(
+                status.HTTP_409_CONFLICT, "This provider identity is already linked."
+            ) from None
+        return MessageResponse(
+            message=f"{pending.provider.value.title()} sign-in has been linked to your account."
+        )
     if identity is None:
         return NativeExternalRecoveryResponse(
             authentication_state="account_choice",
@@ -3144,13 +3260,23 @@ async def mobile_external_recovery_link(
         or auth.session.fresh_auth_at < datetime.now(UTC) - FRESH_AUTH_WINDOW
     ):
         raise HTTPException(status.HTTP_403_FORBIDDEN, "Fresh authentication is required.")
-    pending = await consume_native_external_pending(settings, body.transaction_id)
+    pending = await load_native_external_pending(settings, body.transaction_id)
     if pending is None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "This sign-in attempt has expired.")
+    if pending.intent == "link":
+        if not pending.intended_user_id:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "This linking attempt is invalid.")
+        if pending.intended_user_id != str(auth.user.id):
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN, "This linking attempt belongs to another session."
+            )
     if not verify_redemption_verifier(body.redemption_verifier, pending.redemption_verifier_hash):
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST, "This sign-in attempt is invalid or has expired."
         )
+    pending = await consume_native_external_pending(settings, body.transaction_id)
+    if pending is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This sign-in attempt has expired.")
     try:
         await link_external_identity(
             db,

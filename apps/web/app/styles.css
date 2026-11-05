@@ -749,6 +749,36 @@ textarea {
 .apple-sign-in:hover {
   background: #222;
 }
+.auth-social-registration {
+  margin-bottom: 1rem;
+}
+.auth-social-actions {
+  display: grid;
+  gap: 0.65rem;
+}
+.auth-social-actions .apple-sign-in,
+.auth-social-actions .google-sign-in {
+  margin-top: 0;
+}
+.auth-divider {
+  align-items: center;
+  color: var(--colour-ink-muted);
+  display: flex;
+  gap: 0.75rem;
+  margin: 1rem 0;
+  text-align: center;
+}
+.auth-divider::before,
+.auth-divider::after {
+  background: var(--platform-line);
+  content: "";
+  flex: 1;
+  height: 1px;
+}
+.auth-divider span {
+  font-size: 0.82rem;
+  white-space: nowrap;
+}
 .auth-mfa-methods {
   display: flex;
   gap: 0.5rem;
@@ -11907,7 +11937,8 @@ a.family-feed-row {
 }
 .profile-identity-card,
 .profile-colour-card,
-.profile-info-card {
+.profile-info-card,
+.profile-signin-methods {
   padding: 1rem;
 }
 .profile-identity-card {
@@ -11988,6 +12019,51 @@ a.family-feed-row {
 .profile-colour-card > p {
   color: var(--colour-muted);
   margin: 0.2rem 0 0.75rem;
+}
+.profile-signin-methods {
+  display: grid;
+  gap: 0.85rem;
+}
+.profile-section-heading {
+  align-items: flex-start;
+  display: flex;
+  gap: 0.75rem;
+  justify-content: space-between;
+}
+.profile-section-heading h2 {
+  margin: 0;
+}
+.profile-section-heading p {
+  margin: 0.2rem 0 0;
+}
+.profile-section-heading > svg {
+  color: var(--colour-forest);
+  flex: 0 0 auto;
+  margin-top: 0.15rem;
+}
+.profile-signin-summary {
+  border-top: 1px solid var(--colour-border);
+  display: grid;
+  gap: 0.65rem;
+  padding-top: 0.75rem;
+}
+.profile-signin-summary > div {
+  align-items: center;
+  display: flex;
+  gap: 0.6rem;
+  min-width: 0;
+}
+.profile-signin-summary > div > span:nth-child(2) {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.profile-signin-manage {
+  align-items: center;
+  display: inline-flex;
+  gap: 0.35rem;
+  justify-content: center;
+  width: 100%;
 }
 .profile-settings-links {
   display: grid;

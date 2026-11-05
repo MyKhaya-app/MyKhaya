@@ -311,7 +311,7 @@ export async function nativeExternalRecoveryRegister(body: {
   return result;
 }
 
-export async function nativeExternalBrowserStart(provider: "apple" | "google") {
+export async function nativeExternalBrowserStart(provider: "apple" | "google", intent: "login" | "link" = "login") {
   const platform = nativePlatform();
   if (platform !== "ios" && platform !== "android") throw new Error("Native provider sign-in is unavailable.");
   const host = typeof window === "undefined" ? "" : window.location.hostname;
@@ -320,14 +320,14 @@ export async function nativeExternalBrowserStart(provider: "apple" | "google") {
     ? `${production ? "mykhaya-prod" : "mykhaya"}://auth/callback`
     : `${production ? "app.mykhaya.mobile.prod" : "app.mykhaya.mobile"}://auth/callback`;
   const verifier = newNativeRedemptionVerifier();
-  const result = await client().externalBrowserStart(provider, platform, returnUri, verifier);
+  const result = await client().externalBrowserStart(provider, platform, returnUri, verifier, intent);
   retainNativeRedemptionVerifier(result.transaction_id, verifier);
   return result;
 }
 
 export async function nativeExternalRedeem(transactionId: string) {
   const result = await client().externalRedeem(transactionId, redemptionVerifierFor(transactionId));
-  if ("id" in result) finishNativeRedemption(transactionId);
+  if ("id" in result || "message" in result) finishNativeRedemption(transactionId);
   else if ("transaction_id" in result) retainNativeRedemptionVerifier(result.transaction_id, redemptionVerifierFor(transactionId));
   return result;
 }
