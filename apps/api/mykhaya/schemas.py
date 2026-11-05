@@ -1062,61 +1062,6 @@ class EventCreate(StrictModel):
         return _require_tz_aware(value)
 
 
-class EventCopyDestination(StrictModel):
-    """One independent destination row in a copy request."""
-
-    date: date
-    start_time: clock_time | None = None
-    end_time: clock_time | None = None
-
-    @model_validator(mode="after")
-    def validate_times(self) -> "EventCopyDestination":
-        if (self.start_time is None) != (self.end_time is None):
-            raise ValueError("Start and end times must be provided together")
-        if (
-            self.start_time is not None
-            and self.end_time is not None
-            and self.end_time <= self.start_time
-        ):
-            raise ValueError("End time must be after start time")
-        return self
-
-
-class EventCopyRequest(StrictModel):
-    """Dates are local calendar dates in the source event's timezone."""
-
-    destinations: list[EventCopyDestination] | None = Field(
-        default=None, min_length=1, max_length=31
-    )
-    # Kept for clients released before independent destination rows existed.
-    destination_dates: list[date] = Field(default_factory=list, max_length=31)
-    start_time: clock_time | None = None
-    end_time: clock_time | None = None
-
-    @model_validator(mode="after")
-    def validate_dates_and_times(self) -> "EventCopyRequest":
-        if self.destinations is not None:
-            if self.destination_dates or self.start_time is not None or self.end_time is not None:
-                raise ValueError("Use destinations or the legacy shared-time fields, not both")
-            destination_dates = [item.date for item in self.destinations]
-        else:
-            destination_dates = self.destination_dates
-            if not destination_dates:
-                raise ValueError("At least one destination date is required")
-        if len(set(destination_dates)) != len(destination_dates):
-            raise ValueError("Destination dates must be unique")
-        if self.destinations is None:
-            if (self.start_time is None) != (self.end_time is None):
-                raise ValueError("Start and end times must be provided together")
-            if (
-                self.start_time is not None
-                and self.end_time is not None
-                and self.end_time <= self.start_time
-            ):
-                raise ValueError("End time must be after start time")
-        return self
-
-
 # Which recurring occurrences a mutation applies to — "series" (the whole
 # recurring event, or the only sensible value for a non-recurring one) is
 # the default so every existing API caller (native/web builds predating
@@ -1199,10 +1144,6 @@ class EventOccurrence(BaseModel):
     # occurrence. Equal to `start_at` for a non-overridden occurrence.
     occurrence_start: datetime
     is_overridden: bool = False
-
-
-class EventCopyResponse(BaseModel):
-    items: list[EventOccurrence]
 
 
 class EventActivityResponse(BaseModel):
