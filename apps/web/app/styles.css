@@ -796,193 +796,299 @@ textarea {
 .auth-mfa-setup {
   margin: 1rem 0;
 }
-.security-mfa-status {
-  align-items: flex-start;
-  border-top: 1px solid var(--platform-line);
-  display: flex;
-  gap: 1rem;
-  justify-content: space-between;
-  padding: 0.85rem 0;
-}
-.security-signin-method {
-  align-items: flex-start;
-  border-top: 1px solid var(--platform-line);
-  display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
-  gap: 1rem;
-  min-width: 0;
-  padding: 0.85rem 0;
-}
-.security-signin-method > div,
-.security-row-copy {
-  display: grid;
-  gap: 0.2rem;
-  min-width: 0;
-}
-.security-signin-method span {
-  color: var(--cc-neutral);
-  font-size: 0.9rem;
-}
-.security-provider-icon {
-  align-items: center;
-  background: var(--platform-soft);
-  border-radius: 0.75rem;
-  color: var(--platform-green);
-  display: inline-flex;
-  height: 2.5rem;
-  justify-content: center;
-  width: 2.5rem;
-}
-.security-provider-icon-apple {
-  background: var(--colour-cream-light);
-  color: var(--colour-slate);
-}
-.security-provider-icon-google {
-  background: var(--colour-cream-light);
-  color: var(--colour-terracotta);
-}
-.security-row-actions {
-  align-items: center;
-  display: flex;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  justify-content: flex-end;
-}
+/* --- Security settings (app/settings/security, components/quick-sign-in) ---
+   Matches the approved Security mockup: four separate cards (sign-in
+   methods, MFA, passkeys, signed-in devices) built from one row shape —
+   icon tile | grouped title/detail/meta | status and actions on the right.
+   Mobile is the base; the only width rules are the narrow-phone fallback
+   (actions move beneath the copy) and roomier card padding on wide
+   screens. Everything is scoped to the page's own classes. */
 .security-status-badge {
+  align-items: center;
   border-radius: 999px;
   display: inline-flex;
   font-size: 0.78rem !important;
   font-weight: 700;
+  gap: 0.3rem;
   line-height: 1.2;
   padding: 0.3rem 0.65rem;
   white-space: nowrap;
 }
 .security-status-badge-success {
-  background: var(--platform-soft);
-  color: var(--platform-green) !important;
+  background: var(--colour-sage-soft);
+  color: var(--colour-forest) !important;
 }
 .security-status-badge-neutral {
   background: var(--colour-cream-light);
-  color: var(--cc-neutral) !important;
+  color: var(--colour-muted) !important;
 }
-.security-row-copy .security-mfa-detail {
-  overflow-wrap: anywhere;
-}
-@media (max-width: 600px) {
-  .security-signin-method {
-    grid-template-columns: auto minmax(0, 1fr);
-  }
-  .security-signin-method > .security-status-badge,
-  .security-signin-method > .security-row-actions {
-    grid-column: 2;
-    justify-self: start;
-  }
-}
-.security-mfa-status div {
-  display: grid;
-  gap: 0.2rem;
-  min-width: 0;
-}
-.security-mfa-status span {
-  color: var(--cc-neutral);
-  font-size: 0.9rem;
-}
-.security-mfa-detail {
-  display: block;
-}
-.security-mfa-method-actions {
-  align-items: center;
-  display: flex !important;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  justify-content: flex-end;
-}
+/* Retained consumer selector (see pcc-css-boundary.test.ts). */
 .security-mfa-preferred {
-  background: var(--platform-soft);
+  background: var(--colour-sage-soft);
   border-radius: 999px;
-  color: var(--platform-green) !important;
-  font-size: 0.8rem !important;
+  color: var(--colour-forest);
+  font-size: 0.8rem;
   font-weight: 700;
   padding: 0.3rem 0.65rem;
   white-space: nowrap;
 }
-.security-mfa-prefer {
-  white-space: nowrap;
-}
-.security-mfa-passkeys {
-  border-top: 1px solid var(--platform-line);
-  margin-top: 0.35rem;
-  padding-top: 0.35rem;
-}
-.security-mfa-passkeys > .security-mfa-status {
-  border-top: 0;
-  padding-top: 0.5rem;
-}
-.security-mfa-passkey-device {
-  align-items: center;
-  display: flex;
-  gap: 1rem;
-  justify-content: space-between;
-  padding: 0 0 0.85rem;
-}
-.security-passkey-disclosure {
-  border-top: 1px solid var(--platform-line);
-  margin-top: 0.35rem;
-  padding-top: 0.75rem;
-}
-.security-passkey-disclosure summary {
-  color: var(--platform-green);
-  cursor: pointer;
-  font-weight: 700;
-  min-height: 2.75rem;
-  padding: 0.65rem 0;
-}
-.security-passkey-row,
-.security-device-row {
-  align-items: center;
-  gap: 0.85rem;
+.security-stack {
+  display: grid;
+  gap: var(--space-card-stack);
   min-width: 0;
 }
-.security-passkey-row {
-  border-top: 1px solid var(--platform-line);
-  padding: 0.75rem 0 0;
+.security-stack > .notice {
+  margin: 0;
 }
-.security-device-row {
+.security-card {
+  min-width: 0;
+  padding: 1.1rem 1rem 0.6rem;
+}
+.security-card h2 {
+  font-size: 1.3rem;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+  margin: 0;
+}
+.security-card-header {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 0.3rem;
+  margin-bottom: 0.25rem;
 }
-.security-device-icon {
-  color: var(--platform-green);
-  flex: 0 0 auto;
+.security-card-title-row {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.75rem;
+  justify-content: space-between;
 }
-@media (max-width: 600px) {
-  .security-mfa-status,
-  .security-mfa-passkey-device {
-    align-items: stretch;
-    flex-direction: column;
+.security-card-intro {
+  color: var(--colour-muted);
+  font-size: var(--font-body);
+  line-height: 1.45;
+  margin: 0;
+}
+.security-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.security-row {
+  align-items: center;
+  border-top: 1px solid var(--colour-line);
+  column-gap: 0.8rem;
+  display: grid;
+  grid-template-columns: 2.75rem minmax(0, 1fr) auto;
+  min-width: 0;
+  padding: 0.85rem 0;
+}
+.security-row-no-aside {
+  grid-template-columns: 2.75rem minmax(0, 1fr);
+}
+.security-list > .security-row:first-child,
+.security-card-row {
+  border-top: 0;
+}
+.security-row-icon {
+  align-items: center;
+  align-self: start;
+  background: var(--colour-cream);
+  border-radius: 0.8rem;
+  color: var(--colour-slate);
+  display: inline-flex;
+  height: 2.75rem;
+  justify-content: center;
+  width: 2.75rem;
+}
+.security-row-copy {
+  align-content: center;
+  display: grid;
+  gap: 0.15rem;
+  min-width: 0;
+}
+.security-row-title {
+  color: var(--colour-slate);
+  font-size: var(--font-heading);
+  font-weight: 700;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+.security-row-detail {
+  color: var(--colour-slate);
+  font-size: var(--font-body);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.security-row-meta {
+  color: var(--colour-muted);
+  column-gap: 0.3rem;
+  display: flex;
+  flex-wrap: wrap;
+  font-size: var(--font-small);
+  line-height: 1.45;
+}
+.security-meta-part {
+  white-space: nowrap;
+}
+.security-row-aside {
+  align-items: flex-end;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  justify-self: end;
+}
+.security-row-aside-inline {
+  align-items: center;
+  flex-direction: row;
+  gap: 0.35rem;
+}
+.security-action {
+  font-size: var(--font-body);
+  padding: 0.55rem 1rem;
+  white-space: nowrap;
+}
+.security-action.secondary {
+  border-color: var(--colour-line-strong);
+}
+/* "Make preferred" sits under an MFA method's description, so the right
+   column keeps only status and the primary action, as in the mockup. */
+.security-mfa-status .security-inline-action {
+  font-size: var(--font-small);
+  justify-self: start;
+  margin: -0.35rem 0 -0.5rem;
+  min-height: 44px;
+  padding-left: 0;
+}
+.security-disclosure-chevron {
+  color: var(--colour-slate);
+  flex: none;
+  transition: transform 0.15s;
+}
+[aria-expanded="true"] + .security-disclosure-chevron {
+  transform: rotate(90deg);
+}
+@media (prefers-reduced-motion: reduce) {
+  .security-disclosure-chevron {
+    transition: none;
   }
-  .security-mfa-method-actions {
-    justify-content: flex-start;
+}
+.security-card > .notice,
+.security-panel {
+  margin: 0.25rem 0 0.75rem;
+}
+.security-manage-panel {
+  border-top: 1px solid var(--colour-line);
+  display: grid;
+  gap: 0.6rem;
+  padding: 0.85rem 0 0.5rem;
+}
+.security-manage-panel[hidden] {
+  display: none;
+}
+.security-manage-panel > .notice {
+  margin: 0;
+}
+.security-manage-row {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem 1rem;
+  justify-content: space-between;
+}
+.security-manage-row > .security-row-detail {
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+.security-panel-note {
+  color: var(--colour-muted);
+  font-size: var(--font-body);
+  margin: 0;
+}
+.security-panel-heading {
+  color: var(--colour-muted);
+  font-size: var(--font-small);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  margin: 0.4rem 0 0;
+  text-transform: uppercase;
+}
+.security-passkey-item {
+  grid-template-columns: 2.75rem minmax(0, 1fr);
+  row-gap: 0.4rem;
+}
+.security-passkey-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  grid-column: 2;
+}
+.security-count-badge {
+  background: var(--colour-cream-light);
+  border: 1px solid var(--colour-line-strong);
+  border-radius: 0.6rem;
+  color: var(--colour-slate);
+  font-size: var(--font-small);
+  font-weight: 600;
+  padding: 0.3rem 0.65rem;
+  white-space: nowrap;
+}
+.security-device-list > .security-device-current {
+  background: var(--colour-sage-soft);
+  border-radius: 0.9rem;
+  border-top: 0;
+  margin: 0.35rem 0 0.1rem;
+  padding: 0.75rem 0.85rem 0.75rem 0.5rem;
+}
+.security-device-current .security-row-icon {
+  background: transparent;
+}
+.security-device-current + .security-row {
+  border-top: 0;
+}
+.security-current-badge {
+  background: var(--colour-sage-dark);
+  border-radius: 999px;
+  color: var(--colour-white);
+  font-size: var(--font-small);
+  font-weight: 700;
+  padding: 0.25rem 0.75rem;
+  white-space: nowrap;
+}
+.security-wide-action {
+  margin-top: 0.5rem;
+  width: 100%;
+}
+.security-wide-action + .security-wide-action {
+  margin-top: 0.75rem;
+}
+.security-card > .security-wide-action:last-child {
+  margin-bottom: 0.5rem;
+}
+.security-signout-all {
+  background: var(--colour-cream-light);
+}
+/* Narrow phones (e.g. 320px): there is not enough width beside the copy
+   for a status badge and a button, so the actions sit beneath it — still
+   left-aligned with the copy, in one row. */
+@media (max-width: 359px) {
+  .security-row:not(.security-device-current) {
+    grid-template-columns: 2.75rem minmax(0, 1fr);
+    row-gap: 0.55rem;
   }
-  .security-row-actions {
-    justify-content: flex-start;
-  }
-  .security-device-row {
-    align-items: start;
-    grid-template-columns: auto minmax(0, 1fr);
-  }
-  .security-device-row > button {
+  .security-row:not(.security-device-current) > .security-row-aside {
+    align-items: center;
+    flex-direction: row;
+    flex-wrap: wrap;
     grid-column: 2;
     justify-self: start;
   }
-  .security-passkey-row {
-    align-items: start;
-    display: grid;
-    grid-template-columns: auto minmax(0, 1fr);
+}
+@media (min-width: 600px) {
+  .security-card {
+    padding: 1.4rem 1.5rem 0.9rem;
   }
-  .security-passkey-row .settings-inline-actions {
-    grid-column: 2;
-    justify-content: flex-start;
+  .security-row {
+    column-gap: 1rem;
   }
 }
 .auth-biometric .tertiary {
