@@ -48,6 +48,7 @@ vi.mock("@mykhaya/api-client", async (importOriginal) => {
     api: {
       ...actual.api,
       externalIdentities: vi.fn(),
+      authProviders: vi.fn(),
       appleLinkStart: vi.fn(),
       appleRecoveryLink: vi.fn(),
       appleUnlink: vi.fn(),
@@ -158,6 +159,12 @@ beforeEach(() => {
     identities: [],
   });
   (api.passkeys as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+  (api.authProviders as ReturnType<typeof vi.fn>).mockResolvedValue({
+    providers: [
+      { provider: "apple", enabled: true },
+      { provider: "google", enabled: true },
+    ],
+  });
   (api.mfaStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
     required: false,
     allowed_methods: ["totp", "email"],
@@ -179,7 +186,7 @@ describe("Security — browser passkeys, not enrolled on this device", () => {
     await screen.findByText("Sign-in methods");
     expect(screen.getByText("Email and password")).toBeInTheDocument();
     expect(screen.getByText("Apple")).toBeInTheDocument();
-    await user.click(screen.getAllByRole("button", { name: "Connect" })[0]!);
+    await user.click(await screen.findByRole("button", { name: "Connect Apple" }));
 
     expect(api.appleLinkStart).toHaveBeenCalled();
   });
@@ -263,7 +270,7 @@ describe("Security — browser passkeys, not enrolled on this device", () => {
     render(<Security />);
 
     await screen.findByText("relay@privaterelay.appleid.com");
-    await user.click(screen.getByRole("button", { name: "Disconnect" }));
+    await user.click(screen.getByRole("button", { name: "Disconnect Apple" }));
     expect(api.appleUnlink).toHaveBeenCalled();
     await screen.findByText("Apple sign-in has been disconnected.");
   });
@@ -276,15 +283,23 @@ describe("Security — browser passkeys, not enrolled on this device", () => {
     render(<Security />);
 
     await screen.findByText("Google");
-    await user.click(screen.getAllByRole("button", { name: "Connect" })[1]!);
+    await user.click(await screen.findByRole("button", { name: "Connect Google" }));
 
     expect(api.googleLinkStart).toHaveBeenCalled();
   });
 
-  it("shows a generic Add passkey action inside the MFA card", async () => {
+  it("shows passkeys in their own card with a generic Add passkey action behind Manage", async () => {
+    const user = userEvent.setup();
     render(<Security />);
 
-    await screen.findByText("Passkeys");
+    const card = (await screen.findByRole("heading", { name: "Passkeys" })).closest("section")!;
+    expect(card).not.toContainElement(screen.getByRole("heading", { name: "Multi-factor authentication" }));
+    expect(screen.getByText("No passkeys set up")).toBeInTheDocument();
+    const manage = screen.getByRole("button", { name: "Manage passkeys" });
+    expect(manage).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByRole("button", { name: "Add passkey" })).not.toBeInTheDocument();
+    await user.click(manage);
+    expect(manage).toHaveAttribute("aria-expanded", "true");
     expect(screen.getByRole("button", { name: "Add passkey" })).toBeInTheDocument();
     expect(screen.getByText(/use a passkey to sign in securely/i)).toBeInTheDocument();
     expect(screen.queryByText(/webauthn/i)).not.toBeInTheDocument();
@@ -293,9 +308,11 @@ describe("Security — browser passkeys, not enrolled on this device", () => {
 
   it("does not show a broken Enable button when no platform authenticator is available", async () => {
     (passkeyClient.biometricSignInAvailable as ReturnType<typeof vi.fn>).mockResolvedValue(false);
+    const user = userEvent.setup();
     render(<Security />);
 
-    await screen.findByText(/passkeys aren't available/i);
+    await user.click(await screen.findByRole("button", { name: "Manage passkeys" }));
+    await screen.findByText(/passkeys aren.t available/i);
     expect(screen.queryByRole("button", { name: /enable/i })).not.toBeInTheDocument();
   });
 
@@ -331,6 +348,7 @@ describe("Security — browser passkeys, not enrolled on this device", () => {
     const user = userEvent.setup();
     render(<Security />);
 
+    await user.click(await screen.findByRole("button", { name: "Manage passkeys" }));
     await user.click(await screen.findByRole("button", { name: "Add passkey" }));
 
     await screen.findByText(/a passkey is enabled on this browser\/device/i);
@@ -352,6 +370,7 @@ describe("Security — browser passkeys, not enrolled on this device", () => {
     const user = userEvent.setup();
     render(<Security />);
 
+    await user.click(await screen.findByRole("button", { name: "Manage passkeys" }));
     await user.click(await screen.findByRole("button", { name: "Add passkey" }));
 
     await screen.findByText(/setup was cancelled/i);
@@ -370,7 +389,11 @@ describe("Security — browser passkey already enabled on this device", () => {
   });
 
   it("shows the enabled state and a Disable control, not a credential list", async () => {
+    const user = userEvent.setup();
     render(<Security />);
+
+    expect(await screen.findByText("1 passkey set up")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Manage passkeys" }));
 
     await screen.findByText(/a passkey is enabled on this browser\/device/i);
     expect(screen.getByRole("button", { name: /disable/i })).toBeInTheDocument();
@@ -383,6 +406,7 @@ describe("Security — browser passkey already enabled on this device", () => {
     const user = userEvent.setup();
     render(<Security />);
 
+    await user.click(await screen.findByRole("button", { name: "Manage passkeys" }));
     await user.click(await screen.findByRole("button", { name: /disable/i }));
 
     expect(api.revokePasskey).toHaveBeenCalledWith("passkey-1");
@@ -396,26 +420,33 @@ describe("Security — browser passkey already enabled on this device", () => {
     const user = userEvent.setup();
     render(<Security />);
 
+    await user.click(await screen.findByRole("button", { name: "Manage passkeys" }));
     await user.click(await screen.findByRole("button", { name: /disable/i }));
 
     expect(api.revokePasskey).not.toHaveBeenCalled();
     expect(passkeyClient.getEnrolledPasskeyId()).toBe("passkey-1");
   });
 
-  it("other devices' credentials are tucked behind a secondary disclosure, not shown as a primary list", async () => {
+  it("other devices' credentials stay inside the Manage panel, with rename and remove", async () => {
     (api.passkeys as ReturnType<typeof vi.fn>).mockResolvedValue([
       passkey({ id: "passkey-1", label: "iPhone" }),
       passkey({ id: "passkey-2", label: "Work laptop" }),
     ]);
+    (api.revokePasskey as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+    vi.spyOn(window, "confirm").mockReturnValue(true);
     render(<Security />);
 
-    await screen.findByText(/a passkey is enabled on this browser\/device/i);
+    expect(await screen.findByText("2 passkeys set up")).toBeInTheDocument();
     expect(screen.getByText("Work laptop")).not.toBeVisible();
-    await screen.findByText(/1 other browser passkey/i);
 
     const user = userEvent.setup();
-    await user.click(screen.getByText(/1 other browser passkey/i));
-    expect(screen.getByText("Work laptop")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Manage passkeys" }));
+    expect(screen.getByText("Work laptop")).toBeVisible();
+    expect(screen.getByText("Passkeys on other devices")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Rename Work laptop" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Remove Work laptop" }));
+    expect(api.revokePasskey).toHaveBeenCalledWith("passkey-2");
+    await waitFor(() => expect(screen.queryByText("Work laptop")).not.toBeInTheDocument());
   });
 });
 
@@ -477,5 +508,222 @@ describe("Security — native shell shows Quick Sign-In instead of the browser p
 
     expect(setBiometricSignInEnabled).not.toHaveBeenCalledWith(true);
     expect(document.querySelector(".notice.error")).not.toBeInTheDocument();
+  });
+});
+
+function device(overrides: Partial<{
+  id: string;
+  device_name: string;
+  platform: string;
+  user_agent: string;
+  last_used_at: string;
+  current: boolean;
+}> = {}) {
+  return {
+    id: "device-1",
+    device_name: "MyKhaya device",
+    platform: "Web/PWA",
+    user_agent: "Mozilla/5.0",
+    last_used_at: "2026-11-05T10:00:00Z",
+    current: false,
+    ...overrides,
+  };
+}
+
+const manyDevices = [
+  device({ id: "current", platform: "iOS", current: true }),
+  ...Array.from({ length: 6 }, (_, index) =>
+    device({
+      id: `other-${index}`,
+      platform: index % 2 ? "iOS" : "Web/PWA",
+      last_used_at: `2026-11-0${index + 1}T10:00:00Z`,
+    }),
+  ),
+];
+
+describe("Security — sign-in method rows", () => {
+  it("shows Apple's metadata and does not repeat a connection state for a disconnected provider", async () => {
+    (api.externalIdentities as ReturnType<typeof vi.fn>).mockResolvedValue({
+      password_available: true,
+      identities: [{
+        provider: "apple",
+        provider_email: "me@example.com",
+        provider_email_verified: true,
+        linked_at: "2026-11-04T00:00:00Z",
+        last_used_at: "2026-11-05T00:00:00Z",
+      }],
+    });
+    render(<Security />);
+
+    const apple = (await screen.findByText("Apple")).closest("li")!;
+    expect(apple).toHaveTextContent("me@example.com");
+    expect(apple).toHaveTextContent(/Linked .*2026/);
+    expect(apple).toHaveTextContent(/Last used .*2026/);
+    expect(apple).toHaveTextContent("Connected");
+    const google = screen.getByText("Google").closest("li")!;
+    expect(google.textContent?.match(/Not connected/g)).toHaveLength(1);
+    expect(await screen.findByRole("button", { name: "Connect Google" })).toBeInTheDocument();
+  });
+
+  it("never offers Connect for a provider the platform has disabled", async () => {
+    (api.authProviders as ReturnType<typeof vi.fn>).mockResolvedValue({
+      providers: [
+        { provider: "apple", enabled: true },
+        { provider: "google", enabled: false },
+      ],
+    });
+    render(<Security />);
+
+    await screen.findByRole("button", { name: "Connect Apple" });
+    expect(screen.queryByRole("button", { name: "Connect Google" })).not.toBeInTheDocument();
+    expect(screen.getByText("Google").closest("li")).toHaveTextContent("Unavailable");
+  });
+
+  it("offers no Connect action while provider availability is unresolved or failed", async () => {
+    (api.authProviders as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("offline"));
+    render(<Security />);
+
+    await screen.findAllByText("Unavailable");
+    expect(screen.queryByRole("button", { name: /^Connect/ })).not.toBeInTheDocument();
+  });
+});
+
+describe("Security — multi-factor authentication", () => {
+  it("keeps the preferred-method choice and calls the existing preference API", async () => {
+    (api.mfaStatus as ReturnType<typeof vi.fn>).mockResolvedValue({
+      required: true,
+      allowed_methods: ["totp", "email"],
+      email_available: true,
+      email_destination: "a***@example.com",
+      totp_enabled: true,
+      can_disable_totp: true,
+      usable_methods: ["totp", "email"],
+      preferred_method: "email",
+    });
+    (api.setMfaPreference as ReturnType<typeof vi.fn>).mockResolvedValue({
+      required: true,
+      allowed_methods: ["totp", "email"],
+      email_available: true,
+      email_destination: "a***@example.com",
+      totp_enabled: true,
+      can_disable_totp: true,
+      usable_methods: ["totp", "email"],
+      preferred_method: "totp",
+    });
+    const user = userEvent.setup();
+    render(<Security />);
+
+    const emailRow = (await screen.findByText("Email verification")).closest("li")!;
+    expect(emailRow).toHaveTextContent("a***@example.com");
+    expect(emailRow).toHaveTextContent("Preferred");
+    expect(screen.getByRole("button", { name: "Disable" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Make preferred" }));
+
+    expect(api.setMfaPreference).toHaveBeenCalledWith("totp");
+    await waitFor(() =>
+      expect(screen.getByText("Authenticator app").closest("li")).toHaveTextContent("Preferred"),
+    );
+  });
+});
+
+describe("Security — signed-in devices", () => {
+  it("highlights the backend-identified current session and shows the real session count", async () => {
+    (api.devices as ReturnType<typeof vi.fn>).mockResolvedValue([
+      device({ id: "web", platform: "Web/PWA" }),
+      device({ id: "phone", platform: "iOS", current: true }),
+    ]);
+    render(<Security />);
+
+    expect(await screen.findByText("2 sessions")).toBeInTheDocument();
+    const current = screen.getByText("This device").closest("li")!;
+    expect(current).toHaveClass("security-device-current");
+    expect(current).toHaveTextContent("iOS");
+    expect(current).toHaveTextContent("Current");
+    expect(screen.getByText("Web browser").closest("li")).toHaveTextContent("Web/PWA");
+  });
+
+  it("does not guess a current device when the API marks none", async () => {
+    (api.devices as ReturnType<typeof vi.fn>).mockResolvedValue([device({ id: "a", platform: "iOS" })]);
+    render(<Security />);
+
+    expect(await screen.findByText("1 session")).toBeInTheDocument();
+    expect(screen.queryByText("This device")).not.toBeInTheDocument();
+    expect(screen.getByText("iOS device")).toBeInTheDocument();
+  });
+
+  it("collapses to the current and two most recent sessions, then shows all and fewer without revoking", async () => {
+    (api.devices as ReturnType<typeof vi.fn>).mockResolvedValue(manyDevices);
+    const user = userEvent.setup();
+    render(<Security />);
+
+    expect(await screen.findByText("7 sessions")).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: /^Sign out .*last active/ })).toHaveLength(2);
+    const toggle = screen.getByRole("button", { name: "Show all devices (4 more)" });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+
+    await user.click(toggle);
+    expect(screen.getAllByRole("button", { name: /^Sign out .*last active/ })).toHaveLength(6);
+    await user.click(screen.getByRole("button", { name: "Show fewer devices" }));
+    expect(screen.getAllByRole("button", { name: /^Sign out .*last active/ })).toHaveLength(2);
+    expect(api.revokeDevice).not.toHaveBeenCalled();
+    expect(api.revokeOtherDevices).not.toHaveBeenCalled();
+  });
+
+  it("lists the most recently active other sessions first", async () => {
+    (api.devices as ReturnType<typeof vi.fn>).mockResolvedValue(manyDevices);
+    render(<Security />);
+
+    const buttons = await screen.findAllByRole("button", { name: /^Sign out .*last active/ });
+    expect(buttons[0]).toHaveAccessibleName(`Sign out iOS device, last active ${new Date("2026-11-06T10:00:00Z").toLocaleDateString()}`);
+  });
+
+  it("signs out one session", async () => {
+    (api.devices as ReturnType<typeof vi.fn>).mockResolvedValue([
+      device({ id: "current", platform: "iOS", current: true }),
+      device({ id: "web", platform: "Web/PWA" }),
+    ]);
+    (api.revokeDevice as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+    const user = userEvent.setup();
+    render(<Security />);
+
+    await user.click(await screen.findByRole("button", { name: /^Sign out Web browser/ }));
+    expect(api.revokeDevice).toHaveBeenCalledWith("web");
+    expect(await screen.findByText("1 session")).toBeInTheDocument();
+  });
+
+  it("signs out all other sessions only after confirmation", async () => {
+    (api.devices as ReturnType<typeof vi.fn>).mockResolvedValue(manyDevices);
+    (api.revokeOtherDevices as ReturnType<typeof vi.fn>).mockResolvedValue(undefined);
+    const confirm = vi.spyOn(window, "confirm").mockReturnValueOnce(false).mockReturnValueOnce(true);
+    const user = userEvent.setup();
+    render(<Security />);
+
+    const button = await screen.findByRole("button", { name: "Sign out all other devices" });
+    await user.click(button);
+    expect(api.revokeOtherDevices).not.toHaveBeenCalled();
+    await user.click(button);
+    expect(confirm).toHaveBeenCalledTimes(2);
+    expect(api.revokeOtherDevices).toHaveBeenCalled();
+    expect(await screen.findByText("1 session")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Sign out all other devices" })).not.toBeInTheDocument();
+  });
+});
+
+describe("Security — native shell keeps account security features", () => {
+  it("shows MFA and passkey management without offering WebAuthn enrolment", async () => {
+    nativeShell = true;
+    (api.passkeys as ReturnType<typeof vi.fn>).mockResolvedValue([passkey({ id: "pk", label: "MacBook" })]);
+    const user = userEvent.setup();
+    render(<Security />);
+
+    expect(await screen.findByRole("heading", { name: "Multi-factor authentication" })).toBeInTheDocument();
+    expect(await screen.findByText("Use codes from your authenticator app.")).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Manage passkeys" }));
+    expect(screen.getByText("MacBook")).toBeVisible();
+    expect(screen.getByRole("button", { name: "Remove MacBook" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Add passkey" })).not.toBeInTheDocument();
+    expect(api.authProviders).not.toHaveBeenCalled();
+    expect(await screen.findByRole("button", { name: "Connect Apple" })).toBeInTheDocument();
+    expect(passkeyClient.biometricSignInAvailable).not.toHaveBeenCalled();
   });
 });

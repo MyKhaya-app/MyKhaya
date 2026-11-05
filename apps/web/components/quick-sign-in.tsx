@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { ScanFace } from "lucide-react";
 import {
   authenticateWithBiometrics,
   biometricLabel,
@@ -135,33 +136,46 @@ export function QuickSignIn() {
   const label = capability?.label ?? biometricLabel("none");
   const device = deviceNoun();
 
+  // Presented with the Security page's card/row structure (see the
+  // .security-* rules in app/styles.css) so it sits consistently beside
+  // the Passkeys card in the native shell.
   return (
-    <section className="card details">
-      <h2>Quick Sign-In</h2>
-      {enabled ? (
-        <>
-          <p className="muted">{label} is enabled on {device}.</p>
-          <button className="secondary" disabled={busy} onClick={() => void disable()}>
-            {busy ? "Turning off…" : "Disable"}
-          </button>
-        </>
-      ) : capability?.available ? (
-        <>
-          <p className="muted">Use {label} to securely access MyKhaya on {device}.</p>
-          <button className="secondary" disabled={busy} onClick={() => void enable()}>
-            {busy ? "Confirming…" : `Enable ${label}`}
-          </button>
-        </>
-      ) : capability?.notEnrolled ? (
-        <p className="muted">
-          {label} isn&rsquo;t set up on {device} yet — add it in {device}&rsquo;s Settings
-          app to use Quick Sign-In here.
-        </p>
-      ) : capability?.lockedOut ? (
-        <p className="muted">{label} is temporarily unavailable on {device}. Try again shortly.</p>
-      ) : capability ? (
-        <p className="muted">Quick Sign-In isn&rsquo;t available on {device} — your password still works as usual.</p>
-      ) : null}
+    <section className="card security-card" aria-labelledby="quick-sign-in-heading">
+      <div className="security-row security-card-row">
+        <span className="security-row-icon" aria-hidden="true">
+          <ScanFace size={22} strokeWidth={1.75} />
+        </span>
+        <div className="security-row-copy">
+          <h2 id="quick-sign-in-heading">Quick Sign-In</h2>
+          {enabled ? (
+            <span className="security-row-detail">{label} is enabled on {device}.</span>
+          ) : capability?.available ? (
+            <span className="security-row-detail">Use {label} to securely access MyKhaya on {device}.</span>
+          ) : capability?.notEnrolled ? (
+            <span className="security-row-detail">
+              {label} isn&rsquo;t set up on {device} yet — add it in {device}&rsquo;s Settings
+              app to use Quick Sign-In here.
+            </span>
+          ) : capability?.lockedOut ? (
+            <span className="security-row-detail">{label} is temporarily unavailable on {device}. Try again shortly.</span>
+          ) : capability ? (
+            <span className="security-row-detail">Quick Sign-In isn&rsquo;t available on {device} — your password still works as usual.</span>
+          ) : null}
+        </div>
+        {(enabled || capability?.available) && (
+          <div className="security-row-aside">
+            {enabled ? (
+              <button className="secondary security-action" disabled={busy} onClick={() => void disable()}>
+                {busy ? "Turning off…" : "Disable"}
+              </button>
+            ) : (
+              <button className="secondary security-action" disabled={busy} onClick={() => void enable()}>
+                {busy ? "Confirming…" : `Enable ${label}`}
+              </button>
+            )}
+          </div>
+        )}
+      </div>
       {message && <p className="notice" role="status">{message}</p>}
       {error && <p className="notice error" role="alert">{error}</p>}
     </section>
