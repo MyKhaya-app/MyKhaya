@@ -16,6 +16,7 @@ from mykhaya.db import SessionFactory
 from mykhaya.google_auth import GooglePendingIdentity
 from mykhaya.main import app
 from mykhaya.models import (
+    AuditEvent,
     BetaPendingRegistration,
     ExternalIdentity,
     ExternalIdentityProvider,
@@ -126,6 +127,12 @@ async def test_hide_my_email_requires_explicit_link_and_creates_no_duplicate_use
         user = await db.scalar(select(User).where(User.email == email))
         assert after == before
         assert identity is not None and user is not None and identity.user_id == user.id
+        events = (
+            await db.scalars(select(AuditEvent).where(AuditEvent.actor_user_id == user.id))
+        ).all()
+        event_types = [event.action for event in events]
+        assert "APPLE_IDENTITY_LINKED" in event_types
+        assert "GOOGLE_IDENTITY_LINKED" not in event_types
 
 
 @pytest.mark.asyncio

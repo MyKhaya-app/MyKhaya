@@ -1,5 +1,6 @@
 """Database-backed Google callback, recovery and registration coverage."""
 
+import asyncio
 from collections.abc import AsyncIterator
 from urllib.parse import parse_qs, urlparse
 from uuid import uuid4
@@ -12,7 +13,7 @@ from test_mobile_auth import ORIGIN, PASSWORD, csrf_header, register_and_verify
 from mykhaya.db import SessionFactory
 from mykhaya.google_auth import GoogleFlowState, GooglePendingIdentity
 from mykhaya.main import app
-from mykhaya.models import ExternalIdentity, ExternalIdentityProvider, User
+from mykhaya.models import AuditEvent, ExternalIdentity, ExternalIdentityProvider, User
 from mykhaya.routers import auth as auth_router
 
 
@@ -130,6 +131,148 @@ async def test_google_existing_account_links_only_after_password_authentication(
         assert identity is not None and user is not None
         assert identity.user_id == user.id
     assert pending == {}
+
+
+@pytest.mark.asyncio
+async def test_google_link_rejects_wrong_user_without_consuming_transaction(
+    client: AsyncClient, fake_google_callback
+) -> None:
+    pending, subject, provider_email = fake_google_callback
+    await register_and_verify(client, provider_email, "Correct Google User")
+    wrong_email = f"wrong-{uuid4().hex}@example.com"
+    await register_and_verify(client, wrong_email, "Wrong User")
+    callback = await client.get(
+        "/api/v1/auth/google/callback?state=state&code=code", follow_redirects=False
+    )
+    transaction = parse_qs(urlparse(callback.headers["location"]).query)["transaction"][0]
+
+    async with SessionFactory() as db:
+        correct_user = await db.scalar(select(User).where(User.email == provider_email))
+        assert correct_user is not None
+
+    wrong_login = await client.post(
+        "/api/v1/auth/login", json={"email": wrong_email, "password": PASSWORD}
+    )
+    assert wrong_login.status_code == 200
+    rejected = await client.post(
+        "/api/v1/auth/google/recovery/link",
+        headers=csrf_header(client),
+        json={"transaction_id": transaction},
+    )
+    assert rejected.status_code == 403
+    assert transaction in pending
+    async with SessionFactory() as db:
+        wrong_user = await db.scalar(select(User).where(User.email == wrong_email))
+        assert wrong_user is not None
+        wrong_events = (
+            await db.scalars(
+                select(AuditEvent).where(AuditEvent.actor_user_id == wrong_user.id)
+            )
+        ).all()
+        assert "GOOGLE_IDENTITY_LINKED" not in [event.action for event in wrong_events]
+
+    correct_login = await client.post(
+        "/api/v1/auth/login", json={"email": provider_email, "password": PASSWORD}
+    )
+    assert correct_login.status_code == 200
+    linked = await client.post(
+        "/api/v1/auth/google/recovery/link",
+        headers=csrf_header(client),
+        json={"transaction_id": transaction},
+    )
+    assert linked.status_code == 200, linked.text
+    assert pending == {}
+
+    async with SessionFactory() as db:
+        identity = await db.scalar(
+            select(ExternalIdentity).where(
+                ExternalIdentity.provider == ExternalIdentityProvider.google,
+                ExternalIdentity.provider_subject == subject,
+            )
+        )
+        events = (
+            await db.scalars(
+                select(AuditEvent).where(AuditEvent.action == "GOOGLE_IDENTITY_LINKED")
+            )
+        ).all()
+        assert identity is not None
+        assert identity.user_id == correct_user.id
+        assert events
+
+
+@pytest.mark.asyncio
+async def test_google_recovery_replay_is_rejected_after_successful_link(
+    client: AsyncClient, fake_google_callback
+) -> None:
+    pending, _subject, provider_email = fake_google_callback
+    await register_and_verify(client, provider_email, "Replay Google User")
+    callback = await client.get(
+        "/api/v1/auth/google/callback?state=state&code=code", follow_redirects=False
+    )
+    transaction = parse_qs(urlparse(callback.headers["location"]).query)["transaction"][0]
+    login = await client.post(
+        "/api/v1/auth/login", json={"email": provider_email, "password": PASSWORD}
+    )
+    assert login.status_code == 200
+    first = await client.post(
+        "/api/v1/auth/google/recovery/link",
+        headers=csrf_header(client),
+        json={"transaction_id": transaction},
+    )
+    assert first.status_code == 200
+    second = await client.post(
+        "/api/v1/auth/google/recovery/link",
+        headers=csrf_header(client),
+        json={"transaction_id": transaction},
+    )
+    assert second.status_code == 400
+    assert pending == {}
+
+
+@pytest.mark.asyncio
+async def test_concurrent_google_claims_are_single_use(
+    client: AsyncClient, fake_google_callback
+) -> None:
+    pending, subject, provider_email = fake_google_callback
+    await register_and_verify(client, provider_email, "Concurrent Google User")
+    second_client = AsyncClient(
+        transport=ASGITransport(app=app), base_url=ORIGIN, headers={"Origin": ORIGIN}
+    )
+    try:
+        first_login = await client.post(
+            "/api/v1/auth/login", json={"email": provider_email, "password": PASSWORD}
+        )
+        second_login = await second_client.post(
+            "/api/v1/auth/login", json={"email": provider_email, "password": PASSWORD}
+        )
+        assert first_login.status_code == 200
+        assert second_login.status_code == 200
+        transaction = "google-concurrent-transaction-1234567890"
+        pending[transaction] = GooglePendingIdentity(
+            transaction_id=transaction,
+            subject=subject,
+            provider_email=provider_email,
+            email_verified=True,
+            display_name="Concurrent Google User",
+            can_register=False,
+            return_path=None,
+        )
+        results = await asyncio.gather(
+            client.post(
+                "/api/v1/auth/google/recovery/link",
+                headers=csrf_header(client),
+                json={"transaction_id": transaction},
+            ),
+            second_client.post(
+                "/api/v1/auth/google/recovery/link",
+                headers=csrf_header(second_client),
+                json={"transaction_id": transaction},
+            ),
+        )
+        assert sorted(response.status_code for response in results) == [200, 400]
+        assert pending == {}
+    finally:
+        await second_client.aclose()
 
 
 @pytest.mark.asyncio

@@ -17,6 +17,7 @@ import { nativeRegister } from "@/components/native-auth";
 import { isNativeShell, nativePlatform } from "@/components/native-runtime";
 import { isMaintenanceError } from "@/components/maintenance";
 import { registrationUnavailableReason } from "@/components/registration-availability";
+import { socialRegistrationStartUrl } from "./registration-urls";
 import "@/app/brand-fonts.css";
 import "./register.css";
 
@@ -94,10 +95,6 @@ function RegisterBrandPanel({ beta }: { beta: boolean }) {
       </div>
     </section>
   );
-}
-
-export function socialRegistrationStartUrl(provider: "apple" | "google", context: string) {
-  return `/api/v1/auth/${provider}/start?next_path=${encodeURIComponent(context)}`;
 }
 
 export default function Register() {
@@ -348,12 +345,6 @@ export default function Register() {
         <p className="register-context-card register-context-card--success">
           {shareContext.source_group_name} wants to share the &ldquo;{shareContext.calendar_name}
           &rdquo; calendar with you. Create a free account to view it — Family isn&rsquo;t needed.
-        </p>
-      )}
-      {betaRequested && (
-        <p className="register-legacy-beta">
-          You’re registering for the MyKhaya Founding Beta. After verifying your email, you’ll
-          complete your Beta enrolment and receive complimentary Ultimate access.
         </p>
       )}
       {(socialProviders.apple || socialProviders.google) && !invitation && !calendarShare && (

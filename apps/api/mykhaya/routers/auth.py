@@ -977,7 +977,6 @@ async def apple_recovery_link(
             status.HTTP_409_CONFLICT, "This Apple identity is already linked."
         ) from None
     audit(db, request, "APPLE_IDENTITY_LINKED", current.id, target_type="external_identity")
-    audit(db, request, "GOOGLE_IDENTITY_LINKED", current.id, target_type="external_identity")
     try:
         await db.commit()
     except IntegrityError:
@@ -1473,7 +1472,7 @@ async def google_recovery_link(
     settings: Settings = Depends(get_settings),
 ) -> MessageResponse:
     require_fresh_adult_auth(auth)
-    pending = await consume_google_pending_identity(settings, body.transaction_id)
+    pending = await load_google_pending_identity(settings, body.transaction_id)
     if pending is None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "This Google sign-in attempt has expired.")
     current = await db.get(User, auth.user.id, with_for_update=True)
@@ -1481,6 +1480,13 @@ async def google_recovery_link(
         raise HTTPException(
             status.HTTP_401_UNAUTHORIZED, "Your sign-in session is no longer valid."
         )
+    if current.email != pending.provider_email:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, "This Google linking attempt is invalid."
+        )
+    pending = await consume_google_pending_identity(settings, body.transaction_id)
+    if pending is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This Google sign-in attempt has expired.")
     try:
         await link_external_identity(
             db,
