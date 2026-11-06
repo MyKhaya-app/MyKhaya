@@ -139,9 +139,7 @@ async def consume_flow_state(settings: Settings, state: str) -> GoogleFlowState:
             native_return_uri=str(data["native_return_uri"])
             if data.get("native_return_uri")
             else None,
-            native_platform=str(data["native_platform"])
-            if data.get("native_platform")
-            else None,
+            native_platform=str(data["native_platform"]) if data.get("native_platform") else None,
             native_environment=str(data["native_environment"])
             if data.get("native_environment")
             else None,

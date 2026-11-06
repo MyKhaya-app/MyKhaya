@@ -154,9 +154,7 @@ async def test_native_new_registration_creates_one_user_after_explicit_choice(
     )
     assert registered.status_code == 200, registered.text
     async with SessionFactory() as db:
-        user = await db.scalar(
-            select(User).where(User.email == f"new-{subject}@example.com")
-        )
+        user = await db.scalar(select(User).where(User.email == f"new-{subject}@example.com"))
         identity = await db.scalar(
             select(ExternalIdentity).where(ExternalIdentity.provider_subject == subject)
         )
@@ -230,6 +228,7 @@ async def test_native_transaction_rejects_cross_environment_redemption(
         platform="ios",
         redemption_verifier_hash="wrong-hash",
     )
+
     async def consume(_settings, _transaction_id):
         return transaction
 

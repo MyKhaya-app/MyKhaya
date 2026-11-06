@@ -263,30 +263,6 @@ export default function Onboarding() {
                 Create a new Home
               </button>
             </article>
-            {pricing?.ultimate_options?.length ? (
-              <article className="card feature-card">
-                <div className="feature-card-heading"><h3>Ultimate</h3></div>
-                <p className="muted">Everything in Family, plus Budget, Driveway and future premium modules.</p>
-                <p className="pricing-amount">
-                  <strong>{ultimatePricingOptionFor(pricing, billingInterval)?.formatted_amount ?? "—"}</strong>
-                  <span aria-hidden="true"> / {intervalSuffix(billingInterval)}</span>
-                </p>
-                {!canStartUltimateCheckout(pricing) ? (
-                  <p className="notice" role="status">New Ultimate sign-ups are temporarily paused.</p>
-                ) : (
-                  <button
-                    type="button"
-                    disabled={busy || !ultimatePricingOptionFor(pricing, billingInterval)}
-                    onClick={() => {
-                      setRequestedPlan("ultimate");
-                      void upgradeToFamily("ultimate");
-                    }}
-                  >
-                    {busy ? "One moment…" : "Upgrade to Ultimate"}
-                  </button>
-                )}
-              </article>
-            ) : null}
           </div>
           <button type="button" className="tertiary onboarding-signout" onClick={signOut}>
             Sign out
@@ -488,6 +464,31 @@ export default function Onboarding() {
                 </button>
               )}
             </article>
+
+            {pricing?.ultimate_options?.length ? (
+              <article className="card feature-card">
+                <div className="feature-card-heading"><h3>Ultimate</h3></div>
+                <p className="muted">Everything in Family, plus Budget, Driveway and future premium modules.</p>
+                <p className="pricing-amount">
+                  <strong>{ultimatePricingOptionFor(pricing, billingInterval)?.formatted_amount ?? "—"}</strong>
+                  <span aria-hidden="true"> / {intervalSuffix(billingInterval)}</span>
+                </p>
+                {!canStartUltimateCheckout(pricing) ? (
+                  <p className="notice" role="status">New Ultimate sign-ups are temporarily paused.</p>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={busy || !ultimatePricingOptionFor(pricing, billingInterval)}
+                    onClick={() => {
+                      setRequestedPlan("ultimate");
+                      void upgradeToFamily("ultimate");
+                    }}
+                  >
+                    {busy ? "One moment…" : "Upgrade to Ultimate"}
+                  </button>
+                )}
+              </article>
+            ) : null}
           </div>
         </section>
       </main>

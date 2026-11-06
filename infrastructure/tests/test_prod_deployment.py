@@ -21,6 +21,9 @@ class ProductionDeploymentTests(unittest.TestCase):
         cls.health = (ROOT / "infrastructure/scripts/prod-health.sh").read_text(
             encoding="utf-8"
         )
+        cls.release_migration = (
+            ROOT / "infrastructure/scripts/run-release-check-migration.sh"
+        ).read_text(encoding="utf-8")
 
     def test_makefile_requires_release_and_passes_tag(self) -> None:
         target = self.makefile[self.makefile.index("prod-update:") :]
@@ -183,6 +186,17 @@ class ProductionDeploymentTests(unittest.TestCase):
             "$COMPOSE up -d --no-build caddy web api worker scheduler",
         ):
             self.assertLess(self.script.index(export), self.script.index(operation))
+
+    def test_release_check_migration_uses_an_isolated_compose_project(self) -> None:
+        target = self.makefile[self.makefile.index("release-check:") :]
+        self.assertIn("run-release-check-migration.sh", target)
+        self.assertIn('docker compose -p "$project" run --rm migrate alembic heads', self.release_migration)
+        self.assertIn('docker compose -p "$project" down -v --remove-orphans', self.release_migration)
+        self.assertIn("RELEASE_COMPOSE_PROJECT", self.release_migration)
+        self.assertNotIn("docker compose run --rm migrate alembic heads", target)
+
+    def test_release_check_migration_rejects_unsafe_project_names(self) -> None:
+        self.assertIn("*[!a-z0-9_-]*", self.release_migration)
 
 
 if __name__ == "__main__":

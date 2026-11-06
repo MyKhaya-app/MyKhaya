@@ -112,7 +112,7 @@ web-check:
 # reported green without ever running `validate_version.py`, which then
 # failed immediately in CI.
 release-check: version-check compose-check caddy-check
-	docker compose run --rm migrate alembic heads
+	sh infrastructure/scripts/run-release-check-migration.sh
 	$(MAKE) lint
 	$(MAKE) typecheck
 	$(MAKE) test

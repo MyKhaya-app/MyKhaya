@@ -1481,9 +1481,7 @@ async def google_recovery_link(
             status.HTTP_401_UNAUTHORIZED, "Your sign-in session is no longer valid."
         )
     if current.email != pending.provider_email:
-        raise HTTPException(
-            status.HTTP_403_FORBIDDEN, "This Google linking attempt is invalid."
-        )
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "This Google linking attempt is invalid.")
     pending = await consume_google_pending_identity(settings, body.transaction_id)
     if pending is None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "This Google sign-in attempt has expired.")
