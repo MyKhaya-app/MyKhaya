@@ -37,6 +37,12 @@ import {
   nativeMfaVerify,
   runNativeNetworkDiagnostics,
 } from "@/components/native-auth";
+import {
+  classifyNativeProviderFailure,
+  logNativeProviderFailure,
+  newNativeAuthCorrelationId,
+  type NativeProviderStage,
+} from "@/components/native-provider-errors";
 import { recordLoginFailureDiagnostic } from "@/components/auth-diagnostics";
 import { useAuth } from "@/components/auth-provider";
 import type { SignupStateValue } from "@/components/public-signup";
@@ -328,6 +334,10 @@ export default function Login() {
   async function startNativeProvider(provider: "apple" | "google") {
     setBusy(true);
     setError("");
+    // Each stage is recorded so a failure can be traced (stage + category +
+    // correlation id) without exposing tokens or the transaction itself.
+    let stage: NativeProviderStage = "start";
+    const correlationId = newNativeAuthCorrelationId();
     try {
       const useBrowser = (provider === "google" && nativePlatform() === "ios") || (provider === "apple" && nativePlatform() === "android");
       if (useBrowser) {
@@ -335,9 +345,12 @@ export default function Login() {
         await Browser.open({ url: started.authorization_url });
         return;
       }
-      const started = await nativeExternalStart(provider);
+      const started = await nativeExternalStart(provider, "login", correlationId);
+      stage = "provider";
       const assertion = await nativeExternalAssertion(provider, started.nonce, started.client_id);
-      const result = await nativeExternalExchange(started.transaction_id, assertion.identity_token);
+      stage = "exchange";
+      const result = await nativeExternalExchange(started.transaction_id, assertion.identity_token, correlationId);
+      stage = "follow_up";
       if ("id" in result) {
         await afterSignedIn(result);
       } else if ("authentication_state" in result && result.authentication_state === "additional_auth_required") {
@@ -349,7 +362,11 @@ export default function Login() {
         setNativeRecovery(result);
       }
     } catch (cause) {
-      setError(cause instanceof ApiError ? cause.message : `${provider === "apple" ? "Apple" : "Google"} sign-in could not be completed.`);
+      const failure = classifyNativeProviderFailure(cause, provider, stage);
+      logNativeProviderFailure(provider, stage, correlationId, failure);
+      // Cancelling the Apple/Google sheet is a choice, not an error: return
+      // quietly to the sign-in screen so the person can retry or use a password.
+      if (failure.userMessage) setError(failure.userMessage);
     } finally {
       setBusy(false);
     }

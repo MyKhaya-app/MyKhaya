@@ -265,11 +265,12 @@ export function nativeRenewSession(): Promise<User> {
 export async function nativeExternalStart(
   provider: "apple" | "google",
   intent: "login" | "link" = "login",
+  correlationId?: string,
 ): Promise<{ transaction_id: string; nonce: string; provider: "apple" | "google"; client_id: string | null }> {
   const platform = nativePlatform();
   if (platform !== "ios" && platform !== "android") throw new Error("Native provider sign-in is unavailable.");
   const verifier = newNativeRedemptionVerifier();
-  const result = await client().startExternal(provider, platform, verifier, intent);
+  const result = await client().startExternal(provider, platform, verifier, intent, correlationId);
   retainNativeRedemptionVerifier(result.transaction_id, verifier);
   return result;
 }
@@ -284,9 +285,9 @@ export async function nativeExternalAssertion(
   return NativeExternalAuth.signInGoogle({ nonce, client_id: clientId });
 }
 
-export async function nativeExternalExchange(transactionId: string, identityToken: string) {
+export async function nativeExternalExchange(transactionId: string, identityToken: string, correlationId?: string) {
   const verifier = redemptionVerifierFor(transactionId);
-  const result = await client().exchangeExternal(transactionId, identityToken, verifier);
+  const result = await client().exchangeExternal(transactionId, identityToken, verifier, correlationId);
   if ("id" in result) finishNativeRedemption(transactionId);
   else if ("transaction_id" in result) retainNativeRedemptionVerifier(result.transaction_id, verifier);
   return result;

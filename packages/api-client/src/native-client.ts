@@ -243,9 +243,10 @@ export class NativeMyKhayaClient {
     return parseApiResponse<T>(response);
   }
 
-  private async postUnauthenticated<T>(path: string, body: unknown): Promise<T> {
+  private async postUnauthenticated<T>(path: string, body: unknown, requestId?: string): Promise<T> {
     const headers = this.baseHeaders();
     headers.set("Content-Type", "application/json");
+    if (requestId) headers.set("X-Request-ID", requestId);
     let response: Response;
     try {
       response = await this.fetchImpl(`${this.baseUrl}${path}`, {
@@ -302,15 +303,17 @@ export class NativeMyKhayaClient {
     platform: "ios" | "android",
     redemptionVerifier: string,
     intent: "login" | "link" = "login",
+    requestId?: string,
   ): Promise<{ transaction_id: string; nonce: string; provider: "apple" | "google"; client_id: string | null }> {
     const body = { provider, platform, intent, redemption_verifier: redemptionVerifier };
     if (intent === "link") {
       return this.request<{ transaction_id: string; nonce: string; provider: "apple" | "google"; client_id: string | null }>("/auth/mobile/external/start", {
         method: "POST",
         body: JSON.stringify(body),
+        ...(requestId ? { headers: { "X-Request-ID": requestId } } : {}),
       }).then((result) => { this.linkTransactions.add(result.transaction_id); return result; });
     }
-    return this.postUnauthenticated("/auth/mobile/external/start", body);
+    return this.postUnauthenticated("/auth/mobile/external/start", body, requestId);
   }
 
   externalBrowserStart(provider: "apple" | "google", platform: "ios" | "android", returnUri: string, redemptionVerifier: string, intent: "login" | "link" = "login") {
@@ -355,6 +358,7 @@ export class NativeMyKhayaClient {
     transactionId: string,
     identityToken: string,
     redemptionVerifier: string,
+    requestId?: string,
   ): Promise<
     | User
     | { authentication_state: "account_choice"; transaction_id: string; provider: "apple" | "google"; provider_email: string | null; display_name: string; can_register: boolean }
@@ -377,7 +381,11 @@ export class NativeMyKhayaClient {
           display_name?: string;
           can_register?: boolean;
           message?: string;
-        }>("/auth/mobile/external/exchange", { method: "POST", body: JSON.stringify(body) })
+        }>("/auth/mobile/external/exchange", {
+          method: "POST",
+          body: JSON.stringify(body),
+          ...(requestId ? { headers: { "X-Request-ID": requestId } } : {}),
+        })
       : this.postUnauthenticated<{
       session_token?: string;
       device_token?: string;
@@ -388,7 +396,7 @@ export class NativeMyKhayaClient {
       display_name?: string;
       can_register?: boolean;
       message?: string;
-    }>("/auth/mobile/external/exchange", body));
+    }>("/auth/mobile/external/exchange", body, requestId));
     this.linkTransactions.delete(transactionId);
     if (result.session_token) {
       const { session_token, device_token, ...user } = result as User & { session_token: string; device_token?: string };

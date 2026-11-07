@@ -912,3 +912,36 @@ describe("NativeMyKhayaClient — Founding Beta waitlist (public POST)", () => {
     expect(fetchSpy).not.toHaveBeenCalled();
   });
 });
+
+describe("NativeMyKhayaClient — native provider correlation", () => {
+  it("sends the attempt's correlation id as X-Request-ID on start and exchange, and stores the session", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse(200, { transaction_id: "tx-1", nonce: "raw-nonce", provider: "apple", client_id: "app.mykhaya.mobile" }),
+      )
+      .mockResolvedValueOnce(
+        jsonResponse(200, { id: "user-1", display_name: "A", session_token: "session-secret", device_token: "device-secret" }),
+      );
+    const store = new InMemoryNativeSessionStore();
+    const client = new NativeMyKhayaClient(BASE_URL, store, { fetch: fetchMock });
+
+    await client.startExternal("apple", "ios", "v".repeat(64), "login", "nauth-0123456789abcdef");
+    const user = await client.exchangeExternal("tx-1", "identity-token", "v".repeat(64), "nauth-0123456789abcdef");
+
+    for (const [, init] of fetchMock.mock.calls) {
+      expect(new Headers((init as RequestInit).headers).get("X-Request-ID")).toBe("nauth-0123456789abcdef");
+    }
+    expect(user).not.toHaveProperty("session_token");
+    expect(await store.get()).toEqual({ token: "session-secret", deviceToken: "device-secret" });
+  });
+
+  it("omits X-Request-ID when no correlation id is given", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      jsonResponse(200, { transaction_id: "tx-1", nonce: "raw-nonce", provider: "apple", client_id: "app.mykhaya.mobile" }),
+    );
+    const client = new NativeMyKhayaClient(BASE_URL, new InMemoryNativeSessionStore(), { fetch: fetchMock });
+    await client.startExternal("apple", "ios", "v".repeat(64));
+    expect(new Headers((fetchMock.mock.calls[0]![1] as RequestInit).headers).has("X-Request-ID")).toBe(false);
+  });
+});

@@ -129,6 +129,47 @@ hash and requires the verifier for exchange, recovery and MFA redemption.
 Transactions expire and are single-use. Losing the app's in-memory verifier
 therefore fails safely without issuing a session.
 
+## Native iOS requirements
+
+Native iOS Apple sign-in (AuthenticationServices, in
+`apps/ios-shell/native/plugin/NativeExternalAuthPlugin.swift`) needs all of:
+
+- The `com.apple.developer.applesignin` entitlement (`Default`) in the signed
+  app. It is committed in `AppDebug.entitlements` and `AppRelease.entitlements`
+  and enforced by `apps/ios-shell/src/ios-environments.test.ts`. Without it,
+  every request fails immediately with `ASAuthorizationError.unknown` (1000)
+  and no Apple sheet appears.
+- **Sign in with Apple** enabled on the environment's App ID
+  (`app.mykhaya.mobile` for DEV, `app.mykhaya.mobile.prod` for PROD), and a
+  provisioning profile regenerated after enabling it. With automatic signing,
+  Xcode does this when it builds with the entitlement.
+- `MYKHAYA_APPLE_NATIVE_CLIENT_ID` set to that same bundle ID. Apple issues the
+  native identity token with the bundle ID as its audience, not the web
+  Services ID, so DEV and PROD tokens are not interchangeable.
+
+Nonce contract: `/auth/mobile/external/start` returns a raw nonce and stores
+its SHA-256. The plugin passes `sha256(raw)` (hex) to Apple, and the API
+compares it with the token's `nonce` claim.
+
+### Native diagnostics
+
+Each native attempt has a random correlation ID (`nauth-…`). It is sent as
+`X-Request-ID` on start and exchange, so it appears in the API `request` log
+lines and in the device console (`[NATIVE AUTH] provider attempt failed`)
+together with `stage`, `category`, `code` and `native_code`. The API logs
+`native_external_auth_failed` (`auth_diag`) with a fixed `category`, and for
+rejected tokens a `reason` such as `audience_mismatch`, `nonce_mismatch`,
+`token_expired`, `issuer_mismatch`, `token_signature_or_claims_invalid` or
+`apple_keys_unavailable`. Tokens, nonces, transaction IDs, Apple subjects and
+email addresses are never logged.
+
+| Device `code` | Meaning |
+| --- | --- |
+| `cancelled` | The person closed the Apple sheet; no error is shown |
+| `apple_unknown` (1000) | Missing entitlement or profile, or no Apple Account signed in on the device |
+| `UNIMPLEMENTED` | The installed app predates the native plugin and needs updating |
+| `apple_failed`, `apple_invalid_response`, `apple_not_handled` | Apple-side failure; retry |
+
 ## Troubleshooting and rollback
 
 - A disabled or incomplete provider reports Apple as unavailable and leaves

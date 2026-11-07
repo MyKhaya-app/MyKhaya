@@ -22,6 +22,12 @@ import {
 import { isNativeShell } from "@/components/native-runtime";
 import { QuickSignIn } from "@/components/quick-sign-in";
 import { nativeExternalAssertion, nativeExternalBrowserStart, nativeExternalExchange, nativeExternalRedeem, nativeExternalStart } from "@/components/native-auth";
+import {
+  classifyNativeProviderFailure,
+  logNativeProviderFailure,
+  newNativeAuthCorrelationId,
+  type NativeProviderStage,
+} from "@/components/native-provider-errors";
 import { nativePlatform } from "@/components/native-runtime";
 import { App } from "@capacitor/app";
 import { Browser } from "@capacitor/browser";
@@ -407,6 +413,8 @@ export default function Security() {
   async function linkNativeProvider(provider: "apple" | "google") {
     setIdentityBusy(true);
     setError("");
+    let stage: NativeProviderStage = "start";
+    const correlationId = newNativeAuthCorrelationId();
     try {
       const platform = nativePlatform();
       const useBrowser = (provider === "google" && platform === "ios") || (provider === "apple" && platform === "android");
@@ -416,16 +424,22 @@ export default function Security() {
         await Browser.open({ url: result.authorization_url });
         return;
       }
-      const started = await nativeExternalStart(provider, "link");
+      stage = "start";
+      const started = await nativeExternalStart(provider, "link", correlationId);
+      stage = "provider";
       const assertion = await nativeExternalAssertion(provider, started.nonce, started.client_id);
-      const result = await nativeExternalExchange(started.transaction_id, assertion.identity_token);
+      stage = "exchange";
+      const result = await nativeExternalExchange(started.transaction_id, assertion.identity_token, correlationId);
+      stage = "follow_up";
       if (!("message" in result)) throw new Error("The provider link did not complete.");
       setMessage(result.message);
       const refreshed = await api.externalIdentities();
       setIdentities(refreshed.identities);
       setIdentityBusy(false);
     } catch (cause) {
-      setError(cause instanceof ApiError ? cause.message : "Could not connect the provider.");
+      const failure = classifyNativeProviderFailure(cause, provider, stage, "link");
+      logNativeProviderFailure(provider, stage, correlationId, failure);
+      if (failure.userMessage) setError(failure.userMessage);
       setIdentityBusy(false);
     }
   }

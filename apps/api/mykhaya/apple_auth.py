@@ -16,7 +16,7 @@ from urllib.parse import urlencode
 
 import httpx
 from authlib.jose import JsonWebKey, jwt  # type: ignore[import-untyped]
-from authlib.jose.errors import JoseError  # type: ignore[import-untyped]
+from authlib.jose.errors import ExpiredTokenError, JoseError  # type: ignore[import-untyped]
 from fastapi import HTTPException, status
 from redis.asyncio import Redis
 
@@ -29,7 +29,16 @@ PENDING_IDENTITY_TTL_SECONDS = 600
 
 
 class AppleAuthenticationError(Exception):
-    """An expected, user-safe Apple protocol failure."""
+    """An expected, user-safe Apple protocol failure.
+
+    ``reason`` is a fixed diagnostic category for server logs only (for
+    example ``audience_mismatch``). It never contains token contents, claims,
+    subjects or email addresses, and is never returned to the client.
+    """
+
+    def __init__(self, message: str, reason: str = "unspecified") -> None:
+        super().__init__(message)
+        self.reason = reason
 
 
 @dataclass(frozen=True)
@@ -315,36 +324,40 @@ async def exchange_code(settings: Settings, code: str) -> str:
 async def verify_identity_token(
     settings: Settings, identity_token: str, nonce: str, expected_audience: str | None = None
 ) -> dict[str, Any]:
+    failed = "Apple sign-in could not be verified."
     if not identity_token or len(identity_token) > 20000:
-        raise AppleAuthenticationError("Apple sign-in could not be verified.")
+        raise AppleAuthenticationError(failed, "token_missing_or_oversized")
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
             response = await client.get(settings.apple_jwks_url)
         response.raise_for_status()
         key_set = JsonWebKey.import_key_set(response.json())
+    except (httpx.HTTPError, ValueError, TypeError, JoseError) as exc:
+        raise AppleAuthenticationError(failed, "apple_keys_unavailable") from exc
+    try:
         claims = jwt.decode(identity_token, key_set)
         claims.validate()
-        issuer = claims.get("iss")
-        audience = claims.get("aud")
-        subject = claims.get("sub")
-        token_nonce = claims.get("nonce")
-        required_audience = expected_audience or apple_client_identifier(settings)
-        if issuer != APPLE_ISSUER:
-            raise AppleAuthenticationError("Apple sign-in could not be verified.")
-        valid_audience = audience == required_audience or (
-            isinstance(audience, list) and required_audience in audience
-        )
-        if not valid_audience:
-            raise AppleAuthenticationError("Apple sign-in could not be verified.")
-        if not isinstance(subject, str) or not subject or len(subject) > 255:
-            raise AppleAuthenticationError("Apple sign-in could not be verified.")
-        if not isinstance(token_nonce, str) or not secrets.compare_digest(token_nonce, nonce):
-            raise AppleAuthenticationError("Apple sign-in could not be verified.")
-        return dict(claims)
-    except (httpx.HTTPError, ValueError, TypeError, JoseError, AppleAuthenticationError) as exc:
-        if isinstance(exc, AppleAuthenticationError):
-            raise
-        raise AppleAuthenticationError("Apple sign-in could not be verified.") from exc
+    except ExpiredTokenError as exc:
+        raise AppleAuthenticationError(failed, "token_expired") from exc
+    except (ValueError, TypeError, JoseError) as exc:
+        raise AppleAuthenticationError(failed, "token_signature_or_claims_invalid") from exc
+    issuer = claims.get("iss")
+    audience = claims.get("aud")
+    subject = claims.get("sub")
+    token_nonce = claims.get("nonce")
+    required_audience = expected_audience or apple_client_identifier(settings)
+    if issuer != APPLE_ISSUER:
+        raise AppleAuthenticationError(failed, "issuer_mismatch")
+    valid_audience = audience == required_audience or (
+        isinstance(audience, list) and required_audience in audience
+    )
+    if not valid_audience:
+        raise AppleAuthenticationError(failed, "audience_mismatch")
+    if not isinstance(subject, str) or not subject or len(subject) > 255:
+        raise AppleAuthenticationError(failed, "subject_invalid")
+    if not isinstance(token_nonce, str) or not secrets.compare_digest(token_nonce, nonce):
+        raise AppleAuthenticationError(failed, "nonce_mismatch")
+    return dict(claims)
 
 
 def apple_error(message: str = "Apple sign-in could not be completed.") -> HTTPException:

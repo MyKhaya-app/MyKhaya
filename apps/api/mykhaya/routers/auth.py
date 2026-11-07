@@ -208,6 +208,24 @@ from mykhaya.security import (
 router = APIRouter(prefix="/auth", tags=["authentication"])
 GENERIC_EMAIL_MESSAGE = "If that address is registered, an email is on its way."
 auth_diag_log = structlog.get_logger("auth_diag")
+
+
+def _native_external_failure(
+    request: Request, stage: str, category: str, *, provider: str | None, **fields: str | None
+) -> None:
+    """Safe native provider diagnostics: fixed categories and the request id
+    (the client's per-attempt correlation id) only. Never tokens, nonces,
+    transaction ids, provider subjects or email addresses."""
+    auth_diag_log.warning(
+        "native_external_auth_failed",
+        stage=stage,
+        category=category,
+        provider=provider,
+        request_id=getattr(request.state, "request_id", None),
+        **fields,
+    )
+
+
 PASSKEY_LOGIN_COOKIE = "mk_passkey_challenge"
 PASSKEY_CHALLENGE_TTL_SECONDS = 300
 FRESH_AUTH_WINDOW = timedelta(minutes=10)
@@ -2864,9 +2882,10 @@ async def mobile_external_start(
             status.HTTP_400_BAD_REQUEST,
             "This provider must use the system-browser native flow on this platform.",
         )
-    if provider == ExternalIdentityProvider.apple and not settings.apple_sign_in_enabled:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "This sign-in method is unavailable.")
-    if provider == ExternalIdentityProvider.google and not settings.google_sign_in_enabled:
+    if (provider == ExternalIdentityProvider.apple and not settings.apple_sign_in_enabled) or (
+        provider == ExternalIdentityProvider.google and not settings.google_sign_in_enabled
+    ):
+        _native_external_failure(request, "start", "provider_disabled", provider=provider.value)
         raise HTTPException(status.HTTP_404_NOT_FOUND, "This sign-in method is unavailable.")
     native_client_id = (
         settings.apple_native_client_id
@@ -2874,6 +2893,9 @@ async def mobile_external_start(
         else settings.google_native_client_id
     )
     if not native_client_id:
+        _native_external_failure(
+            request, "start", "native_client_id_not_configured", provider=provider.value
+        )
         raise HTTPException(
             status.HTTP_503_SERVICE_UNAVAILABLE, "This native sign-in method is not configured."
         )
@@ -3003,14 +3025,24 @@ async def mobile_external_exchange(
     require_secure_transport(request, settings)
     tx = await consume_native_external_transaction(settings, body.transaction_id)
     if tx is None:
+        # Unknown, expired or already redeemed (replay) — indistinguishable by design.
+        _native_external_failure(
+            request, "exchange", "transaction_missing_expired_or_replayed", provider=None
+        )
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST, "This sign-in attempt is invalid or has expired."
         )
     if tx.environment != settings.environment:
+        _native_external_failure(
+            request, "exchange", "environment_mismatch", provider=tx.provider.value
+        )
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST, "This sign-in attempt is invalid or has expired."
         )
     if not verify_redemption_verifier(body.redemption_verifier, tx.redemption_verifier_hash):
+        _native_external_failure(
+            request, "exchange", "redemption_verifier_mismatch", provider=tx.provider.value
+        )
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST, "This sign-in attempt is invalid or has expired."
         )
@@ -3039,7 +3071,20 @@ async def mobile_external_exchange(
             provider_email = str(claims["email"])
             email_verified = True
             display_name = str(claims.get("name") or "Google user")
-    except (AppleAuthenticationError, GoogleAuthenticationError, KeyError, TypeError, ValueError):
+    except (
+        AppleAuthenticationError,
+        GoogleAuthenticationError,
+        KeyError,
+        TypeError,
+        ValueError,
+    ) as exc:
+        _native_external_failure(
+            request,
+            "exchange",
+            "provider_token_rejected",
+            provider=tx.provider.value,
+            reason=getattr(exc, "reason", None) or type(exc).__name__,
+        )
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST, "The provider sign-in could not be verified."
         ) from None
