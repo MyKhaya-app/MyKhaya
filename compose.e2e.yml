@@ -1,0 +1,160 @@
+# Disposable E2E stack. Invoke only with an explicit non-default -p project.
+# It intentionally has no env_file and no host secret-directory fallbacks.
+services:
+  postgres:
+    image: postgres:17.5-alpine3.22
+    environment:
+      POSTGRES_DB: mykhaya
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: synthetic-postgres-password
+      MYKHAYA_MIGRATION_DB_PASSWORD: synthetic-migration-password
+      MYKHAYA_DB_PASSWORD: synthetic-app-password
+    volumes:
+      - postgres_e2e_data:/var/lib/postgresql/data
+      - ./infrastructure/docker/init-db.sh:/docker-entrypoint-initdb.d/10-init.sh:ro
+    networks: [e2e-data]
+    healthcheck: { test: [CMD-SHELL, "pg_isready -U postgres -d mykhaya"], interval: 2s, timeout: 3s, retries: 30 }
+
+  redis:
+    image: redis:8.0.3-alpine3.21
+    command: [redis-server, --save, "", --appendonly, "no"]
+    networks: [e2e-data]
+    healthcheck: { test: [CMD, redis-cli, ping], interval: 2s, timeout: 3s, retries: 30 }
+
+  mailpit:
+    image: axllent/mailpit:v1.27.1
+    networks: [e2e-data, e2e-browser]
+    ports:
+      - target: 8025
+        published: "${MYKHAYA_E2E_MAILPIT_PORT:-18082}"
+        host_ip: 127.0.0.1
+
+  oauth-provider:
+    build: { context: ., dockerfile: infrastructure/e2e/Dockerfile.oauth-provider }
+    networks: [e2e-data, e2e-browser]
+    ports: ["127.0.0.1:18081:8081"]
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+
+  migrate:
+    build: { context: ., dockerfile: apps/api/Dockerfile }
+    environment:
+      MYKHAYA_ENVIRONMENT: development
+      MYKHAYA_DATABASE_URL: postgresql+asyncpg://mykhaya_migrator:synthetic-migration-password@postgres:5432/mykhaya
+      MYKHAYA_SECRET_KEY: synthetic-e2e-secret-key-0123456789abcdef
+      MYKHAYA_TRUSTED_HOSTS: '["localhost","127.0.0.1","127.0.0.1:18089","admin.localhost","status.localhost","api.localhost","api","api:8000"]'
+      MYKHAYA_CORS_ORIGINS: '["http://localhost:8080","http://admin.localhost:8080","http://127.0.0.1:18089"]'
+    command: [alembic, upgrade, head]
+    depends_on: { postgres: { condition: service_healthy } }
+    networks: [e2e-data]
+
+  seed:
+    build: { context: ., dockerfile: apps/api/Dockerfile }
+    environment:
+      MYKHAYA_ENVIRONMENT: development
+      MYKHAYA_DATABASE_URL: postgresql+asyncpg://mykhaya_app:synthetic-app-password@postgres:5432/mykhaya
+      MYKHAYA_SECRET_KEY: synthetic-e2e-secret-key-0123456789abcdef
+      MYKHAYA_TRUSTED_HOSTS: '["localhost","127.0.0.1","127.0.0.1:18089","admin.localhost","status.localhost","api.localhost","api","api:8000"]'
+      MYKHAYA_CORS_ORIGINS: '["http://localhost:8080","http://admin.localhost:8080","http://127.0.0.1:18089"]'
+    volumes:
+      - ./infrastructure/e2e/seed.py:/opt/e2e/seed.py:ro
+    command: [python, /opt/e2e/seed.py]
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+    networks: [e2e-data]
+
+  worker:
+    build: { context: ., dockerfile: apps/api/Dockerfile }
+    environment:
+      MYKHAYA_ENVIRONMENT: development
+      MYKHAYA_DATABASE_URL: postgresql+asyncpg://mykhaya_app:synthetic-app-password@postgres:5432/mykhaya
+      MYKHAYA_REDIS_URL: redis://redis:6379/0
+      MYKHAYA_SECRET_KEY: synthetic-e2e-secret-key-0123456789abcdef
+      MYKHAYA_TRUSTED_HOSTS: '["localhost","127.0.0.1","admin.localhost","status.localhost","api.localhost","api","api:8000"]'
+      MYKHAYA_CORS_ORIGINS: '["http://localhost:8080","http://admin.localhost:8080","http://status.localhost:8080"]'
+      MYKHAYA_SMTP_HOST: mailpit
+      MYKHAYA_SMTP_PORT: "1025"
+      MYKHAYA_EMAIL_DELIVERY_CONFIGURED: "true"
+      MYKHAYA_APPLE_SIGN_IN_ENABLED: "false"
+      MYKHAYA_GOOGLE_SIGN_IN_ENABLED: "false"
+    command: [python, -m, mykhaya.worker]
+    depends_on:
+      seed: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+      mailpit: { condition: service_started }
+    networks: [e2e-data]
+
+  scheduler:
+    build: { context: ., dockerfile: apps/api/Dockerfile }
+    environment:
+      MYKHAYA_ENVIRONMENT: development
+      MYKHAYA_DATABASE_URL: postgresql+asyncpg://mykhaya_app:synthetic-app-password@postgres:5432/mykhaya
+      MYKHAYA_REDIS_URL: redis://redis:6379/0
+      MYKHAYA_SECRET_KEY: synthetic-e2e-secret-key-0123456789abcdef
+      MYKHAYA_TRUSTED_HOSTS: '["localhost","127.0.0.1","admin.localhost","status.localhost","api.localhost","api","api:8000"]'
+      MYKHAYA_CORS_ORIGINS: '["http://localhost:8080","http://admin.localhost:8080","http://status.localhost:8080"]'
+      MYKHAYA_APPLE_SIGN_IN_ENABLED: "false"
+      MYKHAYA_GOOGLE_SIGN_IN_ENABLED: "false"
+    command: [python, -m, mykhaya.scheduler]
+    depends_on:
+      seed: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+    networks: [e2e-data]
+
+  api:
+    build: { context: ., dockerfile: apps/api/Dockerfile }
+    environment:
+      MYKHAYA_ENVIRONMENT: development
+      MYKHAYA_DATABASE_URL: postgresql+asyncpg://mykhaya_app:synthetic-app-password@postgres:5432/mykhaya
+      MYKHAYA_REDIS_URL: redis://redis:6379/0
+      MYKHAYA_SECRET_KEY: synthetic-e2e-secret-key-0123456789abcdef
+      MYKHAYA_TRUSTED_HOSTS: '["localhost","127.0.0.1","127.0.0.1:18089","admin.localhost","status.localhost","api.localhost","api","api:8000"]'
+      MYKHAYA_CORS_ORIGINS: '["http://127.0.0.1:${MYKHAYA_E2E_WEB_PORT:-18089}","http://admin.localhost:8080","http://status.localhost:8080"]'
+      MYKHAYA_PUBLIC_WEB_URL: http://127.0.0.1:${MYKHAYA_E2E_WEB_PORT:-18089}
+      MYKHAYA_COOKIE_SECURE: "false"
+      MYKHAYA_BROWSER_MFA_HANDOFF_ENABLED: "true"
+      MYKHAYA_EMAIL_VERIFICATION_ENABLED: "true"
+      MYKHAYA_APPLE_SIGN_IN_ENABLED: "true"
+      MYKHAYA_APPLE_CLIENT_ID: synthetic.apple.client
+      MYKHAYA_APPLE_SERVICE_ID: synthetic.apple.service
+      MYKHAYA_APPLE_TEAM_ID: synthetic-team
+      MYKHAYA_APPLE_KEY_ID: synthetic-key
+      MYKHAYA_APPLE_PRIVATE_KEY_FILE: /run/secrets/e2e/apple-sign-in.p8
+      MYKHAYA_APPLE_REDIRECT_URI: http://127.0.0.1:${MYKHAYA_E2E_WEB_PORT:-18089}/api/v1/auth/apple/callback
+      MYKHAYA_APPLE_AUTHORIZE_URL: http://127.0.0.1:18081/apple/authorize
+      MYKHAYA_APPLE_TOKEN_URL: http://oauth-provider:8081/apple/token
+      MYKHAYA_APPLE_JWKS_URL: http://oauth-provider:8081/apple/jwks
+      MYKHAYA_GOOGLE_SIGN_IN_ENABLED: "true"
+      MYKHAYA_GOOGLE_CLIENT_ID: synthetic.google.client
+      MYKHAYA_GOOGLE_CLIENT_SECRET: synthetic-google-secret
+      MYKHAYA_GOOGLE_REDIRECT_URI: http://127.0.0.1:${MYKHAYA_E2E_WEB_PORT:-18089}/api/v1/auth/google/callback
+      MYKHAYA_GOOGLE_AUTHORIZE_URL: http://127.0.0.1:18081/google/authorize
+      MYKHAYA_GOOGLE_TOKEN_URL: http://oauth-provider:8081/google/token
+      MYKHAYA_GOOGLE_JWKS_URL: http://oauth-provider:8081/google/jwks
+    volumes:
+      - ${MYKHAYA_E2E_SECRET_DIR:-./.e2e-secrets}:/run/secrets/e2e:ro
+      - ./infrastructure/e2e/verify_google.py:/opt/e2e/verify_google.py:ro
+    depends_on:
+      seed: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+      oauth-provider: { condition: service_started }
+    networks: [e2e-data, e2e-browser]
+    ports: ["127.0.0.1:18080:8000"]
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+      args: { MYKHAYA_COMMIT_SHA: "31084ed2c39ae9c00eea43b531d518138491a229" }
+    environment: { API_INTERNAL_URL: http://api:8000 }
+    depends_on: { api: { condition: service_healthy } }
+    networks: [e2e-browser]
+    ports: ["127.0.0.1:${MYKHAYA_E2E_WEB_PORT:-18089}:3000"]
+
+volumes:
+  postgres_e2e_data: {}
+
+networks:
+  e2e-data: { internal: true }
+  e2e-browser: {}

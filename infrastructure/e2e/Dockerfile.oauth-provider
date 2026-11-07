@@ -1,0 +1,7 @@
+FROM python:3.13.5-slim-bookworm
+WORKDIR /app
+RUN pip install --no-cache-dir cryptography python-jose[cryptography]
+COPY infrastructure/e2e/oauth-provider.py ./oauth-provider.py
+USER 65532:65532
+EXPOSE 8081
+CMD ["python", "oauth-provider.py"]
