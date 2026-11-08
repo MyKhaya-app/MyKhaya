@@ -118,7 +118,7 @@ services:
     # Phase 2A). Set MYKHAYA_FIELD_KEYS_HOST_DIR (production:
     # /etc/mykhaya/field-keys). See docs/operations/sensitive-field-keys.md.
     volumes:
-      ["avatar_data:/data/avatars", "support_attachment_data:/data/support-attachments", "vehicle_photo_data:/data/vehicle-photos", "meal_image_data:/data/meal-images", "home_migration_data:/data/home-migrations", "${MYKHAYA_FIELD_KEYS_HOST_DIR:-./secrets/field-keys}:/run/secrets/mykhaya:ro", "${MYKHAYA_APPLE_KEY_HOST_DIR:-./secrets/apple}:/run/secrets/mykhaya-apple:ro"]
+      ["avatar_data:/data/avatars", "support_attachment_data:/data/support-attachments", "vehicle_photo_data:/data/vehicle-photos", "meal_image_data:/data/meal-images", "home_migration_data:/data/home-migrations", "legal_evidence_data:/data/legal-evidence", "${MYKHAYA_FIELD_KEYS_HOST_DIR:-./secrets/field-keys}:/run/secrets/mykhaya:ro", "${MYKHAYA_APPLE_KEY_HOST_DIR:-./secrets/apple}:/run/secrets/mykhaya-apple:ro"]
     restart: unless-stopped
     logging: *default-logging
     cap_drop: [ALL]
@@ -357,3 +357,4 @@ volumes:
   vehicle_photo_data: {}
   meal_image_data: {}
   home_migration_data: {}
+  legal_evidence_data: {}

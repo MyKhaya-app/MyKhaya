@@ -403,7 +403,10 @@ async def _process_legal_evidence(db: AsyncSession, settings: Settings, event: O
         acceptance_reference=str(evidence.acceptance_id),
         content_sha256=evidence.content_sha256,
     )
-    key = evidence.pdf_storage_key or evidence_filename()
+    # The evidence id makes the archive key deterministic. If a worker dies
+    # after writing the PDF but before committing the row, the next attempt
+    # finds the same immutable object instead of orphaning a second copy.
+    key = evidence.pdf_storage_key or evidence_filename(evidence.id)
     await get_legal_evidence_storage(settings).save_once(key, pdf)
     evidence.pdf_storage_key = key
     evidence.pdf_sha256 = hashlib.sha256(pdf).hexdigest()
@@ -556,6 +559,29 @@ async def process(event_id: uuid.UUID) -> None:
             job.finished_at = datetime.now(UTC)
             event.attempts += 1
             event.last_error = type(exc).__name__[:500]
+            if event.topic == "legal.acceptance_evidence":
+                evidence = await db.get(
+                    LegalAcceptanceEvidence, uuid.UUID(event.payload["evidence_id"])
+                )
+                if evidence is not None:
+                    terminal = event.attempts >= MAX_ATTEMPTS
+                    if evidence.status == LegalEvidenceStatus.generating:
+                        evidence.last_error = (
+                            "PDF generation failed permanently."
+                            if terminal
+                            else "PDF generation will be retried."
+                        )
+                    else:
+                        evidence.last_error = (
+                            "Evidence processing failed permanently."
+                            if terminal
+                            else "Evidence processing will be retried."
+                        )
+                    evidence.status = (
+                        LegalEvidenceStatus.failed
+                        if terminal
+                        else LegalEvidenceStatus.retry_pending
+                    )
             if event.attempts >= MAX_ATTEMPTS:
                 # Give up for good: stop the row being selected again, but
                 # leave the WorkerJobRecord as the permanent diagnostic

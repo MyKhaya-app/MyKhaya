@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+import os
+import re
+import tempfile
 import uuid
 from pathlib import Path
 
@@ -22,9 +25,36 @@ class LegalEvidenceStorage:
 
     async def save_once(self, key: str, data: bytes) -> None:
         path = self._path(key)
-        if path.exists():
-            return
-        await asyncio.to_thread(path.write_bytes, data)
+
+        def write_atomically() -> None:
+            if path.exists():
+                if path.read_bytes() != data:
+                    raise OSError(
+                        "Existing legal evidence file differs from the immutable artefact"
+                    )
+                return
+            fd, temporary_name = tempfile.mkstemp(
+                dir=self._base_dir, prefix=f".{path.name}.", suffix=".tmp"
+            )
+            try:
+                with os.fdopen(fd, "wb") as temporary:
+                    temporary.write(data)
+                    temporary.flush()
+                    os.fsync(temporary.fileno())
+                try:
+                    # A hard link gives us an atomic create-without-replace:
+                    # another worker can win the race, but an existing final
+                    # artefact is never overwritten.
+                    os.link(temporary_name, path)
+                except FileExistsError:
+                    pass
+            finally:
+                try:
+                    os.unlink(temporary_name)
+                except FileNotFoundError:
+                    pass
+
+        await asyncio.to_thread(write_atomically)
 
     async def load(self, key: str) -> bytes | None:
         try:
@@ -37,5 +67,18 @@ def get_legal_evidence_storage(settings: Settings) -> LegalEvidenceStorage:
     return LegalEvidenceStorage(Path(settings.legal_evidence_storage_dir))
 
 
-def evidence_filename() -> str:
-    return f"{uuid.uuid4()}.pdf"
+def evidence_filename(evidence_id: uuid.UUID | str | None = None) -> str:
+    return f"{evidence_id or uuid.uuid4()}.pdf"
+
+
+def evidence_download_filename(
+    document_name: str, document_version: str, accepted_at: object
+) -> str:
+    def slug(value: str) -> str:
+        return re.sub(r"[^A-Za-z0-9]+", "-", value).strip("-") or "document"
+
+    accepted_date = getattr(accepted_at, "date", lambda: accepted_at)()
+    return (
+        f"MyKhaya-{slug(document_name)}-v{slug(document_version)}-"
+        f"{accepted_date.isoformat()}.pdf"
+    )

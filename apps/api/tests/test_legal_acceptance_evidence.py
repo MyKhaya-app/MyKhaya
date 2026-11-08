@@ -6,7 +6,10 @@ import pytest
 
 from mykhaya.legal_evidence import queue_acceptance_evidence
 from mykhaya.legal_evidence_pdf import build_acceptance_pdf, sha256_text
-from mykhaya.legal_evidence_storage import LegalEvidenceStorage
+from mykhaya.legal_evidence_storage import (
+    LegalEvidenceStorage,
+    evidence_download_filename,
+)
 
 
 def test_pdf_contains_exact_content_and_certificate_metadata() -> None:
@@ -79,6 +82,16 @@ async def test_storage_rejects_path_traversal_and_preserves_existing_pdf(tmp_pat
         await storage.save_once("../outside.pdf", b"attacker")
 
     await storage.save_once("evidence.pdf", b"original")
-    await storage.save_once("evidence.pdf", b"replacement")
+    with pytest.raises(OSError):
+        await storage.save_once("evidence.pdf", b"replacement")
 
     assert await storage.load("evidence.pdf") == b"original"
+    assert list((tmp_path / "private").glob(".*.tmp")) == []
+
+
+def test_download_filename_is_descriptive_without_personal_data() -> None:
+    accepted_at = datetime(2026, 11, 8, 12, 0, tzinfo=UTC)
+    assert (
+        evidence_download_filename("Terms & Conditions", "1.3", accepted_at)
+        == "MyKhaya-Terms-Conditions-v1-3-2026-11-08.pdf"
+    )

@@ -18,7 +18,10 @@ from mykhaya.legal import (
     guardian_document_status,
     user_document_status,
 )
-from mykhaya.legal_evidence_storage import get_legal_evidence_storage
+from mykhaya.legal_evidence_storage import (
+    evidence_download_filename,
+    get_legal_evidence_storage,
+)
 from mykhaya.legal_test_mode import SETTING_KEY, configuration
 from mykhaya.models import (
     ChildProfile,
@@ -26,8 +29,10 @@ from mykhaya.models import (
     LegalAcceptanceEvidence,
     LegalDocument,
     LegalDocumentVersion,
+    LegalEvidenceStatus,
     LegalRecordType,
     Membership,
+    OutboxEvent,
     PlatformSetting,
     PrivacyRequest,
     PrivacyRequestStatus,
@@ -381,7 +386,60 @@ async def download_acceptance_evidence(
     data = await get_legal_evidence_storage(settings).load(evidence.pdf_storage_key)
     if data is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That evidence file is not available.")
-    return Response(content=data, media_type="application/pdf")
+    filename = evidence_download_filename(
+        evidence.document_name, evidence.document_version, evidence.accepted_at_utc
+    )
+    return Response(
+        content=data,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
+
+
+@router.post(
+    "/acceptance/{user_id}/evidence/{evidence_id}/retry",
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def retry_acceptance_evidence(
+    user_id: uuid.UUID,
+    evidence_id: uuid.UUID,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, str]:
+    require_recent_auth(context, settings)
+    evidence = await db.get(LegalAcceptanceEvidence, evidence_id)
+    if evidence is None or evidence.user_id != user_id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That evidence record could not be found.")
+    event = await db.scalar(
+        select(OutboxEvent).where(
+            OutboxEvent.topic == "legal.acceptance_evidence",
+            OutboxEvent.dedupe_key == f"legal.acceptance_evidence:{evidence.acceptance_id}",
+        )
+    )
+    if event is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That evidence job could not be found.")
+    if event.processed_at is not None:
+        event.processed_at = None
+        event.attempts = 0
+        event.available_at = None
+        event.last_error = None
+    evidence.status = LegalEvidenceStatus.pending
+    evidence.email_status = "pending"
+    evidence.last_error = None
+    platform_audit(
+        db,
+        request,
+        context,
+        "legal_acceptance_evidence.retry_requested",
+        "legal_acceptance_evidence",
+        target_id=evidence.id,
+        reason="PCC manual evidence retry",
+        new={"acceptance_id": str(evidence.acceptance_id)},
+    )
+    await db.commit()
+    return {"status": "queued"}
 
 
 @router.post(

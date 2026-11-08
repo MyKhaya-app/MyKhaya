@@ -53,12 +53,22 @@ function actionLabel(type: string) {
         : "Child acknowledgement";
 }
 
+function evidenceLabel(item: HistoryItem) {
+  if (!item.evidence_status)
+    return "PDF not available for historical acceptance";
+  if (item.evidence_status === "generating") return "Generating PDF";
+  if (item.evidence_status === "failed") return "PDF generation failed";
+  if (item.pdf_available) return "PDF ready";
+  return item.evidence_status;
+}
+
 export default function AcceptanceHistoryPage() {
   const { id } = useParams<{ id: string }>();
   const [data, setData] = useState<History | null>(null);
   const [error, setError] = useState("");
   const [message, setMessage] = useState("");
   const [resending, setResending] = useState<string | null>(null);
+  const [retrying, setRetrying] = useState<string | null>(null);
 
   async function load() {
     try {
@@ -108,6 +118,29 @@ export default function AcceptanceHistoryPage() {
       );
     } finally {
       setResending(null);
+    }
+  }
+
+  async function retry(item: HistoryItem) {
+    if (!item.evidence_id) return;
+    setRetrying(item.evidence_id);
+    setError("");
+    setMessage("");
+    try {
+      await platformApi.post(
+        `/compliance/acceptance/${encodeURIComponent(data!.user_id)}/evidence/${encodeURIComponent(item.evidence_id)}/retry`,
+        {},
+      );
+      setMessage("PDF evidence generation has been queued for retry.");
+      await load();
+    } catch (cause: unknown) {
+      setError(
+        cause instanceof ApiError
+          ? cause.message
+          : "Unable to queue the legal evidence retry.",
+      );
+    } finally {
+      setRetrying(null);
     }
   }
 
@@ -170,38 +203,49 @@ export default function AcceptanceHistoryPage() {
                         : ""}
                     </p>
                     <p>
-                      Evidence:{" "}
-                      {item.evidence_status ??
-                        "Unavailable for this historical record"}{" "}
-                      · Email: {item.email_status ?? "Unavailable"}
+                      Evidence: {evidenceLabel(item)} · Email:{" "}
+                      {item.email_status ?? "Unavailable"}
                     </p>
                     {item.evidence_last_error && (
                       <p className="muted">
                         Delivery detail: {item.evidence_last_error}
                       </p>
                     )}
-                    {item.pdf_available && (
-                      <>
-                        <a
-                          className="table-link"
-                          href={`/api/v1/platform/compliance/acceptance/${encodeURIComponent(data.user_id)}/evidence/${encodeURIComponent(item.id)}`}
-                        >
-                          Download PDF evidence
-                        </a>
-                        {item.evidence_id && (
-                          <button
-                            type="button"
+                    {item.evidence_status === "failed" && item.evidence_id && (
+                      <button
+                        type="button"
+                        className="table-link"
+                        disabled={retrying === item.evidence_id}
+                        onClick={() => void retry(item)}
+                      >
+                        {retrying === item.evidence_id
+                          ? "Queueing..."
+                          : "Retry PDF generation"}
+                      </button>
+                    )}
+                    {item.pdf_available &&
+                      item.evidence_status !== "generating" && (
+                        <>
+                          <a
                             className="table-link"
-                            disabled={resending === item.evidence_id}
-                            onClick={() => void resend(item)}
+                            href={`/api/v1/platform/compliance/acceptance/${encodeURIComponent(data.user_id)}/evidence/${encodeURIComponent(item.id)}`}
                           >
-                            {resending === item.evidence_id
-                              ? "Queueing..."
-                              : "Resend PDF"}
-                          </button>
-                        )}
-                      </>
-                    )}{" "}
+                            Download PDF evidence
+                          </a>
+                          {item.evidence_id && (
+                            <button
+                              type="button"
+                              className="table-link"
+                              disabled={resending === item.evidence_id}
+                              onClick={() => void resend(item)}
+                            >
+                              {resending === item.evidence_id
+                                ? "Queueing..."
+                                : "Resend PDF"}
+                            </button>
+                          )}
+                        </>
+                      )}{" "}
                     {item.email_sent_at && (
                       <span className="muted">
                         · Sent {new Date(item.email_sent_at).toLocaleString()}

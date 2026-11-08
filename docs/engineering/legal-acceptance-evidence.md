@@ -48,6 +48,15 @@ content is copied from the immutable version row, not re-read from today's
 published document. Retention follows the existing legal/privacy retention
 configuration; this feature does not invent a statutory retention period.
 
+The runtime API/worker containers run as UID/GID `10001`, with a read-only
+root filesystem. Legal evidence therefore uses the dedicated
+`legal_evidence_data` Docker volume mounted at `/data/legal-evidence`; the API
+image creates and owns that mount point before dropping privileges. The test
+stack overrides `MYKHAYA_LEGAL_EVIDENCE_STORAGE_DIR` to a writable `/tmp`
+location. A missing volume mount or a path outside a writable volume causes
+`OSError` during storage directory creation, before PDF generation can
+complete; it is not an SMTP failure.
+
 Local validation must use synthetic users and a mock SMTP/Mailpit transport.
 Do not deploy these migrations or enable real delivery against live DEV/PROD
 without separate release approval.
@@ -95,3 +104,33 @@ recorded as failed with a sanitised error. Operators may use the authenticated
 PCC resend endpoint after verifying the recipient and evidence reference. The
 resend idempotency key is stable per evidence row, so repeated requests do not
 queue duplicate deliveries.
+
+PDF archive keys are deterministic per evidence id and are written through an
+atomic temporary-file/link operation. A worker restart after the file write but
+before the database commit reuses the same immutable file; an existing file
+with different bytes is rejected rather than overwritten. Evidence processing
+failures transition from `generating` to `retry_pending` during normal retries,
+or `failed` after the worker's terminal attempt, so a row cannot remain in
+`generating` indefinitely. Authorised PCC operators can use **Retry PDF
+generation** for a failed evidence job; this resets the original outbox job
+without creating a replacement acceptance.
+
+The PCC history labels `Generating PDF`, `PDF ready`, `PDF generation failed`
+and `PDF not available for historical acceptance`. Download is available only
+when the private archive exists, requires the existing authenticated PCC
+support role, and supplies a descriptive filename such as
+`MyKhaya-Terms-Conditions-v1-3-2026-11-08.pdf`. Historical records without an
+evidence row retain the exact-version link but never imply that a contemporaneous
+PDF exists.
+
+For a terminally failed job, first verify the storage mount and permissions in
+the running worker, then use the authenticated PCC retry action. Read-only
+diagnostics for a DEV operator are:
+
+```text
+docker compose ps worker api
+docker compose exec worker sh -lc 'id; printf "storage=%s\\n" "$MYKHAYA_LEGAL_EVIDENCE_STORAGE_DIR"; ls -ld /data /data/legal-evidence; df -h /data; df -i /data'
+docker compose logs --since 30m worker | Select-String 'Legal Acceptance Evidence|OSError|legal.acceptance_evidence'
+```
+
+Do not delete the evidence row, clear the outbox, or remove an existing PDF.
