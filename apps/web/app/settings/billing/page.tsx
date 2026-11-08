@@ -287,7 +287,7 @@ export default function PlanAndBillingSettings() {
       title="Plan & Billing"
       description="Manage this Home's plan, payment and retention status."
     >
-      <main className="standard-page module-page">
+      <main className="standard-page module-page plan-billing-page">
         {checkoutBanner === "success" && (
           <p className="notice" role="status">
             {status?.effective_plan === "family"
@@ -643,45 +643,56 @@ export default function PlanAndBillingSettings() {
             {comparison && comparison.rows.length > 0 && (
               <section className="card plan-compare comparison-table-card">
                 <h2>Compare plans</h2>
-                <table className="plan-compare-table">
-                  <caption className="sr-only">
-                    What's included on the Free, Family and Ultimate plans
-                  </caption>
-                  <colgroup>
-                    <col className="plan-compare-col-feature" />
-                    <col className="plan-compare-col-free" />
-                    <col className="plan-compare-col-family" />
-                    <col className="plan-compare-col-family" />
-                  </colgroup>
-                  <thead>
-                    <tr>
-                      <th scope="col">Features</th>
-                      <th scope="col"><span className="plan-compare-heading"><Sprout size={18} aria-hidden="true" /><span>Free</span></span></th>
-                      <th scope="col" className="plan-compare-family-heading">
-                        <span className="plan-compare-heading"><Crown size={14} aria-hidden="true" /><span>Family</span></span>
-                      </th>
-                      <th scope="col" className="plan-compare-family-heading"><span className="plan-compare-heading"><Star size={14} aria-hidden="true" /><span>Ultimate</span></span></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {comparison.rows.map((row) => {
-                      const RowIcon = COMPARISON_ROW_ICONS[row.key];
-                      return (
-                        <tr key={row.key}>
-                          <th scope="row">
-                            <span className="plan-compare-row-feature">
-                              {RowIcon && <RowIcon size={15} aria-hidden="true" />}
-                              {row.label}
-                            </span>
-                          </th>
-                          <td className="plan-compare-free-value">{comparisonValue(row.free_display)}</td>
-                          <td className="plan-compare-family-value">{comparisonValue(row.family_display)}</td>
-                          <td className="plan-compare-family-value">{comparisonValue(row.ultimate_display)}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
+                <div className="plan-compare-table-wrap">
+                  <table className="plan-compare-table">
+                    <caption className="sr-only">
+                      What's included on the Free, Family and Ultimate plans
+                    </caption>
+                    <colgroup>
+                      <col className="plan-compare-col-feature" />
+                      <col className="plan-compare-col-free" />
+                      <col className="plan-compare-col-family" />
+                      <col className="plan-compare-col-family" />
+                    </colgroup>
+                    <thead>
+                      <tr>
+                        <th scope="col">Features</th>
+                        <th scope="col"><span className="plan-compare-heading"><Sprout size={18} aria-hidden="true" /><span>Free</span></span></th>
+                        <th scope="col" className="plan-compare-family-heading">
+                          <span className="plan-compare-heading"><Crown size={14} aria-hidden="true" /><span>Family</span></span>
+                        </th>
+                        <th scope="col" className="plan-compare-family-heading"><span className="plan-compare-heading"><Star size={14} aria-hidden="true" /><span>Ultimate</span></span></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {comparison.rows.map((row) => {
+                        const RowIcon = COMPARISON_ROW_ICONS[row.key];
+                        return (
+                          <tr key={row.key}>
+                            <th scope="row">
+                              <span className="plan-compare-row-feature">
+                                {RowIcon && <RowIcon size={15} aria-hidden="true" />}
+                                {row.label}
+                              </span>
+                            </th>
+                            <td className="plan-compare-free-value">
+                              <span className="plan-compare-mobile-label">Free</span>
+                              {comparisonValue(row.free_display)}
+                            </td>
+                            <td className="plan-compare-family-value">
+                              <span className="plan-compare-mobile-label">Family</span>
+                              {comparisonValue(row.family_display)}
+                            </td>
+                            <td className="plan-compare-family-value">
+                              <span className="plan-compare-mobile-label">Ultimate</span>
+                              {comparisonValue(row.ultimate_display)}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
               </section>
             )}
 

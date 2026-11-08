@@ -43,6 +43,17 @@ Use the [Native UI acceptance checklist](native-ui-acceptance.md) for that revie
 - Interactive controls must be at least 44 by 44 CSS pixels, keyboard reachable and visibly focused. Bottom sheets trap focus, close with Escape, restore focus and leave room for the on-screen keyboard and device safe areas.
 - Calendar month cells use compact event indicators on narrow phones. Selecting a day opens a readable day sheet; event creation and editing use a full-height sheet rather than a squeezed desktop form.
 - Prefer stacked cards and disclosure panels to wide tables. Text, names and event metadata must wrap without breaking the viewport.
+- Plan & Billing follows the same rule: its plan cards use a container-width
+  query and stack below 680px of available content width, including narrow
+  native-shell columns. The feature comparison becomes a readable stacked
+  feature list below 600px rather than shrinking text or creating document-
+  level horizontal scrolling; the conventional table remains in place on
+  wider content areas. This uses the authoritative comparison data and keeps
+  billing actions and subscription state unchanged. On wider desktop
+  presentation, the page uses a bounded content frame so all three plan cards
+  have room without changing native-shell geometry. Validate the route at
+  280, 320, 360, 375, 390, 430, 600, 768, 1024 and representative desktop
+  widths, including the Duo outer/inner shell presentations.
 - Respect `prefers-reduced-motion`; never make animation necessary to understand state.
 - Follow OWASP Mobile Top 10 2024 as an awareness baseline alongside the main security standards.
 

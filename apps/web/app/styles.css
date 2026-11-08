@@ -9806,7 +9806,13 @@ select.plan-meal-field-input {
   margin: 0 0 0.9rem;
 }
 .plan-compare-redesign {
+  container-name: plan-compare;
+  container-type: inline-size;
   padding: 18px;
+}
+.comparison-table-card {
+  container-name: plan-compare;
+  container-type: inline-size;
 }
 .comparison-table-card {
   margin-top: -0.45rem;
@@ -9907,7 +9913,11 @@ select.plan-meal-field-input {
   opacity: 0.72;
 }
 .plan-compare-table-wrap {
+  min-width: 0;
   overflow-x: auto;
+}
+.plan-compare-mobile-label {
+  display: none;
 }
 .plan-value-check {
   align-items: center;
@@ -10151,21 +10161,21 @@ select.plan-meal-field-input {
     width: 1.35rem;
   }
   .plan-option-title h3 {
-    font-size: 0.9rem;
+    font-size: 1rem;
   }
   .plan-option-description {
-    font-size: 0.7rem;
+    font-size: 0.82rem;
     margin-block: 0.55rem 0.8rem;
   }
   .plan-option-price {
-    font-size: 1.25rem;
+    font-size: 1.5rem;
   }
   .plan-option-cadence {
-    font-size: 0.68rem;
+    font-size: 0.78rem;
   }
   .plan-option-action {
-    font-size: 0.72rem;
-    min-height: 2.2rem;
+    font-size: 0.95rem;
+    min-height: 2.75rem;
   }
   .plan-compare-table {
     font-size: 0.75rem;
@@ -10192,10 +10202,10 @@ select.plan-meal-field-input {
     padding: 0.42rem 0.24rem;
   }
   .plan-compare-table thead th {
-    font-size: 0.64rem;
+    font-size: var(--font-small);
   }
   .plan-compare-row-feature {
-    font-size: 0.7rem;
+    font-size: var(--font-small);
     gap: 0.24rem;
   }
   .plan-compare-row-feature svg {
@@ -10213,6 +10223,102 @@ select.plan-meal-field-input {
     height: 1.2rem;
     padding: 0.22rem;
     width: 1.2rem;
+  }
+}
+
+/* Plan & Billing is often rendered inside a much narrower native-shell
+   content column than the viewport suggests (notably the Duo outer screen).
+   These container queries respond to the page's actual available width, not
+   to a device model or the outer viewport. */
+@container plan-compare (max-width: 680px) {
+  .plan-option-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .plan-option-card {
+    align-items: stretch;
+    padding: 1rem;
+    text-align: left;
+  }
+  .plan-option-card.is-current {
+    padding: calc(1rem - 1px);
+  }
+  .plan-option-title {
+    align-self: flex-start;
+  }
+  .plan-option-description {
+    min-height: 0;
+  }
+  .plan-option-price,
+  .plan-option-cadence {
+    align-self: flex-start;
+  }
+  .plan-option-action {
+    margin-top: 1rem;
+    min-height: 44px;
+  }
+}
+
+@container plan-compare (max-width: 600px) {
+  .plan-compare-table-wrap {
+    overflow: visible;
+  }
+  .plan-compare-table {
+    display: block;
+    font-size: var(--font-small);
+  }
+  .plan-compare-table colgroup,
+  .plan-compare-table thead {
+    display: none;
+  }
+  .plan-compare-table tbody,
+  .plan-compare-table tbody tr {
+    display: block;
+  }
+  .plan-compare-table tbody tr {
+    border-bottom: 1px solid var(--border, #e5ded1);
+    padding: 0.8rem 0;
+  }
+  .plan-compare-table tbody tr:first-child {
+    padding-top: 0;
+  }
+  .plan-compare-table tbody tr:last-child {
+    border-bottom: 0;
+    padding-bottom: 0;
+  }
+  .plan-compare-table tbody th {
+    display: block;
+    padding: 0 0 0.45rem;
+  }
+  .plan-compare-table tbody td {
+    align-items: baseline;
+    display: grid;
+    gap: 0.5rem;
+    grid-template-columns: minmax(4.5rem, 34%) minmax(0, 1fr);
+    padding: 0.35rem 0;
+    text-align: left !important;
+  }
+  .plan-compare-mobile-label {
+    color: var(--colour-slate);
+    display: block;
+    font-size: var(--font-micro);
+    font-weight: 700;
+  }
+  .plan-compare-family-value {
+    border-radius: 0.35rem;
+    padding-inline: 0.35rem !important;
+  }
+  .plan-compare-table tbody tr:last-child td.plan-compare-family-value {
+    border-radius: 0.35rem;
+  }
+}
+
+@media (min-width: 801px) {
+  /* Settings keeps a compact reading column by default. Plan comparison is
+     one of the few settings surfaces that benefits from the available
+     browser width; widening only this page preserves the mobile/native shell
+     geometry while allowing the three-card desktop presentation. */
+  .standard-page.plan-billing-page {
+    max-width: 960px;
   }
 }
 
