@@ -4,6 +4,7 @@ import {
   NativeMyKhayaClient,
   api,
   nativeApiBaseUrlForWebHost,
+  type NativeMfaContinuation,
   type NativeSessionStore,
 } from "@mykhaya/api-client";
 import { isNativeShell, nativePlatform } from "./native-runtime";
@@ -159,12 +160,21 @@ export function bootstrapNativeSession(): Promise<User | null> {
   })();
 }
 
-export function nativeLogin(email: string, password: string): Promise<User> {
+/** Native email/password sign-in. When the consumer MFA policy applies the
+ * server returns a continuation instead of a session; the per-attempt
+ * redemption verifier is retained under that continuation's transaction id so
+ * nativeMfaOptions/Start/Verify can prove they are the same client. */
+export function nativeLogin(email: string, password: string): Promise<User | NativeMfaContinuation> {
   lastNativeLoginDiagnostic = null;
-  return client().login(email, password).then((user) => {
+  const verifier = newNativeRedemptionVerifier();
+  return client().login(email, password, verifier).then((result) => {
+    if ("authentication_state" in result) {
+      retainNativeRedemptionVerifier(result.transaction_id, verifier);
+      return result;
+    }
     offerBiometricAfterLogin = true;
     void syncWidgetSnapshot();
-    return user;
+    return result;
   }).catch((error: unknown) => {
     if (error instanceof Error && "status" in error && typeof error.status === "number") {
       const code = "code" in error && typeof error.code === "string" ? error.code : `http_${error.status}`;
@@ -343,6 +353,14 @@ export function nativeMfaStart(transactionId: string, method: "totp" | "email") 
 export function nativeMfaVerify(transactionId: string, method: "totp" | "email", code: string) {
   return client().nativeMfaVerify(transactionId, method, code, redemptionVerifierFor(transactionId)).then((user) => {
     finishNativeRedemption(transactionId);
+    offerBiometricAfterLogin = true;
+    void syncWidgetSnapshot();
     return user;
   });
+}
+
+/** Abandon a native MFA continuation (the person chose "Use a different
+ * sign-in method"). The server transaction simply expires. */
+export function cancelNativeMfa(transactionId: string): void {
+  finishNativeRedemption(transactionId);
 }

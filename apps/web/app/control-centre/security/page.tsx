@@ -46,13 +46,13 @@ function consumerMethodLabel(method: string): string {
 
 function consumerEnforcementMessage(policy: ConsumerMfaPolicy): string {
   if (policy.effective === "required" && !policy.enforcement_enabled) {
-    return "Browser MFA is configured as Required but is not currently being enforced because the deployment safety gate is disabled.";
+    return "Consumer MFA is configured as Required but is not currently being enforced because the deployment safety gate is disabled.";
   }
   if (policy.effective === "required") {
-    return "Browser MFA is actively enforced for users whose effective policy requires it.";
+    return "Consumer MFA is actively enforced on web and native app sign-in for users whose effective policy requires it.";
   }
   if (policy.enforcement_enabled) {
-    return "The deployment supports Browser MFA enforcement, but the current Platform policy does not require it.";
+    return "The deployment supports Consumer MFA enforcement, but the current Platform policy does not require it.";
   }
   return "The current Platform policy is Optional and deployment enforcement is disabled.";
 }
@@ -80,7 +80,7 @@ export default function GlobalSecurityPage() {
       .catch((cause) => setAdminPolicyError(safeError(cause, "Could not load administrator MFA policy.")));
     void platformApi.get<ConsumerMfaPolicy>("/auth/mfa/browser-policy")
       .then(setBrowserPolicy)
-      .catch((cause) => setBrowserPolicyError(safeError(cause, "Browser MFA policy could not be loaded.")));
+      .catch((cause) => setBrowserPolicyError(safeError(cause, "Consumer MFA policy could not be loaded.")));
     void platformApi.get<{ items: SecurityEvent[] }>("/security?page_size=25")
       .then((result) => setEvents(result.items))
       .catch((cause) => setError(safeError(cause, "Security events could not be loaded.")));
@@ -141,10 +141,10 @@ export default function GlobalSecurityPage() {
           });
           setBrowserPolicy(result);
           setPendingBrowserChange(null);
-          setMessage("Browser MFA policy updated.");
+          setMessage("Consumer MFA policy updated.");
         } catch (cause) {
           if (cause instanceof ApiError && cause.status === 403) throw cause;
-          setError(safeError(cause, "The browser MFA policy could not be changed."));
+          setError(safeError(cause, "The consumer MFA policy could not be changed."));
         } finally {
           setSaving(false);
         }
@@ -187,7 +187,7 @@ export default function GlobalSecurityPage() {
         ) : (
           <CcCard
             title="Platform Administrator Security"
-            description="Protects privileged Platform Control Centre access. This is separate from consumer Browser MFA and cannot be weakened through consumer policy."
+            description="Protects privileged Platform Control Centre access. This is separate from Consumer MFA and cannot be weakened through consumer policy."
             icon={ShieldCheck}
             actions={<CcBadge tone={policy.required ? "success" : "warning"}>{policy.required ? "Required" : "Optional"}</CcBadge>}
           >
@@ -234,11 +234,11 @@ export default function GlobalSecurityPage() {
         )}
 
         {!browserPolicy ? (
-          browserPolicyError ? <CcNotice tone="error">{browserPolicyError}</CcNotice> : <CcLoadingState label="Loading browser MFA policy…" />
+          browserPolicyError ? <CcNotice tone="error">{browserPolicyError}</CcNotice> : <CcLoadingState label="Loading consumer MFA policy…" />
         ) : (
           <CcCard
-            title="Consumer Browser MFA"
-            description="Controls MFA for users signing into the MyKhaya consumer web application. This does not affect PCC administrator authentication or native app sign-in. Passkeys are managed separately from these Browser MFA challenge methods."
+            title="Consumer MFA"
+            description="Controls MFA for adult consumers signing into MyKhaya with a password, Apple, Google or a browser passkey, on the web and in the iOS and Android apps. Native app sign-in uses the same policy because the API cannot prove a request comes from the genuine app. When required, long-lived device renewal on web and native stops and the person signs in again with MFA. Managed-child sign-in and PCC administrator authentication are separate and unaffected."
             icon={ShieldCheck}
             actions={<CcBadge tone={browserPolicy.effective === "required" ? "success" : "warning"}>{titleCase(browserPolicy.effective)}</CcBadge>}
           >
@@ -272,7 +272,7 @@ export default function GlobalSecurityPage() {
             <p className="pcc-security-policy-note">Email codes expire after {browserPolicy.email_code_lifetime_minutes} minutes.</p>
             {pendingBrowserChange === null ? (
               <button className={browserPolicy.configured === "required" ? "secondary" : undefined} onClick={() => setPendingBrowserChange(browserPolicy.configured === "required" ? "optional" : "required")}>
-                {browserPolicy.configured === "required" ? "Make browser MFA optional" : "Require browser MFA"}
+                {browserPolicy.configured === "required" ? "Make consumer MFA optional" : "Require consumer MFA"}
               </button>
             ) : (
               <form onSubmit={(event) => { event.preventDefault(); const value = new FormData(event.currentTarget).get("browser-reason"); void applyBrowserChange(typeof value === "string" ? value : ""); }} className="mfa-method">
@@ -281,7 +281,7 @@ export default function GlobalSecurityPage() {
                 </CcField>
                 <div className="platform-modal-actions">
                   <button type="button" className="secondary" onClick={() => setPendingBrowserChange(null)} disabled={saving}>Cancel</button>
-                  <button disabled={saving}>{saving ? "Saving…" : "Confirm browser MFA policy"}</button>
+                  <button disabled={saving}>{saving ? "Saving…" : "Confirm consumer MFA policy"}</button>
                 </div>
               </form>
             )}

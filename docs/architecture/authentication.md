@@ -66,15 +66,21 @@ The default Apple callback is
 different canonical public origin. That exact URI must be registered in Apple
 Developer.
 
-Consumer browser MFA uses the existing Phase 4.5 pre-auth handoff when
+Consumer MFA uses the existing Phase 4.5 pre-auth handoff when
 `MYKHAYA_BROWSER_MFA_HANDOFF_ENABLED=true`; the setting remains false by
 default. Phase 5A supports only authenticator-app TOTP and verified-account
 email codes. TOTP secrets are encrypted with the application secret using a
 purpose-specific HKDF/Fernet key, while email challenge codes are stored only
 as keyed hashes in short-lived, single-use database records. Both methods
 complete by consuming the pre-auth transaction and issuing the ordinary
-opaque browser session. Native bearer sessions, managed-child authentication,
-and Platform Control Centre MFA are separate flows. Browser passkey login uses
+opaque browser session. Native bearer sign-in (password, Apple, Google) and
+native renewal enforce the same consumer policy through a separate native
+pre-auth transaction bound to a client redemption verifier, completed by
+`/auth/mobile/mfa/*`; a native request carries no app-authenticity proof, so
+it cannot be exempt (see
+[Consumer MFA enforcement](../engineering/consumer-mfa-enforcement.md)).
+Managed-child authentication and Platform Control Centre MFA are separate
+flows. Browser passkey login uses
 the same completion seam as password and Apple login: when browser MFA is
 required, a passkey establishes pre-authentication but does not silently bypass
 the configured second-factor policy. Browser trusted-device renewal is blocked

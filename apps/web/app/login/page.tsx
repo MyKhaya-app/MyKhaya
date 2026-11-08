@@ -23,6 +23,7 @@ import {
 import { isSafeInternalPath } from "@/components/internal-path";
 import { isNativeShell, nativePlatform } from "@/components/native-runtime";
 import {
+  cancelNativeMfa,
   getLastNativeLoginDiagnostic,
   nativeExternalAssertion,
   nativeExternalBrowserStart,
@@ -143,11 +144,16 @@ export default function Login() {
     [nativeMfaMethod, setNativeMfaMethod] = useState<"totp" | "email">("email"),
     [nativeMfaCode, setNativeMfaCode] = useState(""),
     [nativeMfaStarted, setNativeMfaStarted] = useState(false),
+    [nativeMfaEnrolmentKey, setNativeMfaEnrolmentKey] = useState<string | null>(null),
     [passwordVisible, setPasswordVisible] = useState(false),
     // undefined while loading, null if it failed: both show the normal card.
     [signupState, setSignupState] = useState<SignupStateValue>(undefined);
 
   const hint = getBiometricHint();
+  // While a native MFA challenge is open it is the only thing on the card:
+  // the password form, provider buttons and recovery choices are hidden so a
+  // second primary sign-in cannot be started underneath the challenge.
+  const nativeMfaActive = isNativeShell() && nativeMfaTransaction !== null;
 
   useEffect(() => {
     if (!isNativeShell() || (social !== "apple" && social !== "google") || appleResult || googleResult) return;
@@ -301,12 +307,7 @@ export default function Login() {
           if ("id" in result) await afterSignedIn(result);
           else if ("message" in result) throw new Error(result.message);
           else if (result.authentication_state === "account_choice") setNativeRecovery(result);
-          else {
-            setNativeMfaTransaction(result.transaction_id);
-            const options = await nativeMfaOptions(result.transaction_id);
-            setNativeMfaMethods(options.methods);
-            setNativeMfaMethod(options.preferred_method ?? options.methods[0] ?? "email");
-          }
+          else await enterNativeMfa(result.transaction_id);
         })().catch((cause) => setError(cause instanceof ApiError ? cause.message : "The provider callback could not be completed.")).finally(() => setBusy(false));
       } catch {
         setError("The provider callback was invalid.");
@@ -341,10 +342,7 @@ export default function Login() {
       if ("id" in result) {
         await afterSignedIn(result);
       } else if ("authentication_state" in result && result.authentication_state === "additional_auth_required") {
-        setNativeMfaTransaction(result.transaction_id);
-        const options = await nativeMfaOptions(result.transaction_id);
-        setNativeMfaMethods(options.methods);
-        setNativeMfaMethod(options.preferred_method ?? options.methods[0] ?? "email");
+        await enterNativeMfa(result.transaction_id);
       } else if ("authentication_state" in result) {
         setNativeRecovery(result);
       }
@@ -355,12 +353,36 @@ export default function Login() {
     }
   }
 
+  /** Native sign-in reached pre-authentication: the consumer MFA policy must
+   * be satisfied before any session exists. The sign-in form is replaced by
+   * the challenge (never stacked beneath it). */
+  async function enterNativeMfa(transactionId: string) {
+    setError("");
+    setNativeMfaStarted(false);
+    setNativeMfaCode("");
+    setNativeMfaEnrolmentKey(null);
+    setNativeMfaTransaction(transactionId);
+    const options = await nativeMfaOptions(transactionId);
+    setNativeMfaMethods(options.methods);
+    setNativeMfaMethod(options.preferred_method ?? options.methods[0] ?? "email");
+  }
+
+  function leaveNativeMfa() {
+    if (nativeMfaTransaction) cancelNativeMfa(nativeMfaTransaction);
+    setNativeMfaTransaction(null);
+    setNativeMfaStarted(false);
+    setNativeMfaCode("");
+    setNativeMfaEnrolmentKey(null);
+    setError("");
+  }
+
   async function startNativeMfa() {
     if (!nativeMfaTransaction) return;
     setBusy(true);
     setError("");
     try {
-      await nativeMfaStart(nativeMfaTransaction, nativeMfaMethod);
+      const started = await nativeMfaStart(nativeMfaTransaction, nativeMfaMethod);
+      setNativeMfaEnrolmentKey(started.enrolling && started.manual_key ? started.manual_key : null);
       setNativeMfaStarted(true);
     } catch (cause) {
       setError(cause instanceof ApiError ? cause.message : "Could not start verification.");
@@ -370,11 +392,17 @@ export default function Login() {
   }
 
   async function verifyNativeMfa() {
-    if (!nativeMfaTransaction || nativeMfaCode.length !== 6) return;
+    if (!nativeMfaTransaction || nativeMfaCode.length !== 6 || busy) return;
     setBusy(true);
     setError("");
     try {
-      await afterSignedIn(await nativeMfaVerify(nativeMfaTransaction, nativeMfaMethod, nativeMfaCode));
+      const user = await nativeMfaVerify(nativeMfaTransaction, nativeMfaMethod, nativeMfaCode);
+      // A provider-linking password sign-in links only after MFA completes.
+      if (nativeRecovery) {
+        await nativeExternalRecoveryLink(nativeRecovery.transaction_id);
+        setNativeRecovery(null);
+      }
+      await afterSignedIn(user);
     } catch (cause) {
       setError(cause instanceof ApiError ? cause.message : "The verification code could not be accepted.");
     } finally {
@@ -410,10 +438,7 @@ export default function Login() {
         platform: nativePlatform() === "android" ? "android" : "ios",
       });
       if ("authentication_state" in result) {
-        setNativeMfaTransaction(result.transaction_id);
-        const options = await nativeMfaOptions(result.transaction_id);
-        setNativeMfaMethods(options.methods);
-        setNativeMfaMethod(options.preferred_method ?? options.methods[0] ?? "email");
+        await enterNativeMfa(result.transaction_id);
       } else {
         await afterSignedIn(result);
       }
@@ -528,6 +553,12 @@ export default function Login() {
       const result: BrowserAuthResult = isNativeShell()
         ? await nativeLogin(email, password)
         : await api.post<BrowserAuthResult>("/auth/login", { email, password });
+      if ("authentication_state" in result && isNativeShell()) {
+        // Native MFA stays in-app on the bearer transport; the browser /mfa
+        // page is cookie-based and never used inside the native shell.
+        await enterNativeMfa(result.transaction_id);
+        return;
+      }
       if ("authentication_state" in result) {
         const linkQuery = appleLinking && appleTransaction
           ? `&apple_link_transaction=${encodeURIComponent(appleTransaction)}`
@@ -830,7 +861,7 @@ export default function Login() {
             </section>
           )}
           {googleResult === "error" && <p className="notice">Google sign-in could not be completed. Please try again or use your password.</p>}
-          {isNativeShell() && nativeRecovery && (
+          {isNativeShell() && nativeRecovery && !nativeMfaActive && (
             <section className="notice" aria-labelledby="native-recovery-heading">
               <h2 id="native-recovery-heading">Continue with {nativeRecovery.provider === "apple" ? "Apple" : "Google"}</h2>
               <p>Choose whether to link this provider to an existing MyKhaya account or create a new one. Accounts are never merged automatically.</p>
@@ -853,22 +884,32 @@ export default function Login() {
               )}
             </section>
           )}
-          {isNativeShell() && nativeMfaTransaction && (
-            <section className="notice" aria-labelledby="native-mfa-heading">
+          {nativeMfaActive && (
+            <section className="notice" aria-labelledby="native-mfa-heading" data-testid="native-mfa-challenge">
               <h2 id="native-mfa-heading">Additional verification required</h2>
-              <p>Complete your account’s required MFA before the native session is issued.</p>
+              <p>Your account requires a second verification step before you can continue.</p>
               <label htmlFor="native-mfa-method">Verification method</label>
-              <select id="native-mfa-method" value={nativeMfaMethod} onChange={(event) => setNativeMfaMethod(event.target.value as "totp" | "email")}>
+              <select id="native-mfa-method" value={nativeMfaMethod} disabled={nativeMfaStarted} onChange={(event) => setNativeMfaMethod(event.target.value as "totp" | "email")}>
                 {nativeMfaMethods.map((method) => <option key={method} value={method}>{method === "totp" ? "Authenticator app" : "Email code"}</option>)}
               </select>
-              {!nativeMfaStarted ? <button type="button" className="secondary" onClick={() => void startNativeMfa()} disabled={busy}>Start verification</button> : (
-                <>
-                  <input aria-label="MFA code" inputMode="numeric" maxLength={6} value={nativeMfaCode} onChange={(event) => setNativeMfaCode(event.target.value.replace(/\D/g, ""))} />
-                  <button type="button" onClick={() => void verifyNativeMfa()} disabled={busy || nativeMfaCode.length !== 6}>Verify and continue</button>
-                </>
+              {nativeMfaEnrolmentKey && (
+                <p>
+                  Add MyKhaya to your authenticator app with this setup key, then enter the 6-digit code:{" "}
+                  <code>{nativeMfaEnrolmentKey}</code>
+                </p>
               )}
+              {!nativeMfaStarted ? <button type="button" className="secondary" onClick={() => void startNativeMfa()} disabled={busy}>Start verification</button> : (
+                // A form so the keyboard's Go/Enter key submits the code.
+                <form onSubmit={(event) => { event.preventDefault(); void verifyNativeMfa(); }}>
+                  <input aria-label="MFA code" inputMode="numeric" autoComplete="one-time-code" autoFocus maxLength={6} value={nativeMfaCode} onChange={(event) => setNativeMfaCode(event.target.value.replace(/\D/g, ""))} />
+                  <button type="submit" disabled={busy || nativeMfaCode.length !== 6}>Verify and continue</button>
+                </form>
+              )}
+              <FormStatus error={error} />
+              <button type="button" className="tertiary" onClick={leaveNativeMfa} disabled={busy}>Use a different sign-in method</button>
             </section>
           )}
+          {!nativeMfaActive && (<>
           <form className="signin-form" onSubmit={submit}>
             <div className="signin-field">
               <label htmlFor="signin-email">Email</label>
@@ -914,12 +955,12 @@ export default function Login() {
             )}
             <button className="signin-submit" disabled={busy}>{busy ? "Signing in…" : "Sign in"}</button>
           </form>
-          {(appleEnabled || isNativeShell()) && !nativeRecovery && !nativeMfaTransaction && (
+          {(appleEnabled || isNativeShell()) && !nativeRecovery && (
             <button type="button" className="apple-sign-in" onClick={() => isNativeShell() ? void startNativeProvider("apple") : startAppleSignIn()} disabled={busy}>
               Continue with Apple
             </button>
           )}
-          {(googleEnabled || isNativeShell()) && !nativeRecovery && !nativeMfaTransaction && (
+          {(googleEnabled || isNativeShell()) && !nativeRecovery && (
             <button type="button" className="google-sign-in" onClick={() => isNativeShell() ? void startNativeProvider("google") : startGoogleSignIn()} disabled={busy}>
               Continue with Google
             </button>
@@ -933,6 +974,7 @@ export default function Login() {
             Signing in as a child?{" "}
             <Link href="/login/child" className="signin-link">Child sign in</Link>
           </p>
+          </>)}
         </div>
       </div>
     </main>

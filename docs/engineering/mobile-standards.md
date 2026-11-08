@@ -21,6 +21,7 @@ Screenshots taken via automated tooling (Playwright, etc.) are useful for catchi
 
 - Design mobile-first: build and verify the phone layout before widening for tablet/desktop, not the reverse.
 - Store reusable credentials (session tokens) only via secure, HttpOnly cookies for the browser/PWA client — this remains unchanged and is not migrated to any other storage. A future native (Capacitor) shell around this same PWA uses the separate bearer-token mechanism in [ADR 0010](../architecture/adr/0010-mobile-bearer-session-tokens.md) instead, stored via the native-session-store abstraction in `packages/api-client` (in-memory only until an iOS Keychain adapter exists) — this is a second, narrowly-scoped transport for that one future shell, not a general-purpose mobile credential store, and does not change how the browser/PWA client authenticates.
+- The bearer transport is not an authentication exemption. Native sign-in and renewal enforce the same consumer MFA policy as the browser, because nothing in a native request proves it came from the genuine app. See [Consumer MFA enforcement](consumer-mfa-enforcement.md).
 - Request browser permissions (notifications, etc.) only when a feature needs them, with clear just-in-time explanation.
 - Design for intermittent connectivity and PWA offline support via the service worker.
 - Keep bottom navigation purpose-built for touch rather than a shrunk desktop layout.

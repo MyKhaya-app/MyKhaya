@@ -25,6 +25,35 @@ describe("NativeMyKhayaClient — construction", () => {
   });
 });
 
+describe("NativeMyKhayaClient — login MFA continuation", () => {
+  it("sends the redemption verifier and stores nothing when MFA is required", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      jsonResponse(200, {
+        authentication_state: "additional_auth_required",
+        transaction_id: "native-mfa-transaction",
+        provider: "password",
+      }),
+    );
+    const store = new InMemoryNativeSessionStore();
+    const client = new NativeMyKhayaClient(BASE_URL, store, { fetch: fetchMock });
+
+    const result = await client.login("a@example.com", "correct horse", "v".repeat(64));
+
+    expect(result).toEqual({
+      authentication_state: "additional_auth_required",
+      transaction_id: "native-mfa-transaction",
+      provider: "password",
+    });
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(String(init.body))).toEqual({
+      email: "a@example.com",
+      password: "correct horse",
+      redemption_verifier: "v".repeat(64),
+    });
+    expect(await store.get()).toBeNull();
+  });
+});
+
 describe("NativeMyKhayaClient — login", () => {
   it("binds an injected Window.fetch-like implementation to globalThis", async () => {
     const receiverSensitiveFetch = vi.fn(function (this: unknown) {
