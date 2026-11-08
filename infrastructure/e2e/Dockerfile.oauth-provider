@@ -4,4 +4,11 @@ RUN pip install --no-cache-dir cryptography python-jose[cryptography]
 COPY infrastructure/e2e/oauth-provider.py ./oauth-provider.py
 USER 65532:65532
 EXPOSE 8081
+# Healthy only when the provider serves its signing key on the internal JWKS
+# endpoint (the same read-only call the API makes to verify ID tokens). Never
+# touches /authorize or the token endpoint, so it cannot advance the synthetic
+# profile sequence or consume authorization codes. Standard library only; works
+# as the non-root user on the read-only container.
+HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=3 \
+  CMD ["python", "-c", "import json, os, sys, urllib.request; port = os.environ.get('PORT', '8081'); request = urllib.request.Request(f'http://127.0.0.1:{port}/jwks', headers={'Host': 'oauth-provider:8081'}); keys = json.load(urllib.request.urlopen(request, timeout=2))['keys']; sys.exit(0 if keys and keys[0].get('kid') == 'synthetic-e2e-key' else 1)"]
 CMD ["python", "oauth-provider.py"]

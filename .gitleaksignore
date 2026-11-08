@@ -77,3 +77,22 @@ ce2887cfca68f4a9e8a3e2d66a105de9e077282f:.env.production.example:generic-api-key
 # assessed and actioned — not as a standing exemption for DVLA keys or
 # generic-api-key findings in this file generally.
 32b102ab29fcb88c2ecb27edbb13f4e76b7cd336:.env.example:generic-api-key:70
+
+# Synthetic E2E application signing key (reviewed 2026-11-08). compose.e2e.yml
+# is the isolated, disposable OAuth/registration acceptance stack
+# (MYKHAYA_ENVIRONMENT=development, synthetic database passwords, local
+# synthetic OAuth provider). MYKHAYA_SECRET_KEY there is a fixed, explicitly
+# labelled "e2e"/"synthetic" value shared by its five API-image services; it is
+# not present in any real .env, protects no real data and grants access to no
+# live system. One entry per service line of the commit that introduced it.
+6d5f78c05c9ab91843e9b89b58c13eb0bb8d41d2:compose.e2e.yml:generic-api-key:45
+6d5f78c05c9ab91843e9b89b58c13eb0bb8d41d2:compose.e2e.yml:generic-api-key:57
+6d5f78c05c9ab91843e9b89b58c13eb0bb8d41d2:compose.e2e.yml:generic-api-key:73
+6d5f78c05c9ab91843e9b89b58c13eb0bb8d41d2:compose.e2e.yml:generic-api-key:94
+6d5f78c05c9ab91843e9b89b58c13eb0bb8d41d2:compose.e2e.yml:generic-api-key:111
+
+# The same synthetic Stripe placeholder already reviewed above (SEC-18,
+# documented placeholder suffix, far too short to be a real Stripe key), moved
+# to a new line by a later commit on dev. It is reported here because the CI
+# checkout fetches every branch and Gitleaks scans all refs.
+bc2220223a9e9e141675c38a68d1a067c839c5e3:apps/api/tests/test_billing_config.py:generic-api-key:131

@@ -236,7 +236,7 @@ async function completeBetaSocial(page: Page, provider: "Apple" | "Google", invi
   await page.getByRole("button", { name: "Accept and create account" }).click();
   await page.waitForURL(/\/onboarding(?:\?beta=1[^/]*)?$|\/mfa\?transaction=/);
   await completePasswordMfaIfShown(page, `${provider.toLowerCase()}-beta-register`);
-  await completeNewHome(page, `${provider} Beta E2E Home`, true);
+  await completeNewHome(page, homeName, true);
   await page.screenshot({ path: `test-results/${provider.toLowerCase()}-beta-home.png`, fullPage: true });
 
   const csrf = await page.evaluate(() => document.cookie.match(/(?:^|; )mk_csrf=([^;]+)/)?.[1] ?? "");

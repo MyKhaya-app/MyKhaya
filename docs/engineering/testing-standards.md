@@ -30,7 +30,10 @@ Testing must cover behaviour, security and operations.
   current authentication policy (see
   [Consumer MFA enforcement](consumer-mfa-enforcement.md#session-lifecycle-and-rotation-web-and-native))
 
-A scanner passing does not replace manual security review.
+A scanner passing does not replace manual security review. Scanner triage,
+synthetic fixture conventions, container health checks and the full
+release-candidate validation procedure are in
+[CI security scanning and validation](ci-security-scanning.md).
 
 ## Deterministic tests
 
