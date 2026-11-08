@@ -47,6 +47,7 @@ from mykhaya.founding_beta_schemas import (
     SignupStateResponse,
 )
 from mykhaya.legal import current_published_version, user_document_status
+from mykhaya.legal_evidence import queue_acceptance_evidence
 from mykhaya.models import (
     BetaEnrollment,
     BetaInvitation,
@@ -358,20 +359,27 @@ async def join(
                         "message": "Please accept the current Founding Beta Terms to continue.",
                     },
                 )
-            db.add(
-                LegalAcceptance(
-                    record_type=(
-                        LegalRecordType.user_acceptance
-                        if beta_document.action_verb == LegalActionVerb.accept
-                        else LegalRecordType.user_acknowledgement
-                    ),
-                    document_version_id=current_terms.id,
-                    user_id=auth.user.id,
-                    context=LegalAcceptanceContext.beta_enrolment,
-                    platform=LegalPlatform.web,
-                    ip_address=resolve_client_ip(request, settings),
-                    user_agent=request.headers.get("user-agent", "")[:300] or None,
-                )
+            acceptance = LegalAcceptance(
+                created_at=datetime.now(UTC),
+                record_type=(
+                    LegalRecordType.user_acceptance
+                    if beta_document.action_verb == LegalActionVerb.accept
+                    else LegalRecordType.user_acknowledgement
+                ),
+                document_version_id=current_terms.id,
+                user_id=auth.user.id,
+                context=LegalAcceptanceContext.beta_enrolment,
+                platform=LegalPlatform.web,
+                ip_address=resolve_client_ip(request, settings),
+                user_agent=request.headers.get("user-agent", "")[:300] or None,
+            )
+            db.add(acceptance)
+            await queue_acceptance_evidence(
+                db,
+                acceptance=acceptance,
+                document=beta_document,
+                version=current_terms,
+                user=auth.user,
             )
     enrollment = await db.scalar(
         select(BetaEnrollment).where(

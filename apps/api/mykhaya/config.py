@@ -246,6 +246,7 @@ class Settings(BaseSettings):
     # package is the only transport between environments; this path is never
     # accepted from package contents or request parameters.
     home_migration_storage_dir: str = "/data/home-migrations"
+    legal_evidence_storage_dir: str = "/data/legal-evidence"
     # How long a package file that hasn't completed an import may stay on
     # disk before the scheduler purges it (completed imports are removed
     # immediately). Packages are full plaintext Home copies — keep this short.

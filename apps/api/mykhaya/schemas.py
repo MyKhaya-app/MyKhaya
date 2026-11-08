@@ -85,6 +85,13 @@ class LoginRequest(StrictModel):
     password: str = Field(min_length=1, max_length=128)
 
 
+class MobileLoginRequest(LoginRequest):
+    # Binds a native MFA continuation to the client that proved the password.
+    # Required whenever the consumer MFA policy applies; optional so a client
+    # with no MFA requirement still signs in with the same request shape.
+    redemption_verifier: str | None = Field(default=None, min_length=32, max_length=256)
+
+
 class AuthContinuationResponse(BaseModel):
     authentication_state: Literal["additional_auth_required"]
     transaction_id: str
@@ -342,7 +349,8 @@ class NativeExternalRecoveryResponse(BaseModel):
 class NativeMfaContinuationResponse(BaseModel):
     authentication_state: Literal["additional_auth_required"]
     transaction_id: str
-    provider: Literal["apple", "google"]
+    # The completed primary factor. "password" is native email/password.
+    provider: Literal["apple", "google", "password"]
 
 
 class NativeExternalLinkRequest(StrictModel):

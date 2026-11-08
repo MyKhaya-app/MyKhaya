@@ -2046,6 +2046,16 @@ class LegalPlatform(StrEnum):
     android = "android"
 
 
+class LegalEvidenceStatus(StrEnum):
+    pending = "pending"
+    generating = "generating"
+    ready = "ready"
+    sending = "sending"
+    sent = "sent"
+    failed = "failed"
+    retry_pending = "retry_pending"
+
+
 class LegalDocument(UuidTimeMixin, Base):
     """Source-of-truth registry of legal/policy document *types* (Terms,
     Privacy Policy, Family & Children's Privacy Notice, Cookie Policy, and
@@ -2242,6 +2252,56 @@ class LegalAcceptance(Base):
     # for child_notice_acknowledgement, per data-minimisation for the child.
     ip_address: Mapped[str | None] = mapped_column(String(64))
     user_agent: Mapped[str | None] = mapped_column(String(300))
+
+
+class LegalAcceptanceEvidence(Base):
+    """Immutable snapshot and delivery lifecycle for one legal action.
+
+    This is deliberately separate from LegalAcceptance: the acceptance remains
+    the legal history record, while this row tracks a reproducible evidence
+    artefact and operational delivery without mutating that history.
+    """
+
+    __tablename__ = "legal_acceptance_evidence"
+    __table_args__ = (
+        UniqueConstraint("acceptance_id", name="uq_legal_acceptance_evidence_acceptance"),
+        Index("ix_legal_acceptance_evidence_status", "status"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid7)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    acceptance_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("legal_acceptances.id", ondelete="RESTRICT"), nullable=False
+    )
+    user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    registered_email: Mapped[str | None] = mapped_column(String(320))
+    account_name: Mapped[str | None] = mapped_column(String(100))
+    document_name: Mapped[str] = mapped_column(String(200))
+    document_version: Mapped[str] = mapped_column(String(20))
+    content_markdown: Mapped[str] = mapped_column(Text)
+    content_sha256: Mapped[str] = mapped_column(String(64))
+    accepted_at_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    accepted_timezone: Mapped[str] = mapped_column(String(100), nullable=False)
+    ip_address: Mapped[str | None] = mapped_column(String(64))
+    platform: Mapped[LegalPlatform] = mapped_column(
+        Enum(LegalPlatform, name="legal_platform", create_type=False), nullable=False
+    )
+    action_type: Mapped[LegalRecordType] = mapped_column(
+        Enum(LegalRecordType, name="legal_record_type", create_type=False), nullable=False
+    )
+    status: Mapped[LegalEvidenceStatus] = mapped_column(
+        Enum(LegalEvidenceStatus, name="legal_evidence_status", values_callable=lambda e: [x.value for x in e]),
+        default=LegalEvidenceStatus.pending,
+        server_default=LegalEvidenceStatus.pending.value,
+        nullable=False,
+    )
+    pdf_storage_key: Mapped[str | None] = mapped_column(String(255))
+    pdf_sha256: Mapped[str | None] = mapped_column(String(64))
+    generated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    email_status: Mapped[str] = mapped_column(String(30), default="pending", server_default="pending")
+    email_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    provider_message_id: Mapped[str | None] = mapped_column(String(255))
+    last_error: Mapped[str | None] = mapped_column(String(500))
 
 
 class IncidentLifecycleState(StrEnum):
@@ -2554,6 +2614,7 @@ class NotificationDelivery(Base):
     )
     retry_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     sanitised_failure_reason: Mapped[str | None] = mapped_column(String(300))
+    provider_message_id: Mapped[str | None] = mapped_column(String(255))
     used_template_default: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="false"
     )

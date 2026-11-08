@@ -83,6 +83,7 @@ from mykhaya.google_auth import store_flow_state as store_google_flow_state
 from mykhaya.google_auth import store_pending_identity as store_google_pending_identity
 from mykhaya.google_auth import verify_identity_token as verify_google_identity_token
 from mykhaya.legal import validate_signup_acceptances
+from mykhaya.legal_evidence import queue_acceptance_evidence
 from mykhaya.models import (
     ActionToken,
     AuthIdentity,
@@ -1072,20 +1073,27 @@ async def apple_recovery_register(
             if resolved.document.action_verb == LegalActionVerb.accept
             else LegalRecordType.user_acknowledgement
         )
-        db.add(
-            LegalAcceptance(
-                record_type=record_type,
-                document_version_id=resolved.version.id,
-                user_id=user.id,
-                context=(
-                    LegalAcceptanceContext.beta_registration
-                    if body.beta
-                    else LegalAcceptanceContext.signup
-                ),
-                platform=body.platform,
-                ip_address=resolve_client_ip(request, settings),
-                user_agent=request.headers.get("user-agent", "")[:300] or None,
-            )
+        acceptance = LegalAcceptance(
+            created_at=datetime.now(UTC),
+            record_type=record_type,
+            document_version_id=resolved.version.id,
+            user_id=user.id,
+            context=(
+                LegalAcceptanceContext.beta_registration
+                if body.beta
+                else LegalAcceptanceContext.signup
+            ),
+            platform=body.platform,
+            ip_address=resolve_client_ip(request, settings),
+            user_agent=request.headers.get("user-agent", "")[:300] or None,
+        )
+        db.add(acceptance)
+        await queue_acceptance_evidence(
+            db,
+            acceptance=acceptance,
+            document=resolved.document,
+            version=resolved.version,
+            user=user,
         )
     await link_external_identity(
         db,
@@ -1591,20 +1599,27 @@ async def google_recovery_register(
             if resolved.document.action_verb == LegalActionVerb.accept
             else LegalRecordType.user_acknowledgement
         )
-        db.add(
-            LegalAcceptance(
-                record_type=record_type,
-                document_version_id=resolved.version.id,
-                user_id=user.id,
-                context=(
-                    LegalAcceptanceContext.beta_registration
-                    if body.beta
-                    else LegalAcceptanceContext.signup
-                ),
-                platform=body.platform,
-                ip_address=resolve_client_ip(request, settings),
-                user_agent=request.headers.get("user-agent", "")[:300] or None,
-            )
+        acceptance = LegalAcceptance(
+            created_at=datetime.now(UTC),
+            record_type=record_type,
+            document_version_id=resolved.version.id,
+            user_id=user.id,
+            context=(
+                LegalAcceptanceContext.beta_registration
+                if body.beta
+                else LegalAcceptanceContext.signup
+            ),
+            platform=body.platform,
+            ip_address=resolve_client_ip(request, settings),
+            user_agent=request.headers.get("user-agent", "")[:300] or None,
+        )
+        db.add(acceptance)
+        await queue_acceptance_evidence(
+            db,
+            acceptance=acceptance,
+            document=resolved.document,
+            version=resolved.version,
+            user=user,
         )
     await link_external_identity(
         db,
@@ -2232,20 +2247,27 @@ async def register(
                 if resolved.document.action_verb == LegalActionVerb.accept
                 else LegalRecordType.user_acknowledgement
             )
-            db.add(
-                LegalAcceptance(
-                    record_type=record_type,
-                    document_version_id=resolved.version.id,
-                    user_id=user.id,
-                    context=(
-                        LegalAcceptanceContext.beta_registration
-                        if beta
-                        else LegalAcceptanceContext.signup
-                    ),
-                    platform=body.platform,
-                    ip_address=resolve_client_ip(request, settings),
-                    user_agent=request.headers.get("user-agent", "")[:300] or None,
-                )
+            acceptance = LegalAcceptance(
+                created_at=datetime.now(UTC),
+                record_type=record_type,
+                document_version_id=resolved.version.id,
+                user_id=user.id,
+                context=(
+                    LegalAcceptanceContext.beta_registration
+                    if beta
+                    else LegalAcceptanceContext.signup
+                ),
+                platform=body.platform,
+                ip_address=resolve_client_ip(request, settings),
+                user_agent=request.headers.get("user-agent", "")[:300] or None,
+            )
+            db.add(acceptance)
+            await queue_acceptance_evidence(
+                db,
+                acceptance=acceptance,
+                document=resolved.document,
+                version=resolved.version,
+                user=user,
             )
         if verification_required:
             token = await create_action_token(
@@ -3399,18 +3421,23 @@ async def mobile_external_recovery_register(
     db.add(user)
     await db.flush()
     for item in resolved:
-        db.add(
-            LegalAcceptance(
-                record_type=LegalRecordType.user_acceptance
+        acceptance = LegalAcceptance(
+            created_at=datetime.now(UTC),
+            record_type=(
+                LegalRecordType.user_acceptance
                 if item.document.action_verb == LegalActionVerb.accept
-                else LegalRecordType.user_acknowledgement,
-                document_version_id=item.version.id,
-                user_id=user.id,
-                context=LegalAcceptanceContext.signup,
-                platform=body.platform,
-                ip_address=resolve_client_ip(request, settings),
-                user_agent=request.headers.get("user-agent", "")[:300] or None,
-            )
+                else LegalRecordType.user_acknowledgement
+            ),
+            document_version_id=item.version.id,
+            user_id=user.id,
+            context=LegalAcceptanceContext.signup,
+            platform=body.platform,
+            ip_address=resolve_client_ip(request, settings),
+            user_agent=request.headers.get("user-agent", "")[:300] or None,
+        )
+        db.add(acceptance)
+        await queue_acceptance_evidence(
+            db, acceptance=acceptance, document=item.document, version=item.version, user=user
         )
     await link_external_identity(
         db,

@@ -6,7 +6,7 @@ import uuid
 from datetime import UTC, date, datetime
 from typing import Literal
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -18,10 +18,12 @@ from mykhaya.legal import (
     guardian_document_status,
     user_document_status,
 )
+from mykhaya.legal_evidence_storage import get_legal_evidence_storage
 from mykhaya.legal_test_mode import SETTING_KEY, configuration
 from mykhaya.models import (
     ChildProfile,
     LegalAcceptance,
+    LegalAcceptanceEvidence,
     LegalDocument,
     LegalDocumentVersion,
     LegalRecordType,
@@ -33,6 +35,8 @@ from mykhaya.models import (
     SubprocessorState,
     User,
 )
+from mykhaya.notifications.engine import notify
+from mykhaya.notifications.templates import render_notification_email
 from mykhaya.platform_audit import platform_audit
 from mykhaya.platform_schemas import (
     AcceptanceDashboardResponse,
@@ -300,6 +304,19 @@ async def acceptance_history(
         )
         .order_by(LegalAcceptance.created_at.desc())
     )
+    records = (await db.execute(query)).all()
+    evidence_rows = {
+        row.acceptance_id: row
+        for row in (
+            await db.scalars(
+                select(LegalAcceptanceEvidence).where(
+                    LegalAcceptanceEvidence.acceptance_id.in_([
+                        record.id for record, _, _ in records
+                    ])
+                )
+            )
+        ).all()
+    }
     history = [
         AcceptanceHistoryItem(
             id=record.id,
@@ -317,8 +334,24 @@ async def acceptance_history(
             else None,
             child_profile_id=record.child_profile_id,
             is_test=record.is_test,
+            evidence_status=(
+                evidence_rows.get(record.id).status.value if evidence_rows.get(record.id) else None
+            ),
+            email_status=(
+                evidence_rows.get(record.id).email_status if evidence_rows.get(record.id) else None
+            ),
+            evidence_last_error=(
+                evidence_rows.get(record.id).last_error if evidence_rows.get(record.id) else None
+            ),
+            email_sent_at=(
+                evidence_rows.get(record.id).email_sent_at if evidence_rows.get(record.id) else None
+            ),
+            pdf_available=bool(
+                evidence_rows.get(record.id) and evidence_rows.get(record.id).pdf_storage_key
+            ),
+            evidence_id=evidence_rows.get(record.id).id if evidence_rows.get(record.id) else None,
         )
-        for record, version, document in (await db.execute(query)).all()
+        for record, version, document in records
     ]
     return AcceptanceHistoryResponse(
         user_id=user.id,
@@ -328,6 +361,91 @@ async def acceptance_history(
         current_status=current.documents,
         history=history,
     )
+
+
+@router.get("/acceptance/{user_id}/evidence/{acceptance_id}")
+async def download_acceptance_evidence(
+    user_id: uuid.UUID,
+    acceptance_id: uuid.UUID,
+    _: PlatformContext = Depends(require_roles(*SUPPORT)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> Response:
+    evidence = await db.scalar(
+        select(LegalAcceptanceEvidence).where(
+            LegalAcceptanceEvidence.acceptance_id == acceptance_id
+        )
+    )
+    if evidence is None or evidence.user_id != user_id or not evidence.pdf_storage_key:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That evidence file could not be found.")
+    data = await get_legal_evidence_storage(settings).load(evidence.pdf_storage_key)
+    if data is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That evidence file is not available.")
+    return Response(content=data, media_type="application/pdf")
+
+
+@router.post(
+    "/acceptance/{user_id}/evidence/{evidence_id}/resend",
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def resend_acceptance_evidence(
+    user_id: uuid.UUID,
+    evidence_id: uuid.UUID,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, str]:
+    require_recent_auth(context, settings)
+    evidence = await db.get(LegalAcceptanceEvidence, evidence_id)
+    user = await db.get(User, user_id)
+    if (
+        evidence is None
+        or user is None
+        or evidence.user_id != user_id
+        or not evidence.pdf_storage_key
+    ):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That evidence file could not be found.")
+    if user.email_verified_at is None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "The registered email address is not verified."
+        )
+    subject, body, html = await render_notification_email(
+        db, settings, "legal_acceptance_confirmation", {
+            "user_first_name": (user.display_name or "there").split(" ", 1)[0],
+            "document_name": evidence.document_name,
+            "document_version": evidence.document_version,
+            "accepted_at": evidence.accepted_at_utc.isoformat(),
+            "accepted_timezone": evidence.accepted_timezone,
+            "ip_address": evidence.ip_address or "Unavailable",
+            "acceptance_reference": str(evidence.acceptance_id),
+            "support_email": settings.smtp_reply_to or settings.email_from,
+        }
+    )
+    resend_key = f"legal_acceptance_confirmation:resend:{evidence.id}"
+    await notify(
+        db,
+        settings=settings,
+        recipient_user_id=user.id,
+        recipient_email=user.email,
+        notification_type="legal_acceptance_confirmation",
+        title=subject,
+        body=body,
+        html_body=html,
+        idempotency_key=resend_key,
+        is_critical=True,
+        attachment_storage_key=evidence.pdf_storage_key,
+        attachment_filename=f"mykhaya-legal-acceptance-{evidence.acceptance_id}.pdf",
+        attachment_evidence_id=str(evidence.id),
+    )
+    platform_audit(
+        db, request, context, "legal_acceptance_evidence.resent", "legal_acceptance_evidence",
+        target_id=evidence.id,
+        reason="PCC manual resend",
+        new={"acceptance_id": str(evidence.acceptance_id)},
+    )
+    await db.commit()
+    return {"status": "queued"}
 
 
 def _privacy_response(

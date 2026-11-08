@@ -1334,6 +1334,12 @@ class AcceptanceHistoryItem(BaseModel):
     guardian_user_id: uuid.UUID | None = None
     child_profile_id: uuid.UUID | None = None
     is_test: bool = False
+    evidence_status: str | None = None
+    email_status: str | None = None
+    evidence_last_error: str | None = None
+    email_sent_at: datetime | None = None
+    pdf_available: bool = False
+    evidence_id: uuid.UUID | None = None
 
 
 class AcceptanceHistoryResponse(BaseModel):

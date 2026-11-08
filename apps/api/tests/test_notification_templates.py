@@ -183,6 +183,7 @@ def test_registry_matches_migration_version() -> None:
         "support.ticket.reply",
         "support.ticket.resolved",
         "support.ticket.follow_up",
+        "legal_acceptance_confirmation",
     }
 
 
@@ -1136,7 +1137,12 @@ def test_security_critical_templates_all_require_their_link() -> None:
     for the email MFA code, a single one-time code — today. If a future one
     doesn't, this test should be updated deliberately rather than silently
     passing."""
-    required_by_type = {"mfa_email_code": frozenset({"code"})}
+    required_by_type = {
+        "mfa_email_code": frozenset({"code"}),
+        "legal_acceptance_confirmation": frozenset(
+            {"document_name", "document_version", "acceptance_reference"}
+        ),
+    }
     for template_type, default in TEMPLATES.items():
         if default.security_critical:
             expected = required_by_type.get(template_type, frozenset({"link"}))
