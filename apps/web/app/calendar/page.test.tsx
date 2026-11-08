@@ -1433,6 +1433,16 @@ describe("Calendar — Recurring event scope chooser", () => {
     (api.listLabels as ReturnType<typeof vi.fn>).mockResolvedValue([]);
     (api.members as ReturnType<typeof vi.fn>).mockResolvedValue([]);
     window.confirm = vi.fn(() => true);
+    // The fixtures below are fixed to September 2026; pin the clock to that
+    // month (as the other blocks in this file pin theirs) so the month view
+    // shows them regardless of the real date. Only Date is faked, so async
+    // queries keep working.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-12T09:00:00Z"));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   // A moved+overridden occurrence: its canonical identity ("occurrence_start")
