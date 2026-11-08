@@ -25,5 +25,9 @@ Testing must cover behaviour, security and operations.
 - XSS and injection payload handling
 - Resource and pagination limits
 - Safe error disclosure
+- Session lifecycle across transports: a token must not be extended, renewed or
+  converted into the other transport's credential in a way that skips the
+  current authentication policy (see
+  [Consumer MFA enforcement](consumer-mfa-enforcement.md#session-lifecycle-and-rotation-web-and-native))
 
 A scanner passing does not replace manual security review.

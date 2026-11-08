@@ -157,3 +157,16 @@ Mobile-side (once the client wrapper exists): a unit test for the compare-and-cl
 ## Deviation from this ADR
 
 `require_secure_transport()` is gated on `settings.environment == "production"`, not `!= "development"` as originally worded above. Reason: `MYKHAYA_ENVIRONMENT=test` is what the automated test suite runs under (`compose.yml`'s `test` service), over plain HTTP via the ASGI test transport - gating on `!= "development"` would have made the test environment itself fail the HTTPS check and block the required test suite from running. `environment == "production"` matches the existing convention already used elsewhere in `Settings` for other production-only checks (e.g. `cookie_secure`, the admin production defaults validator), so this is a correction toward consistency with the rest of the codebase rather than a weakening of the intent. No other deviation from the approved design.
+
+## Amendment (2026-11-08): rotation and the consumer MFA policy
+
+`POST /auth/sessions/rotate` previously accepted a bearer token (through the
+shared `auth_context`), issued cookies, reset the expiry and dropped the
+trusted-device link. Rotation is now transport-bound: browser rotation requires
+the cookie transport (`require_cookie_transport`) and native rotation requires
+bearer (`require_bearer_transport`). Browser rotation keeps the trusted-device
+link. While the effective consumer MFA policy is enforced and Required, both
+rotation endpoints keep the original `expires_at`, and native rotation mints no
+new renewal device. The shared token model and the transport-neutral
+authorisation of ordinary API requests described above are unchanged. Details:
+[Consumer MFA enforcement](../../engineering/consumer-mfa-enforcement.md).

@@ -62,22 +62,44 @@ required policy has no allowed methods.
 | Native system-browser provider flow | `POST /auth/mobile/external/redeem` | Native pre-auth. |
 | Native provider registration | `POST /auth/mobile/external/recovery/register` | Native pre-auth. |
 | Native device renewal | `POST /auth/mobile/sessions/renew` | Device revoked, 401. The app returns to sign-in. |
-| Native session rotation | `POST /auth/mobile/sessions/rotate` | 403 "Sign in again to extend this session". The current session stays valid until it expires. **Not yet sufficient on its own:** see the known gap below. |
-| Browser session rotation | `POST /auth/sessions/rotate` | **Not gated (known gap).** |
+| Native session rotation | `POST /auth/mobile/sessions/rotate` | Bearer only. Rotates the token but **keeps the original expiry**, and mints no renewal device. |
+| Browser session rotation | `POST /auth/sessions/rotate` | Cookie only. Rotates the token but **keeps the original expiry**. |
 | Managed child (web and native) | `/auth/child/login`, `/auth/mobile/child/login` | Not subject to the policy. |
 
 `_native_mfa_continuation()` creates every native pre-auth.
 
-**Known gap: browser session rotation.** `POST /auth/sessions/rotate` does not
-check the consumer MFA policy, and `auth_context` accepts a bearer token as
-well as the cookie. A session that was valid before MFA became Required, from
-either transport, can therefore still be rotated there into a new cookie
-session with a fresh expiry. This was confirmed on the release candidate on
-2026-11-08. It does not let a new sign-in skip MFA, because it needs an
-already-valid session. It does allow such a session to outlive the policy
-change indefinitely. The planned fix applies the same gate as native rotation,
-a 403 when MFA is required with the current session left valid. No first-party
-client calls either rotate endpoint.
+## Session lifecycle and rotation (web and native)
+
+Browser and native sessions are rows in the same `sessions` table with the same
+token scheme ([ADR 0010](../architecture/adr/0010-mobile-bearer-session-tokens.md)).
+`resolve_session` accepts a valid token either as `Authorization: Bearer` (no
+CSRF) or as the `mk_session` cookie (CSRF-checked). Which transport a caller
+uses proves nothing, so lifecycle rules are enforced on the session itself.
+
+| Operation | Rule |
+|---|---|
+| Expiry | Set once at issuance (`MYKHAYA_SESSION_MINUTES`, 14 days by default). It never slides with use. |
+| Validity | Every request checks that the session is not revoked or expired, that its user is active, and that its trusted device (if linked) is not revoked or expired. |
+| Renewal (`/auth/renew`, `/auth/mobile/sessions/renew`) | Uses the long-lived device credential after the session has expired. Refused, with the device revoked, while MFA is required. |
+| Rotation (`/auth/sessions/rotate`, `/auth/mobile/sessions/rotate`) | Replaces the token atomically. The old token is revoked in the same commit. `kind`, `fresh_auth_at` and the trusted-device link carry over. |
+| Rotation while MFA is required | The new session **inherits the old `expires_at`** (`_rotated_session_expiry`), so rotation can never extend a session. A session issued before the policy changed ends on schedule, and only a sign-in that satisfies the policy starts a new lifetime. Sessions that already completed MFA can still rotate; they just aren't extended. |
+| Rotation while MFA is not required | Unchanged: the new session gets a fresh lifetime. Native rotation of a legacy device-less session still gains a renewal device (the established compatibility path). |
+| Transport binding | Browser rotation requires the cookie transport (`require_cookie_transport`, 400 otherwise) and native rotation requires bearer, so rotation never converts a token into the other transport's credential. |
+| Device revocation | `DELETE /auth/devices/{id}` and `POST /auth/devices/revoke-others` revoke the sessions linked to a device. Browser rotation keeps the link, so a rotated session cannot escape device revocation. |
+| Managed-child sessions | Not subject to the consumer MFA policy. Rotation behaviour is unchanged. |
+
+Why "keep the expiry" rather than refusing rotation: refusing (403) took
+credential rotation away from sessions that had completed MFA, and on its own it
+did not stop the browser endpoint from extending a bearer session. Session rows
+do not record whether MFA was completed (that would need a schema change), so
+expiry is the only property rotation can preserve safely.
+
+History: before 2026-11-08 the browser endpoint accepted bearer tokens, issued
+cookies, reset the expiry and dropped the device link. A session valid before
+MFA became Required could therefore be kept alive indefinitely, and the rotated
+session survived device revocation. Native rotation could also mint a renewal
+device for such a device-less session. All of these are closed by the rules
+above and covered by `test_session_rotation_policy.py`.
 
 ## Native pre-authentication contract
 
@@ -156,6 +178,8 @@ implemented.
 | `/auth/mobile/mfa/*` returns 400 "invalid or has expired" | The transaction expired (10 minutes), was already used, or the verifier does not match. Sign in again. |
 | 429 on MFA verify | Ten failed codes for that user from that IP within the window. Wait for the window (15 minutes for email, 5 for TOTP). |
 | App returns to sign-in after about 14 days with MFA Required | Expected. Renewal is refused while MFA is required (`session.renewal_blocked_mfa_required` in the audit log). |
+| 400 "This endpoint requires browser session authentication" from `/auth/sessions/rotate` | A bearer token was sent. Native clients use `/auth/mobile/sessions/rotate`. |
+| Rotation succeeds but the session still expires at its old time | Expected while MFA is required. Rotation never extends a session then; sign in again (with MFA) for a new lifetime. |
 | Policy shows Required but nobody is challenged | `MYKHAYA_BROWSER_MFA_HANDOFF_ENABLED=false`. The PCC card shows a warning. |
 | 503 "We couldn't complete secure sign-in" | The required policy has no allowed methods after Home and user narrowing. It fails closed. Fix the method configuration. |
 
@@ -169,6 +193,7 @@ Audit events: `native.pre_auth.created`, `MFA_EMAIL_CHALLENGE_*`,
 |---|---|---|
 | API | `apps/api/tests/test_native_mfa_policy.py` | Native password challenge with no session or device row. Missing verifier fails closed. Optional policy or gate off still issues a session. Verifier theft, mistyped code, single issuance and replay. Spoofed native headers on browser `/auth/login`. Browser and native transactions are not interchangeable. Apple and Google exchange challenge plus exchange replay. Renewal blocked and revoked when required, and unchanged when optional. |
 | API | `apps/api/tests/test_native_mfa_policy.py` (continued) | A valid session works after the policy becomes Required, and rotation is refused while the session stays valid. Rotation is unchanged when optional. Transaction TTL is 10 minutes or less and only the verifier hash is stored. Ten failed codes give 401 then 429, with 10 `MFA_LOGIN_FAILED` audit rows and no session. |
+| API | `apps/api/tests/test_session_rotation_policy.py` | Bearer tokens are refused by browser rotation (no cookie minted) and cookie sessions by native rotation. Native and browser rotation keep the expiry while Required, including repeated rotation, and keep the device link. Policy transitions Optional → Required → Optional. Optional and gate-off rotation give a fresh lifetime. Expired and revoked sessions cannot rotate or be used. Device revocation reaches a browser-rotated session. No renewal device is minted while Required, and the legacy upgrade is kept when Optional. Consumer sessions never reach PCC (404 on the consumer host, 401 on the admin host). |
 | API | `apps/api/tests/test_native_external_auth.py::test_concurrent_native_claims_leave_one_provider_owner` | Two users racing for one provider subject leave exactly one owner. Both rejection paths (ownership check or unique constraint) count as a lost claim. |
 | API | `apps/api/tests/test_browser_mfa_flow.py` | Browser enforcement matrix and completion. Unchanged. |
 | API client | `packages/api-client/src/native-client.test.ts` | `login()` sends the verifier and stores nothing on a continuation. |

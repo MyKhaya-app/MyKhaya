@@ -1920,6 +1920,7 @@ async def issue_session(
     device_token: str | None = None,
     device_csrf: str | None = None,
     fresh_auth_at: datetime | None = None,
+    expires_at: datetime | None = None,
 ) -> Session:
     raw = new_session_token()
     csrf = secrets.token_urlsafe(32)
@@ -1927,7 +1928,7 @@ async def issue_session(
         user_id=user.id,
         trusted_device_id=trusted_device_id,
         token_hash=hash_secret(raw, settings.secret_key.get_secret_value()),
-        expires_at=datetime.now(UTC) + timedelta(minutes=settings.session_minutes),
+        expires_at=expires_at or datetime.now(UTC) + timedelta(minutes=settings.session_minutes),
         fresh_auth_at=fresh_auth_at,
         user_agent=request.headers.get("user-agent", "Unknown device")[:300],
         kind=kind,
@@ -2025,6 +2026,8 @@ async def issue_mobile_session(
     kind: SessionKind = SessionKind.adult,
     fresh_auth_at: datetime | None = None,
     existing_device_id: uuid.UUID | None = None,
+    expires_at: datetime | None = None,
+    mint_device: bool = True,
 ) -> tuple[str, Session, str | None]:
     """Bearer-transport equivalent of issue_session: same Session model, same
     token scheme, no cookies. Returns the raw session token - callers must
@@ -2047,11 +2050,16 @@ async def issue_mobile_session(
     rotate_mobile_session), the existing device is reused unchanged rather
     than minting a new TrustedDevice on every rotation; the returned device
     token is None in that case since nothing about the device credential
-    changed and there is nothing new to persist."""
+    changed and there is nothing new to persist.
+
+    Rotation passes expires_at when it must not extend the session's lifetime
+    (see _rotated_session_expiry) and then also mint_device=False, so a
+    device-less session cannot gain a renewal credential while consumer MFA
+    is required."""
     raw = new_session_token()
     device_raw: str | None = None
     device_id = existing_device_id
-    if device_id is None:
+    if device_id is None and mint_device:
         device, device_raw, _device_csrf = await issue_trusted_device(
             db, request, user, settings, kind
         )
@@ -2059,7 +2067,7 @@ async def issue_mobile_session(
     session = Session(
         user_id=user.id,
         token_hash=hash_secret(raw, settings.secret_key.get_secret_value()),
-        expires_at=datetime.now(UTC) + timedelta(minutes=settings.session_minutes),
+        expires_at=expires_at or datetime.now(UTC) + timedelta(minutes=settings.session_minutes),
         fresh_auth_at=fresh_auth_at,
         user_agent=mobile_client_descriptor(request),
         trusted_device_id=device_id,
@@ -3866,6 +3874,36 @@ def require_bearer_transport(auth: AuthContext) -> None:
         )
 
 
+def require_cookie_transport(auth: AuthContext) -> None:
+    """Counterpart of require_bearer_transport for endpoints that issue browser
+    cookies, so a bearer request cannot be converted into a cookie session."""
+    if auth.transport != "cookie":
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "This endpoint requires browser session authentication."
+        )
+
+
+async def _rotated_session_expiry(
+    db: AsyncSession, auth: AuthContext, settings: Settings
+) -> datetime | None:
+    """Expiry for the session that replaces ``auth.session`` on rotation.
+
+    Session expiry never slides, so rotation is the only way a still-valid
+    session's lifetime could be extended. While the effective consumer MFA
+    policy is enforced and Required, rotation still replaces the credential but
+    keeps the original expiry: an adult session (including one issued before
+    the policy changed) then ends on schedule, and only a new sign-in that
+    satisfies the policy starts a new lifetime. ``None`` means the normal
+    fresh lifetime (MFA not required, or a managed-child session).
+    """
+    if auth.session.kind != SessionKind.adult:
+        return None
+    policy = await _resolve_browser_mfa_policy(db, auth.user.id, settings)
+    if policy.enforcement_enabled and policy.required:
+        return auth.session.expires_at
+    return None
+
+
 @router.post("/mobile/logout", status_code=status.HTTP_204_NO_CONTENT)
 async def mobile_logout(
     request: Request,
@@ -4051,12 +4089,18 @@ async def rotate_session(
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> UserResponse:
+    # Browser rotation issues cookies; a bearer (native) token must use
+    # /auth/mobile/sessions/rotate and is never converted into a cookie session.
+    require_cookie_transport(auth)
+    expires_at = await _rotated_session_expiry(db, auth, settings)
     auth.session.revoked_at = datetime.now(UTC)
     # kind must be carried over from the session being rotated, never left to
     # issue_session's adult default — otherwise a managed Child session rotating
     # its own session would silently come back as an *adult* session for the same
     # underlying User row, defeating require_adult_session and every other
-    # kind-based check from that point on.
+    # kind-based check from that point on. The trusted device link is carried
+    # over too, so device revocation (DELETE /auth/devices/{id}, revoke-others)
+    # still reaches the rotated session.
     new_session = await issue_session(
         db,
         response,
@@ -4064,7 +4108,9 @@ async def rotate_session(
         auth.user,
         settings,
         kind=auth.session.kind,
+        trusted_device_id=auth.session.trusted_device_id,
         fresh_auth_at=auth.session.fresh_auth_at,
+        expires_at=expires_at,
     )
     audit(
         db,
@@ -4093,14 +4139,10 @@ async def rotate_mobile_session(
     intended safe failure mode, not a bug."""
     require_secure_transport(request, settings)
     require_bearer_transport(auth)
-    # Rotation mints a session with a fresh expiry. While consumer MFA is
-    # required it must not extend a session indefinitely (one issued before
-    # the policy changed would otherwise never face it). The current session
-    # stays valid until it expires; renewal after that needs a new sign-in.
-    if auth.session.kind == SessionKind.adult:
-        mfa_policy = await _resolve_browser_mfa_policy(db, auth.user.id, settings)
-        if mfa_policy.enforcement_enabled and mfa_policy.required:
-            raise HTTPException(status.HTTP_403_FORBIDDEN, "Sign in again to extend this session.")
+    # While consumer MFA is required, rotation keeps the original expiry (see
+    # _rotated_session_expiry) rather than refusing: the credential can still
+    # be rotated, but a session can never be extended past its lifetime.
+    expires_at = await _rotated_session_expiry(db, auth, settings)
     auth.session.revoked_at = datetime.now(UTC)
     # See the identical comment in rotate_session: kind must carry over from the
     # session being rotated, not silently reset to issue_mobile_session's adult
@@ -4117,6 +4159,11 @@ async def rotate_mobile_session(
         kind=auth.session.kind,
         fresh_auth_at=auth.session.fresh_auth_at,
         existing_device_id=auth.session.trusted_device_id,
+        expires_at=expires_at,
+        # A legacy device-less session still gains a renewal device here (the
+        # established compatibility path), but only when rotation grants a
+        # fresh lifetime anyway; never while MFA is required.
+        mint_device=expires_at is None,
     )
     audit(
         db,

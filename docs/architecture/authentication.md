@@ -80,7 +80,12 @@ pre-auth transaction bound to a client redemption verifier, completed by
 it cannot be exempt (see
 [Consumer MFA enforcement](../engineering/consumer-mfa-enforcement.md)).
 Managed-child authentication and Platform Control Centre MFA are separate
-flows. Browser passkey login uses
+flows. Session rotation never extends a session while
+consumer MFA is required (the rotated session keeps the original expiry), is
+bound to its transport (browser rotation is cookie-only, native rotation is
+bearer-only) and keeps the trusted-device link so device revocation still
+applies (see the session lifecycle section of
+[Consumer MFA enforcement](../engineering/consumer-mfa-enforcement.md)). Browser passkey login uses
 the same completion seam as password and Apple login: when browser MFA is
 required, a passkey establishes pre-authentication but does not silently bypass
 the configured second-factor policy. Browser trusted-device renewal is blocked

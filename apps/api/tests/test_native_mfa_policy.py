@@ -449,11 +449,25 @@ async def test_valid_native_session_keeps_working_but_cannot_be_extended_when_re
         await _set_policy("required")
         # A still-valid session restores normally: no MFA prompt per launch.
         assert (await client.get("/api/v1/users/me", headers=bearer(token))).status_code == 200
-        # It cannot be stretched past its original expiry by rotation.
+        # Rotation still works, but cannot stretch it past its original expiry
+        # (full coverage in test_session_rotation_policy.py).
+        async with SessionFactory() as db:
+            original = await db.scalar(
+                select(Session.expires_at).where(Session.user_id == _user_row.id)
+            )
         rotated = await client.post("/api/v1/auth/mobile/sessions/rotate", headers=bearer(token))
-        assert rotated.status_code == 403
-        assert "session_token" not in rotated.text
-        assert (await client.get("/api/v1/users/me", headers=bearer(token))).status_code == 200
+        assert rotated.status_code == 200, rotated.text
+        new_token = rotated.json()["session_token"]
+        assert (await client.get("/api/v1/users/me", headers=bearer(new_token))).status_code == 200
+        async with SessionFactory() as db:
+            expiries = (
+                await db.scalars(
+                    select(Session.expires_at).where(
+                        Session.user_id == _user_row.id, Session.revoked_at.is_(None)
+                    )
+                )
+            ).all()
+        assert expiries == [original]
     finally:
         await _clear_policy()
 
