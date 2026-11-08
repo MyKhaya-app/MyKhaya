@@ -276,6 +276,15 @@ describe("entitlements and Info.plists take every environment value from the bui
     expect(read("native/widgets/MyKhayaWidgets.entitlements")).not.toContain("aps-environment");
   });
 
+  it("entitles the main app (DEV and PROD) to Sign in with Apple, and only the main app", () => {
+    for (const path of ["ios/App/App/AppDebug.entitlements", "ios/App/App/AppRelease.entitlements"]) {
+      const block = /<key>com\.apple\.developer\.applesignin<\/key>\s*<array>([\s\S]*?)<\/array>/.exec(read(path))?.[1];
+      expect(block, path).toBeDefined();
+      expect([...block!.matchAll(/<string>([^<]*)<\/string>/g)].map((m) => m[1])).toEqual(["Default"]);
+    }
+    expect(read("native/widgets/MyKhayaWidgets.entitlements")).not.toContain("applesignin");
+  });
+
   it("the app registers only its own widget URL scheme and knows its environment", () => {
     const info = read("ios/App/App/Info.plist");
     const urlTypes = /<key>CFBundleURLTypes<\/key>\s*<array>([\s\S]*?)<\/array>\s*<key>/.exec(info)![1]!;
@@ -365,6 +374,13 @@ describe("no environment is hardcoded in shared native code or setup scripts", (
 
 describe("scripts/validate-ios-environments.sh", () => {
   const script = read("scripts/validate-ios-environments.sh");
+
+  it("checks both main-app entitlement files for Sign in with Apple", () => {
+    expect(script).toContain("check_sign_in_with_apple_entitlements");
+    expect(script).toContain("com.apple.developer.applesignin");
+    expect(script).toContain("AppDebug.entitlements");
+    expect(script).toContain("AppRelease.entitlements");
+  });
 
   it.each(ENVIRONMENTS)("encodes the same $environment values", (app: IosAppEnvironment) => {
     const line = script.split("\n").find((l) => l.includes(`env=${app.environment};`))!;

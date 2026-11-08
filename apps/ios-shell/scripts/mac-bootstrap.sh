@@ -103,10 +103,10 @@ fi
 echo "== 5c-widgets. Install MyKhaya Home Screen widgets (Phase 5) =="
 bash scripts/install-widget-sources.sh
 
-echo "== 5d. Inspect APNs and App Group entitlements (signing is not changed by this script) =="
+echo "== 5d. Inspect APNs, App Group and Sign in with Apple entitlements (signing is not changed by this script) =="
 for ENTITLEMENTS_FILE in ios/App/App/AppDebug.entitlements ios/App/App/AppRelease.entitlements; do
   if [ -f "$ENTITLEMENTS_FILE" ]; then
-    grep -E 'aps-environment|application-groups|MYKHAYA' "$ENTITLEMENTS_FILE" || {
+    grep -E 'aps-environment|application-groups|applesignin|MYKHAYA' "$ENTITLEMENTS_FILE" || {
       echo "WARNING: $ENTITLEMENTS_FILE has no aps-environment/App Group value"
     }
   else

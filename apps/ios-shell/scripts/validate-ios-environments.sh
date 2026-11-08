@@ -67,6 +67,18 @@ check_versions() {
     fail "$CONTEXT: PROD MARKETING_VERSION $prod_version is ahead of DEV $dev_version (DEV may lead PROD, never trail it)"
 }
 
+check_sign_in_with_apple_entitlements() {
+  local root="$1"
+  for file in "$root/AppDebug.entitlements" "$root/AppRelease.entitlements"; do
+    if [ ! -f "$file" ]; then
+      fail "Sign in with Apple entitlement file is missing: $file"
+    elif ! grep -q '<key>com.apple.developer.applesignin</key>' "$file" ||
+         ! grep -q '<string>Default</string>' "$file"; then
+      fail "$file does not declare com.apple.developer.applesignin = Default"
+    fi
+  done
+}
+
 # check <configuration> <target product type: app|appex> <settings...>
 # Settings are read from the variables below, set by the caller.
 check() {
@@ -120,6 +132,7 @@ if [ "${1:-}" = "--build-phase" ]; then
   S_BUILD="${CURRENT_PROJECT_VERSION:-}"
   if [ "${WRAPPER_EXTENSION:-}" = appex ]; then kind=appex; else kind=app; fi
   check_versions
+  check_sign_in_with_apple_entitlements "${SRCROOT:-.}/App"
   check "${CONFIGURATION:-}" "$kind"
   if [ "$FAILURES" -gt 0 ]; then
     echo "error: MyKhaya iOS environment check failed for ${TARGET_NAME:-target} (${CONFIGURATION:-?}). See docs/mobile/ios-environments.md." >&2
@@ -145,6 +158,7 @@ setting() {
 }
 
 check_versions
+check_sign_in_with_apple_entitlements "ios/App/App"
 
 for configuration in Debug-Dev Release-Dev Debug-Prod Release-Prod; do
   for target in App MyKhayaWidgets; do
