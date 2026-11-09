@@ -5,6 +5,7 @@ import os
 import re
 import tempfile
 import uuid
+from datetime import date, datetime
 from pathlib import Path
 
 from mykhaya.config import Settings
@@ -72,13 +73,12 @@ def evidence_filename(evidence_id: uuid.UUID | str | None = None) -> str:
 
 
 def evidence_download_filename(
-    document_name: str, document_version: str, accepted_at: object
+    document_name: str, document_version: str, accepted_at: date | datetime
 ) -> str:
     def slug(value: str) -> str:
         return re.sub(r"[^A-Za-z0-9]+", "-", value).strip("-") or "document"
 
-    accepted_date = getattr(accepted_at, "date", lambda: accepted_at)()
+    accepted_date = accepted_at.date() if isinstance(accepted_at, datetime) else accepted_at
     return (
-        f"MyKhaya-{slug(document_name)}-v{slug(document_version)}-"
-        f"{accepted_date.isoformat()}.pdf"
+        f"MyKhaya-{slug(document_name)}-v{slug(document_version)}-{accepted_date.isoformat()}.pdf"
     )

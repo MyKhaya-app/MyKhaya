@@ -205,9 +205,7 @@ async def test_onboarding_home_creation_is_idempotent_and_free_completion_is_exp
             )
         ).status_code == 200
 
-    ambiguous_resume = await unsafe(
-        client, "GET", "/api/v1/groups/onboarding/resume"
-    )
+    ambiguous_resume = await unsafe(client, "GET", "/api/v1/groups/onboarding/resume")
     assert ambiguous_resume.status_code == 409
 
     completed = await unsafe(client, "POST", f"/api/v1/groups/{first_id}/onboarding/complete")

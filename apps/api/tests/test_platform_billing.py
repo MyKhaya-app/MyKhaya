@@ -526,7 +526,7 @@ async def test_reconcile_applies_current_stripe_state_and_is_audited(
             "id": sub_id,
             "status": "active",
             "cancel_at_period_end": False,
-                "customer": f"cus_{sub_id}",
+            "customer": f"cus_{sub_id}",
             "current_period_start": 1_700_000_000,
             "current_period_end": 1_800_000_000,
             "items": {
@@ -606,7 +606,7 @@ async def test_reconcile_with_no_named_transition_uses_the_reconciled_label(
             "id": sub_id,
             "status": "active",
             "cancel_at_period_end": False,
-                "customer": f"cus_{sub_id}",
+            "customer": f"cus_{sub_id}",
             "current_period_start": 1_700_000_000,
             "current_period_end": 1_900_000_000,
             "items": {

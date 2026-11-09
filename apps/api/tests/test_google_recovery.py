@@ -165,9 +165,7 @@ async def test_google_link_rejects_wrong_user_without_consuming_transaction(
         wrong_user = await db.scalar(select(User).where(User.email == wrong_email))
         assert wrong_user is not None
         wrong_events = (
-            await db.scalars(
-                select(AuditEvent).where(AuditEvent.actor_user_id == wrong_user.id)
-            )
+            await db.scalars(select(AuditEvent).where(AuditEvent.actor_user_id == wrong_user.id))
         ).all()
         assert "GOOGLE_IDENTITY_LINKED" not in [event.action for event in wrong_events]
 

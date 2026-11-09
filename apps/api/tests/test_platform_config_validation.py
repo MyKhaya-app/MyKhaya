@@ -25,6 +25,7 @@ def _base_kwargs(**overrides: object) -> dict[str, object]:
         "admin_url": "http://admin.localhost:8089",
         "status_url": "http://status.localhost:8089",
         "native_api_url": "http://api.localhost:8089",
+        "fcm_project_id": "mykhaya-prod",
         "trusted_hosts": [
             "localhost",
             "127.0.0.1",

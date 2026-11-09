@@ -752,6 +752,7 @@ def test_production_configuration_fails_closed_without_admin_networks() -> None:
         Settings(
             environment="production",
             secret_key="x" * 32,
+            fcm_project_id="mykhaya-prod",
             cookie_secure=True,
             admin_allowed_networks=[],
             admin_mfa_required=True,

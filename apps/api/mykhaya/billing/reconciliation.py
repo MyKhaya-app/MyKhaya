@@ -101,17 +101,13 @@ async def _require_paid_latest_invoice(
         )
     required_fields = ("status", "customer")
     if not isinstance(invoice, dict) or any(field not in invoice for field in required_fields):
-        invoice = await call_stripe(
-            lambda: stripe.Invoice.retrieve(invoice_id, api_key=secret_key)
-        )
+        invoice = await call_stripe(lambda: stripe.Invoice.retrieve(invoice_id, api_key=secret_key))
     if not isinstance(invoice, dict):
         raise ReconciliationValidationError("Stripe returned an invalid latest invoice.")
     if _stripe_id(invoice.get("id")) != invoice_id:
         raise ReconciliationValidationError("Stripe returned a different latest invoice.")
     if invoice.get("status") != "paid":
-        raise ReconciliationValidationError(
-            "The latest Stripe invoice is not confirmed paid."
-        )
+        raise ReconciliationValidationError("The latest Stripe invoice is not confirmed paid.")
     if "paid" in invoice and invoice.get("paid") is not True:
         raise ReconciliationValidationError(
             "The latest Stripe invoice has contradictory payment fields."
@@ -198,11 +194,15 @@ async def confirm_checkout_session(
     if subscription_group_raw and str(subscription_group_raw) != str(group_id):
         raise CheckoutConfirmationError("The Stripe subscription does not belong to this Home.")
 
-    configured_prices = {
-        config.family_monthly_price_id,
-        config.family_annual_price_id,
-        config.ultimate_monthly_price_id,
-        config.ultimate_annual_price_id,
+    configured_prices: set[str] = {
+        price_id
+        for price_id in (
+            config.family_monthly_price_id,
+            config.family_annual_price_id,
+            config.ultimate_monthly_price_id,
+            config.ultimate_annual_price_id,
+        )
+        if price_id is not None
     }
     item = select_subscription_item(stripe_subscription, known_price_ids=configured_prices)
     price_id = _stripe_id(item.get("price")) if item else None
@@ -310,9 +310,9 @@ async def reconcile_home_subscription(
     if not config.configured or not config.secret_key:
         raise StripeNotConfiguredError("Stripe billing is not configured.")
     subscription = await get_home_subscription(db, group_id)
-    subscription_id = subscription.external_subscription_id if subscription else None
-    if not subscription_id:
+    if subscription is None or not subscription.external_subscription_id:
         raise NoStripeSubscriptionError("This Home has no Stripe subscription to reconcile.")
+    subscription_id = subscription.external_subscription_id
 
     stripe_subscription = await call_stripe(
         lambda: stripe.Subscription.retrieve(
@@ -326,10 +326,12 @@ async def reconcile_home_subscription(
             "Stripe returned a different subscription identifier."
         )
     stripe_customer_id = _stripe_id(stripe_subscription.get("customer"))
-    if (
-        not subscription.external_customer_id
-        or stripe_customer_id != subscription.external_customer_id
-    ):
+    external_customer_id = subscription.external_customer_id
+    if not external_customer_id:
+        raise SubscriptionOwnershipMismatchError(
+            "This Home subscription has no external customer identifier."
+        )
+    if stripe_customer_id != external_customer_id:
         raise SubscriptionOwnershipMismatchError(
             "Stripe returned a subscription for a different customer."
         )
@@ -340,9 +342,7 @@ async def reconcile_home_subscription(
         )
 
     if stripe_subscription.get("status") not in {"active", "trialing", "past_due"}:
-        raise ReconciliationValidationError(
-            "The Stripe subscription is not in an eligible state."
-        )
+        raise ReconciliationValidationError("The Stripe subscription is not in an eligible state.")
     if stripe_subscription.get("pending_update"):
         raise ReconciliationValidationError(
             "The Stripe subscription has an unresolved pending update."
@@ -377,7 +377,7 @@ async def reconcile_home_subscription(
     await _require_paid_latest_invoice(
         latest_invoice,
         secret_key=config.secret_key,
-        expected_customer_id=subscription.external_customer_id,
+        expected_customer_id=external_customer_id,
         expected_subscription_id=subscription_id,
     )
 

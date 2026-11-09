@@ -10,11 +10,15 @@ from mykhaya.config import Settings
 
 
 def _private_pem() -> str:
-    return ec.generate_private_key(ec.SECP256R1()).private_bytes(
-        serialization.Encoding.PEM,
-        serialization.PrivateFormat.PKCS8,
-        serialization.NoEncryption(),
-    ).decode()
+    return (
+        ec.generate_private_key(ec.SECP256R1())
+        .private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        )
+        .decode()
+    )
 
 
 def _settings(**values: object) -> Settings:
@@ -100,9 +104,7 @@ def test_malformed_file_fails_closed(tmp_path: Path) -> None:
         ),
     ],
 )
-def test_encrypted_non_ec_and_non_p256_files_fail_closed(
-    tmp_path: Path, private_key
-) -> None:
+def test_encrypted_non_ec_and_non_p256_files_fail_closed(tmp_path: Path, private_key) -> None:
     path = tmp_path / "apple-sign-in.p8"
     path.write_bytes(private_key())
 

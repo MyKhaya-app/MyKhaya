@@ -442,9 +442,7 @@ async def _billing_change_home(
     return subscription
 
 
-@group_router.post(
-    "/change-preview", response_model=SubscriptionChangePreviewResponse
-)
+@group_router.post("/change-preview", response_model=SubscriptionChangePreviewResponse)
 async def subscription_change_preview(
     group_id: uuid.UUID,
     body: SubscriptionChangeRequest,
@@ -853,11 +851,7 @@ async def stripe_webhook(
         )
         await db.commit()
         try:
-            state_result = (
-                exc.result
-                if isinstance(exc, WebhookStateApplicationError)
-                else None
-            )
+            state_result = exc.result if isinstance(exc, WebhookStateApplicationError) else None
             safe_code = (
                 f"webhook_{state_result.outcome.value}"
                 if state_result is not None

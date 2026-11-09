@@ -348,9 +348,13 @@ async def preview_subscription_change(
     }
     is_upgrade = plan_rank[target_plan] > plan_rank[home.plan]
     is_interval_change = target_plan == home.plan and target_interval != home.billing_interval
-    is_immediate = is_upgrade or is_interval_change or (
-        target_plan != SubscriptionPlan.free
-        and home.status == SubscriptionStatus.cancel_at_period_end
+    is_immediate = (
+        is_upgrade
+        or is_interval_change
+        or (
+            target_plan != SubscriptionPlan.free
+            and home.status == SubscriptionStatus.cancel_at_period_end
+        )
     )
     return {
         "current_plan": home.plan,
@@ -412,9 +416,13 @@ async def apply_subscription_change(
     }
     is_upgrade = plan_rank[target_plan] > plan_rank[home.plan]
     is_interval_change = target_plan == home.plan and target_interval != home.billing_interval
-    is_immediate = is_upgrade or is_interval_change or (
-        target_plan != SubscriptionPlan.free
-        and home.status == SubscriptionStatus.cancel_at_period_end
+    is_immediate = (
+        is_upgrade
+        or is_interval_change
+        or (
+            target_plan != SubscriptionPlan.free
+            and home.status == SubscriptionStatus.cancel_at_period_end
+        )
     )
 
     existing_schedule_id = _id(subscription.get("schedule")) or home.stripe_schedule_id

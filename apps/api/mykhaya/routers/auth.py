@@ -913,7 +913,7 @@ async def apple_link_start(
 async def authenticated_external_identities(
     auth: AuthContext = Depends(auth_context),
     db: AsyncSession = Depends(get_db),
-) -> list[ExternalIdentityResponse]:
+) -> SignInMethodsResponse:
     require_adult_session(auth)
     password_available = await db.scalar(
         select(AuthIdentity.id).where(AuthIdentity.user_id == auth.user.id)
@@ -1027,16 +1027,19 @@ async def apple_recovery_register(
             status.HTTP_409_CONFLICT,
             "This Apple identity must be linked to an existing account.",
         )
+    provider_email = pending.provider_email
+    if not provider_email:
+        raise HTTPException(status.HTTP_409_CONFLICT, "This Apple identity has no usable email.")
     policy = await evaluate_signup_policy(db, settings)
     if body.beta:
         beta_allowed = policy.beta_path and (
             not policy.invitation_required
             or bool(body.beta_invitation_token)
-            and await beta_invitation_valid(db, body.beta_invitation_token, pending.provider_email)
+            and await beta_invitation_valid(db, body.beta_invitation_token or "", provider_email)
         )
     else:
         beta_allowed = policy.normal_path and not policy.invitation_required
-    if not beta_allowed or not policy.domain_allowed(pending.provider_email):
+    if not beta_allowed or not policy.domain_allowed(provider_email):
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
             "New accounts cannot be created with Apple right now.",
@@ -1049,7 +1052,7 @@ async def apple_recovery_register(
     if pending is None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "This Apple sign-in attempt has expired.")
     existing = await db.scalar(
-        select(User).where(User.email == normalise_email(pending.provider_email)).with_for_update()
+        select(User).where(User.email == normalise_email(provider_email)).with_for_update()
     )
     if existing is not None:
         raise HTTPException(
@@ -1062,7 +1065,7 @@ async def apple_recovery_register(
     if identity is not None:
         raise HTTPException(status.HTTP_409_CONFLICT, "This Apple identity is already linked.")
     user = User(
-        email=normalise_email(pending.provider_email),
+        email=normalise_email(provider_email),
         display_name=pending.display_name,
         email_verified_at=datetime.now(UTC) if pending.email_verified else None,
     )
@@ -1229,7 +1232,7 @@ async def _apple_callback(
                     and bool(provider_email)
                     and policy.normal_path
                     and not policy.invitation_required
-                    and policy.domain_allowed(provider_email),
+                    and policy.domain_allowed(provider_email or ""),
                     platform=flow.native_platform,
                     redemption_verifier_hash=flow.native_redemption_verifier_hash,
                     intended_user_id=flow.user_id if flow.intent == "link" else None,
@@ -1553,16 +1556,19 @@ async def google_recovery_register(
         raise HTTPException(
             status.HTTP_409_CONFLICT, "This Google identity must be linked to an existing account."
         )
+    provider_email = pending.provider_email
+    if not provider_email:
+        raise HTTPException(status.HTTP_409_CONFLICT, "This Google identity has no usable email.")
     policy = await evaluate_signup_policy(db, settings)
     if body.beta:
         beta_allowed = policy.beta_path and (
             not policy.invitation_required
             or bool(body.beta_invitation_token)
-            and await beta_invitation_valid(db, body.beta_invitation_token, pending.provider_email)
+            and await beta_invitation_valid(db, body.beta_invitation_token or "", provider_email)
         )
     else:
         beta_allowed = policy.normal_path and not policy.invitation_required
-    if not beta_allowed or not policy.domain_allowed(pending.provider_email):
+    if not beta_allowed or not policy.domain_allowed(provider_email):
         raise HTTPException(
             status.HTTP_403_FORBIDDEN, "New accounts cannot be created with Google right now."
         )
@@ -1573,7 +1579,7 @@ async def google_recovery_register(
     if pending is None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "This Google sign-in attempt has expired.")
     existing = await db.scalar(
-        select(User).where(User.email == normalise_email(pending.provider_email)).with_for_update()
+        select(User).where(User.email == normalise_email(provider_email)).with_for_update()
     )
     if existing is not None:
         raise HTTPException(
@@ -1586,7 +1592,7 @@ async def google_recovery_register(
     if identity is not None:
         raise HTTPException(status.HTTP_409_CONFLICT, "This Google identity is already linked.")
     user = User(
-        email=normalise_email(pending.provider_email),
+        email=normalise_email(provider_email),
         display_name=pending.display_name,
         email_verified_at=datetime.now(UTC),
     )
@@ -1765,9 +1771,10 @@ async def google_callback(
             await db.commit()
             return _google_settings_redirect(settings, "google=linked")
         if identity is not None:
-            linked_user = await db.get(User, identity.user_id, with_for_update=True)
-            if linked_user is None or not linked_user.is_active:
+            candidate_user = await db.get(User, identity.user_id, with_for_update=True)
+            if candidate_user is None or not candidate_user.is_active:
                 raise GoogleAuthenticationError("Google sign-in could not be completed.")
+            linked_user = candidate_user
             await touch_external_identity(
                 db, identity=identity, provider_email=provider_email, provider_email_verified=True
             )
@@ -2453,7 +2460,7 @@ async def passkey_login_verify(
     response: Response,
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
-) -> UserResponse:
+) -> UserResponse | AuthContinuationResponse:
     require_secure_transport(request, settings)
     await enforce_rate_limit(request, settings, "family-passkey-login", 8, 300)
     token = request.cookies.get(PASSKEY_LOGIN_COOKIE)

@@ -40,7 +40,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -161,7 +161,7 @@ def select_subscription_item(
     grandfathered Price is no longer in current configuration. Multiple items
     without exactly one matching signal are rejected safely.
     """
-    items = (stripe_subscription.get("items") or {}).get("data") or []
+    items = cast(list[dict[str, Any]], (stripe_subscription.get("items") or {}).get("data") or [])
     if not items:
         return None
     if preferred_price_id:

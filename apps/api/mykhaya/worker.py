@@ -414,7 +414,10 @@ async def _process_legal_evidence(db: AsyncSession, settings: Settings, event: O
     evidence.status = LegalEvidenceStatus.ready
     first_name = (evidence.account_name or "there").split(" ", 1)[0]
     subject, body, html = await render_notification_email(
-        db, settings, "legal_acceptance_confirmation", {
+        db,
+        settings,
+        "legal_acceptance_confirmation",
+        {
             "user_first_name": first_name,
             "document_name": evidence.document_name,
             "document_version": evidence.document_version,
@@ -423,7 +426,7 @@ async def _process_legal_evidence(db: AsyncSession, settings: Settings, event: O
             "ip_address": evidence.ip_address or "Unavailable",
             "acceptance_reference": str(evidence.acceptance_id),
             "support_email": settings.smtp_reply_to or settings.email_from,
-        }
+        },
     )
     user = await db.get(User, evidence.user_id) if evidence.user_id else None
     if user is None or user.email_verified_at is None or not evidence.registered_email:
@@ -447,6 +450,8 @@ async def _process_legal_evidence(db: AsyncSession, settings: Settings, event: O
     )
     evidence.status = LegalEvidenceStatus.sending
     evidence.email_status = "queued"
+
+
 def _redact_sensitive_email_payload(event: OutboxEvent) -> None:
     """Remove rendered MFA content after it is no longer needed for delivery."""
     if event.payload.get("sensitive_email_expires_at") is None:

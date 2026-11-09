@@ -5,7 +5,7 @@ from datetime import UTC, date, datetime, timedelta, tzinfo
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
-from sqlalchemy import ColumnElement, and_, delete, func, or_, select, text
+from sqlalchemy import ColumnElement, and_, delete, func, literal, or_, select, text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -1691,7 +1691,7 @@ async def copy_event(
                         CalendarEventMember.user_id == auth.user.id
                     )
                 ),
-                Capability.calendar_view_all in capabilities,
+                literal(Capability.calendar_view_all in capabilities),
             ),
         )
     )
@@ -1713,9 +1713,17 @@ async def copy_event(
     else:
         _require_calendar_writable(await _calendar_access(db, home_id), calendar_row.id)
 
-    member_ids = sorted(set((await db.scalars(
-        select(CalendarEventMember.user_id).where(CalendarEventMember.event_id == source.id)
-    )).all()))
+    member_ids = sorted(
+        set(
+            (
+                await db.scalars(
+                    select(CalendarEventMember.user_id).where(
+                        CalendarEventMember.event_id == source.id
+                    )
+                )
+            ).all()
+        )
+    )
     label = await db.get(CalendarEventLabel, source.label_id) if source.label_id else None
     if len(member_ids) > 1:
         await require_entitlement(db, home_id, "events.shared.enabled")
@@ -1767,11 +1775,17 @@ async def copy_event(
             )
         )
         if existing is not None:
-            existing_members = sorted(set((await db.scalars(
-                select(CalendarEventMember.user_id).where(
-                    CalendarEventMember.event_id == existing.id
+            existing_members = sorted(
+                set(
+                    (
+                        await db.scalars(
+                            select(CalendarEventMember.user_id).where(
+                                CalendarEventMember.event_id == existing.id
+                            )
+                        )
+                    ).all()
                 )
-            )).all()))
+            )
             copied.append(
                 _occurrence(
                     existing, _own_occurrence(existing), label, existing_members, calendar_row.color
@@ -1779,13 +1793,21 @@ async def copy_event(
             )
             continue
         event = CalendarEvent(
-            group_id=home_id, calendar_id=source.calendar_id, label_id=source.label_id,
-            title=source.title, description=source.description, start_at=start_at, end_at=end_at,
+            group_id=home_id,
+            calendar_id=source.calendar_id,
+            label_id=source.label_id,
+            title=source.title,
+            description=source.description,
+            start_at=start_at,
+            end_at=end_at,
             is_all_day=source.is_all_day,
             timezone=source.timezone,
             location_text=source.location_text,
-            reminder_minutes=source.reminder_minutes, recurrence=RecurrencePattern.none,
-            recurrence_interval=1, created_by=auth.user.id, last_edited_by=auth.user.id,
+            reminder_minutes=source.reminder_minutes,
+            recurrence=RecurrencePattern.none,
+            recurrence_interval=1,
+            created_by=auth.user.id,
+            last_edited_by=auth.user.id,
         )
         db.add(event)
         await db.flush()
@@ -1803,12 +1825,21 @@ async def copy_event(
             event.version,
         )
         await _notify_visible_members_event_created(
-            db, settings, event, auth.user.id, auth.user.display_name,
+            db,
+            settings,
+            event,
+            auth.user.id,
+            auth.user.display_name,
             await home_viewer_ids_for_event(db, event) - set(member_ids),
         )
         await notify_calendar_share_recipients(
-            db, settings, event, actor_user_id=auth.user.id, actor_name=auth.user.display_name,
-            action="created", version_marker=event.version,
+            db,
+            settings,
+            event,
+            actor_user_id=auth.user.id,
+            actor_name=auth.user.display_name,
+            action="created",
+            version_marker=event.version,
         )
         copied.append(
             _occurrence(event, _own_occurrence(event), label, member_ids, calendar_row.color)

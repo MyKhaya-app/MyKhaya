@@ -106,6 +106,7 @@ async def test_preview_uses_provider_amount_without_frontend_math(
         "create_preview",
         lambda **kwargs: {"amount_due": 1275, "currency": "gbp"},
     )
+
     async def fake_price(*args):
         return PriceOption(
             interval=BillingInterval.year,
@@ -148,6 +149,7 @@ async def test_preview_reads_item_level_periods_under_current_stripe_api(
         "create_preview",
         lambda **kwargs: {"amount_due": 2000, "currency": "gbp"},
     )
+
     async def fake_price(*args):
         return _price_option("price_ultimate_year", BillingInterval.year, 5900)
 
@@ -183,6 +185,7 @@ async def test_multiple_items_select_the_stored_plan_price_safely(
         return {"amount_due": 2000, "currency": "gbp"}
 
     monkeypatch.setattr(transitions_module.stripe.Invoice, "create_preview", fake_preview)
+
     async def fake_price(*args):
         return _price_option("price_ultimate_year", BillingInterval.year, 5900)
 
@@ -269,6 +272,7 @@ async def test_family_annual_to_ultimate_annual_uses_same_item_and_target_price(
         "create_preview",
         lambda **kwargs: captured.update(kwargs) or {"amount_due": 1000, "currency": "gbp"},
     )
+
     async def fake_price(*args):
         return _price_option("price_ultimate_year", BillingInterval.year, 5900)
 

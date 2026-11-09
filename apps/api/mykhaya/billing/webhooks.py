@@ -212,7 +212,7 @@ async def _handle_invoice_event(
     docs/architecture/commercial-entitlements.md#out-of-order-events."""
     subscription_id = _invoice_subscription_id(invoice_obj)
     if not subscription_id or not config.secret_key:
-        return
+        return None
     stripe_subscription = await call_stripe(
         lambda: stripe.Subscription.retrieve(subscription_id, api_key=config.secret_key)
     )
@@ -286,35 +286,41 @@ async def process_webhook_event(
         await _handle_checkout_completed(db, group_id, data_object)
         outcome = "processed"
     elif event_type == "customer.subscription.created":
-        outcome = _webhook_outcome(await _handle_subscription_event(
-            db,
-            group_id,
-            data_object,
-            config,
-            event_id=event_id,
-            event_type=event_type,
-            hint="stripe_subscription_activated",
-        ))
+        outcome = _webhook_outcome(
+            await _handle_subscription_event(
+                db,
+                group_id,
+                data_object,
+                config,
+                event_id=event_id,
+                event_type=event_type,
+                hint="stripe_subscription_activated",
+            )
+        )
     elif event_type == "customer.subscription.updated":
-        outcome = _webhook_outcome(await _handle_subscription_event(
-            db,
-            group_id,
-            data_object,
-            config,
-            event_id=event_id,
-            event_type=event_type,
-            hint="stripe_subscription_updated",
-        ))
+        outcome = _webhook_outcome(
+            await _handle_subscription_event(
+                db,
+                group_id,
+                data_object,
+                config,
+                event_id=event_id,
+                event_type=event_type,
+                hint="stripe_subscription_updated",
+            )
+        )
     elif event_type == "customer.subscription.deleted":
-        outcome = _webhook_outcome(await _handle_subscription_event(
-            db,
-            group_id,
-            data_object,
-            config,
-            event_id=event_id,
-            event_type=event_type,
-            hint="stripe_subscription_cancelled",
-        ))
+        outcome = _webhook_outcome(
+            await _handle_subscription_event(
+                db,
+                group_id,
+                data_object,
+                config,
+                event_id=event_id,
+                event_type=event_type,
+                hint="stripe_subscription_cancelled",
+            )
+        )
     elif event_type == "invoice.payment_succeeded":
         result = await _handle_invoice_event(
             db,

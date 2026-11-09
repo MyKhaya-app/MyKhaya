@@ -1921,14 +1921,10 @@ async def test_event_suggestions_rank_deduplicate_and_isolate_home_history(
     assert items[0]["reminder_minutes"] == 15
 
     assert (
-        await client.get(
-            f"/api/v1/homes/{home_id}/event-suggestions", params={"q": "zzzz"}
-        )
+        await client.get(f"/api/v1/homes/{home_id}/event-suggestions", params={"q": "zzzz"})
     ).json() == {"items": []}
     assert (
-        await client.get(
-            f"/api/v1/homes/{home_id}/event-suggestions", params={"q": "s"}
-        )
+        await client.get(f"/api/v1/homes/{home_id}/event-suggestions", params={"q": "s"})
     ).status_code == 422
 
 

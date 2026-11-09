@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, date, datetime
-from typing import Literal
+from typing import Any, Literal, cast
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy import select
@@ -315,49 +315,41 @@ async def acceptance_history(
         for row in (
             await db.scalars(
                 select(LegalAcceptanceEvidence).where(
-                    LegalAcceptanceEvidence.acceptance_id.in_([
-                        record.id for record, _, _ in records
-                    ])
+                    LegalAcceptanceEvidence.acceptance_id.in_(
+                        [record.id for record, _, _ in records]
+                    )
                 )
             )
         ).all()
     }
-    history = [
-        AcceptanceHistoryItem(
-            id=record.id,
-            document_key=document.key,
-            document_id=document.id,
-            display_name=document.display_name,
-            version=version.version,
-            version_id=version.id,
-            record_type=record.record_type.value,
-            context=record.context.value,
-            platform=record.platform.value,
-            created_at=record.created_at,
-            guardian_user_id=record.user_id
-            if record.record_type == LegalRecordType.guardian_authorisation
-            else None,
-            child_profile_id=record.child_profile_id,
-            is_test=record.is_test,
-            evidence_status=(
-                evidence_rows.get(record.id).status.value if evidence_rows.get(record.id) else None
-            ),
-            email_status=(
-                evidence_rows.get(record.id).email_status if evidence_rows.get(record.id) else None
-            ),
-            evidence_last_error=(
-                evidence_rows.get(record.id).last_error if evidence_rows.get(record.id) else None
-            ),
-            email_sent_at=(
-                evidence_rows.get(record.id).email_sent_at if evidence_rows.get(record.id) else None
-            ),
-            pdf_available=bool(
-                evidence_rows.get(record.id) and evidence_rows.get(record.id).pdf_storage_key
-            ),
-            evidence_id=evidence_rows.get(record.id).id if evidence_rows.get(record.id) else None,
+    history = []
+    for record, version, document in records:
+        evidence = evidence_rows.get(record.id)
+        history.append(
+            AcceptanceHistoryItem(
+                id=record.id,
+                document_key=document.key,
+                document_id=document.id,
+                display_name=document.display_name,
+                version=version.version,
+                version_id=version.id,
+                record_type=record.record_type.value,
+                context=record.context.value,
+                platform=record.platform.value,
+                created_at=record.created_at,
+                guardian_user_id=record.user_id
+                if record.record_type == LegalRecordType.guardian_authorisation
+                else None,
+                child_profile_id=record.child_profile_id,
+                is_test=record.is_test,
+                evidence_status=evidence.status.value if evidence else None,
+                email_status=evidence.email_status if evidence else None,
+                evidence_last_error=evidence.last_error if evidence else None,
+                email_sent_at=evidence.email_sent_at if evidence else None,
+                pdf_available=bool(evidence and evidence.pdf_storage_key),
+                evidence_id=evidence.id if evidence else None,
+            )
         )
-        for record, version, document in records
-    ]
     return AcceptanceHistoryResponse(
         user_id=user.id,
         display_name=user.display_name,
@@ -423,7 +415,7 @@ async def retry_acceptance_evidence(
     if event.processed_at is not None:
         event.processed_at = None
         event.attempts = 0
-        event.available_at = None
+        event.available_at = cast(Any, None)
         event.last_error = None
     evidence.status = LegalEvidenceStatus.pending
     evidence.email_status = "pending"
@@ -469,7 +461,10 @@ async def resend_acceptance_evidence(
             status.HTTP_409_CONFLICT, "The registered email address is not verified."
         )
     subject, body, html = await render_notification_email(
-        db, settings, "legal_acceptance_confirmation", {
+        db,
+        settings,
+        "legal_acceptance_confirmation",
+        {
             "user_first_name": (user.display_name or "there").split(" ", 1)[0],
             "document_name": evidence.document_name,
             "document_version": evidence.document_version,
@@ -478,7 +473,7 @@ async def resend_acceptance_evidence(
             "ip_address": evidence.ip_address or "Unavailable",
             "acceptance_reference": str(evidence.acceptance_id),
             "support_email": settings.smtp_reply_to or settings.email_from,
-        }
+        },
     )
     resend_key = f"legal_acceptance_confirmation:resend:{evidence.id}"
     await notify(
@@ -497,7 +492,11 @@ async def resend_acceptance_evidence(
         attachment_evidence_id=str(evidence.id),
     )
     platform_audit(
-        db, request, context, "legal_acceptance_evidence.resent", "legal_acceptance_evidence",
+        db,
+        request,
+        context,
+        "legal_acceptance_evidence.resent",
+        "legal_acceptance_evidence",
         target_id=evidence.id,
         reason="PCC manual resend",
         new={"acceptance_id": str(evidence.acceptance_id)},

@@ -1,18 +1,19 @@
 # Known test debt
 
-## Mypy baseline
+## Resolved Ruff and mypy gate debt
 
-The identical Docker toolchain and `mypy mykhaya` command produced the
-following comparison during the social-auth reconciliation:
+The merged DEV quality gate previously stopped at Ruff formatting, with 27
+files requiring the repository's pinned formatter. Those files are now
+formatted without changing the Ruff configuration.
 
-- Clean DEV HEAD (`6abdba5`): 36 errors.
-- Integrated approved checkout: 30 errors (the same result as the previously
-  validated DEV working tree).
-- No new semantic errors were introduced by the integration.
-- Six existing semantic errors were resolved by the integration.
+The same Docker toolchain and `mypy mykhaya` command previously reported 24
+baseline errors on clean DEV HEAD. They were resolved with narrow annotations,
+explicit `None` narrowing and typed SQLAlchemy result handling. The current
+result is `Success: no issues found in 176 source files`.
 
-This is a documented baseline, not a type-clean result. The integrated
-checkout must continue to report its own mypy result before promotion.
+Ruff lint, Ruff format validation and mypy are therefore no longer outstanding
+test debt. The remaining items below are independent pre-existing test and
+fixture issues.
 
 ## API tests that cannot be rerun against the same database
 

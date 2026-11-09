@@ -12,6 +12,7 @@ from mykhaya.models import (
     LegalDocument,
     LegalDocumentVersion,
     OutboxEvent,
+    User,
 )
 
 
@@ -31,7 +32,7 @@ async def queue_acceptance_evidence(
     acceptance: LegalAcceptance,
     document: LegalDocument,
     version: LegalDocumentVersion,
-    user,
+    user: User,
 ) -> LegalAcceptanceEvidence:
     """Create one immutable evidence snapshot and its transactional outbox row."""
     await db.flush()

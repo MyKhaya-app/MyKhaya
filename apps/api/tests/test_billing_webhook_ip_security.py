@@ -86,9 +86,7 @@ def test_monitoring_records_only_safe_source_observation() -> None:
     added: list[object] = []
     db = SimpleNamespace(add=added.append)
 
-    record_monitored_webhook_request(
-        db, source_ip="3.18.12.63", request_id="req_test"
-    )
+    record_monitored_webhook_request(db, source_ip="3.18.12.63", request_id="req_test")
 
     assert len(added) == 1
     event = added[0]

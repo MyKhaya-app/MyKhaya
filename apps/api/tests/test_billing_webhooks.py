@@ -44,15 +44,15 @@ WEBHOOK_SECRET = "whsec_test_secret_abc123"
 
 
 def test_webhook_outcome_deduplicates_only_stale_or_successful_results() -> None:
-    assert _webhook_outcome(
-        SubscriptionStateResult(SubscriptionStateOutcome.APPLIED)
-    ) == "processed"
-    assert _webhook_outcome(
-        SubscriptionStateResult(SubscriptionStateOutcome.UNCHANGED)
-    ) == "processed"
-    assert _webhook_outcome(
-        SubscriptionStateResult(SubscriptionStateOutcome.STALE_EVENT)
-    ) == "ignored"
+    assert (
+        _webhook_outcome(SubscriptionStateResult(SubscriptionStateOutcome.APPLIED)) == "processed"
+    )
+    assert (
+        _webhook_outcome(SubscriptionStateResult(SubscriptionStateOutcome.UNCHANGED)) == "processed"
+    )
+    assert (
+        _webhook_outcome(SubscriptionStateResult(SubscriptionStateOutcome.STALE_EVENT)) == "ignored"
+    )
 
     result = SubscriptionStateResult(
         SubscriptionStateOutcome.UNKNOWN_PRICE_ID,

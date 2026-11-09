@@ -440,9 +440,7 @@ class Settings(BaseSettings):
             env_key = file_key.strip()
             self.apple_private_key = SecretStr(file_key)
         if env_key:
-            source = (
-                "MYKHAYA_APPLE_PRIVATE_KEY_FILE" if key_file else "MYKHAYA_APPLE_PRIVATE_KEY"
-            )
+            source = "MYKHAYA_APPLE_PRIVATE_KEY_FILE" if key_file else "MYKHAYA_APPLE_PRIVATE_KEY"
             self._validate_apple_private_key(
                 env_key,
                 source=source,
@@ -454,13 +452,9 @@ class Settings(BaseSettings):
         try:
             key = serialization.load_pem_private_key(value.encode("utf-8"), password=None)
         except (TypeError, ValueError, UnicodeError) as exc:
-            raise ValueError(
-                f"{source} must contain an unencrypted P-256 PEM key"
-            ) from exc
+            raise ValueError(f"{source} must contain an unencrypted P-256 PEM key") from exc
         if not isinstance(key, EllipticCurvePrivateKey) or not isinstance(key.curve, SECP256R1):
-            raise ValueError(
-                f"{source} must contain an unencrypted P-256 PEM key"
-            )
+            raise ValueError(f"{source} must contain an unencrypted P-256 PEM key")
 
     @model_validator(mode="after")
     def validate_production_fcm_configuration(self) -> "Settings":
@@ -475,9 +469,7 @@ class Settings(BaseSettings):
             return self
 
         if self.fcm_project_id and self.fcm_project_id != "mykhaya-prod":
-            raise ValueError(
-                "MYKHAYA_FCM_PROJECT_ID must be mykhaya-prod in production"
-            )
+            raise ValueError("MYKHAYA_FCM_PROJECT_ID must be mykhaya-prod in production")
 
         if self.fcm_delivery_configured:
             if not (self.fcm_project_id and self.fcm_client_email and self.fcm_private_key):

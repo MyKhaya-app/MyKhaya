@@ -139,7 +139,11 @@ def _classify_response(code: int, default: type[EmailSendError]) -> EmailSendErr
 
 
 def send_email(
-    config: SmtpConfig, recipient: str, subject: str, text: str, html: str | None = None,
+    config: SmtpConfig,
+    recipient: str,
+    subject: str,
+    text: str,
+    html: str | None = None,
     attachment: tuple[str, bytes, str] | None = None,
 ) -> str:
     """Sends a multipart/alternative message (text/plain + optional text/html) —

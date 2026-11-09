@@ -120,9 +120,7 @@ async def test_hide_my_email_requires_explicit_link_and_creates_no_duplicate_use
     async with SessionFactory() as db:
         after = await db.scalar(select(func.count()).select_from(User))
         identity = await db.scalar(
-            select(ExternalIdentity).where(
-                ExternalIdentity.provider_subject == subject
-            )
+            select(ExternalIdentity).where(ExternalIdentity.provider_subject == subject)
         )
         user = await db.scalar(select(User).where(User.email == email))
         assert after == before
@@ -203,9 +201,7 @@ async def test_explicit_new_apple_registration_creates_one_user_and_identity(
     )
     assert registered.status_code == 200, registered.text
     async with SessionFactory() as db:
-        users = (
-            await db.scalars(select(User).where(User.email == provider_email))
-        ).all()
+        users = (await db.scalars(select(User).where(User.email == provider_email))).all()
         identities = (
             await db.scalars(
                 select(ExternalIdentity).where(
@@ -225,12 +221,14 @@ async def test_exact_email_match_cannot_choose_new_apple_registration(
     _pending, subject = fake_apple_callback
     email = f"apple-existing-{datetime.now(UTC).strftime('%H%M%S%f')}@example.com"
     await register_and_verify(client, email, "Existing Relay User")
+
     async def verify_existing_email(_settings, _token: str, _nonce: str) -> dict[str, object]:
         return {
             "sub": subject,
             "email": email,
             "email_verified": True,
         }
+
     monkeypatch.setattr(auth_router, "verify_identity_token", verify_existing_email)
     callback = await client.get(
         "/api/v1/auth/apple/callback?state=state&code=code", follow_redirects=False
@@ -370,8 +368,7 @@ async def test_concurrent_apple_claim_has_one_owner_and_preserves_tenancy(
             assert await db.scalar(select(func.count()).select_from(User)) == before[User]
             assert await db.scalar(select(func.count()).select_from(Group)) == before[Group]
             assert (
-                await db.scalar(select(func.count()).select_from(Membership))
-                == before[Membership]
+                await db.scalar(select(func.count()).select_from(Membership)) == before[Membership]
             )
             assert (
                 await db.scalar(select(func.count()).select_from(HomeSubscription))
@@ -400,6 +397,7 @@ async def test_social_beta_rejects_disabled_beta_path(
             can_register=True,
             return_path="/register?beta=1",
         )
+
         async def load_pending(*_args):
             return pending
 
@@ -415,6 +413,7 @@ async def test_social_beta_rejects_disabled_beta_path(
             can_register=True,
             return_path="/register?beta=1",
         )
+
         async def load_pending(*_args):
             return pending
 
@@ -463,6 +462,7 @@ async def test_social_beta_rejects_invalid_invitation(
             can_register=True,
             return_path="/register?beta=1",
         )
+
         async def load_pending(*_args):
             return pending
 
@@ -478,6 +478,7 @@ async def test_social_beta_rejects_invalid_invitation(
             can_register=True,
             return_path="/register?beta=1",
         )
+
         async def load_pending(*_args):
             return pending
 
@@ -531,6 +532,7 @@ async def test_social_beta_accepts_valid_invited_registration(
             can_register=True,
             return_path="/register?beta=1",
         )
+
         async def load_pending(*_args):
             return pending
 
@@ -550,6 +552,7 @@ async def test_social_beta_accepts_valid_invited_registration(
             can_register=True,
             return_path="/register?beta=1",
         )
+
         async def load_pending(*_args):
             return pending
 
@@ -587,9 +590,13 @@ async def test_social_beta_accepts_valid_invited_registration(
     assert response.status_code == 200, response.text
     async with SessionFactory() as db:
         user = await db.scalar(select(User).where(User.email == email))
-        pending_intent = await db.scalar(
-            select(BetaPendingRegistration).where(BetaPendingRegistration.user_id == user.id)
-        ) if user is not None else None
+        pending_intent = (
+            await db.scalar(
+                select(BetaPendingRegistration).where(BetaPendingRegistration.user_id == user.id)
+            )
+            if user is not None
+            else None
+        )
         identity = await db.scalar(
             select(ExternalIdentity).where(ExternalIdentity.provider_subject == subject)
         )

@@ -24,11 +24,15 @@ def test_provider_status_defaults_fail_closed_without_credentials() -> None:
 
 
 def test_apple_status_is_enabled_only_when_complete_and_explicitly_enabled() -> None:
-    private = ec.generate_private_key(ec.SECP256R1()).private_bytes(
-        serialization.Encoding.PEM,
-        serialization.PrivateFormat.PKCS8,
-        serialization.NoEncryption(),
-    ).decode()
+    private = (
+        ec.generate_private_key(ec.SECP256R1())
+        .private_bytes(
+            serialization.Encoding.PEM,
+            serialization.PrivateFormat.PKCS8,
+            serialization.NoEncryption(),
+        )
+        .decode()
+    )
     settings = Settings(
         secret_key="test-only-secret-key-never-used-in-production-1234",
         apple_sign_in_enabled=True,

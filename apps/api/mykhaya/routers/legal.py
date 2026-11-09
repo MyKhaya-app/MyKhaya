@@ -294,17 +294,17 @@ async def record_acceptance(
         else LegalRecordType.user_acknowledgement
     )
     acceptance = LegalAcceptance(
-            created_at=datetime.now(UTC),
-            record_type=record_type,
-            document_version_id=version.id,
-            user_id=auth.user.id,
-            is_test=version.is_test,
-            context=body.context,
-            platform=body.platform,
-            app_version=body.app_version,
-            ip_address=resolve_client_ip(request, settings),
-            user_agent=request.headers.get("user-agent", "")[:300] or None,
-        )
+        created_at=datetime.now(UTC),
+        record_type=record_type,
+        document_version_id=version.id,
+        user_id=auth.user.id,
+        is_test=version.is_test,
+        context=body.context,
+        platform=body.platform,
+        app_version=body.app_version,
+        ip_address=resolve_client_ip(request, settings),
+        user_agent=request.headers.get("user-agent", "")[:300] or None,
+    )
     db.add(acceptance)
     await queue_acceptance_evidence(
         db, acceptance=acceptance, document=document, version=version, user=auth.user
@@ -345,18 +345,18 @@ async def record_guardian_authorisation(
     await _require_test_access(version, auth, db, settings)
 
     acceptance = LegalAcceptance(
-            created_at=datetime.now(UTC),
-            record_type=LegalRecordType.guardian_authorisation,
-            document_version_id=version.id,
-            user_id=auth.user.id,
-            child_profile_id=profile.id,
-            is_test=version.is_test,
-            context=body.context,
-            platform=body.platform,
-            app_version=body.app_version,
-            ip_address=resolve_client_ip(request, settings),
-            user_agent=request.headers.get("user-agent", "")[:300] or None,
-        )
+        created_at=datetime.now(UTC),
+        record_type=LegalRecordType.guardian_authorisation,
+        document_version_id=version.id,
+        user_id=auth.user.id,
+        child_profile_id=profile.id,
+        is_test=version.is_test,
+        context=body.context,
+        platform=body.platform,
+        app_version=body.app_version,
+        ip_address=resolve_client_ip(request, settings),
+        user_agent=request.headers.get("user-agent", "")[:300] or None,
+    )
     db.add(acceptance)
     await queue_acceptance_evidence(
         db, acceptance=acceptance, document=document, version=version, user=auth.user

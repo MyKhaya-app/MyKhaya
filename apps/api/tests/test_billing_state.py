@@ -175,9 +175,7 @@ def test_multiple_items_require_a_unique_known_plan_price() -> None:
         "si_plan"
     )
     assert select_subscription_item(subscription) is None
-    price_id, interval = extract_price_and_interval(
-        subscription, known_price_ids={"price_family"}
-    )
+    price_id, interval = extract_price_and_interval(subscription, known_price_ids={"price_family"})
     assert (price_id, interval) == ("price_family", BillingInterval.year)
 
 

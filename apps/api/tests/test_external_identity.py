@@ -62,8 +62,9 @@ def test_one_user_can_hold_apple_and_google_identities_without_email_linking() -
 
 
 @pytest.mark.asyncio
-async def test_provider_neutral_service_supports_apple_and_google_and_protects_last_method(
-) -> None:
+async def test_provider_neutral_service_supports_apple_and_google_and_protects_last_method() -> (
+    None
+):
     apple_user = User(
         email=f"identity-service-apple-{uuid.uuid4().hex}@example.com", display_name="Apple"
     )

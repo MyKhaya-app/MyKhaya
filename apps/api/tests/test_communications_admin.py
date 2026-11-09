@@ -50,15 +50,18 @@ def test_delivery_provider_labels_without_exposing_tokens() -> None:
     )
     devices = {android.id: android, ios.id: ios}
 
-    assert _delivery_provider(
-        NotificationDelivery(native_push_device_id=android.id), devices
-    ) == "Android · FCM"
-    assert _delivery_provider(
-        NotificationDelivery(native_push_device_id=ios.id), devices
-    ) == "iOS · APNs"
-    assert _delivery_provider(
-        NotificationDelivery(push_subscription_id=uuid.uuid4()), devices
-    ) == "Web Push"
+    assert (
+        _delivery_provider(NotificationDelivery(native_push_device_id=android.id), devices)
+        == "Android · FCM"
+    )
+    assert (
+        _delivery_provider(NotificationDelivery(native_push_device_id=ios.id), devices)
+        == "iOS · APNs"
+    )
+    assert (
+        _delivery_provider(NotificationDelivery(push_subscription_id=uuid.uuid4()), devices)
+        == "Web Push"
+    )
 
 
 @pytest.fixture

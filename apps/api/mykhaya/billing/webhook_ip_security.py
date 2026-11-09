@@ -66,9 +66,7 @@ async def sync_stripe_webhook_ips(
     db: AsyncSession, *, force: bool = False, now: datetime | None = None
 ) -> tuple[StripeWebhookIpSecuritySettings, bool]:
     now = now or datetime.now(UTC)
-    row = await db.scalar(
-        select(StripeWebhookIpSecuritySettings).with_for_update().limit(1)
-    )
+    row = await db.scalar(select(StripeWebhookIpSecuritySettings).with_for_update().limit(1))
     if row is None:
         row = StripeWebhookIpSecuritySettings()
         db.add(row)

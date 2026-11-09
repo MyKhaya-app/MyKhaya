@@ -139,9 +139,7 @@ async def consume_flow_state(settings: Settings, state: str) -> GoogleFlowState:
             native_return_uri=str(data["native_return_uri"])
             if data.get("native_return_uri")
             else None,
-            native_platform=str(data["native_platform"])
-            if data.get("native_platform")
-            else None,
+            native_platform=str(data["native_platform"]) if data.get("native_platform") else None,
             native_environment=str(data["native_environment"])
             if data.get("native_environment")
             else None,
@@ -160,6 +158,9 @@ async def consume_flow_state(settings: Settings, state: str) -> GoogleFlowState:
 
 async def exchange_code(settings: Settings, code: str, verifier: str) -> str:
     require_google_configuration(settings)
+    client_secret = settings.google_client_secret
+    if client_secret is None:
+        raise GoogleAuthenticationError("Google sign-in could not be completed.")
     if not code or len(code) > 4096:
         raise GoogleAuthenticationError("Google sign-in could not be completed.")
     try:
@@ -169,7 +170,7 @@ async def exchange_code(settings: Settings, code: str, verifier: str) -> str:
                 data={
                     "code": code,
                     "client_id": settings.google_client_id,
-                    "client_secret": settings.google_client_secret.get_secret_value(),
+                    "client_secret": client_secret.get_secret_value(),
                     "redirect_uri": google_redirect_uri(settings),
                     "grant_type": "authorization_code",
                     "code_verifier": verifier,
