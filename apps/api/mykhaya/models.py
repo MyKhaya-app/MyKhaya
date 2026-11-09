@@ -2290,7 +2290,11 @@ class LegalAcceptanceEvidence(Base):
         Enum(LegalRecordType, name="legal_record_type", create_type=False), nullable=False
     )
     status: Mapped[LegalEvidenceStatus] = mapped_column(
-        Enum(LegalEvidenceStatus, name="legal_evidence_status", values_callable=lambda e: [x.value for x in e]),
+        Enum(
+            LegalEvidenceStatus,
+            name="legal_evidence_status",
+            values_callable=lambda e: [x.value for x in e],
+        ),
         default=LegalEvidenceStatus.pending,
         server_default=LegalEvidenceStatus.pending.value,
         nullable=False,
@@ -2298,7 +2302,9 @@ class LegalAcceptanceEvidence(Base):
     pdf_storage_key: Mapped[str | None] = mapped_column(String(255))
     pdf_sha256: Mapped[str | None] = mapped_column(String(64))
     generated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
-    email_status: Mapped[str] = mapped_column(String(30), default="pending", server_default="pending")
+    email_status: Mapped[str] = mapped_column(
+        String(30), default="pending", server_default="pending"
+    )
     email_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     provider_message_id: Mapped[str | None] = mapped_column(String(255))
     last_error: Mapped[str | None] = mapped_column(String(500))

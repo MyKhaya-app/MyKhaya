@@ -157,6 +157,7 @@ from mykhaya.schemas import (
     MfaTotpVerifyRequest,
     MfaVerifyRequest,
     MobileDeviceRenewRequest,
+    MobileLoginRequest,
     MobileSessionResponse,
     NativeExternalBrowserStartRequest,
     NativeExternalBrowserStartResponse,
@@ -1507,9 +1508,7 @@ async def google_recovery_link(
             status.HTTP_401_UNAUTHORIZED, "Your sign-in session is no longer valid."
         )
     if current.email != pending.provider_email:
-        raise HTTPException(
-            status.HTTP_403_FORBIDDEN, "This Google linking attempt is invalid."
-        )
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "This Google linking attempt is invalid.")
     pending = await consume_google_pending_identity(settings, body.transaction_id)
     if pending is None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "This Google sign-in attempt has expired.")
@@ -1943,6 +1942,7 @@ async def issue_session(
     device_token: str | None = None,
     device_csrf: str | None = None,
     fresh_auth_at: datetime | None = None,
+    expires_at: datetime | None = None,
 ) -> Session:
     raw = new_session_token()
     csrf = secrets.token_urlsafe(32)
@@ -1950,7 +1950,7 @@ async def issue_session(
         user_id=user.id,
         trusted_device_id=trusted_device_id,
         token_hash=hash_secret(raw, settings.secret_key.get_secret_value()),
-        expires_at=datetime.now(UTC) + timedelta(minutes=settings.session_minutes),
+        expires_at=expires_at or datetime.now(UTC) + timedelta(minutes=settings.session_minutes),
         fresh_auth_at=fresh_auth_at,
         user_agent=request.headers.get("user-agent", "Unknown device")[:300],
         kind=kind,
@@ -2048,6 +2048,8 @@ async def issue_mobile_session(
     kind: SessionKind = SessionKind.adult,
     fresh_auth_at: datetime | None = None,
     existing_device_id: uuid.UUID | None = None,
+    expires_at: datetime | None = None,
+    mint_device: bool = True,
 ) -> tuple[str, Session, str | None]:
     """Bearer-transport equivalent of issue_session: same Session model, same
     token scheme, no cookies. Returns the raw session token - callers must
@@ -2070,11 +2072,16 @@ async def issue_mobile_session(
     rotate_mobile_session), the existing device is reused unchanged rather
     than minting a new TrustedDevice on every rotation; the returned device
     token is None in that case since nothing about the device credential
-    changed and there is nothing new to persist."""
+    changed and there is nothing new to persist.
+
+    Rotation passes expires_at when it must not extend the session's lifetime
+    (see _rotated_session_expiry) and then also mint_device=False, so a
+    device-less session cannot gain a renewal credential while consumer MFA
+    is required."""
     raw = new_session_token()
     device_raw: str | None = None
     device_id = existing_device_id
-    if device_id is None:
+    if device_id is None and mint_device:
         device, device_raw, _device_csrf = await issue_trusted_device(
             db, request, user, settings, kind
         )
@@ -2082,7 +2089,7 @@ async def issue_mobile_session(
     session = Session(
         user_id=user.id,
         token_hash=hash_secret(raw, settings.secret_key.get_secret_value()),
-        expires_at=datetime.now(UTC) + timedelta(minutes=settings.session_minutes),
+        expires_at=expires_at or datetime.now(UTC) + timedelta(minutes=settings.session_minutes),
         fresh_auth_at=fresh_auth_at,
         user_agent=mobile_client_descriptor(request),
         trusted_device_id=device_id,
@@ -2860,20 +2867,77 @@ async def renew(
     return user_response(user, session)
 
 
-@router.post("/mobile/login", response_model=MobileSessionResponse)
+async def _native_mfa_continuation(
+    db: AsyncSession,
+    request: Request,
+    settings: Settings,
+    user: User,
+    *,
+    primary: str,
+    platform: str,
+    redemption_verifier_hash: str,
+) -> NativeMfaContinuationResponse:
+    """Hold a native sign-in at pre-authentication until the consumer MFA
+    policy is satisfied through /auth/mobile/mfa/*. No session or device
+    credential exists until /auth/mobile/mfa/verify succeeds."""
+    mfa_transaction = NativeMfaTransaction(
+        transaction_id=secrets.token_urlsafe(32),
+        user_id=str(user.id),
+        provider=primary,
+        platform=platform,
+        redemption_verifier_hash=redemption_verifier_hash,
+    )
+    await store_native_mfa_transaction(settings, mfa_transaction)
+    audit(db, request, "native.pre_auth.created", user.id, target_type="native_pre_auth")
+    return NativeMfaContinuationResponse(
+        authentication_state="additional_auth_required",
+        transaction_id=mfa_transaction.transaction_id,
+        provider=primary,
+    )
+
+
+@router.post("/mobile/login", response_model=MobileSessionResponse | NativeMfaContinuationResponse)
 async def mobile_login(
-    body: LoginRequest,
+    body: MobileLoginRequest,
     request: Request,
     response: Response,
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
-) -> MobileSessionResponse:
+) -> MobileSessionResponse | NativeMfaContinuationResponse:
     """Native-client equivalent of /login: same credential check, opaque
     Session token, but returned in the body (not a cookie) since a native
     app has no cookie jar to rely on. Sets no cookies. Never logs the raw
-    token - only the caller who receives this response ever sees it."""
+    token - only the caller who receives this response ever sees it.
+
+    The consumer MFA policy applies exactly as it does to browser /login:
+    nothing about a request proves it came from the MyKhaya app (no app
+    attestation exists; X-MyKhaya-* headers are display-only), so exempting
+    this endpoint would let any password holder bypass required MFA."""
     require_secure_transport(request, settings)
     user = await authenticate_credentials(db, request, settings, body, "mobile_login")
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Pragma"] = "no-cache"
+    policy = await _resolve_browser_mfa_policy(db, user.id, settings)
+    if policy.enforcement_enabled and policy.required:
+        if body.redemption_verifier is None:
+            # An older client that cannot continue an MFA challenge. Fail
+            # closed: the password was correct, but no session is issued.
+            await db.commit()
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                "Additional verification is required. Update MyKhaya and sign in again.",
+            )
+        continuation = await _native_mfa_continuation(
+            db,
+            request,
+            settings,
+            user,
+            primary="password",
+            platform=device_platform(request),
+            redemption_verifier_hash=hash_redemption_verifier(body.redemption_verifier),
+        )
+        await db.commit()
+        return continuation
     raw, session, device_raw = await issue_mobile_session(
         db, request, user, settings, fresh_auth_at=datetime.now(UTC)
     )
@@ -3150,21 +3214,19 @@ async def mobile_external_exchange(
             raise HTTPException(
                 status.HTTP_400_BAD_REQUEST, "This provider identity is unavailable."
             )
-        policy = await _resolve_browser_mfa_policy(db, user.id, settings)
-        if policy.enforcement_enabled and policy.required:
-            mfa_transaction = NativeMfaTransaction(
-                transaction_id=secrets.token_urlsafe(32),
-                user_id=str(user.id),
-                provider=tx.provider,
+        mfa_policy = await _resolve_browser_mfa_policy(db, user.id, settings)
+        if mfa_policy.enforcement_enabled and mfa_policy.required:
+            continuation = await _native_mfa_continuation(
+                db,
+                request,
+                settings,
+                user,
+                primary=tx.provider.value,
                 platform=tx.platform,
                 redemption_verifier_hash=tx.redemption_verifier_hash,
             )
-            await store_native_mfa_transaction(settings, mfa_transaction)
-            return NativeMfaContinuationResponse(
-                authentication_state="additional_auth_required",
-                transaction_id=mfa_transaction.transaction_id,
-                provider=tx.provider.value,
-            )
+            await db.commit()
+            return continuation
         await touch_external_identity(
             db,
             identity=identity,
@@ -3182,13 +3244,13 @@ async def mobile_external_exchange(
             **user_response(user, session).model_dump(), session_token=raw, device_token=device_raw
         )
 
-    policy = await evaluate_signup_policy(db, settings)
+    signup_policy = await evaluate_signup_policy(db, settings)
     can_register = bool(
         provider_email
         and email_verified
-        and policy.normal_path
-        and not policy.invitation_required
-        and policy.domain_allowed(provider_email)
+        and signup_policy.normal_path
+        and not signup_policy.invitation_required
+        and signup_policy.domain_allowed(provider_email)
     )
     await store_native_external_pending(
         settings,
@@ -3218,7 +3280,8 @@ async def mobile_external_exchange(
     "/mobile/external/redeem",
     response_model=MobileSessionResponse
     | NativeExternalRecoveryResponse
-    | NativeMfaContinuationResponse,
+    | NativeMfaContinuationResponse
+    | MessageResponse,
 )
 async def mobile_external_redeem(
     body: NativeExternalLinkRequest,
@@ -3226,7 +3289,12 @@ async def mobile_external_redeem(
     response: Response,
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
-) -> MobileSessionResponse | NativeExternalRecoveryResponse | NativeMfaContinuationResponse:
+) -> (
+    MobileSessionResponse
+    | NativeExternalRecoveryResponse
+    | NativeMfaContinuationResponse
+    | MessageResponse
+):
     require_secure_transport(request, settings)
     pending = await load_native_external_pending(settings, body.transaction_id)
     if pending is None:
@@ -3292,20 +3360,17 @@ async def mobile_external_redeem(
     )
     policy = await _resolve_browser_mfa_policy(db, user.id, settings)
     if policy.enforcement_enabled and policy.required:
-        mfa_transaction = NativeMfaTransaction(
-            transaction_id=secrets.token_urlsafe(32),
-            user_id=str(user.id),
-            provider=pending.provider,
+        continuation = await _native_mfa_continuation(
+            db,
+            request,
+            settings,
+            user,
+            primary=pending.provider.value,
             platform=pending.platform,
             redemption_verifier_hash=pending.redemption_verifier_hash,
         )
-        await store_native_mfa_transaction(settings, mfa_transaction)
         await db.commit()
-        return NativeMfaContinuationResponse(
-            authentication_state="additional_auth_required",
-            transaction_id=mfa_transaction.transaction_id,
-            provider=pending.provider.value,
-        )
+        return continuation
     raw, session, device_raw = await issue_mobile_session(
         db, request, user, settings, fresh_auth_at=datetime.now(UTC)
     )
@@ -3412,7 +3477,9 @@ async def mobile_external_recovery_register(
     consumed = await consume_native_external_pending(settings, body.transaction_id)
     if consumed is None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "This sign-in attempt has expired.")
+    assert consumed is not None
     pending = consumed
+    assert pending.provider_email is not None
     user = User(
         email=normalise_email(pending.provider_email),
         display_name=body.display_name or pending.display_name,
@@ -3450,20 +3517,17 @@ async def mobile_external_recovery_register(
     )
     policy = await _resolve_browser_mfa_policy(db, user.id, settings)
     if policy.enforcement_enabled and policy.required:
-        mfa_transaction = NativeMfaTransaction(
-            transaction_id=secrets.token_urlsafe(32),
-            user_id=str(user.id),
-            provider=pending.provider,
+        continuation = await _native_mfa_continuation(
+            db,
+            request,
+            settings,
+            user,
+            primary=pending.provider.value,
             platform=pending.platform,
             redemption_verifier_hash=pending.redemption_verifier_hash,
         )
-        await store_native_mfa_transaction(settings, mfa_transaction)
         await db.commit()
-        return NativeMfaContinuationResponse(
-            authentication_state="additional_auth_required",
-            transaction_id=mfa_transaction.transaction_id,
-            provider=pending.provider.value,
-        )
+        return continuation
     raw, session, device_raw = await issue_mobile_session(
         db, request, user, settings, fresh_auth_at=datetime.now(UTC)
     )
@@ -3504,7 +3568,7 @@ async def mobile_mfa_options(
     return MfaOptionsResponse(
         methods=methods,
         destination=_masked_email(user.email),
-        primary_auth_method=state.provider.value,
+        primary_auth_method=state.provider,
         policy="required" if policy.required else "optional",
         policy_source=policy.source,
         enrolment_required=not bool(active & allowed),
@@ -3576,10 +3640,18 @@ async def mobile_mfa_start(
             is_critical=True,
             sensitive_email_expires_at=challenge.expires_at,
         )
+        audit(
+            db,
+            request,
+            "MFA_EMAIL_CHALLENGE_CREATED",
+            user.id,
+            target_type="mfa_email_challenge",
+        )
         await db.commit()
         return MfaStartResponse(
             method="email", destination=_masked_email(user.email), enrolling=False
         )
+    await enforce_rate_limit(request, settings, f"mfa-totp-start:{user.id}", 5, 300)
     factor = await db.scalar(
         select(UserMfaMethodRecord).where(
             UserMfaMethodRecord.user_id == user.id,
@@ -3614,8 +3686,15 @@ async def mobile_mfa_verify(
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> MobileSessionResponse:
+    """Mirror of /auth/mfa/verify for native pre-authentication.
+
+    The transaction is read (not consumed) while the code is checked, so a
+    mistyped code does not discard the primary factor; failed attempts are
+    rate limited and audited exactly like the browser flow. The transaction
+    is consumed atomically only after a correct code, immediately before the
+    session is issued, so a transaction can never yield two sessions."""
     require_secure_transport(request, settings)
-    state = await consume_native_mfa_transaction(settings, body.transaction_id)
+    state = await load_native_mfa_transaction(settings, body.transaction_id)
     if state is None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "This sign-in attempt has expired.")
     if not verify_redemption_verifier(body.redemption_verifier, state.redemption_verifier_hash):
@@ -3630,6 +3709,7 @@ async def mobile_mfa_verify(
         raise HTTPException(status.HTTP_403_FORBIDDEN, "That MFA method is not allowed by policy.")
     now = datetime.now(UTC)
     if body.method == UserMfaMethod.email.value:
+        await enforce_rate_limit(request, settings, f"mfa-email-verify:{user.id}", 10, 900)
         challenge = await db.scalar(
             select(MfaEmailChallenge)
             .where(
@@ -3647,10 +3727,26 @@ async def mobile_mfa_verify(
             or challenge.expires_at <= now
             or challenge.attempts >= EMAIL_MAX_ATTEMPTS
         ):
-            await db.rollback()
+            audit(
+                db,
+                request,
+                "MFA_EMAIL_CHALLENGE_FAILED",
+                user.id,
+                target_type="mfa_email_challenge",
+            )
+            audit(db, request, "MFA_LOGIN_FAILED", user.id, target_type="native_mfa")
+            await db.commit()
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "That verification code is invalid.")
         challenge.attempts += 1
         if not secrets.compare_digest(challenge.code_hash, hash_email_code(settings, body.code)):
+            audit(
+                db,
+                request,
+                "MFA_EMAIL_CHALLENGE_FAILED",
+                user.id,
+                target_type="mfa_email_challenge",
+            )
+            audit(db, request, "MFA_LOGIN_FAILED", user.id, target_type="native_mfa")
             await db.commit()
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "That verification code is invalid.")
         challenge.consumed_at = now
@@ -3666,7 +3762,15 @@ async def mobile_mfa_verify(
         factor.enabled = True
         factor.enrolled_at = factor.enrolled_at or now
         factor.last_used_at = now
+        audit(
+            db,
+            request,
+            "MFA_EMAIL_CHALLENGE_SUCCEEDED",
+            user.id,
+            target_type="mfa_email_challenge",
+        )
     else:
+        await enforce_rate_limit(request, settings, f"mfa-totp-verify:{user.id}", 10, 300)
         factor = await db.scalar(
             select(UserMfaMethodRecord).where(
                 UserMfaMethodRecord.user_id == user.id,
@@ -3676,20 +3780,34 @@ async def mobile_mfa_verify(
         )
         if factor is None or not factor.encrypted_secret:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "Authenticator setup is required.")
+        was_enabled = factor.enabled
         step = matched_totp_step(
             decrypt_user_mfa_totp(settings, factor.encrypted_secret), body.code
         )
         if step is None or not await claim_totp_step(settings, user.id, step):
-            await db.rollback()
+            audit(db, request, "MFA_TOTP_VERIFICATION_FAILED", user.id, target_type="mfa_method")
+            audit(db, request, "MFA_LOGIN_FAILED", user.id, target_type="native_mfa")
+            await db.commit()
             raise HTTPException(status.HTTP_401_UNAUTHORIZED, "That verification code is invalid.")
         factor.enabled = True
         factor.enrolled_at = factor.enrolled_at or now
         factor.last_used_at = now
+        audit(db, request, "MFA_TOTP_VERIFICATION_SUCCEEDED", user.id, target_type="mfa_method")
+        if not was_enabled:
+            audit(db, request, "MFA_TOTP_ENROLLED", user.id, target_type="mfa_method")
+
+    # Single issuance: only the request that atomically consumes the
+    # pre-authentication may mint the session (replay/race protection).
+    consumed = await consume_native_mfa_transaction(settings, body.transaction_id)
+    if consumed is None or consumed.user_id != str(user.id):
+        await db.rollback()
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This sign-in attempt has expired.")
     raw, session, device_raw = await issue_mobile_session(
         db, request, user, settings, fresh_auth_at=now
     )
     user.last_login_at = now
     user.last_activity_at = now
+    audit(db, request, "MFA_LOGIN_SUCCEEDED", user.id, target_type="session")
     await db.commit()
     response.headers["Cache-Control"] = "no-store"
     return MobileSessionResponse(
@@ -3814,6 +3932,36 @@ def require_bearer_transport(auth: AuthContext) -> None:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST, "This endpoint requires bearer authentication."
         )
+
+
+def require_cookie_transport(auth: AuthContext) -> None:
+    """Counterpart of require_bearer_transport for endpoints that issue browser
+    cookies, so a bearer request cannot be converted into a cookie session."""
+    if auth.transport != "cookie":
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "This endpoint requires browser session authentication."
+        )
+
+
+async def _rotated_session_expiry(
+    db: AsyncSession, auth: AuthContext, settings: Settings
+) -> datetime | None:
+    """Expiry for the session that replaces ``auth.session`` on rotation.
+
+    Session expiry never slides, so rotation is the only way a still-valid
+    session's lifetime could be extended. While the effective consumer MFA
+    policy is enforced and Required, rotation still replaces the credential but
+    keeps the original expiry: an adult session (including one issued before
+    the policy changed) then ends on schedule, and only a new sign-in that
+    satisfies the policy starts a new lifetime. ``None`` means the normal
+    fresh lifetime (MFA not required, or a managed-child session).
+    """
+    if auth.session.kind != SessionKind.adult:
+        return None
+    policy = await _resolve_browser_mfa_policy(db, auth.user.id, settings)
+    if policy.enforcement_enabled and policy.required:
+        return auth.session.expires_at
+    return None
 
 
 @router.post("/mobile/logout", status_code=status.HTTP_204_NO_CONTENT)
@@ -4001,12 +4149,18 @@ async def rotate_session(
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> UserResponse:
+    # Browser rotation issues cookies; a bearer (native) token must use
+    # /auth/mobile/sessions/rotate and is never converted into a cookie session.
+    require_cookie_transport(auth)
+    expires_at = await _rotated_session_expiry(db, auth, settings)
     auth.session.revoked_at = datetime.now(UTC)
     # kind must be carried over from the session being rotated, never left to
     # issue_session's adult default — otherwise a managed Child session rotating
     # its own session would silently come back as an *adult* session for the same
     # underlying User row, defeating require_adult_session and every other
-    # kind-based check from that point on.
+    # kind-based check from that point on. The trusted device link is carried
+    # over too, so device revocation (DELETE /auth/devices/{id}, revoke-others)
+    # still reaches the rotated session.
     new_session = await issue_session(
         db,
         response,
@@ -4014,7 +4168,9 @@ async def rotate_session(
         auth.user,
         settings,
         kind=auth.session.kind,
+        trusted_device_id=auth.session.trusted_device_id,
         fresh_auth_at=auth.session.fresh_auth_at,
+        expires_at=expires_at,
     )
     audit(
         db,
@@ -4043,6 +4199,10 @@ async def rotate_mobile_session(
     intended safe failure mode, not a bug."""
     require_secure_transport(request, settings)
     require_bearer_transport(auth)
+    # While consumer MFA is required, rotation keeps the original expiry (see
+    # _rotated_session_expiry) rather than refusing: the credential can still
+    # be rotated, but a session can never be extended past its lifetime.
+    expires_at = await _rotated_session_expiry(db, auth, settings)
     auth.session.revoked_at = datetime.now(UTC)
     # See the identical comment in rotate_session: kind must carry over from the
     # session being rotated, not silently reset to issue_mobile_session's adult
@@ -4059,6 +4219,11 @@ async def rotate_mobile_session(
         kind=auth.session.kind,
         fresh_auth_at=auth.session.fresh_auth_at,
         existing_device_id=auth.session.trusted_device_id,
+        expires_at=expires_at,
+        # A legacy device-less session still gains a renewal device here (the
+        # established compatibility path), but only when rotation grants a
+        # fresh lifetime anyway; never while MFA is required.
+        mint_device=expires_at is None,
     )
     audit(
         db,
@@ -4121,6 +4286,26 @@ async def renew_mobile_session(
     if pair is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Please sign in to continue.")
     user, device = pair
+
+    # Same rule as browser /auth/renew: a long-lived device credential must
+    # not keep minting sessions once the consumer MFA policy is required, or
+    # a credential issued before the policy (or from a pre-MFA sign-in)
+    # would bypass it indefinitely. The person signs in again and completes
+    # MFA through /auth/mobile/login or the native provider exchange.
+    if device.kind == SessionKind.adult:
+        policy = await _resolve_browser_mfa_policy(db, user.id, settings)
+        if policy.enforcement_enabled and policy.required:
+            device.revoked_at = now
+            audit(
+                db,
+                request,
+                "session.renewal_blocked_mfa_required",
+                user.id,
+                target_type="trusted_device",
+                target_id=device.id,
+            )
+            await db.commit()
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Please sign in to continue.")
 
     if device.kind == SessionKind.managed_child:
         child_active = await db.scalar(

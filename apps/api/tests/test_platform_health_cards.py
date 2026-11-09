@@ -191,7 +191,30 @@ async def test_push_card_is_honestly_not_configured(
     optional subsystem regardless of what it actually checked."""
     admin = await admin_factory(PlatformRole.owner)
     await login(admin_client, admin)
-    services = await _health_services(admin_client)
+    # Hermetic: the test stack loads the repository .env, which may carry a
+    # real APNs/FCM/VAPID configuration on a developer machine. Clear every
+    # environment-supplied push provider so this asserts the unconfigured case.
+    unconfigured = get_settings().model_copy(
+        update={
+            "push_delivery_configured": False,
+            "vapid_public_key": None,
+            "vapid_private_key": None,
+            "vapid_subject": None,
+            "apns_delivery_configured": False,
+            "apns_team_id": None,
+            "apns_key_id": None,
+            "apns_private_key": None,
+            "fcm_delivery_configured": False,
+            "fcm_project_id": None,
+            "fcm_client_email": None,
+            "fcm_private_key": None,
+        }
+    )
+    app.dependency_overrides[get_settings] = lambda: unconfigured
+    try:
+        services = await _health_services(admin_client)
+    finally:
+        app.dependency_overrides.pop(get_settings, None)
     assert services["Push notifications"]["state"] == "Not configured"
     explanation = services["Push notifications"]["explanation"]
     assert "No authoritative monitoring source is configured." not in explanation

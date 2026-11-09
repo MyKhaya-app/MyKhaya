@@ -2,7 +2,9 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-const css = readFileSync(join(process.cwd(), "app", "styles.css"), "utf8");
+// Normalise line endings: a Windows checkout (core.autocrlf) has CRLF, which
+// would otherwise break the "\n}\n" block slicing below.
+const css = readFileSync(join(process.cwd(), "app", "styles.css"), "utf8").replace(/\r\n/g, "\n");
 const home = readFileSync(join(process.cwd(), "app", "home", "page.tsx"), "utf8");
 const W = ".app-shell.native-shell-app.native-wide-viewport";
 // Rules shared with the Duo outer-screen rail layout.

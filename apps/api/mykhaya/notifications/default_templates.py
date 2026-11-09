@@ -64,21 +64,34 @@ TEMPLATES: dict[str, TemplateDefault] = {
         subject="Your MyKhaya {{document_name}} acceptance confirmation",
         body=(
             "Hi {{user_first_name}},\n\n"
-            "This email confirms that you accepted or acknowledged the following MyKhaya legal document:\n\n"
+            "This email confirms that you accepted or acknowledged the following "
+            "MyKhaya legal document:\n\n"
             "{{document_name}}\nVersion: {{document_version}}\n\n"
             "Acceptance details\n\n"
             "Date and time: {{accepted_at}} {{accepted_timezone}}\n\n"
             "IP address: {{ip_address}}\n\n"
             "Reference: {{acceptance_reference}}\n\n"
-            "A PDF copy of the exact legal document version recorded at the time, together with your acceptance details, is attached for your records.\n\n"
-            "If you believe this activity was not authorised, please contact {{support_email}}.\n\nMyKhaya"
+            "A PDF copy of the exact legal document version recorded at the time, "
+            "together with your acceptance details, is attached for your records.\n\n"
+            "If you believe this activity was not authorised, please contact "
+            "{{support_email}}.\n\nMyKhaya"
         ),
-        allowed_variables=frozenset({
-            "user_first_name", "document_name", "document_version", "accepted_at",
-            "accepted_timezone", "ip_address", "acceptance_reference", "support_email",
-        }),
+        allowed_variables=frozenset(
+            {
+                "user_first_name",
+                "document_name",
+                "document_version",
+                "accepted_at",
+                "accepted_timezone",
+                "ip_address",
+                "acceptance_reference",
+                "support_email",
+            }
+        ),
         required_variables=frozenset({"document_name", "document_version", "acceptance_reference"}),
-        description="Mandatory confirmation of a user's recorded legal acceptance or acknowledgement.",
+        description=(
+            "Mandatory confirmation of a user's recorded legal acceptance or acknowledgement."
+        ),
         module="legal_compliance",
         disableable=False,
         security_critical=True,
@@ -627,9 +640,12 @@ del _template_type, _default, _unknown_required
 # real user data, since a preview must never leak anything from an actual account.
 SAMPLE_VARIABLES: dict[str, dict[str, str]] = {
     "legal_acceptance_confirmation": {
-        "user_first_name": "Jamie", "document_name": "Terms & Conditions",
-        "document_version": "1.0", "accepted_at": "8 November 2026, 12:00",
-        "accepted_timezone": "Europe/London", "ip_address": "203.0.113.10",
+        "user_first_name": "Jamie",
+        "document_name": "Terms & Conditions",
+        "document_version": "1.0",
+        "accepted_at": "8 November 2026, 12:00",
+        "accepted_timezone": "Europe/London",
+        "ip_address": "203.0.113.10",
         "acceptance_reference": "00000000-0000-0000-0000-000000000000",
         "support_email": "support@example.com",
     },

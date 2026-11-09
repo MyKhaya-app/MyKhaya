@@ -12,6 +12,7 @@ import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from urllib.parse import parse_qs, urlparse
 
 import pytest
 from httpx import AsyncClient
@@ -709,6 +710,45 @@ async def _user_exists(email: str) -> bool:
         return await db.scalar(select(User.id).where(User.email == email)) is not None
 
 
+async def _apple_choice(client: AsyncClient, harness: _AppleHarness) -> tuple[str, bool]:
+    """Unlinked Apple callbacks never create an account: they always hand the
+    browser an explicit recovery choice (see docs/architecture/authentication.md).
+    Returns the recovery transaction and whether registration is offered."""
+    response = await harness.call(client)
+    assert response.status_code == 303
+    query = parse_qs(urlparse(response.headers["location"]).query)
+    assert query.get("apple") == ["choose"]
+    transaction = query["transaction"][0]
+    options = await client.get(
+        "/api/v1/auth/apple/recovery/options", params={"transaction_id": transaction}
+    )
+    assert options.status_code == 200, options.text
+    return transaction, bool(options.json()["can_register"])
+
+
+async def _current_adult_acceptances(client: AsyncClient) -> list[dict[str, str]]:
+    documents = (await client.get("/api/v1/legal/documents")).json()
+    return [
+        {"document_key": item["key"], "document_version_id": item["current_version_id"]}
+        for item in documents
+        if item["audience"] == "adult"
+        and item["acceptance_required"]
+        and item["action_verb"] == "accept"
+        and item["scope"] == "global"
+        and item["current_version_id"]
+    ]
+
+
+async def _apple_register(client: AsyncClient, transaction: str):
+    return await client.post(
+        "/api/v1/auth/apple/recovery/register",
+        json={
+            "transaction_id": transaction,
+            "legal_acceptances": await _current_adult_acceptances(client),
+        },
+    )
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     ("setting", "value"),
@@ -726,9 +766,10 @@ async def test_apple_sign_up_is_gated_by_the_signup_policy(
     email = _email("apple")
     harness = _AppleHarness(monkeypatch, email)
     await set_setting(setting, value)
-    response = await harness.call(client)
-    assert response.status_code == 303
-    assert "apple=registration_unavailable" in response.headers["location"]
+    transaction, can_register = await _apple_choice(client, harness)
+    assert can_register is False
+    refused = await _apple_register(client, transaction)
+    assert refused.status_code == 409
     assert not await _user_exists(email)
 
 
@@ -739,10 +780,30 @@ async def test_apple_sign_up_works_when_signup_is_open(
     email = _email("apple-open")
     harness = _AppleHarness(monkeypatch, email)
     await set_setting("signup_mode", "normal")
-    response = await harness.call(client)
-    assert response.status_code == 303
-    assert "registration_unavailable" not in response.headers["location"]
+    transaction, can_register = await _apple_choice(client, harness)
+    assert can_register is True
+    # The callback alone never creates the account; the explicit choice does.
+    assert not await _user_exists(email)
+    registered = await _apple_register(client, transaction)
+    assert registered.status_code == 200, registered.text
     assert await _user_exists(email)
+
+
+@pytest.mark.asyncio
+async def test_apple_registration_rechecks_the_policy_at_the_decision_point(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Signup closing between the callback and the explicit registration
+    still stops the account being created."""
+    email = _email("apple-late-close")
+    harness = _AppleHarness(monkeypatch, email)
+    await set_setting("signup_mode", "normal")
+    transaction, can_register = await _apple_choice(client, harness)
+    assert can_register is True
+    await set_setting("registration_enabled", False)
+    refused = await _apple_register(client, transaction)
+    assert refused.status_code == 403
+    assert not await _user_exists(email)
 
 
 @pytest.mark.asyncio
@@ -750,16 +811,19 @@ async def test_apple_sign_in_for_an_existing_account_ignores_the_signup_policy(
     client: AsyncClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     email = _email("apple-existing")
-    harness = _AppleHarness(monkeypatch, email)
     await set_setting("signup_mode", "normal")
-    assert "registration_unavailable" not in (await harness.call(client)).headers["location"]
+    transaction, _ = await _apple_choice(client, _AppleHarness(monkeypatch, email))
+    assert (await _apple_register(client, transaction)).status_code == 200
+    client.cookies.clear()
     # The account now exists. With signup closed, the same email arriving
-    # through Apple is handled as an existing account (link required), never
-    # as a refused registration.
+    # through Apple is offered linking to that existing account, never treated
+    # as a refused registration and never linked implicitly by email.
     await set_setting("registration_enabled", False)
-    again = await harness.call(client)
-    assert again.status_code == 303
-    assert "apple=link_required" in again.headers["location"]
+    transaction, can_register = await _apple_choice(client, _AppleHarness(monkeypatch, email))
+    assert can_register is False
+    refused = await _apple_register(client, transaction)
+    assert refused.status_code == 409
+    assert refused.json()["detail"] == "This Apple identity must be linked to an existing account."
 
 
 # ------------------------------------------------------------------ PCC contract

@@ -64,6 +64,7 @@ vi.mock("@/components/native-auth", () => ({
   nativeMfaOptions: vi.fn(async () => ({ methods: ["email"], preferred_method: "email" })),
   nativeMfaStart: vi.fn(),
   nativeMfaVerify: vi.fn(),
+  cancelNativeMfa: vi.fn(),
   getLastNativeLoginDiagnostic: () => null,
   runNativeNetworkDiagnostics: vi.fn(async () => []),
 }));

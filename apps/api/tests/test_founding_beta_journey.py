@@ -29,6 +29,7 @@ from mykhaya.models import (
     Group,
     HomeSubscription,
     LegalAcceptance,
+    LegalAcceptanceEvidence,
     LegalDocument,
     LegalDocumentVersion,
     LegalDocumentVersionStatus,
@@ -436,6 +437,14 @@ async def test_a_new_beta_terms_version_requires_reacceptance(
         assert state["terms"]["satisfied"] is True
     finally:
         async with SessionFactory() as db:
+            acceptance_ids = select(LegalAcceptance.id).where(
+                LegalAcceptance.document_version_id == new_id
+            )
+            await db.execute(
+                delete(LegalAcceptanceEvidence).where(
+                    LegalAcceptanceEvidence.acceptance_id.in_(acceptance_ids)
+                )
+            )
             await db.execute(
                 delete(LegalAcceptance).where(LegalAcceptance.document_version_id == new_id)
             )

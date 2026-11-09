@@ -15,7 +15,10 @@ from test_mobile_auth import ORIGIN, PASSWORD, bearer, register_and_verify
 
 from mykhaya.config import get_settings
 from mykhaya.db import SessionFactory
-from mykhaya.external_identities import link_external_identity
+from mykhaya.external_identities import (
+    ExternalIdentityOwnershipConflict,
+    link_external_identity,
+)
 from mykhaya.main import app
 from mykhaya.models import ExternalIdentity, ExternalIdentityProvider, User
 from mykhaya.native_external_auth import NativeExternalPendingIdentity, NativeExternalTransaction
@@ -52,6 +55,7 @@ async def test_native_link_is_explicit_and_single_use(
     client: AsyncClient, native_settings, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     verifier = "v" * 64
+    provider_subject = f"native-link-subject-{uuid4().hex}"
     email = f"native-link-{datetime.now(UTC).strftime('%H%M%S%f')}@example.com"
     await register_and_verify(client, email, "Native Link User")
     login = await client.post(
@@ -63,7 +67,7 @@ async def test_native_link_is_explicit_and_single_use(
     async def verify(_settings, _token, _nonce, _audience=None):
         assert _audience == native_settings.apple_native_client_id
         return {
-            "sub": "native-link-subject",
+            "sub": provider_subject,
             "email": "relay@privaterelay.appleid.com",
             "email_verified": True,
         }
@@ -105,7 +109,7 @@ async def test_native_link_is_explicit_and_single_use(
         identities = await db.scalar(
             select(func.count())
             .select_from(ExternalIdentity)
-            .where(ExternalIdentity.provider_subject == "native-link-subject")
+            .where(ExternalIdentity.provider_subject == provider_subject)
         )
         assert identities == 1
 
@@ -154,9 +158,7 @@ async def test_native_new_registration_creates_one_user_after_explicit_choice(
     )
     assert registered.status_code == 200, registered.text
     async with SessionFactory() as db:
-        user = await db.scalar(
-            select(User).where(User.email == f"new-{subject}@example.com")
-        )
+        user = await db.scalar(select(User).where(User.email == f"new-{subject}@example.com"))
         identity = await db.scalar(
             select(ExternalIdentity).where(ExternalIdentity.provider_subject == subject)
         )
@@ -166,7 +168,14 @@ async def test_native_new_registration_creates_one_user_after_explicit_choice(
 
 @pytest.mark.asyncio
 async def test_concurrent_native_claims_leave_one_provider_owner() -> None:
+    """Two users racing to claim one provider subject: exactly one wins.
+
+    The loser is rejected either by the ownership check (it observed the
+    winner's committed row) or by the unique constraint (both inserted); the
+    timing decides which, and both are correct. The subject is unique per run
+    so the test does not depend on database state from earlier runs."""
     request = Request({"type": "http", "method": "POST", "path": "/", "headers": []})
+    subject = f"concurrent-native-subject-{uuid4().hex}"
     first = User(email=f"race-a-{uuid4().hex}@example.com", display_name="Race A")
     second = User(email=f"race-b-{uuid4().hex}@example.com", display_name="Race B")
     async with SessionFactory() as db:
@@ -182,13 +191,13 @@ async def test_concurrent_native_claims_leave_one_provider_owner() -> None:
                     request,
                     user_id=user_id,
                     provider=ExternalIdentityProvider.apple,
-                    provider_subject="concurrent-native-subject",
+                    provider_subject=subject,
                     provider_email="relay@privaterelay.appleid.com",
                     provider_email_verified=True,
                 )
                 await db.commit()
                 return True
-            except IntegrityError:
+            except (IntegrityError, ExternalIdentityOwnershipConflict):
                 await db.rollback()
                 return False
 
@@ -196,9 +205,7 @@ async def test_concurrent_native_claims_leave_one_provider_owner() -> None:
     assert sorted(results) == [False, True]
     async with SessionFactory() as db:
         owners = await db.scalars(
-            select(ExternalIdentity).where(
-                ExternalIdentity.provider_subject == "concurrent-native-subject"
-            )
+            select(ExternalIdentity).where(ExternalIdentity.provider_subject == subject)
         )
         assert len(owners.all()) == 1
 
@@ -230,6 +237,7 @@ async def test_native_transaction_rejects_cross_environment_redemption(
         platform="ios",
         redemption_verifier_hash="wrong-hash",
     )
+
     async def consume(_settings, _transaction_id):
         return transaction
 

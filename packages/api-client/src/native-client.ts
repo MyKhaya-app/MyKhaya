@@ -68,6 +68,14 @@ export function isPublicNativeEndpoint(path: string, method: string = "GET"): bo
   return PUBLIC_GET_PATHS.has(pathname) || PUBLIC_GET_PATH_SHAPES.some((shape) => shape.test(pathname));
 }
 
+/** Native pre-authentication awaiting the consumer MFA policy. `provider` is
+ * the completed primary factor; no session exists until MFA verification. */
+export type NativeMfaContinuation = {
+  authentication_state: "additional_auth_required";
+  transaction_id: string;
+  provider: "apple" | "google" | "password";
+};
+
 /**
  * The native (bearer-transport, ADR 0010) counterpart to `MyKhayaClient`.
  * Deliberately a separate class in the same package, not a mode flag on
@@ -288,11 +296,24 @@ export class NativeMyKhayaClient {
    * NativeSession.deviceToken) via the configured NativeSessionStore and
    * returns everything the response carries *except* those tokens, so
    * callers never need to (and cannot accidentally) handle them
-   * themselves. */
-  async login(email: string, password: string): Promise<User> {
+   * themselves.
+   *
+   * When the consumer MFA policy applies, the server issues no session and
+   * returns a native MFA continuation instead; `redemptionVerifier` binds
+   * that continuation to this client (see /auth/mobile/mfa/*). */
+  async login(
+    email: string,
+    password: string,
+    redemptionVerifier?: string,
+  ): Promise<User | NativeMfaContinuation> {
     const result = await this.postUnauthenticated<
-      User & { session_token: string; device_token?: string }
-    >("/auth/mobile/login", { email, password });
+      (User & { session_token: string; device_token?: string }) | NativeMfaContinuation
+    >("/auth/mobile/login", {
+      email,
+      password,
+      ...(redemptionVerifier ? { redemption_verifier: redemptionVerifier } : {}),
+    });
+    if ("authentication_state" in result) return result;
     const { session_token, device_token, ...user } = result;
     await this.store.set({ token: session_token, deviceToken: device_token });
     return user;
