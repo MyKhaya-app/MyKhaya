@@ -187,7 +187,13 @@ Native authentication uses bearer session tokens and secure storage/Keychain/Key
 
 Security controls include secure cookie configuration, CSRF, explicit CORS, trusted-proxy-aware client IP resolution, rate limiting, security headers/CSP, bounded request/file/image resources, password hashing, encrypted stored integration secrets, webhook signature validation, audit logging, tenant isolation and structured non-sensitive errors. Platform administration has separate network/host gates and role checks. The stated assurance target is OWASP ASVS Level 2 and relevant NCSC guidance; this is not a certification claim.
 
-Known security concerns are tracked rather than hidden: PCC production administration still requires completion of the approved MFA/WebAuthn ceremony; some generic PCC settings are explicitly marked `not_enforced`; the public status service initially shares the application stack; and dependency, deployment and real-device verification remain environment-dependent. A complete compliance certification is not determinable from repository evidence.
+Known security concerns are tracked rather than hidden: PCC has implemented mandatory
+MFA policy enforcement plus TOTP/WebAuthn and recovery flows, but production still
+requires the approved administrator enrolment and live-origin ceremony; some generic
+PCC settings are explicitly marked `not_enforced`; the public status service initially
+shares the application stack; and dependency, deployment and real-device verification
+remain environment-dependent. Password-only production administration is not approved.
+A complete compliance certification is not determinable from repository evidence.
 
 ## 7. Data architecture and migrations
 
@@ -299,7 +305,10 @@ The repository’s definition of done requires work to be secure, tested, docume
 
 ### Security gaps
 
-- Production PCC WebAuthn/passkey/MFA ceremony is documented as incomplete; password-only production administration is not approved.
+- Production PCC MFA enforcement and TOTP/WebAuthn code paths are implemented. The
+  remaining release gate is operational: every production administrator must enrol
+  and verify a factor against the configured admin origin, with recovery codes tested;
+  password-only production administration is not approved.
 - External provider and notification delivery security depends on deployment secrets, host restrictions and operational configuration that cannot be proven from source alone.
 - Certification/compliance status is not determinable from repository evidence.
 
@@ -359,11 +368,16 @@ The repository has explicit Home tenancy concepts, central entitlement resolutio
 
 ### Important architectural debt
 
-The largest risks are phase/document drift, incomplete PCC MFA ceremony, partial native platform maturity, future-scale work not yet deployed, schema duplication and uneven concentration of business logic across routers and services.
+The largest risks are phase/document drift, incomplete PCC MFA operational ceremony,
+partial native platform maturity, future-scale work not yet deployed, schema duplication
+and uneven concentration of business logic across routers and services.
 
 ### Security posture
 
-There are meaningful layered controls for authentication, authorization, tenancy, CSRF/CORS, rate limiting, secrets and audit. Remaining risks include deployment configuration, incomplete privileged MFA, provider availability and the inability to infer production operational correctness solely from source.
+There are meaningful layered controls for authentication, authorization, tenancy,
+CSRF/CORS, rate limiting, secrets and audit. Remaining risks include deployment
+configuration, incomplete privileged-MFA enrolment evidence, provider availability and
+the inability to infer production operational correctness solely from source.
 
 ### Scalability posture
 

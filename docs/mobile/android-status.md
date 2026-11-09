@@ -79,13 +79,15 @@ See "Resume point" below.
     `app/control-centre/push/page.test.tsx` (frontend). All pass; APNs and
     Web Push tests are unmodified and still pass.
 
-## Implemented but still requiring live validation
+## Implemented in the repository; requiring operator/device validation
 
-None of the following have been exercised on a real device/emulator or
-against a real Firebase project — only unit/integration-tested:
+The shell, production flavor identity, fail-closed Firebase checks, FCM client
+integration and release build path are implemented in this repository. The following
+still require an operator-owned Firebase/Play account and a physical device or
+emulator; this workspace cannot independently verify their current external state:
 
-- **Real Firebase-backed FCM end-to-end delivery** — blocked on a real
-  Firebase project; see "Resume point" below.
+- **Real Firebase-backed FCM end-to-end delivery** — verify against the PROD
+  Firebase project and `mykhaya-prod` before mobile acceptance.
 - **Android notification permission flow on-device** (first-run prompt →
   OS dialog → granted/denied/permanently-denied → Settings deep link).
 - **Notification channels on-device** — that `general`/`reminders`/
@@ -101,16 +103,14 @@ against a real Firebase project — only unit/integration-tested:
   tested against a mocked Capacitor `App` listener, not against Android's
   real predictive-back animation/gesture on-device.
 
-## Not started / intentionally deferred
+## Deferred product work and external release gates
 
-- **Phase 5B — real Firebase/FCM runtime validation** (this document's
-  resume point).
-- Android App Links.
-- Google Play Billing.
-- Android home-screen widgets.
-- Google Play Console release work.
-- Signing/release pipeline (only the auto-generated debug keystore has
-  ever been used; no release keystore exists).
+- Android App Links, Google Play Billing, and Android home-screen widgets remain
+  intentionally deferred product work.
+- Google Play Console state, the current Internal Testing artifact, and physical
+  device acceptance are external release gates and must be checked by the operator.
+- The permanent upload keystore is intentionally outside the repository. Signing
+  material must remain operator-owned; the repository cannot prove its availability.
 
 ## Known implementation decisions (do not re-litigate on resume)
 
@@ -160,15 +160,20 @@ committed. Android DEV and PROD debug APKs have been built separately.
 
 ## Resume point: Phase 5B — real Firebase/FCM runtime validation
 
+**Repository/source evidence versus live state:** the README records a reported
+PROD v0.1.31 Internal Testing/Samsung checkpoint, but this workspace does not verify
+the current Play Console, Firebase project, or device state. Treat that checkpoint as
+operator evidence to re-confirm, not as a source-controlled release guarantee.
+
 **Tooling already present on this development machine** (discovered during
 this pause, worth recording so it isn't re-discovered from scratch):
 Android SDK at `%LOCALAPPDATA%\Android\Sdk` (platforms `android-34` and
 `android-36`, build-tools, platform-tools, emulator), two AVDs already
 created (`mykhaya_test` = API 34, `mykhaya_test36` = API 36), and JDK 17/21
-(Eclipse Temurin) under `Program Files\Eclipse Adoptium`. **No Firebase or
-gcloud CLI is installed, and no Firebase project, `google-services.json`, or
-service-account key exists anywhere on this machine** — that is the actual
-and only blocker to resuming, not missing build tooling.
+(Eclipse Temurin) under `Program Files\Eclipse Adoptium`. Firebase credentials,
+`google-services.json`, service-account keys, and Play signing material are external
+inputs and must not be committed. Their availability and current project identity
+must be confirmed by the mobile release operator.
 
 First actions on resume:
 
@@ -215,8 +220,8 @@ First actions on resume:
   and the auto-generated `~/.android/debug.keystore` are both outside/
   excluded from source control, as expected — neither is a secret, both are
   ordinary per-machine Android tooling state.
-- No release keystore exists anywhere in the repo or gitignore patterns for
-  one — signing/release work has not started.
+- No release keystore is stored in the repo; this is expected. The operator must
+  confirm access to the external upload keystore and signing identity before upload.
 
 ## Local cleanup performed during this pause
 

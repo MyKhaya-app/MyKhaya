@@ -16,8 +16,18 @@ Exceptional future content access requires a separate design: record scope, elev
 
 - Implemented: hostname/network gates, isolated sessions, role authorization, recent-auth checks, confirmation/reason schemas, immutable application audit API, bounded metadata lists, suspension/session revocation, notes, health, jobs, a schema-driven administrator-facing operational settings UI (see "Platform settings" below) with a consumer-safe allow-listed config endpoint, global feature flags, security/audit views, incident management, and Platform-Admin-managed SMTP and Web Push (VAPID) configuration.
 - Implemented feature controls: global and Home override management, role checks, recent authentication, explicit confirmation/reason and administrative audit events.
-- Designed but incomplete: mandatory MFA ceremony, job manual retry and independent status hosting.
-- Production blocker: no WebAuthn/passkey ceremony exists. Password-only production administration is not approved.
+- Implemented administrator MFA: the environment policy is resolved at login, unenrolled
+  administrators are placed into setup, and password-only login is rejected when
+  `MYKHAYA_ADMIN_MFA_REQUIRED=true`. TOTP setup/verification, WebAuthn/passkey
+  registration and login, credential management, recovery codes, role-gated reset,
+  and console-only break-glass recovery are implemented in the platform router.
+- Production gate: keep `MYKHAYA_ADMIN_MFA_REQUIRED=true`, enrol and verify at least
+  one factor for every production administrator, and record a successful login and
+  recovery-code ceremony against the configured admin origin/RP ID. The enrolment,
+  authenticator possession, and live-origin checks are operational evidence outside
+  this source tree; they must be complete before production acceptance.
+- Job manual retry and independent status hosting remain separate future work. A
+  password-only production administration mode is not approved.
 
 ## SMTP configuration precedence
 

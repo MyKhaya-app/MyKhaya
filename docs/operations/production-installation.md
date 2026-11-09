@@ -35,6 +35,100 @@ See [Deployment configuration ownership](../architecture/deployment-configuratio
 for the configuration inventory, PCC precedence rules, and migration procedure
 for installations that previously edited `compose.production.yml` locally.
 
+## BETA promotion readiness
+
+This section is an acceptance gate for promoting the validated DEV release to
+PROD. It does not replace the supported `make prod-config`, `make prod-install`,
+and `make prod-update` commands, and it must be completed by an operator on the
+separately hosted PROD server. This repository has not inspected that host.
+
+### Required production configuration
+
+Before enabling traffic, verify the production `.env` contains approved values
+for the public/admin/API URLs, CORS and trusted hosts, exact Cloudflare/NetBird
+and Caddy trusted CIDRs, secure cookies, SMTP, backup encryption recipients,
+field-encryption settings, and `MYKHAYA_ADMIN_MFA_REQUIRED=true` with bootstrap
+disabled after the first owner is enrolled. Provider-specific requirements are:
+
+- Apple: a PROD Services ID/client identity, team/key metadata, private-key file
+  supplied outside Git, the exact HTTPS callback, and the distinct native return
+  URI. Do not reuse DEV registrations or keys.
+- Google: a PROD web and native client identity, client secret supplied outside
+  Git, the exact HTTPS callback, and the distinct native return URI.
+- APNs/FCM: production bundle/project identity and credentials, with FCM locked
+  to `mykhaya-prod`; never place a service-account file in the repository.
+- Stripe: live-mode key and webhook signing secret only when the billing flags are
+  deliberately enabled; verify webhook IP controls and acquisition policy first.
+
+The tracked `.env.production.example` is a schema/example only. Blank values and
+placeholders in it are intentional and must be replaced only on the PROD host.
+
+### Read-only operator verification
+
+Run from the approved release checkout on PROD. These checks deliberately report
+presence, identity, status, or revision only; never print `.env`, private keys,
+tokens, client secrets, webhook secrets, or full Compose configuration.
+
+```sh
+git branch --show-current
+git rev-parse --verify HEAD
+git status --porcelain
+docker compose -f compose.yml -f compose.production.yml config --quiet
+python3 infrastructure/scripts/validate_backend_config.py
+docker compose -f compose.yml -f compose.production.yml ps
+docker compose -f compose.yml -f compose.production.yml run --rm --no-deps migrate alembic current
+docker compose -f compose.yml -f compose.production.yml run --rm --no-deps migrate alembic heads
+```
+
+For non-secret settings, report only whether a key is present and, where safe,
+its boolean/host identity. Do not use `grep KEY .env` because it prints values.
+For example:
+
+```sh
+for key in MYKHAYA_ENVIRONMENT MYKHAYA_PUBLIC_WEB_URL MYKHAYA_NATIVE_API_URL \
+  MYKHAYA_APPLE_SIGN_IN_ENABLED MYKHAYA_APPLE_REDIRECT_URI \
+  MYKHAYA_NATIVE_APPLE_RETURN_URI MYKHAYA_GOOGLE_SIGN_IN_ENABLED \
+  MYKHAYA_GOOGLE_REDIRECT_URI MYKHAYA_NATIVE_GOOGLE_RETURN_URI \
+  MYKHAYA_ADMIN_MFA_REQUIRED MYKHAYA_FCM_PROJECT_ID \
+  MYKHAYA_APNS_BUNDLE_ID MYKHAYA_STRIPE_BILLING_ACQUISITION_ENABLED; do
+  if grep -q "^${key}=" .env; then echo "${key}=present"; else echo "${key}=MISSING"; fi
+done
+```
+
+Also verify the configured backup marker and the last encrypted off-host backup
+through the existing backup runbook, without displaying archive contents or
+credentials. Check API, worker, scheduler, PostgreSQL and Redis health with
+`make prod-health`; verify Cloudflare/NetBird/Caddy routing and trusted CIDRs at
+the operator boundary. Provider sign-in, Stripe webhook delivery, APNs/FCM
+delivery, and restore readiness require controlled operator tests; they cannot be
+proven by this checkout.
+
+### Database, recovery, and rollback gates
+
+The release includes migrations through Alembic head `0124_legal_evidence_provider_msg`.
+Record the current revision and heads before applying anything, complete an
+encrypted off-host backup and restore rehearsal, then use only the supported
+tagged-release update command. Do not run ad-hoc production Alembic downgrades.
+Rollback is code-only for compatible schema changes; otherwise stop writes and
+restore the verified PostgreSQL backup before redeploying the prior tag. Existing
+legal evidence, subscription, onboarding, and provider-link data must be included
+in the restore rehearsal.
+
+### Explicit release decision
+
+PROD is **GO** only when the release tag/SHA, clean checkout, one Alembic head,
+backup marker and restore evidence, provider callbacks, live Stripe mode, health
+checks, trusted ingress, and every administrator's MFA enrollment are recorded.
+It is **NO-GO** for any missing secret/configuration, callback mismatch, pending
+unreviewed migration, unverified backup, password-only PCC access, failed health
+check, or unaccepted native device.
+
+For mobile BETA acceptance, separately verify the PROD iOS bundle/signing/App
+Group/push configuration and TestFlight physical-device flow, and the Android
+PROD application ID, Firebase project, upload signing identity, Play Internal
+Testing artifact, FCM delivery, and physical-device flow. These are external
+acceptance gates and are not implied by local shell tests or source inspection.
+
 ## Updates and rollback
 
 Create `/var/lib/mykhaya/last-backup.ok` only after an encrypted off-host backup has
