@@ -5,7 +5,7 @@ import { describe, expect, it } from "vitest";
 // iOS zooms the page when a focused text control computes under 16px, and
 // stays zoomed after the keyboard closes. These guard the rules that keep
 // controls at 16px on phones and touch screens without touching desktop.
-const styles = readFileSync(resolve(process.cwd(), "app/styles.css"), "utf8");
+const styles = readFileSync(resolve(process.cwd(), "app/styles.css"), "utf8").replace(/\r\n/g, "\n");
 
 /** Top-level @media blocks as [prelude, body], matched by brace depth. */
 function mediaBlocks(css: string): Array<[string, string]> {

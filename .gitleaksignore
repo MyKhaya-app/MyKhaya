@@ -53,6 +53,16 @@ c46ba221979acc450a8f411727d0279591a0c68d:apps/api/mykhaya/notifications/push.py:
 bea11e6cd595a803ffba16923d5c5f9da7c0f556:apps/api/tests/test_billing_config.py:generic-api-key:92
 bea11e6cd595a803ffba16923d5c5f9da7c0f556:apps/api/tests/test_billing_config.py:generic-api-key:119
 
+# Synthetic local-only E2E and billing fixtures reviewed during the isolated
+# social-auth integration. The E2E values are disposable test-stack secrets;
+# the billing value is a test-shaped placeholder. These exact fingerprints do
+# not suppress future findings in other commits, files or lines.
+6d5f78c05c9ab91843e9b89b58c13eb0bb8d41d2:compose.e2e.yml:generic-api-key:45
+6d5f78c05c9ab91843e9b89b58c13eb0bb8d41d2:compose.e2e.yml:generic-api-key:57
+6d5f78c05c9ab91843e9b89b58c13eb0bb8d41d2:compose.e2e.yml:generic-api-key:73
+6d5f78c05c9ab91843e9b89b58c13eb0bb8d41d2:compose.e2e.yml:generic-api-key:94
+6d5f78c05c9ab91843e9b89b58c13eb0bb8d41d2:compose.e2e.yml:generic-api-key:111
+bc2220223a9e9e141675c38a68d1a067c839c5e3:apps/api/tests/test_billing_config.py:generic-api-key:131
 # Documentation placeholder, not a secret: the literal instructional string
 # "GENERATE_A_UNIQUE_32_PLUS_CHARACTER_SECRET" that MYKHAYA_SECRET_KEY is set
 # to in the production .env template, telling the operator what to generate.

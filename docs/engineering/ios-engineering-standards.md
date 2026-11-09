@@ -227,6 +227,18 @@ Which devices get which state:
 - Browser/PWA passkeys and native Quick Sign-In are separate code paths. Do not
   merge them.
 
+**Consumer MFA** ([Consumer MFA enforcement](consumer-mfa-enforcement.md))
+
+- Native password, Apple and Google sign-in follow the PCC consumer MFA policy.
+  When MFA is required, the API returns a native MFA continuation, not a
+  session. The app completes it in-app through `/auth/mobile/mfa/*` with the
+  per-attempt redemption verifier. It never uses the cookie `/mfa` page.
+- While the challenge is open, the sign-in card shows only the challenge. Never
+  render the email/password form or provider buttons beneath it.
+- Native renewal is refused once MFA becomes required. Quick Sign-In then
+  falls back to a full sign-in. Do not add a native MFA exemption or toggle
+  without an app-attestation design and an ADR.
+
 **Push** (`components/native-push*.ts`, `NativePushEnvironmentPlugin.swift`,
 `apps/api/mykhaya/notifications/push.py`)
 

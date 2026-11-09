@@ -80,6 +80,8 @@ External calendar, wishlist and other sharing features create a separate trust b
 
 The Platform Control Centre is a separate high-trust management plane. It requires separate privileged authorization, MFA, strong session controls, recent authentication for sensitive actions, audit logging and appropriate host/network restrictions. Consumer sessions must never inherit platform privilege, and missing administrative state must not fail open.
 
+Consumer MFA is one policy for every adult sign-in transport. Native endpoints, `X-MyKhaya-*` headers and user-agent strings are not a trust boundary, so no native path may issue a session that the browser path would hold behind MFA. Any new session-issuing or renewal endpoint must call the shared consumer MFA policy. See [Consumer MFA enforcement](consumer-mfa-enforcement.md).
+
 Shared development, staging and production environments default securely: Secure cookies, HTTPS, strict host validation, security headers, CSRF protection, explicit CORS allow-lists, rate limits, no debug bypasses and no development backdoors. Local-only exceptions must be explicit, isolated, documented and impossible to silently carry into shared environments.
 
 Critical controls use defence in depth across application authorization, database constraints, tenant-scoped queries, reverse-proxy limits, host validation, rate limiting, CSP and security headers, request-size limits, queue/task validation, audit logging and infrastructure controls. No single layer is sufficient on its own.

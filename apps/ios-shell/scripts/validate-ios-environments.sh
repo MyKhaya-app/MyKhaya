@@ -39,7 +39,7 @@ expect() {
 
 env_setting() {
   # env_setting <Dev|Prod> <name>: a value from Config/Environment-<env>.xcconfig
-  sed -n "s/^$2 *= *\([^ ]*\).*/\1/p" "$CONFIG_DIR/Environment-$1.xcconfig" | head -1
+  sed -n "s/^$2 *= *\([^ ]*\).*/\1/p" "$CONFIG_DIR/Environment-$1.xcconfig" | head -1 | tr -d '\r'
 }
 
 version_at_least() {

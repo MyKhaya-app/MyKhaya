@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 // (components/form-layout.tsx, docs/design/forms.md). jsdom has no layout:
 // rendered geometry is measured by scripts/form-layout-harness.mjs.
 
-const css = readFileSync(join(process.cwd(), "app", "styles.css"), "utf8");
+const css = readFileSync(join(process.cwd(), "app", "styles.css"), "utf8").replace(/\r\n/g, "\n");
 const rule = (selector: string) => {
   // Anchored to the start of a line, so ".form-section-body" does not match
   // the end of a compound selector.

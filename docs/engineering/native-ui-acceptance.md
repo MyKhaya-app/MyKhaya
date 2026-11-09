@@ -110,6 +110,7 @@ For each form below, on each presentation:
 | Meal Plans | Planned meal and saved meal (add and edit), Import recipe, Plan this meal, Add ingredients to list, photo selection, Filter meals |
 | Lists and Wishlists | New and edit list, list items, New and edit wishlist, wishlist items with price and link, Share |
 | Members and Support | Member invitation with the Family access checkbox, Contact support, Report a bug, a request reply (validation only) |
+| Sign-in MFA challenge | With consumer MFA Required: native password, Apple and Google sign-in each show only the "Additional verification required" challenge. No email/password form or provider buttons are underneath. The code field stays visible above the keyboard, errors appear inside the challenge, and "Use a different sign-in method" brings the form back. See [Consumer MFA enforcement](consumer-mfa-enforcement.md). |
 | Calendar toolbar (not a form) | The Everyone and view pickers and the Tags pill: no zoom when opened, each picker's native list opens and applies, the pills wrap to a second row only when there is no room, month navigation stays on one row, and nothing is cut off. Check portrait, landscape, both Duo screens and after folding. |
 
 ## Recording results
