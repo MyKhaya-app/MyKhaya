@@ -1,7 +1,24 @@
 # MyKhaya contributor and agent rules
 
+## Mandatory for all work
+
+Before any work, read
+[`docs/engineering/engineering-charter.md`](docs/engineering/engineering-charter.md)
+first. This applies to every kind of change: backend, frontend, native
+applications, infrastructure, security, integrations, database changes,
+documentation, testing and deployment. Then read the standards the charter
+names as authoritative for the area you are changing, starting with
+`docs/engineering/engineering-standards.md`.
+
+If the charter, a standard or the implementation conflicts with another
+authoritative project requirement, stop, report the conflict and resolve it
+through the approved workflow. Never silently pick the more convenient
+instruction.
+
+## UI, layout and native-shell work
+
 Before making any UI, layout, navigation, responsive, mobile, tablet, desktop,
-PWA or native-shell change, read the relevant standards and architecture records:
+PWA or native-shell change, also read the relevant standards and architecture records:
 
 1. `docs/engineering/engineering-standards.md`
 2. `docs/engineering/ui-platform-standards.md`
