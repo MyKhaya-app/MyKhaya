@@ -10,8 +10,8 @@ Environment (per deployment; DEV and PROD each have their own values):
 | Variable | Default | Purpose |
 | --- | --- | --- |
 | `MYKHAYA_MONITORING_ENABLED` | `true` | Runs the monitoring runner in the scheduler and the watchdog in the worker. Off means the public page shows Unknown, never a fabricated Operational. |
-| `MYKHAYA_MONITORING_WEB_URL` | `public_web_url` | Target for the web application check, when the public URL is not reachable from inside the container (local Docker). |
-| `MYKHAYA_MONITORING_API_URL` | `native_api_url` | Target for the API readiness and authentication checks. |
+| `MYKHAYA_MONITORING_WEB_URL` | `http://web:3000` | Internal address of the web container (the one Caddy proxies to). Blank = default. Never a public hostname. |
+| `MYKHAYA_MONITORING_API_URL` | `http://api:8000` | Internal address of the API container, for readiness and authentication checks. Blank = default. |
 | `MYKHAYA_MONITORING_WATCHDOG_URL` | unset | External dead-man's switch URL (secret; it contains the check token). |
 | `MYKHAYA_MONITORING_WATCHDOG_FAIL_SUFFIX` | `/fail` | Appended while a critical component is Unavailable. |
 
@@ -100,89 +100,45 @@ always email.
 - A passing mocked test is **not** evidence that live DEV or PROD monitoring
   works. Use the runbook below.
 
-## Validating public-hostname and provider checks (before public reporting)
+## Verifying internal checks and validating provider checks
 
-Vantage-dependent checks start **PCC only: awaiting live validation**. For
-each one, run the probe **from the scheduler container**, which uses the same
-DNS resolver, egress and User-Agent as the monitor. It is read-only: one GET,
-no authentication.
-
-First print the hostnames this deployment actually uses:
+MyKhaya's own web, API and authentication checks run over the internal Docker
+network and need no validation or infrastructure change. To see exactly what
+they see, run the read-only probe from the scheduler container (one GET, no
+authentication, redirects not followed with `--host`):
 
 ```sh
-docker compose exec scheduler python -c "from mykhaya.config import get_settings as g; s = g(); print(s.public_web_url, s.native_api_url, s.monitoring_web_url, s.monitoring_api_url)"
+docker compose exec scheduler python -m mykhaya.monitoring.probe http://api:8000/api/v1/health/ready --expect-json status=ready
+docker compose exec scheduler python -m mykhaya.monitoring.probe http://api:8000/api/v1/auth/providers
+docker compose exec scheduler python -m mykhaya.monitoring.probe http://web:3000/ --host dev.mykhaya.app
+docker compose exec scheduler python -m mykhaya.monitoring.probe http://api:8000/api/v1/health/ready --timeout 0.05
 ```
 
-Then probe each (substitute the printed hostnames; DEV examples shown):
+Use the hostname of `MYKHAYA_PUBLIC_WEB_URL` for `--host`. Expected verdicts:
+`SUCCESS` (a 3xx from the web container is also a healthy answer), and a
+timeout for the last command. No public hostname, NetBird route, Cloudflare
+rule or firewall change is involved. A failure here is a genuine internal
+problem with that container.
+
+These checks prove internal component health only, not internet
+reachability (see the architecture doc).
+
+**External provider checks** (APNs, FCM, Stripe API, DVSA, DVLA, Apple,
+Google) start as *PCC only: awaiting live validation*. They make outbound
+requests only. Probe each provider from the scheduler container, for example:
 
 ```sh
-# Web application (the check expects an HTML page)
-docker compose exec scheduler python -m mykhaya.monitoring.probe https://dev.mykhaya.app/
-
-# API readiness (the check expects {"status": "ready"})
-docker compose exec scheduler python -m mykhaya.monitoring.probe https://api.dev.mykhaya.app/api/v1/health/ready --expect-json status=ready
-
-# Authentication route (read-only provider status; no sign-in)
-docker compose exec scheduler python -m mykhaya.monitoring.probe https://api.dev.mykhaya.app/api/v1/auth/providers
-
-# Timeout behaviour: an impossible budget must end promptly as a classified
-# failure, never hang
-docker compose exec scheduler python -m mykhaya.monitoring.probe https://dev.mykhaya.app/ --timeout 0.05
-```
-
-Each run prints one line per layer, then the verdict the monitor would record:
-
-| Line | What it proves | If it fails |
-| --- | --- | --- |
-| `DNS` | The container's resolver returns addresses (normally Cloudflare anycast) | Container/host DNS: check `/etc/resolv.conf` in the container and the host resolver |
-| `TLS` | TCP to the edge, and full certificate validation for the hostname (protocol, CN, issuer, expiry) | Egress firewall (connect error) or edge certificate problem (`certificate validation failed`) |
-| `HTTP` | Status, latency, `server`, `cf-ray`, `cf-cache-status`, `cf-mitigated`, content type | See the verdict |
-| `body` | The first 300 characters | Wrong content, or a challenge/error page |
-| `Monitor verdict` | Exactly what the check records | — |
-
-Verdicts:
-
-- `SUCCESS`: the check is valid from this server.
-- `CANNOT VERIFY (monitor error) / Blocked by a Cloudflare security challenge`:
-  Cloudflare WAF/bot protection is challenging the monitor. Add a Cloudflare
-  WAF *skip* rule matching `ip.src` = the server's egress IP **and**
-  User-Agent `MyKhaya-Monitoring/1.0` (the User-Agent alone is spoofable),
-  then probe again. Until then the check records Unknown, never an outage.
-- `FAILURE / Cloudflare could not reach the origin server` (HTTP 520–524/530,
-  with the Cloudflare error code, e.g. 1016 = origin DNS): the edge works but
-  the origin did not answer. Look for the origin being down, the origin
-  firewall not allowing Cloudflare's ranges, or a wrong origin record.
-- `FAILURE / Cloudflare could not establish TLS to the origin` (525/526): the
-  origin certificate, or the Cloudflare SSL mode.
-- `FAILURE / DNS …` or a TLS failure: the container's own path to Cloudflare.
-- `FAILURE / Request timed out` (in the `--timeout 0.05` run): the expected
-  behaviour. The monitor bounds every check the same way (default 10 s).
-
-Provider connectivity (DNS/TLS only, matching what those checks do):
-
-```sh
-docker compose exec scheduler python -m mykhaya.monitoring.probe https://history.mot.api.gov.uk/
 docker compose exec scheduler python -m mykhaya.monitoring.probe https://appleid.apple.com/auth/keys
 docker compose exec scheduler python -m mykhaya.monitoring.probe https://www.googleapis.com/oauth2/v3/certs
+docker compose exec scheduler python -m mykhaya.monitoring.probe https://history.mot.api.gov.uk/
 ```
 
-For DVSA, an HTTP 4xx without credentials is expected. Only the `DNS` and
-`TLS` lines matter, because that is all the DVSA connectivity check uses.
-Never probe a vehicle endpoint or supply a registration.
-
-Then in PCC → Health → Automated monitoring, confirm the component itself
-shows Healthy for at least 3 consecutive scheduled checks. Only then choose
-Configure → tick **Affects the public status page**, with a reason that
-records the probe evidence (audited as `monitoring.public_reporting_enabled`).
-
-**If a public hostname cannot be checked reliably** (e.g. a challenge you
-cannot allow-list), leave public reporting off. MyKhaya Web Application then
-stays Unknown publicly, which is accurate. Optionally set
-`MYKHAYA_MONITORING_WEB_URL` / `MYKHAYA_MONITORING_API_URL` to an internal
-address. Those results are labelled "does not prove public availability",
-stay limited-confidence, and must not be presented or enabled as an external
-availability check. Use an external uptime monitor for genuine outside-in
-coverage.
+(For DVSA, an HTTP 4xx without credentials is expected; only DNS and TLS
+matter. Never probe a vehicle endpoint.) Once the component shows Healthy for
+3 consecutive scheduled checks in PCC → Health, choose Configure → tick
+**Affects the public status page**, with the probe evidence as the reason.
+If a provider is unreachable because of this server's egress policy, leave it
+PCC-only; never open inbound access for it.
 
 ## Live DEV acceptance runbook
 
@@ -191,9 +147,9 @@ Never inject faults in PROD (the API and runner both refuse), and never
 disrupt a real provider or account.
 
 1. **Deploy and migrate.** After the approved DEV deployment, confirm
-   migration `0125_service_monitoring` is applied (`docker compose exec api
-   alembic current` shows `0125_service_monitoring (head)`) and the API
-   readiness endpoint on the DEV API host returns `{"status":"ready"}`.
+   `docker compose exec api alembic current` shows
+   `0126_monitoring_internal_checks (head)`, and the internal probes above
+   return `SUCCESS`.
 2. **Scheduler active.** In `docker compose logs scheduler`, look for
    `monitoring.transition` lines on first start (`unknown → healthy`).
    PCC **Health → Automated monitoring** shows *Monitoring running* and
@@ -209,10 +165,11 @@ disrupt a real provider or account.
    services show Operational (or Unknown where DEV has no traffic or the
    integration is off, which is correct). External services appear only for
    integrations enabled in DEV.
-6. **Validation gate.** Every check marked *PCC only: awaiting live
-   validation* has been validated with the probe procedure above, or
-   deliberately left PCC-only. Confirm that none of them has opened a public
-   incident while unvalidated.
+6. **Validation gate.** Web, API and authentication show Healthy without
+   any validation step. Every external provider check marked *PCC only:
+   awaiting live validation* has been validated with the probes above, or
+   deliberately left PCC-only. Confirm none of them opened a public incident
+   or sent an email while unvalidated.
 7. **Controlled failure (core service).** Pick a component that is public by
    default and has no live-validation gate: **Job queue progress**
    (`background.outbox`, Background Processing, critical, 60 s). Choose

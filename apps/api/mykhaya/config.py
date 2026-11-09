@@ -8,7 +8,7 @@ from urllib.parse import urlsplit
 
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric.ec import SECP256R1, EllipticCurvePrivateKey
-from pydantic import Field, SecretStr, field_validator, model_validator
+from pydantic import Field, SecretStr, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from mykhaya.url_validation import is_valid_http_url
@@ -284,12 +284,15 @@ class Settings(BaseSettings):
     # state. Disabling it does not make services look healthy: the public
     # status page reports Unknown for anything without a fresh observation.
     monitoring_enabled: bool = True
-    # Optional overrides for the HTTP reachability checks. They default to
-    # public_web_url and native_api_url, which is the right target on a hosted
-    # DEV/PROD server. Local Docker stacks whose public URL is not reachable
-    # from inside the container can point these at an internal address.
-    monitoring_web_url: str | None = None
-    monitoring_api_url: str | None = None
+    # Internal targets for monitoring MyKhaya's own web and API services. These
+    # are the Docker service addresses Caddy itself proxies to on the internal
+    # `app` network (compose.yml), identical in DEV and PROD, so the monitor
+    # checks the services from inside the trusted application environment and
+    # never routes out through a public hostname, Cloudflare or NetBird. Blank
+    # means the default. They prove internal component health only, not that
+    # customers can reach MyKhaya over the internet.
+    monitoring_web_url: str = "http://web:3000"
+    monitoring_api_url: str = "http://api:8000"
     # Optional independent dead-man's-switch (e.g. a healthchecks.io check URL).
     # The scheduler pings it after each healthy monitoring cycle and pings
     # `<url><fail suffix>` while a critical component is unavailable, so an
@@ -333,6 +336,16 @@ class Settings(BaseSettings):
         """
         if isinstance(value, str) and (not value.strip() or value.strip() == "unknown"):
             return resolve_app_version()
+        return value
+
+    @field_validator("monitoring_web_url", "monitoring_api_url", mode="before")
+    @classmethod
+    def resolve_blank_monitoring_targets(cls, value: object, info: ValidationInfo) -> object:
+        """`.env.example` ships these blank: blank means the internal default."""
+        if value is None or (isinstance(value, str) and not value.strip()):
+            if info.field_name == "monitoring_web_url":
+                return "http://web:3000"
+            return "http://api:8000"
         return value
 
     @field_validator(

@@ -357,3 +357,24 @@ describe("Public Status page — automated monitoring", () => {
     expect(screen.queryByRole("heading", { name: "External services" })).not.toBeInTheDocument();
   });
 });
+
+describe("Public Status page — what the service states mean", () => {
+  it("says the states are internal health checks, not proof of internet reachability", async () => {
+    (global.fetch as ReturnType<typeof vi.fn>).mockReturnValue(
+      jsonResponse({
+        overall: "operational",
+        overall_message: "Operational",
+        last_updated: "2026-01-01T00:00:00Z",
+        services: baseServices(),
+        current_incidents: [],
+        recent_incidents: [],
+      }),
+    );
+
+    render(<ServiceStatus />);
+
+    expect(
+      await screen.findByText(/not whether they can be reached from your network/),
+    ).toBeInTheDocument();
+  });
+});

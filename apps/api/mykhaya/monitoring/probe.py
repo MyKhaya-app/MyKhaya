@@ -1,16 +1,22 @@
-"""Read-only connectivity probe for live acceptance of the public-route checks.
+"""Read-only connectivity probe, run inside the scheduler container so the
+network path, DNS resolver and egress are exactly the monitor's.
 
-Run inside the container that hosts the monitor (the scheduler), so the
-network path, DNS resolver and egress are exactly the monitor's:
+MyKhaya's own services (internal Docker network, as the monitor checks them):
 
-    docker compose exec scheduler python -m mykhaya.monitoring.probe https://dev.mykhaya.app/
-    docker compose exec scheduler python -m mykhaya.monitoring.probe \
-        https://api.dev.mykhaya.app/api/v1/health/ready --expect-json status=ready
+    python -m mykhaya.monitoring.probe http://api:8000/api/v1/health/ready \
+        --expect-json status=ready
+    python -m mykhaya.monitoring.probe http://web:3000/ --host dev.mykhaya.app
+
+External providers (outbound only):
+
+    python -m mykhaya.monitoring.probe https://appleid.apple.com/auth/keys
+
+(each prefixed with `docker compose exec scheduler`).
 
 It reports each layer separately (DNS -> TCP/TLS with certificate validation
--> HTTP via Cloudflare -> body) and finishes with the verdict the monitor
-itself would record, using the same classification code and User-Agent. It
-sends one GET; it never authenticates, posts or follows sign-in flows.
+for https -> HTTP -> body) and finishes with the verdict a check would
+record. It sends one GET, never follows redirects for --host probes, and never
+authenticates, posts or follows sign-in flows.
 """
 
 from __future__ import annotations
@@ -91,11 +97,17 @@ def _tls(host: str, port: int, timeout: float) -> bool:
     return True
 
 
-async def _http(url: str, timeout_seconds: float, expect_json: str | None) -> int:
-    async with httpx.AsyncClient(headers={"User-Agent": USER_AGENT}) as client:
+async def _http(
+    url: str, timeout_seconds: float, expect_json: str | None, host: str | None = None
+) -> int:
+    request_headers = {"User-Agent": USER_AGENT}
+    if host:
+        # Exactly what Caddy forwards to the web container.
+        request_headers.update({"Host": host, "X-Forwarded-Proto": "https"})
+    async with httpx.AsyncClient(headers=request_headers) as client:
         started = time.monotonic()
         try:
-            response = await client.get(url, timeout=timeout_seconds, follow_redirects=True)
+            response = await client.get(url, timeout=timeout_seconds, follow_redirects=host is None)
         except httpx.HTTPError as exc:
             result = network_failure(exc, urlsplit(url).hostname or url)
             _line("HTTP", False, f"{type(exc).__name__}: {result.detail}")
@@ -135,6 +147,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("url")
     parser.add_argument("--timeout", type=float, default=10.0, help="seconds (monitor default 10)")
     parser.add_argument("--expect-json", help="key=value the JSON body must contain")
+    parser.add_argument(
+        "--host", help="Host header to send (internal web check, e.g. dev.mykhaya.app)"
+    )
     args = parser.parse_args(argv)
     parts = urlsplit(args.url)
     host = parts.hostname or ""
@@ -146,7 +161,7 @@ def main(argv: list[str] | None = None) -> int:
     if parts.scheme == "https" and not _tls(host, port, args.timeout):
         print(f"\nMonitor verdict: FAILURE / {category_label('tls')} (or connectivity)")
         return 1
-    return asyncio.run(_http(args.url, args.timeout, args.expect_json))
+    return asyncio.run(_http(args.url, args.timeout, args.expect_json, args.host))
 
 
 if __name__ == "__main__":

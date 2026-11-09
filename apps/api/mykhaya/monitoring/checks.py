@@ -220,16 +220,6 @@ def classify_public_route(response: httpx.Response, target: str) -> CheckResult 
     return classify_http_status(response.status_code, target)
 
 
-def vantage_note(override: str | None, what: str) -> str:
-    """Never let a configured internal URL pass for an external check."""
-    if override:
-        return (
-            f"{what} checked via a configured override URL, not the public hostname; "
-            "this does not prove public availability."
-        )
-    return f"{what} checked through its public hostname from MyKhaya's own server."
-
-
 async def _get(
     ctx: CheckContext, url: str, target: str, **kwargs: Any
 ) -> tuple[httpx.Response | None, int, CheckResult | None]:
@@ -311,31 +301,44 @@ async def _platform_toggle(ctx: CheckContext, key: str) -> bool:
 # --- MyKhaya Web Application ------------------------------------------------------------
 
 
+def internal_note(what: str) -> str:
+    return (
+        f"{what} checked over the internal Docker network; this proves the service "
+        "is running and answering, not that customers can reach it over the internet."
+    )
+
+
 async def check_web_http(ctx: CheckContext) -> CheckResult:
-    base = (ctx.settings.monitoring_web_url or ctx.settings.public_web_url).rstrip("/")
+    """GET / on the web container exactly as Caddy forwards it: internal
+    address, the public Host header the web app routes on, and
+    X-Forwarded-Proto https. Redirects are never followed, so nothing can
+    leave the internal network."""
+    base = ctx.settings.monitoring_web_url.rstrip("/")
+    public_host = urlsplit(ctx.settings.public_web_url).hostname or "localhost"
     target = "The web application"
-    response, latency, error = await _get(ctx, f"{base}/", target, follow_redirects=True)
+    response, latency, error = await _get(
+        ctx,
+        f"{base}/",
+        target,
+        headers={"Host": public_host, "X-Forwarded-Proto": "https"},
+        follow_redirects=False,
+    )
     if error is not None:
         return error
     assert response is not None
-    status_failure = classify_public_route(response, target)
+    if 300 <= response.status_code < 400:
+        return CheckResult.success(
+            f"Answered with a redirect (HTTP {response.status_code}). "
+            + internal_note("The web application"),
+            latency_ms=latency,
+        )
+    status_failure = classify_http_status(response.status_code, target)
     if status_failure is not None:
         return status_failure
     if "text/html" not in response.headers.get("content-type", ""):
         return CheckResult.failure(
             "unexpected_response", "The web application did not return an HTML page."
         )
-    host = urlsplit(base).hostname
-    if base.startswith("https://") and host:
-        tls_result, days_left = await probe_tls(host, urlsplit(base).port or 443, ctx.timeout)
-        if tls_result.outcome == "failure":
-            return tls_result
-        if days_left is not None and days_left < CERTIFICATE_EXPIRY_WARNING_DAYS:
-            return CheckResult.failure(
-                "tls",
-                f"The web application's TLS certificate expires in {days_left} days.",
-                severity="degraded",
-            )
     if latency > WEB_LATENCY_DEGRADED_MS:
         return CheckResult.failure(
             "latency",
@@ -344,9 +347,7 @@ async def check_web_http(ctx: CheckContext) -> CheckResult:
             latency_ms=latency,
         )
     return CheckResult.success(
-        "Home page served. " + vantage_note(ctx.settings.monitoring_web_url, "The web application"),
-        latency_ms=latency,
-        confidence="limited",
+        "Home page served. " + internal_note("The web application"), latency_ms=latency
     )
 
 
@@ -385,7 +386,8 @@ async def check_redis(ctx: CheckContext) -> CheckResult:
 
 
 def _api_base(ctx: CheckContext) -> str:
-    return (ctx.settings.monitoring_api_url or ctx.settings.native_api_url).rstrip("/")
+    """The API container's internal address (see Settings.monitoring_api_url)."""
+    return ctx.settings.monitoring_api_url.rstrip("/")
 
 
 async def check_api_ready(ctx: CheckContext) -> CheckResult:
@@ -394,14 +396,11 @@ async def check_api_ready(ctx: CheckContext) -> CheckResult:
     if error is not None:
         return error
     assert response is not None
-    if response.status_code == 503 and not (
-        _is_cloudflare(response)
-        and response.headers.get("content-type", "").startswith("text/html")
-    ):
+    if response.status_code == 503:
         return CheckResult.failure(
             "provider_outage", "The API reports that a required dependency is unavailable."
         )
-    status_failure = classify_public_route(response, target)
+    status_failure = classify_http_status(response.status_code, target)
     if status_failure is not None:
         return status_failure
     try:
@@ -415,9 +414,8 @@ async def check_api_ready(ctx: CheckContext) -> CheckResult:
             "latency", f"The API answered in {latency} ms.", severity="degraded", latency_ms=latency
         )
     return CheckResult.success(
-        "Readiness confirmed. " + vantage_note(ctx.settings.monitoring_api_url, "The API"),
+        "Readiness confirmed (database, Redis, schema). " + internal_note("The API"),
         latency_ms=latency,
-        confidence="limited",
     )
 
 
@@ -479,7 +477,7 @@ async def check_auth_endpoint(ctx: CheckContext) -> CheckResult:
     if error is not None:
         return error
     assert response is not None
-    status_failure = classify_public_route(response, target)
+    status_failure = classify_http_status(response.status_code, target)
     if status_failure is not None:
         return status_failure
     try:
@@ -491,10 +489,8 @@ async def check_auth_endpoint(ctx: CheckContext) -> CheckResult:
             "unexpected_response", "The authentication service returned an unexpected response."
         )
     return CheckResult.success(
-        "Provider status returned. "
-        + vantage_note(ctx.settings.monitoring_api_url, "The authentication service"),
+        "Provider status returned. " + internal_note("The authentication service"),
         latency_ms=latency,
-        confidence="limited",
     )
 
 

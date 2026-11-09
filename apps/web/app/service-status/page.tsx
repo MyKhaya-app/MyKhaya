@@ -211,6 +211,12 @@ export default function ServiceStatus() {
 
             <section>
               <h2>Services</h2>
+              {/* Monitoring runs inside MyKhaya's own environment: it proves the
+                  services are running, not that the internet path to them works. */}
+              <p className="status-section-note">
+                Based on MyKhaya&apos;s own health checks of its services. They show whether our services are
+                running, not whether they can be reached from your network.
+              </p>
               <ServiceList services={data.services} label="MyKhaya services" />
             </section>
 

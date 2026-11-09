@@ -57,13 +57,13 @@ observation at all, the state is `unknown`.
 
 | Public service | Component | Signal | Confidence |
 | --- | --- | --- | --- |
-| MyKhaya Web Application | `web.http` | GET public web URL: HTTP status, `text/html`, latency, TLS certificate expiry (<14 days = degraded) | limited (own vantage point) |
+| MyKhaya Web Application | `web.http` | GET `/` on the web container over the internal Docker network (`http://web:3000`, public Host header as Caddy sends it; redirects never followed): HTTP status, `text/html`, latency | verified (internal component health) |
 | API | `api.database` | `SELECT 1` and latency | verified |
 | API | `api.redis` | `PING` | verified |
-| API | `api.ready` | GET `/api/v1/health/ready` through the public API host | limited |
+| API | `api.ready` | GET `/api/v1/health/ready` on the API container over the internal Docker network (`http://api:8000`) | verified (internal component health) |
 | API | `api.error_rate` | Share of real customer API requests answered 5xx over 5 minutes (≥5 % degraded, ≥25 % unavailable), average latency (>3 s degraded) | verified with ≥20 requests, otherwise limited |
 | Authentication | `api.database`, `api.redis` | as above | verified |
-| Authentication | `auth.endpoint` | GET `/api/v1/auth/providers` (read-only; no sign-in, no account) | limited |
+| Authentication | `auth.endpoint` | GET `/api/v1/auth/providers` on the API container over the internal Docker network (read-only; no sign-in, no account) | verified (internal component health) |
 | Authentication | `auth.error_rate` | 5xx share on `/api/v1/auth/*` | verified with ≥10 requests |
 | Email Delivery | `email.smtp` | Connect, TLS, AUTH, NOOP, QUIT. Never MAIL/RCPT/DATA. Every 5 minutes. | limited |
 | Email Delivery | `email.delivery` | Real delivery outcomes in 30 minutes; emails queued >15 minutes | verified when there is traffic |
@@ -90,65 +90,57 @@ No check creates a payment, customer, sign-in, account, webhook delivery,
 push, email, or DVSA/DVLA vehicle lookup. DVSA and DVLA quota is never spent
 by monitoring.
 
-## Live-validation gate (no false public incidents)
+## MyKhaya monitors itself from inside its own environment
 
-Ten checks depend on the network path from MyKhaya's own server: the public
-web, API and authentication hostnames (behind Cloudflare), the push gateways,
-the Stripe API, DVSA/DVLA connectivity and the Apple/Google key endpoints
-(`requires_live_validation=True` in the catalogue). Whether the server can
-reach its own public hostnames through Cloudflare, or a provider through its
-egress, can only be proven on the live environment. These checks therefore
-**start PCC-only** (`public_visible = false`). They run, record, appear in
-PCC and alert administrators, but cannot change the public page or open an
-incident. An Owner/Administrator enables public reporting per check after
-validating it (Health → Configure → "Affects the public status page"). This
-is audited as `monitoring.public_reporting_enabled`.
+MyKhaya's own components are checked from within the trusted application
+environment: PostgreSQL and Redis directly, heartbeats, delivery and failure
+records, request metrics, and the web and API containers over the internal
+`app` Docker network, at the same addresses Caddy proxies to (`web:3000`,
+`api:8000`; `MYKHAYA_MONITORING_WEB_URL` / `MYKHAYA_MONITORING_API_URL`,
+identical in DEV and PROD). No self-check uses a public hostname, so
+monitoring needs no NetBird service, DNS record, Cloudflare rule, firewall
+opening or TLS exception. The web check sends the public Host header and
+`X-Forwarded-Proto: https` exactly as Caddy does, so the web app routes it as
+a customer request, and it never follows redirects, so nothing leaves the
+internal network.
 
-Until a public service has at least one validated or deterministic component,
-its public state is **Unknown**. For example, MyKhaya Web Application is
-covered only by `web.http`. This is deliberate: an unproven check is never
-allowed to report Operational *or* an outage.
+**Internal health is not internet reachability.** These checks prove that the
+web, API and authentication services are running and answering. They do not
+prove that customers can reach MyKhaya through DNS, Cloudflare, NetBird or
+TLS, and results say so ("checked over the internal Docker network …").
+Outside-in reachability needs a separate, externally hosted uptime monitor
+(and the optional dead-man's switch catches a host that stops checking in);
+MyKhaya does not open its infrastructure to measure it from inside.
 
-Deterministic checks (database, Redis, worker heartbeat, queue progress,
-failing jobs, request error rates, real email/push/webhook/MOT-lookup
-outcomes) are public from the start.
+Before migration `0126_monitoring_internal_checks`, these three checks used
+public hostnames. That migration resets their history (which measured a
+route a NetBird-protected deployment deliberately blocks) to Unknown, so the
+first internal result sets the real state with no false recovery alert, and
+returns them to public reporting unless an administrator configured them
+explicitly.
 
-## Public hostnames behind Cloudflare
+## Live-validation gate (external providers only)
 
-`web.http`, `api.ready` and `auth.endpoint` request the real public
-hostnames, so the request goes resolver → Cloudflare edge → origin.
-`classify_public_route` reports where it failed instead of "down":
+Seven checks leave MyKhaya for a third party (`requires_live_validation=True`):
+the APNs and FCM gateways, the Stripe API, DVSA and DVLA connectivity, and the
+Apple and Google key endpoints. They make outbound requests only, never need
+inbound access, but whether this server's egress reaches each provider can
+only be proven on the live environment. They therefore **start PCC-only**
+(`public_visible = false`): they run, record and appear in PCC, but cannot
+change the public page or open an incident, and their alerts are not emailed
+(`awaiting_validation`). An Owner/Administrator enables public reporting per
+check after validating it (Health → Configure → "Affects the public status
+page"), audited as `monitoring.public_reporting_enabled`.
 
-| Observed | Category | Effect |
-| --- | --- | --- |
-| Name does not resolve | `dns` | failure |
-| TCP/TLS to the edge fails, or the edge certificate is invalid | `connectivity` / `tls` / `timeout` | failure |
-| Cloudflare challenge or WAF block aimed at the monitor (`cf-mitigated: challenge`; a 403/429/503 challenge or "you have been blocked" page; edge error 1020/1015/1010/1012 on 403/429) | `waf_challenge` | **monitor error**: cannot verify; never an outage; the component goes stale → Unknown |
-| 520–524, 530 from Cloudflare (origin down, refused, timed out, origin DNS error such as 1016) | `edge_origin_unreachable` | failure (the Cloudflare error code and Ray ID are kept for PCC) |
-| 525/526 from Cloudflare | `edge_origin_tls` | failure |
-| Other 5xx from the origin (passed through Cloudflare) | `provider_outage` | failure |
-| 401/403 without a challenge, 429 | `auth_config` / `rate_limited` | failure |
-| 200 with the wrong content (not HTML, or readiness not `ready`) | `unexpected_response` | failure |
+All internal checks, including web, API and authentication, are public from
+the start.
 
-NAT hairpinning is not assumed: with Cloudflare proxying, the server's
-request leaves through its normal egress to a Cloudflare anycast address,
-then follows the same edge → origin path as any customer request. What the
-check cannot see is a problem *between other networks and Cloudflare* (ISP
-routing, regional edge issues). That is why its confidence is always
-`limited`.
+### Cloudflare-fronted providers
 
-### Override URLs and their limits
-
-`MYKHAYA_MONITORING_WEB_URL` / `MYKHAYA_MONITORING_API_URL` point these
-checks at another URL (e.g. an internal service address) when the public
-hostname cannot be checked reliably from the server. An override changes
-what is being measured. It proves the application answers, **not** that
-customers can reach it through DNS, Cloudflare and TLS. Every result from an
-overridden check says so in its detail ("checked via a configured override
-URL, not the public hostname; this does not prove public availability"), and
-its confidence stays `limited`. Do not enable public reporting for an
-overridden `web.http` as if it were an external availability check. Use an
-external uptime probe for that.
+`classify_public_route` (used by the probe for external endpoints) still
+separates DNS, edge TLS, Cloudflare WAF challenges and blocks (reported as
+"cannot verify", never an outage), origin unreachable (520–524, 530) and
+origin TLS (525/526) when a provider is behind Cloudflare.
 
 ## Failure categories
 
@@ -323,11 +315,11 @@ A DEV failure therefore cannot affect PROD status or alerts, and vice versa.
 
 ## Limitations
 
-- Web and API reachability is checked from MyKhaya's own server, not from
-  the public internet. A failure only visible from outside (e.g. an upstream
-  DNS or CDN problem) is caught by the external dead-man's switch only if it
-  also stops the pings, and otherwise by customers. Consider an external
-  uptime probe of `status.mykhaya.app` and the web app.
+- Web, API and authentication health is internal component health. A
+  failure only visible from outside (DNS, Cloudflare, NetBird, certificate
+  expiry) is not detected by MyKhaya itself; it is caught by the external
+  dead-man's switch only if it also stops the pings. Use an externally hosted
+  uptime monitor for outside-in reachability.
 - Provider status feeds (Stripe, Apple, Google) are not consumed: no feed
   format was verified for this release. Provider health comes from direct
   checks and real-traffic observations.

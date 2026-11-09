@@ -1478,45 +1478,150 @@ def test_cloudflare_origin_failures_are_distinguished() -> None:
     assert origin_5xx is not None and origin_5xx.category == "provider_outage"
 
 
+PUBLIC = {
+    "public_web_url": "https://dev.mykhaya.app",
+    "native_api_url": "https://api.dev.mykhaya.app",
+    "monitoring_web_url": "http://web:3000",
+    "monitoring_api_url": "http://api:8000",
+}
+
+
+async def _run_self_checks(
+    handler: Callable[[httpx.Request], httpx.Response],
+) -> dict[str, CheckResult]:
+    settings = get_settings().model_copy(update=PUBLIC)
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+        context = _context(http, settings)
+        results = {
+            "web": await checks.check_web_http(context),
+            "ready": await checks.check_api_ready(context),
+            "auth": await checks.check_auth_endpoint(context),
+        }
+        await context.redis.aclose()
+    return results
+
+
 @pytest.mark.asyncio
-async def test_override_url_is_never_reported_as_a_public_check() -> None:
+async def test_self_checks_use_only_the_internal_docker_network() -> None:
+    seen: list[httpx.Request] = []
+
     def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if request.url.path == "/api/v1/health/ready":
+            return httpx.Response(200, json={"status": "ready"})
+        if request.url.path == "/api/v1/auth/providers":
+            return httpx.Response(200, json={"providers": []})
         return httpx.Response(200, text="<html></html>", headers={"content-type": "text/html"})
 
-    override = get_settings().model_copy(update={"monitoring_web_url": "http://web.internal:3000"})
-    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
-        context = _context(http, override)
-        result = await checks.check_web_http(context)
-        await context.redis.aclose()
-    assert result.outcome == "success" and result.confidence == "limited"
-    assert "does not prove public availability" in (result.detail or "")
+    results = await _run_self_checks(handler)
+    assert {r.outcome for r in results.values()} == {"success"}
+    # Internal component health is a verified result, and says what it is not.
+    assert all(r.confidence is None for r in results.values())
+    assert all("not that customers can reach it" in (r.detail or "") for r in results.values())
+    # Only the Docker service addresses are contacted: never a public
+    # hostname, Cloudflare, NetBird or TLS to MyKhaya's own domain.
+    assert {(r.url.scheme, r.url.host, r.url.port) for r in seen} == {
+        ("http", "web", 3000),
+        ("http", "api", 8000),
+    }
+    web = next(r for r in seen if r.url.host == "web")
+    # Exactly what Caddy forwards, so the web app routes it as a customer request.
+    assert web.headers["host"] == "dev.mykhaya.app"
+    assert web.headers["x-forwarded-proto"] == "https"
 
 
 @pytest.mark.asyncio
-async def test_unvalidated_vantage_checks_start_pcc_only_and_cannot_open_incidents(
+async def test_internal_web_api_and_auth_failures_are_detected() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if request.url.host == "web":
+            raise httpx.ConnectError("connection refused", request=request)
+        if request.url.path == "/api/v1/health/ready":
+            return httpx.Response(503, json={"detail": "A required service is unavailable."})
+        return httpx.Response(500)
+
+    results = await _run_self_checks(handler)
+    assert results["web"].outcome == "failure" and results["web"].category == "connectivity"
+    assert results["ready"].outcome == "failure" and results["ready"].category == "provider_outage"
+    assert results["auth"].outcome == "failure" and results["auth"].category == "provider_outage"
+    assert {r.url.host for r in seen} <= {"web", "api"}
+
+
+@pytest.mark.asyncio
+async def test_internal_web_redirect_is_never_followed_out_of_the_network() -> None:
+    seen: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(str(request.url))
+        if request.url.host == "web":
+            return httpx.Response(307, headers={"location": "https://dev.mykhaya.app/login"})
+        return httpx.Response(200, json={"status": "ready", "providers": []})
+
+    results = await _run_self_checks(handler)
+    assert results["web"].outcome == "success"
+    assert not any("dev.mykhaya.app" in url for url in seen)
+
+
+def test_blank_internal_targets_fall_back_to_the_docker_service_addresses() -> None:
+    from mykhaya.config import Settings
+
+    settings = Settings(monitoring_web_url="", monitoring_api_url="  ")  # type: ignore[call-arg]
+    assert settings.monitoring_web_url == "http://web:3000"
+    assert settings.monitoring_api_url == "http://api:8000"
+
+
+@pytest.mark.asyncio
+async def test_unvalidated_external_checks_start_pcc_only_and_cannot_open_incidents(
     monitoring_state: Any, redis: Redis
 ) -> None:
     async with SessionFactory() as db:
         rows = await engine.ensure_components(db)
         await db.commit()
     gated = {item.key for item in CATALOGUE if item.requires_live_validation}
-    assert {"web.http", "api.ready", "auth.endpoint", "billing.stripe_api"} <= gated
+    # Only checks that leave MyKhaya for a third party need live validation.
+    assert gated == {
+        "notifications.apns",
+        "notifications.fcm",
+        "billing.stripe_api",
+        "provider.dvsa.connectivity",
+        "provider.dvla.connectivity",
+        "provider.apple.sign_in",
+        "provider.google.sign_in",
+    }
     assert all(rows[key].public_visible is False for key in gated)
-    assert rows["api.database"].public_visible is True
+    # MyKhaya's own components are internal and public from the start.
+    for key in ("web.http", "api.ready", "auth.endpoint", "api.database"):
+        assert rows[key].public_visible is True, key
 
-    now = await fail_n(redis, "web.http", T0, 5)
-    assert (await component("web.http")).state == "unavailable"
-    assert await automated_incidents("web_application") == []
+    now = await fail_n(redis, "provider.apple.sign_in", T0, 5)
+    assert (await component("provider.apple.sign_in")).state == "unavailable"
+    assert await automated_incidents("apple_sign_in") == []
     # Recorded and visible in PCC for commissioning, but not emailed.
-    gated_alerts = await alerts_for("web.http")
+    gated_alerts = await alerts_for("provider.apple.sign_in")
     assert [a.kind for a in gated_alerts] == ["unavailable"]
     assert gated_alerts[0].suppressed_reason == "awaiting_validation"
     assert await deliveries_for(gated_alerts[0]) == []
     await write_runner_heartbeat(now)
     async with SessionFactory() as db:
         snapshot = await compute_status_snapshot(db, now - timedelta(seconds=30))
-    web = next(item for item in snapshot.services if item.key == "web_application")
-    assert web.state == "unknown"
+    assert not any(item.key == "apple_sign_in" for item in snapshot.external_services)
+
+
+@pytest.mark.asyncio
+async def test_internal_web_failure_updates_public_status_and_alerts(
+    monitoring_state: Callable[[PlatformRole], Awaitable[PlatformAdministrator]],
+    redis: Redis,
+) -> None:
+    await monitoring_state(PlatformRole.owner)
+    now = await succeed_n(redis, "api.database", T0, 1)
+    now = await fail_n(redis, "web.http", now, 3)
+    assert (await component("web.http")).state == "unavailable"
+    incidents = await automated_incidents("web_application")
+    assert len(incidents) == 1
+    alert = (await alerts_for("web.http"))[0]
+    assert alert.suppressed_reason is None and await deliveries_for(alert) != []
 
 
 def test_probe_reports_dns_failure_layer_by_layer(capsys: pytest.CaptureFixture[str]) -> None:
@@ -1551,13 +1656,13 @@ async def test_validated_check_emails_while_monitoring_failures_always_email(
         await engine.ensure_components(db)
         await db.execute(
             update(MonitorComponent)
-            .where(MonitorComponent.key == "web.http")
+            .where(MonitorComponent.key == "billing.stripe_api")
             .values(public_visible=True)
         )
         await db.commit()
-    now = await succeed_n(redis, "web.http", T0, 1)
-    await fail_n(redis, "web.http", now, 3)
-    alert = (await alerts_for("web.http"))[0]
+    now = await succeed_n(redis, "billing.stripe_api", T0, 1)
+    await fail_n(redis, "billing.stripe_api", now, 3)
+    alert = (await alerts_for("billing.stripe_api"))[0]
     assert alert.suppressed_reason is None
     assert await deliveries_for(alert) != []
 

@@ -57,14 +57,13 @@ CATALOGUE: tuple[ComponentDefinition, ...] = (
     # --- MyKhaya Web Application ---
     ComponentDefinition(
         key="web.http",
-        name="Web application endpoint",
+        name="Web application (internal)",
         service_keys=("web_application",),
         check_type="http",
-        verifies="The public web address serves an HTML page with a valid certificate. "
-        "Checked from MyKhaya's own server, so it cannot prove reachability from every network.",
+        verifies="The web container serves its home page over the internal Docker network "
+        "(as Caddy forwards it). Internal health only: not internet reachability.",
         customer_impact="The MyKhaya web app may not load.",
         run=checks.check_web_http,
-        requires_live_validation=True,
     ),
     # --- API ---
     ComponentDefinition(
@@ -90,11 +89,10 @@ CATALOGUE: tuple[ComponentDefinition, ...] = (
         name="API readiness",
         service_keys=("api",),
         check_type="http",
-        verifies="The API's readiness endpoint answers through the public route "
+        verifies="The API container's readiness endpoint over the internal Docker network "
         "(database, Redis and schema version checked by the API itself).",
         customer_impact="The apps cannot load or save data.",
         run=checks.check_api_ready,
-        requires_live_validation=True,
     ),
     ComponentDefinition(
         key="api.error_rate",
@@ -113,11 +111,10 @@ CATALOGUE: tuple[ComponentDefinition, ...] = (
         name="Authentication service",
         service_keys=("authentication",),
         check_type="http",
-        verifies="The authentication router answers a read-only status request. "
-        "No sign-in is attempted and no account is created.",
+        verifies="The authentication router answers a read-only status request over the "
+        "internal Docker network. No sign-in is attempted and no account is created.",
         customer_impact="Customers may be unable to sign in or register.",
         run=checks.check_auth_endpoint,
-        requires_live_validation=True,
     ),
     ComponentDefinition(
         key="auth.error_rate",
