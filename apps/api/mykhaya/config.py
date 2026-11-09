@@ -297,6 +297,13 @@ class Settings(BaseSettings):
     # delivery is down. A secret: the URL embeds the check's token.
     monitoring_watchdog_url: SecretStr | None = None
     monitoring_watchdog_fail_suffix: str = "/fail"
+    # BookStack documentation sync (mykhaya.docs_sync). The docs are bundled
+    # into the image at build time (apps/api/Dockerfile); the branch label
+    # defaults from the environment (production -> main, otherwise dev) and
+    # is only used for the source notice and GitHub links. Everything else
+    # (URL, token, book, schedule) is configured per environment in PCC.
+    docs_sync_source_dir: str = "/app/docs"
+    docs_sync_branch: str | None = None
     commit_sha: str = "unknown"
     build_time: str = "unknown"
     build_channel: Literal["development", "stable"] = "development"

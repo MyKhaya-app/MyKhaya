@@ -12,6 +12,7 @@ from mykhaya.calendar_highlights import sync_due_holiday_sources
 from mykhaya.config import Settings, get_settings
 from mykhaya.crypto.config import validate_sensitive_key_configuration
 from mykhaya.db import SessionFactory
+from mykhaya.docs_sync import run_forever as run_docs_sync
 from mykhaya.family_retention import scan_family_retention
 from mykhaya.home_migration_pcc import purge_expired_packages
 from mykhaya.managed_demo_homes import ManagedDemoService
@@ -82,6 +83,9 @@ async def run() -> None:
     # loop: a slow provider check must not delay reminders. Its own failures
     # are contained in run_monitoring; the worker watchdog notices if it stops.
     monitoring = asyncio.create_task(run_monitoring(settings), name="monitoring")
+    # BookStack documentation sync: idle unless configured in PCC; failures
+    # are recorded in its own status and never affect the scan loop.
+    docs_sync = asyncio.create_task(run_docs_sync(settings), name="docs-sync")
     try:
         while True:
             if monitoring.done() and settings.monitoring_enabled:
@@ -141,6 +145,7 @@ async def run() -> None:
             await asyncio.sleep(2)
     finally:
         monitoring.cancel()
+        docs_sync.cancel()
         await dispatcher.stop()
         await redis.aclose()
 

@@ -45,6 +45,10 @@ COPY --from=builder /opt/venv /opt/venv
 WORKDIR /app
 COPY --chown=mykhaya:mykhaya apps/api/alembic.ini ./
 COPY --chown=mykhaya:mykhaya apps/api/migrations ./migrations
+# Repository documentation for the BookStack sync (mykhaya.docs_sync). Built
+# from the deployed branch, so DEV carries dev's docs and PROD carries main's.
+# Root-owned and read-only to the app user; never served over HTTP.
+COPY docs ./docs
 # A fresh named volume mounted here inherits this directory's ownership on first
 # use (only api actually writes to it — see compose.yml) — without this, Docker
 # creates the volume owned by root and the non-root `mykhaya` user below can't
