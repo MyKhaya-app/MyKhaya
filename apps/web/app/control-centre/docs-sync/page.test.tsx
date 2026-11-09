@@ -69,7 +69,7 @@ describe("Documentation Sync page", () => {
     });
     render(<DocsSyncPage />);
     expect(await screen.findByText("3 / 1 / 113")).toBeInTheDocument();
-    const secret = screen.getByLabelText(/API token secret/);
+    const secret = screen.getByLabelText<HTMLInputElement>(/API token secret/);
     expect(secret.value).toBe("");
     expect(secret.type).toBe("password");
     expect(screen.getByRole("button", { name: "Sync now" })).toBeEnabled();
