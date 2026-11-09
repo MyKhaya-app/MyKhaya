@@ -6066,10 +6066,16 @@ body.sheet-open {
   background: #fff3d8;
   border-color: #e8cf8b;
 }
-.status-banner.major_outage,
-.status-banner.unknown {
+.status-banner.major_outage {
   background: #f7e2df;
   border-color: #dda9a1;
+}
+/* Unknown = "could not be verified": neutral, never alarm-red and never
+   the green of a verified Operational. Also used when the page itself
+   cannot load the status. */
+.status-banner.unknown {
+  background: #eef1ef;
+  border-color: #cdd5d0;
 }
 .status-banner span {
   font-size: 0.76rem;
@@ -6110,6 +6116,21 @@ body.sheet-open {
 }
 .service-list .major_outage i {
   background: #b34d43;
+}
+.service-list .unknown i {
+  background: #8b9690;
+}
+.service-list article > span {
+  display: grid;
+  gap: 0.15rem;
+}
+.service-list .service-note,
+.status-section-note {
+  color: #64736b;
+  font-size: 0.75rem;
+}
+.status-section-note {
+  margin: -0.4rem 0 0.75rem;
 }
 .status-clear,
 .incident,

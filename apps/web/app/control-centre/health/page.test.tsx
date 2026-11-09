@@ -87,7 +87,10 @@ describe("Health", () => {
   it("shows a loading state before data arrives", () => {
     get.mockImplementation(() => new Promise(() => {}));
     render(<HealthPage />);
-    expect(screen.getByRole("status")).toBeInTheDocument();
+    // The live checks and the automated-monitoring panel each show their own
+    // loading state.
+    expect(screen.getByText("Running platform checks…")).toHaveAttribute("role", "status");
+    expect(screen.getAllByRole("status").length).toBeGreaterThanOrEqual(1);
   });
 
   it("shows an empty state when no services are returned", async () => {

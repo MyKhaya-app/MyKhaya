@@ -676,7 +676,8 @@ class PushTestRequest(SensitiveActionRequest):
     recipient: EmailStr
 
 
-# Keep in sync with mykhaya.status_aggregation.PUBLIC_SERVICES's keys —
+# Keep in sync with mykhaya.status_aggregation.PUBLIC_SERVICES and
+# EXTERNAL_SERVICES's keys (tests/test_service_monitoring.py asserts it) —
 # pydantic's Literal needs a statically-known value set, so this can't just
 # import the dict's keys directly.
 PublicServiceKey = Literal[
@@ -687,6 +688,12 @@ PublicServiceKey = Literal[
     "notifications",
     "background_processing",
     "billing",
+    "dvsa_mot_history",
+    "dvla_vehicle_enquiry",
+    "stripe_payments",
+    "stripe_webhooks",
+    "apple_sign_in",
+    "google_sign_in",
 ]
 
 

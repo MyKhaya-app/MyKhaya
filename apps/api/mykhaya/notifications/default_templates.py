@@ -323,6 +323,28 @@ TEMPLATES: dict[str, TemplateDefault] = {
         disableable=False,
         security_critical=False,
     ),
+    # --- Platform monitoring ----------------------------------------------------
+    # Sent to Platform Control Centre administrators by mykhaya.monitoring.alerts.
+    # The subject/summary are composed by monitoring itself (service, environment,
+    # status, failure, timings); this template only frames them. Operational, not
+    # account-security mail, and never disableable: an outage alert that can be
+    # switched off from the template page would defeat its purpose (recipients
+    # and on/off live in PCC Health -> Alert recipients, which is audited).
+    "platform.monitoring_alert": TemplateDefault(
+        subject="{{subject}}",
+        body=(
+            "{{summary}}\n\n"
+            "This is an automated MyKhaya monitoring alert sent to Platform Control "
+            "Centre administrators."
+        ),
+        allowed_variables=frozenset({"subject", "summary", "link"}),
+        required_variables=frozenset({"subject", "summary"}),
+        description="Sent to PCC administrators when automated monitoring confirms a "
+        "service failure, recovery, or that monitoring itself has stopped.",
+        module="platform",
+        disableable=False,
+        security_critical=False,
+    ),
     # --- Calendar (in-app / push) --------------------------------------------
     # These four cover routers.calendar's per-event-member notifications
     # (Home-side) and notifications.calendar_shares' equivalent for external
@@ -639,6 +661,15 @@ del _template_type, _default, _unknown_required
 # Realistic placeholder values for the Platform Admin preview/test-send actions — never
 # real user data, since a preview must never leak anything from an actual account.
 SAMPLE_VARIABLES: dict[str, dict[str, str]] = {
+    "platform.monitoring_alert": {
+        "subject": "[MyKhaya DEV] Service Degraded: DVSA MOT History",
+        "summary": (
+            "Service: DVSA MOT History\nEnvironment: DEV\nStatus: Degraded\n"
+            "Detected: 09/11/2026 19:25 UTC\nFailure: TLS or certificate failure\n"
+            "Consecutive failures: 3\nLast successful check: 19:21 UTC"
+        ),
+        "link": "https://admin.example.test/health",
+    },
     "legal_acceptance_confirmation": {
         "user_first_name": "Jamie",
         "document_name": "Terms & Conditions",

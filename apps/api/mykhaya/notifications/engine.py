@@ -79,6 +79,10 @@ MANDATORY_EMAIL_TYPES = {
     # be mandatory to satisfy notify()'s "no user account yet" exemption.
     "support.ticket.follow_up",
     "legal_acceptance_confirmation",
+    # Platform Control Centre monitoring alerts (mykhaya.monitoring.alerts).
+    # Recipients are PCC administrators, who have no MyKhaya consumer account,
+    # so this is always sent with recipient_email and no recipient_user_id.
+    "platform.monitoring_alert",
 }
 
 # Notification types whose in-app and push/native-push delivery is mandatory

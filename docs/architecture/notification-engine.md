@@ -76,6 +76,9 @@ async def notify(
 invitation to an email address that hasn't registered) — that case passes
 `recipient_email` instead. Every other caller passes `recipient_user_id`; `notify()`
 raises `ValueError` if a non-mandatory type is called without one.
+Monitoring alerts to Platform Control Centre administrators
+(`platform.monitoring_alert`, see `docs/architecture/service-monitoring.md`) use
+the same `recipient_email` path, since PCC administrators have no consumer account.
 
 Returns the created in-app `Notification` row, or `None` if nothing was written to
 in-app (channel disabled, category disabled, or the type is a mandatory

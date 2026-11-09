@@ -184,6 +184,7 @@ def test_registry_matches_migration_version() -> None:
         "support.ticket.resolved",
         "support.ticket.follow_up",
         "legal_acceptance_confirmation",
+        "platform.monitoring_alert",
     }
 
 
@@ -222,11 +223,12 @@ def test_mandatory_email_types_are_registered_as_non_disableable() -> None:
         assert template_type in TEMPLATES
         assert TEMPLATES[template_type].disableable is False
         # Transactional confirmations (support tickets, the Founding Beta
-        # welcome) are always delivered but are not account-security mail.
-        if (
-            not template_type.startswith("support.ticket.")
-            and template_type != "founding_beta_welcome"
-        ):
+        # welcome) and operational PCC monitoring alerts are always
+        # delivered but are not account-security mail.
+        if not template_type.startswith("support.ticket.") and template_type not in {
+            "founding_beta_welcome",
+            "platform.monitoring_alert",
+        }:
             assert TEMPLATES[template_type].security_critical is True
 
 

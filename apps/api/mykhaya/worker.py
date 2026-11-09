@@ -31,6 +31,7 @@ from mykhaya.models import (
     User,
     WorkerJobRecord,
 )
+from mykhaya.monitoring.watchdog import watchdog_tick
 from mykhaya.notifications.birthdays import deliver_birthday_reminder
 from mykhaya.notifications.briefing import deliver_daily_briefing
 from mykhaya.notifications.deep_links import resolve_path
@@ -633,6 +634,12 @@ async def run() -> None:
                     )
                 )
                 await db.commit()
+            try:
+                # Throttled to once a minute; checks that the scheduler's
+                # monitoring runner is still alive (monitoring the monitor).
+                await watchdog_tick(settings, redis=redis)
+            except Exception as exc:  # noqa: BLE001 - never let it stop job processing
+                log.error("monitoring.watchdog_failed", error=type(exc).__name__)
             if item:
                 payload = json.loads(item[1])
                 try:

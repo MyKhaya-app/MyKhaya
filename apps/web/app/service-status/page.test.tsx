@@ -266,3 +266,94 @@ describe("Public Status page — recent history", () => {
     );
   });
 });
+
+describe("Public Status page — automated monitoring", () => {
+  it("shows Unknown, never Operational, for a service monitoring cannot verify", async () => {
+    (global.fetch as ReturnType<typeof vi.fn>).mockReturnValue(
+      jsonResponse({
+        overall: "unknown",
+        overall_message: "Live service monitoring is temporarily unavailable",
+        last_updated: "2026-01-01T00:00:00Z",
+        services: baseServices({ api: "unknown" }).map((service) =>
+          service.key === "api" ? { ...service, confidence: "none" } : service,
+        ),
+        current_incidents: [],
+        recent_incidents: [],
+      }),
+    );
+
+    render(<ServiceStatus />);
+
+    const banner = await screen.findByText("Live service monitoring is temporarily unavailable");
+    expect(banner.closest(".status-banner")).toHaveClass("unknown");
+    const apiRow = screen.getByText("API").closest("article")!;
+    expect(within(apiRow).getByText("Unknown")).toBeInTheDocument();
+    expect(within(apiRow).getByText("Not currently verified")).toBeInTheDocument();
+  });
+
+  it("notes limited monitoring without changing the state", async () => {
+    (global.fetch as ReturnType<typeof vi.fn>).mockReturnValue(
+      jsonResponse({
+        overall: "operational",
+        overall_message: "Operational",
+        last_updated: "2026-01-01T00:00:00Z",
+        services: baseServices().map((service) =>
+          service.key === "web_application" ? { ...service, confidence: "limited" } : service,
+        ),
+        current_incidents: [],
+        recent_incidents: [],
+      }),
+    );
+
+    render(<ServiceStatus />);
+
+    const row = (await screen.findByText("MyKhaya Web Application")).closest("article")!;
+    expect(within(row).getByText("Operational")).toBeInTheDocument();
+    expect(within(row).getByText("Limited monitoring")).toBeInTheDocument();
+  });
+
+  it("lists external services separately, with their own state, when present", async () => {
+    (global.fetch as ReturnType<typeof vi.fn>).mockReturnValue(
+      jsonResponse({
+        overall: "partial_outage",
+        overall_message: "Partial service disruption",
+        last_updated: "2026-01-01T00:00:00Z",
+        services: baseServices(),
+        external_services: [
+          { key: "dvsa_mot_history", name: "DVSA MOT History", state: "major_outage", confidence: "verified" },
+        ],
+        current_incidents: [],
+        recent_incidents: [],
+      }),
+    );
+
+    render(<ServiceStatus />);
+
+    const heading = await screen.findByRole("heading", { name: "External services" });
+    const section = heading.closest("section")!;
+    const row = within(section).getByText("DVSA MOT History").closest("article")!;
+    expect(within(row).getByText("Major Outage")).toBeInTheDocument();
+    // Core services are unaffected by the external failure.
+    const apiRow = screen.getByText("API").closest("article")!;
+    expect(within(apiRow).getByText("Operational")).toBeInTheDocument();
+  });
+
+  it("omits the External services section when none are in use", async () => {
+    (global.fetch as ReturnType<typeof vi.fn>).mockReturnValue(
+      jsonResponse({
+        overall: "operational",
+        overall_message: "Operational",
+        last_updated: "2026-01-01T00:00:00Z",
+        services: baseServices(),
+        external_services: [],
+        current_incidents: [],
+        recent_incidents: [],
+      }),
+    );
+
+    render(<ServiceStatus />);
+
+    await screen.findByText("Billing & Subscriptions");
+    expect(screen.queryByRole("heading", { name: "External services" })).not.toBeInTheDocument();
+  });
+});

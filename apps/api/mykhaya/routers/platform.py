@@ -136,6 +136,7 @@ from mykhaya.models import (
     Meal,
     MealPlanEntry,
     Membership,
+    MonitorComponent,
     NativePushDevice,
     NativePushDisabledSource,
     NotificationChannel,
@@ -188,6 +189,8 @@ from mykhaya.module_registry import (
     household_modules,
     module_definition,
 )
+from mykhaya.monitoring.catalogue import BY_KEY as MONITOR_CATALOGUE
+from mykhaya.monitoring.state import effective_state as monitor_effective_state
 from mykhaya.notifications.default_templates import (
     DEFAULT_TEMPLATE_VERSION,
     SAMPLE_VARIABLES,
@@ -370,13 +373,7 @@ from mykhaya.security import (
 )
 from mykhaya.showcase.guards import is_showcase_type
 from mykhaya.showcase.registry import modules_for_plan as showcase_modules_for_plan
-from mykhaya.status_aggregation import (
-    PUBLIC_SERVICES,
-    highest_severity,
-    is_incident_active,
-    overall_message,
-    service_states_from_impacts,
-)
+from mykhaya.status_aggregation import compute_status_snapshot, runner_is_fresh
 from mykhaya.syslog_forwarding import (
     SyslogConfig,
     current_dispatcher,
@@ -5625,6 +5622,79 @@ def _probe_file_storage(storage_dir: Path) -> shutil._ntuple_diskusage:
     return shutil.disk_usage(storage_dir)
 
 
+# PCC Health's own vocabulary (it deliberately never shows an "Unknown"
+# placeholder): a component without a fresh observation is "not verified",
+# which makes the card a Warning rather than Healthy.
+_MONITOR_STATE_WORDS = {
+    "healthy": "healthy",
+    "degraded": "degraded",
+    "unavailable": "unavailable",
+    "unknown": "not verified",
+}
+
+
+async def _external_dependencies_card(db: AsyncSession, now: datetime) -> dict[str, Any]:
+    runner_fresh = await runner_is_fresh(db, now)
+    rows = (await db.scalars(select(MonitorComponent))).all()
+    external: list[tuple[str, str, MonitorComponent]] = []
+    for row in rows:
+        definition = MONITOR_CATALOGUE.get(row.key)
+        if definition is None or definition.category != "external":
+            continue
+        state = monitor_effective_state(row, now, runner_fresh=runner_fresh)
+        if state in ("not_applicable", "disabled"):
+            continue
+        external.append((definition.name, state, row))
+    if not rows:
+        return {
+            "state": "Not configured",
+            "explanation": "Automated monitoring has not recorded any observations yet.",
+            "last_success": None,
+            "last_failure": None,
+            "action": "Confirm the scheduler is running; see Automated monitoring below.",
+        }
+    if not external:
+        return {
+            "state": "Not applicable",
+            "explanation": "No external provider integration is enabled in this environment.",
+            "last_success": None,
+            "last_failure": None,
+            "action": None,
+        }
+    states = {state for _, state, _ in external}
+    if "unavailable" in states:
+        worst = "Unavailable"
+    elif "degraded" in states:
+        worst = "Degraded"
+    elif states - {"healthy"}:
+        worst = "Warning"
+    else:
+        worst = "Healthy"
+    problems = [
+        f"{name} ({_MONITOR_STATE_WORDS.get(state, state)})"
+        for name, state, _ in external
+        if state != "healthy"
+    ]
+    return {
+        "state": worst,
+        "explanation": (
+            f"{len(external)} monitored provider checks. "
+            + (
+                "Needing attention: " + ", ".join(problems) + "."
+                if problems
+                else "All are currently healthy."
+            )
+        ),
+        "last_success": max(
+            (row.last_success_at for _, _, row in external if row.last_success_at), default=None
+        ),
+        "last_failure": max(
+            (row.last_failure_at for _, _, row in external if row.last_failure_at), default=None
+        ),
+        "action": "Review Automated monitoring below." if problems else None,
+    }
+
+
 @router.get("/health")
 async def internal_health(
     _: PlatformContext = Depends(require_roles(*ALL_ROLES)),
@@ -6025,19 +6095,18 @@ async def internal_health(
                 ),
             )
 
-    # Deliberately not a live check. Email (SMTP) and Push (VAPID) already own
-    # their own health cards, computed from real delivery data above — probing
-    # SMTP reachability again here would just be Email's health reported a
-    # second time under a different name, and could disagree with it (port
-    # reachable but deliveries failing, or vice versa). MyKhaya has no other
-    # externally-integrated service today (no object storage, no OIDC
-    # provider). This card exists for when one is added, not to manufacture
-    # activity out of the two that already have dedicated cards.
+    # External providers (Stripe, DVSA, DVLA, Apple/Google sign-in, push
+    # gateways) are monitored continuously by mykhaya.monitoring; this card is
+    # a read-only summary of those persisted observations, never a second
+    # live probe. Email (SMTP) keeps its own card above and is not repeated.
+    external_card = await _external_dependencies_card(db, checked)
     observation(
         "External dependencies",
-        "Not applicable",
-        "MyKhaya has no separate external service integrations beyond Email and Push, "
-        "which have their own health cards above.",
+        external_card["state"],
+        external_card["explanation"],
+        last_success=external_card["last_success"],
+        last_failure=external_card["last_failure"],
+        action=external_card["action"],
     )
     observation(
         "Public status service",
@@ -8784,6 +8853,7 @@ def _incident_list_item(
         "resolved_at": row.resolved_at,
         "latest_update_message": latest.message if latest else row.message,
         "latest_update_at": latest.occurred_at if latest else row.starts_at,
+        "source": row.source,
     }
 
 
@@ -8799,23 +8869,20 @@ async def incidents(
     services_by_incident, updates_by_incident = await _incident_services_and_updates(
         db, [row.id for row in rows]
     )
-    now = datetime.now(UTC)
-    active_impacts = [
-        (entry.service, entry.impact)
-        for row in rows
-        if is_incident_active(
-            row.starts_at, row.resolved_at, lifecycle_state=row.lifecycle_state, now=now
-        )
-        for entry in services_by_incident[row.id]
-    ]
-    service_states = service_states_from_impacts(active_impacts)
-    overall = highest_severity(list(service_states.values()))
+    # The exact public view (monitoring + incidents + overrides), so PCC never
+    # disagrees with status.mykhaya.app about what customers are being shown.
+    snapshot = await compute_status_snapshot(db)
     return {
-        "overall": overall,
-        "overall_message": overall_message(overall),
+        "overall": snapshot.overall,
+        "overall_message": snapshot.overall_message,
+        "monitoring_active": snapshot.monitoring_active,
         "services": [
-            {"key": key, "name": label, "state": service_states[key]}
-            for key, label in PUBLIC_SERVICES.items()
+            {"key": item.key, "name": item.name, "state": item.state, "confidence": item.confidence}
+            for item in snapshot.services
+        ],
+        "external_services": [
+            {"key": item.key, "name": item.name, "state": item.state, "confidence": item.confidence}
+            for item in snapshot.external_services
         ],
         "incidents": [
             _incident_list_item(row, services_by_incident[row.id], updates_by_incident[row.id])
@@ -8840,7 +8907,9 @@ async def incident_detail(
             admin.id: admin.display_name
             for admin in await db.scalars(
                 select(PlatformAdministrator).where(
-                    PlatformAdministrator.id.in_({update.created_by for update in updates})
+                    PlatformAdministrator.id.in_(
+                        {update.created_by for update in updates if update.created_by is not None}
+                    )
                 )
             )
         }
@@ -8859,13 +8928,17 @@ async def incident_detail(
         "resolved_at": row.resolved_at,
         "internal_notes": row.internal_notes,
         "created_at": row.created_at,
+        "source": row.source,
         "updates": [
             {
                 "id": update.id,
                 "lifecycle_state": update.lifecycle_state,
                 "message": update.message,
                 "occurred_at": update.occurred_at,
-                "created_by_display_name": authors.get(update.created_by),
+                # None for an update written by automated monitoring.
+                "created_by_display_name": authors.get(update.created_by)
+                if update.created_by is not None
+                else "Automated monitoring",
                 "created_at": update.created_at,
             }
             for update in updates

@@ -1,10 +1,26 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import type { IncidentLifecycleState, ServiceState } from "@/components/platform-types";
-import { formatDuration, lifecycleStateLabel, serviceStateLabel } from "@/components/status-incidents-logic";
+import type {
+  IncidentLifecycleState,
+  PublicStatusState,
+  ServiceState,
+  StatusConfidence,
+} from "@/components/platform-types";
+import {
+  confidenceNote,
+  formatDuration,
+  lifecycleStateLabel,
+  serviceStateLabel,
+} from "@/components/status-incidents-logic";
 
-type StatusService = { key: string; name: string; state: ServiceState };
+type StatusService = {
+  key: string;
+  name: string;
+  state: PublicStatusState;
+  confidence?: StatusConfidence;
+  last_checked?: string | null;
+};
 type StatusIncidentServiceEntry = { key: string; name: string; impact: ServiceState };
 type StatusIncidentUpdateEntry = {
   lifecycle_state: IncidentLifecycleState;
@@ -22,10 +38,14 @@ type StatusIncident = {
 };
 type ResolvedStatusIncident = StatusIncident & { duration_seconds: number | null };
 type StatusPayload = {
-  overall: ServiceState;
+  overall: PublicStatusState;
   overall_message: string;
   last_updated: string;
+  generated_at?: string;
   services: StatusService[];
+  // Additive: customer-relevant external providers in use in this
+  // environment. Older API builds omit it.
+  external_services?: StatusService[];
   current_incidents: StatusIncident[];
   recent_incidents: ResolvedStatusIncident[];
 };
@@ -79,6 +99,28 @@ function AffectedServices({ services }: { services: StatusIncidentServiceEntry[]
           {service.name} — {serviceStateLabel(service.impact)}
         </span>
       ))}
+    </div>
+  );
+}
+
+function ServiceList({ services, label }: { services: StatusService[]; label: string }) {
+  return (
+    <div className="service-list" aria-label={label}>
+      {services.map((service) => {
+        const note = confidenceNote(service.state, service.confidence);
+        return (
+          <article key={service.key}>
+            <span>
+              {service.name}
+              {note && <small className="service-note">{note}</small>}
+            </span>
+            <strong className={service.state}>
+              <i aria-hidden="true" />
+              {serviceStateLabel(service.state)}
+            </strong>
+          </article>
+        );
+      })}
     </div>
   );
 }
@@ -161,24 +203,26 @@ export default function ServiceStatus() {
               <strong>{data.overall_message}</strong>
               <span>
                 Last updated{" "}
-                <time dateTime={data.last_updated}>{new Date(data.last_updated).toLocaleString()}</time>
+                <time dateTime={data.generated_at ?? data.last_updated}>
+                  {new Date(data.generated_at ?? data.last_updated).toLocaleString()}
+                </time>
               </span>
             </div>
 
             <section>
               <h2>Services</h2>
-              <div className="service-list">
-                {data.services.map((service) => (
-                  <article key={service.key}>
-                    <span>{service.name}</span>
-                    <strong className={service.state}>
-                      <i aria-hidden="true" />
-                      {serviceStateLabel(service.state)}
-                    </strong>
-                  </article>
-                ))}
-              </div>
+              <ServiceList services={data.services} label="MyKhaya services" />
             </section>
+
+            {data.external_services && data.external_services.length > 0 && (
+              <section>
+                <h2>External services</h2>
+                <p className="status-section-note">
+                  Third-party services some MyKhaya features depend on.
+                </p>
+                <ServiceList services={data.external_services} label="External services" />
+              </section>
+            )}
 
             <section>
               <h2>Current incidents</h2>

@@ -278,6 +278,25 @@ class Settings(BaseSettings):
     # scheduling mechanism (the application never triggers backups itself).
     backup_expected_interval_hours: int = Field(default=26, ge=1, le=24 * 30)
     status_public_enabled: bool = True
+    # Automated service monitoring (mykhaya.monitoring). Runs inside the
+    # scheduler process; every observation, transition and alert is stored in
+    # *this* environment's own database, so DEV and PROD never share monitoring
+    # state. Disabling it does not make services look healthy: the public
+    # status page reports Unknown for anything without a fresh observation.
+    monitoring_enabled: bool = True
+    # Optional overrides for the HTTP reachability checks. They default to
+    # public_web_url and native_api_url, which is the right target on a hosted
+    # DEV/PROD server. Local Docker stacks whose public URL is not reachable
+    # from inside the container can point these at an internal address.
+    monitoring_web_url: str | None = None
+    monitoring_api_url: str | None = None
+    # Optional independent dead-man's-switch (e.g. a healthchecks.io check URL).
+    # The scheduler pings it after each healthy monitoring cycle and pings
+    # `<url><fail suffix>` while a critical component is unavailable, so an
+    # external service raises the alarm if MyKhaya, its host, or its own email
+    # delivery is down. A secret: the URL embeds the check's token.
+    monitoring_watchdog_url: SecretStr | None = None
+    monitoring_watchdog_fail_suffix: str = "/fail"
     commit_sha: str = "unknown"
     build_time: str = "unknown"
     build_channel: Literal["development", "stable"] = "development"

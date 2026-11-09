@@ -16,6 +16,7 @@ from mykhaya.config import get_settings
 from mykhaya.crypto.config import validate_sensitive_key_configuration
 from mykhaya.db import SessionFactory, get_db
 from mykhaya.models import PlatformSetting
+from mykhaya.monitoring import http_metrics
 from mykhaya.platform_runtime import require_not_in_maintenance
 from mykhaya.routers import (
     activity,
@@ -43,6 +44,7 @@ from mykhaya.routers import (
     platform,
     platform_compliance,
     platform_legal,
+    platform_monitoring,
     platform_support,
     public_config,
     reminders,
@@ -306,6 +308,11 @@ async def security_and_limits(
         response.headers["Cache-Control"] = (
             "no-store" if request.url.path.startswith("/api/v1/") else "no-cache"
         )
+    duration_ms = round((time.monotonic() - started) * 1000, 2)
+    # In-memory only on the request path; flushed to Redis in the background
+    # for the API/Authentication error-rate monitors (mykhaya.monitoring).
+    http_metrics.record(request.url.path, response.status_code, duration_ms)
+    http_metrics.schedule_flush(settings.redis_url)
     log_request = log.aerror if response.status_code >= 500 else log.ainfo
     await log_request(
         "request",
@@ -313,7 +320,7 @@ async def security_and_limits(
         method=request.method,
         path=request.url.path,
         status=response.status_code,
-        duration_ms=round((time.monotonic() - started) * 1000, 2),
+        duration_ms=duration_ms,
     )
     return response
 
@@ -337,6 +344,7 @@ MAINTENANCE_EXEMPT_ROUTERS = (
     status_router.router,
     platform.router,
     platform_support.router,
+    platform_monitoring.router,
     platform_compliance.router,
     platform_legal.router,
     communications_admin.router,
@@ -383,6 +391,7 @@ for router in (
     notifications.router,
     platform.router,
     platform_support.router,
+    platform_monitoring.router,
     platform_compliance.router,
     platform_legal.router,
     legal.router,

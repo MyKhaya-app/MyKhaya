@@ -709,19 +709,26 @@ async def test_push_health_native_only_fcm_deployment_is_not_reported_not_config
 
 
 @pytest.mark.asyncio
-async def test_external_dependencies_card_does_not_duplicate_email_health(
+async def test_external_dependencies_card_reports_monitoring_not_a_second_probe(
     admin_client: AsyncClient,
     admin_factory: Callable[[PlatformRole], Awaitable[PlatformAdministrator]],
 ) -> None:
-    """External Dependencies must never re-derive its state from SMTP
-    reachability — Email already owns SMTP health, and probing it twice could
-    disagree with Email's own card (port reachable but deliveries failing, or
-    vice versa). With no separate external integration today, this card is
-    "Not applicable", not a second opinion on Email."""
+    """External Dependencies summarises automated monitoring of the real
+    external providers (Stripe, DVSA, DVLA, Apple/Google sign-in, push
+    gateways). It must never re-derive state from SMTP (Email owns that), and
+    must never claim Healthy without monitoring observations behind it."""
     admin = await admin_factory(PlatformRole.owner)
     await login(admin_client, admin)
     services = await _health_services(admin_client)
-    assert services["External dependencies"]["state"] == "Not applicable"
-    explanation = services["External dependencies"]["explanation"]
+    card = services["External dependencies"]
+    assert card["state"] in {
+        "Not configured",
+        "Not applicable",
+        "Warning",
+        "Healthy",
+        "Degraded",
+        "Unavailable",
+    }
+    explanation = card["explanation"]
     assert "smtp" not in explanation.casefold()
-    assert "No authoritative monitoring source is configured." not in explanation
+    assert "no separate external service integrations" not in explanation.casefold()
