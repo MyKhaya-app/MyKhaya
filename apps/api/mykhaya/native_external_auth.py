@@ -49,13 +49,28 @@ class NativeExternalPendingIdentity:
     intent: str = "login"
 
 
+NATIVE_MFA_PRIMARY_METHODS = frozenset({"apple", "google", "password"})
+
+
 @dataclass(frozen=True)
 class NativeMfaTransaction:
+    """Native pre-authentication awaiting the consumer MFA policy.
+
+    ``provider`` names the completed primary factor: ``apple``, ``google`` or
+    ``password``.  The transaction is bound to the client that completed that
+    factor by ``redemption_verifier_hash``; the transaction id alone is never
+    sufficient to continue it.
+    """
+
     transaction_id: str
     user_id: str
-    provider: ExternalIdentityProvider
+    provider: str
     platform: str
     redemption_verifier_hash: str
+
+    def __post_init__(self) -> None:
+        if self.provider not in NATIVE_MFA_PRIMARY_METHODS:
+            raise ValueError("Unsupported native primary authentication method")
 
 
 def hash_redemption_verifier(verifier: str) -> str:
@@ -278,7 +293,7 @@ async def store_native_mfa_transaction(settings: Settings, value: NativeMfaTrans
             json.dumps(
                 {
                     "user_id": value.user_id,
-                    "provider": value.provider.value,
+                    "provider": value.provider,
                     "platform": value.platform,
                     "redemption_verifier_hash": value.redemption_verifier_hash,
                 }
@@ -323,7 +338,7 @@ async def _read_native_mfa_transaction(
         return NativeMfaTransaction(
             transaction_id=transaction_id,
             user_id=str(value["user_id"]),
-            provider=ExternalIdentityProvider(str(value["provider"])),
+            provider=str(value["provider"]),
             platform=str(value["platform"]),
             redemption_verifier_hash=str(value["redemption_verifier_hash"]),
         )
