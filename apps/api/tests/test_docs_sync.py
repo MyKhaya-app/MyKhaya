@@ -25,7 +25,9 @@ SECRET = "bookstack-token-secret-never-shown"
 
 class FakeBookStack:
     def __init__(self) -> None:
-        self.books = [{"id": 7, "name": "Engineering"}, {"id": 9, "name": "Other"}]
+        self.shelves = [{"id": 42, "name": "MyKhaya"}, {"id": 43, "name": "Other"}]
+        self.shelf_books: dict[int, list[int]] = {42: [900], 43: []}
+        self.books: dict[int, dict[str, Any]] = {900: {"name": "Manual book"}}
         self.pages: dict[int, dict[str, Any]] = {}
         self.chapters: dict[int, dict[str, Any]] = {}
         self.calls: list[tuple[str, str]] = []
@@ -38,8 +40,22 @@ class FakeBookStack:
             return httpx.Response(401, json={"error": "unauthorised"})
         path = request.url.path.removeprefix("/api/")
         body = json.loads(request.content) if request.content else {}
-        if request.method == "GET" and path == "books":
-            return httpx.Response(200, json={"data": self.books})
+        if request.method == "GET" and path == "shelves":
+            return httpx.Response(200, json={"data": self.shelves})
+        if request.method == "GET" and path.startswith("shelves/"):
+            shelf_id = int(path.split("/")[1])
+            return httpx.Response(
+                200,
+                json={"id": shelf_id, "books": [{"id": i} for i in self.shelf_books[shelf_id]]},
+            )
+        if request.method == "PUT" and path.startswith("shelves/"):
+            shelf_id = int(path.split("/")[1])
+            self.shelf_books[shelf_id] = body["books"]
+            return httpx.Response(200, json={"id": shelf_id})
+        if request.method == "POST" and path == "books":
+            self.next_id += 1
+            self.books[self.next_id] = body
+            return httpx.Response(200, json={"id": self.next_id})
         if request.method == "POST" and path == "chapters":
             self.next_id += 1
             self.chapters[self.next_id] = body
@@ -62,11 +78,13 @@ def docs_root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     root = tmp_path / "docs"
     (root / "architecture").mkdir(parents=True)
     (root / "operations").mkdir()
+    (root / "architecture" / "adr").mkdir()
     (root / "README.md").write_text("# Overview\n\nSee [ops](operations/runbook.md).\n")
     (root / "architecture" / "status.md").write_text(
         "# Status\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n```py\nprint(1)\n```\n"
     )
     (root / "operations" / "runbook.md").write_text("# Status\n\nRunbook body.\n")
+    (root / "architecture" / "adr" / "decision.md").write_text("# Decision\n\nADR body.\n")
     monkeypatch.setattr(get_settings(), "docs_sync_source_dir", str(root))
     monkeypatch.setattr(docs_sync, "WRITE_PAUSE_SECONDS", 0)
     return root
@@ -101,7 +119,7 @@ async def clean_sync_state(
     await wipe()
 
 
-async def configure(book_id: int | None = 7, **extra: Any) -> None:
+async def configure(shelf_id: int | None = 42, **extra: Any) -> None:
     async with SessionFactory() as db:
         await docs_sync.store(
             db,
@@ -110,8 +128,8 @@ async def configure(book_id: int | None = 7, **extra: Any) -> None:
                 "url": "https://bookstack.example.com",
                 "token_id": "tid",
                 "token_secret_encrypted": docs_sync.encrypt_token_secret(get_settings(), SECRET),
-                "book_id": book_id,
-                "book_name": "Engineering",
+                "shelf_id": shelf_id,
+                "shelf_name": "MyKhaya",
                 "repository_url": "https://github.com/example/repo",
                 **extra,
             },
@@ -147,7 +165,9 @@ def test_discovery_handles_duplicates_chapters_links_and_notice(docs_root: Path)
     }
     assert docs["architecture/status.md"].name == "Status (architecture/status.md)"
     assert docs["operations/runbook.md"].name == "Status (operations/runbook.md)"
-    assert docs["architecture/status.md"].chapter == "Architecture"
+    assert docs["architecture/status.md"].book_name == "Architecture"
+    assert docs["architecture/status.md"].chapter is None
+    assert docs["architecture/adr/decision.md"].chapter == "Adr"
     assert docs["README.md"].chapter is None
     readme = docs["README.md"].markdown
     assert "https://github.com/example/repo/blob/dev/docs/operations/runbook.md" in readme
@@ -165,10 +185,10 @@ def test_branch_follows_environment_and_never_shares_state() -> None:
     assert (
         docs_sync.source_branch(settings.model_copy(update={"environment": "development"})) == "dev"
     )
-    # Associations are scoped to instance host + book, so a PROD (or other)
+    # Associations are scoped to instance host + shelf, so a PROD (or other)
     # instance can never reuse DEV page IDs.
-    dev = docs_sync.association_key({"url": "https://docs-dev.example.com", "book_id": 7})
-    prod = docs_sync.association_key({"url": "https://docs.example.com", "book_id": 7})
+    dev = docs_sync.association_key({"url": "https://docs-dev.example.com", "shelf_id": 42})
+    prod = docs_sync.association_key({"url": "https://docs.example.com", "shelf_id": 42})
     assert dev != prod
 
 
@@ -179,26 +199,30 @@ def test_branch_follows_environment_and_never_shares_state() -> None:
 async def test_sync_creates_then_skips_then_updates_without_duplicates(
     docs_root: Path, fake: FakeBookStack, clean_sync_state: Any
 ) -> None:
+    fake.pages[901] = {"name": "Manual page", "markdown": "Keep me unchanged."}
     await configure()
     first = await docs_sync.run_sync(get_settings(), trigger="manual")
     assert first["status"] == "succeeded", first
-    assert (first["created"], first["updated"], first["skipped"]) == (3, 0, 0)
-    assert len(fake.chapters) == 2 and len(fake.pages) == 3
+    assert (first["created"], first["updated"], first["skipped"]) == (4, 0, 0)
+    assert len(fake.chapters) == 1 and len(fake.pages) == 5
+    assert len(fake.books) == 4  # includes the pre-existing manual book
+    assert fake.shelf_books[42][0] == 900  # existing shelf book remains attached
+    assert fake.pages[901] == {"name": "Manual page", "markdown": "Keep me unchanged."}
 
     second = await docs_sync.run_sync(get_settings(), trigger="manual")
-    assert (second["created"], second["updated"], second["skipped"]) == (0, 0, 3)
+    assert (second["created"], second["updated"], second["skipped"]) == (0, 0, 4)
 
     (docs_root / "architecture" / "status.md").write_text("# Status\n\nChanged.\n")
     third = await docs_sync.run_sync(get_settings(), trigger="automatic")
-    assert (third["created"], third["updated"], third["skipped"]) == (0, 1, 2)
-    assert len(fake.pages) == 3  # updated in place, no duplicate
+    assert (third["created"], third["updated"], third["skipped"]) == (0, 1, 3)
+    assert len(fake.pages) == 5  # updated in place, no duplicate
     assert any("Changed." in page["markdown"] for page in fake.pages.values())
     # Nothing is ever deleted.
     assert not any(method == "DELETE" for method, _ in fake.calls)
 
 
 @pytest.mark.asyncio
-async def test_page_deleted_in_bookstack_is_recreated_and_new_book_is_fresh(
+async def test_page_deleted_in_bookstack_is_recreated_and_new_shelf_is_fresh(
     docs_root: Path, fake: FakeBookStack, clean_sync_state: Any
 ) -> None:
     await configure()
@@ -207,13 +231,13 @@ async def test_page_deleted_in_bookstack_is_recreated_and_new_book_is_fresh(
     del fake.pages[readme_id]
     (docs_root / "README.md").write_text("# Overview\n\nEdited.\n")
     result = await docs_sync.run_sync(get_settings(), trigger="manual")
-    assert result["created"] == 1 and result["skipped"] == 2
+    assert result["created"] == 1 and result["skipped"] == 3
 
-    # Switching book never touches pages published to the old one.
+    # Switching shelf never touches pages published to the old one.
     old_pages = dict(fake.pages)
-    await configure(book_id=9)
+    await configure(shelf_id=43)
     switched = await docs_sync.run_sync(get_settings(), trigger="manual")
-    assert switched["created"] == 3
+    assert switched["created"] == 4
     for page_id, page in old_pages.items():
         assert fake.pages[page_id] == page
 
@@ -236,7 +260,7 @@ async def test_failure_is_recorded_safely_and_unconfigured_does_nothing(
 
 
 @pytest.mark.asyncio
-async def test_pcc_flow_connect_test_select_book_and_request_sync(
+async def test_pcc_flow_connect_test_select_shelf_and_request_sync(
     docs_root: Path,
     fake: FakeBookStack,
     clean_sync_state: Callable[[PlatformRole], Awaitable[PlatformAdministrator]],
@@ -277,22 +301,22 @@ async def test_pcc_flow_connect_test_select_book_and_request_sync(
         json={"reason": "Check token works", "confirmed": True},
     )
     assert tested.json()["ok"] is True
-    books = (await admin_client.get(f"{base}/books")).json()["books"]
-    assert {book["name"] for book in books} == {"Engineering", "Other"}
+    shelves = (await admin_client.get(f"{base}/shelves")).json()["shelves"]
+    assert {shelf["name"] for shelf in shelves} == {"MyKhaya", "Other"}
     bad = await unsafe(
         admin_client,
         "PUT",
-        f"{base}/book",
-        json={"book_id": 999, "reason": "Pick a missing book", "confirmed": True},
+        f"{base}/shelf",
+        json={"shelf_id": 999, "reason": "Pick a missing shelf", "confirmed": True},
     )
     assert bad.status_code == 422
     picked = await unsafe(
         admin_client,
         "PUT",
-        f"{base}/book",
-        json={"book_id": 7, "reason": "Publish to Engineering", "confirmed": True},
+        f"{base}/shelf",
+        json={"shelf_id": 42, "reason": "Publish to MyKhaya", "confirmed": True},
     )
-    assert picked.json()["book_name"] == "Engineering"
+    assert picked.json()["shelf_name"] == "MyKhaya"
     queued = await unsafe(
         admin_client, "POST", f"{base}/sync", json={"reason": "First publish", "confirmed": True}
     )

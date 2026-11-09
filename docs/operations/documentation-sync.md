@@ -1,7 +1,7 @@
 # Documentation Sync (BookStack)
 
 PCC → Platform → **Documentation Sync** publishes this repository's `docs/`
-Markdown to a private BookStack book. Publishing is one-way (repository →
+Markdown to managed books inside a private BookStack shelf. Publishing is one-way (repository →
 BookStack). Code: `apps/api/mykhaya/docs_sync.py`,
 `apps/api/mykhaya/routers/platform_docs_sync.py`.
 
@@ -18,31 +18,37 @@ BookStack). Code: `apps/api/mykhaya/docs_sync.py`,
   a deploy). Unchanged docs cause no BookStack calls. A PostgreSQL advisory
   lock prevents overlapping runs. After a failed automatic run it waits
   15 minutes before retrying.
-- Each `.md` file becomes one page. The first `# Heading` becomes the page
-  name, and clashing names get their path appended. Files in a folder go into
-  a chapter named after the top-level folder. Relative `.md` links are
+- Each top-level folder under `docs/` becomes a publisher-owned BookStack book
+  in the selected shelf. Root-level Markdown files go into the automatically
+  managed `Repository Documentation` book. The first `# Heading` becomes the
+  page name, and clashing names get their path appended. Nested folders become
+  one-level chapters named from their relative folder path; BookStack chapters
+  are not nested. Relative `.md` links are
   rewritten to GitHub links when a repository URL is set. Each page starts
   with a notice naming its source file and branch.
-- Page IDs are stored per BookStack host and book, so pages are updated in
-  place and never duplicated. Unchanged pages are skipped. A page deleted in
-  BookStack is recreated. Nothing is ever deleted, and pages the sync did not
-  create are never edited. Changing the book or the instance starts a fresh
-  set of pages and leaves the earlier ones untouched.
+- Book, chapter and page IDs are stored per BookStack host and shelf, with an
+  ownership marker and source path. Only objects created and tracked by this
+  publisher are updated. Unchanged pages are skipped. A deleted managed page
+  or chapter is recreated; nothing is ever deleted, and untracked/manual
+  content is never edited. Changing the shelf or instance starts a fresh set
+  of managed books and leaves earlier content untouched.
 - Writes are paced at about 150 per minute, below BookStack's default API
   limit. A first sync of ~120 documents takes roughly a minute.
 
 ## Configure (per environment)
 
 1. In BookStack, create a dedicated user (e.g. "MyKhaya Docs Sync") with a
-   role that has the **"Access system API"** system permission, plus **view,
-   create and update** on the destination book and its chapters and pages.
-   Give it **no delete** permission and no access to other books. Create an
-   API token for that user.
+  role that has the **"Access system API"** system permission, plus **view and
+  update** on the selected shelf and **create/update** on books, chapters and
+  pages. The account needs no delete permission and no access to unrelated
+  shelves or books. Create an API token for that user. Shelf update is required
+  because BookStack attaches a new book by updating the shelf's book ID list;
+  the sync reads that list first and appends only its own book.
 2. In PCC (Owner or Administrator), enter the BookStack URL (public HTTPS
    only), the token ID and secret, and optionally the GitHub repository URL
    (for source links) and a folder filter. Then **Save connection** and
    **Test connection**.
-3. **Refresh list**, choose the book, then **Use this book**.
+3. **Refresh shelves**, choose the shelf, then **Use this shelf**.
 4. Press **Sync now** for the first publish, then optionally **Enable
    automatic sync**.
 
@@ -57,7 +63,7 @@ selection and disables automatic sync.
 Settings, credentials, page associations and history live in each
 environment's own database. Nothing is configured by default, and nothing is
 copied between environments. PROD stays inactive until an administrator
-configures it in PROD's PCC. Use a different BookStack book (or instance)
+configures it in PROD's PCC. Use a different BookStack shelf (or instance)
 for each environment.
 
 ## Troubleshooting

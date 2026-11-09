@@ -22,8 +22,8 @@ const base = {
   has_token_secret: false,
   repository_url: null,
   include_paths: [],
-  book_id: null,
-  book_name: null,
+  shelf_id: null,
+  shelf_name: null,
   auto_enabled: false,
   configured: false,
   connection: null,
@@ -38,7 +38,7 @@ function respond(overview: object) {
   get.mockImplementation((path: string) => {
     if (path === "/auth/me") return Promise.resolve(actor);
     if (path === "/docs-sync") return Promise.resolve(overview);
-    if (path === "/docs-sync/books") return Promise.resolve({ books: [{ id: 7, name: "Engineering" }] });
+    if (path === "/docs-sync/shelves") return Promise.resolve({ shelves: [{ id: 7, name: "MyKhaya" }] });
     return Promise.reject(new Error("unexpected"));
   });
 }
@@ -61,8 +61,8 @@ describe("Documentation Sync page", () => {
       url: "https://docs.example.com",
       token_id: "tid",
       has_token_secret: true,
-      book_id: 7,
-      book_name: "Engineering",
+      shelf_id: 7,
+      shelf_name: "MyKhaya",
       configured: true,
       auto_enabled: true,
       last_run: { status: "succeeded", trigger: "automatic", finished_at: "2026-11-09T20:00:00Z", created: 3, updated: 1, skipped: 113 },
@@ -78,7 +78,7 @@ describe("Documentation Sync page", () => {
   it("populates the destination dropdown from BookStack on refresh", async () => {
     respond({ ...base, url: "https://docs.example.com", token_id: "tid", has_token_secret: true });
     render(<DocsSyncPage />);
-    (await screen.findByRole("button", { name: "Refresh list" })).click();
-    expect(await screen.findByRole("option", { name: "Engineering" })).toBeInTheDocument();
+    (await screen.findByRole("button", { name: "Refresh shelves" })).click();
+    expect(await screen.findByRole("option", { name: "MyKhaya" })).toBeInTheDocument();
   });
 });

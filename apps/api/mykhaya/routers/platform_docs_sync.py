@@ -37,8 +37,8 @@ class ConnectionUpdate(SensitiveActionRequest):
     include_paths: list[str] = Field(default_factory=list, max_length=20)
 
 
-class BookSelection(SensitiveActionRequest):
-    book_id: int = Field(ge=1)
+class ShelfSelection(SensitiveActionRequest):
+    shelf_id: int = Field(ge=1)
 
 
 class AutoSync(SensitiveActionRequest):
@@ -77,8 +77,8 @@ async def overview(
         "has_token_secret": bool(config.get("token_secret_encrypted")),
         "repository_url": config.get("repository_url"),
         "include_paths": config.get("include_paths") or [],
-        "book_id": config.get("book_id"),
-        "book_name": config.get("book_name"),
+        "shelf_id": config.get("shelf_id"),
+        "shelf_name": config.get("shelf_name"),
         "auto_enabled": bool(config.get("auto_enabled")),
         "configured": docs_sync.is_configured(config),
         "connection": state.get("connection"),
@@ -122,9 +122,9 @@ async def save_connection(
     if secret:
         config["token_secret_encrypted"] = docs_sync.encrypt_token_secret(settings, secret)
     if url_changed:
-        # A different instance: the previous book selection does not apply,
-        # and automatic sync waits for a book to be chosen again.
-        config.update(book_id=None, book_name=None, auto_enabled=False)
+        # A different instance: the previous shelf selection does not apply,
+        # and automatic sync waits for a shelf to be chosen again.
+        config.update(shelf_id=None, shelf_name=None, auto_enabled=False)
     await docs_sync.store(db, docs_sync.CONFIG_KEY, config, context.administrator.id)
     platform_audit(
         db,
@@ -137,7 +137,7 @@ async def save_connection(
         new={"url": url, "token_id": config["token_id"], "token_secret_changed": bool(secret)},
     )
     await db.commit()
-    return {"saved": True, "book_cleared": url_changed}
+    return {"saved": True, "shelf_cleared": url_changed}
 
 
 async def _client(db: AsyncSession, settings: Settings) -> docs_sync.BookStack:
@@ -159,8 +159,11 @@ async def test_connection(
     require_recent_auth(context, settings)
     client = await _client(db, settings)
     try:
-        books = await client.list_books()
-        result = {"ok": True, "message": f"Connected. {len(books)} book(s) visible to this token."}
+        shelves = await client.list_shelves()
+        result = {
+            "ok": True,
+            "message": f"Connected. {len(shelves)} shelf(s) visible to this token.",
+        }
     except (docs_sync.SyncError, LookupError) as exc:
         message = str(exc) if isinstance(exc, docs_sync.SyncError) else "BookStack API not found."
         result = {"ok": False, "message": message}
@@ -180,23 +183,23 @@ async def test_connection(
     return result
 
 
-@router.get("/books")
-async def list_books(
+@router.get("/shelves")
+async def list_shelves(
     _: PlatformContext = Depends(require_roles(*OPERATORS)),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
     client = await _client(db, settings)
     try:
-        return {"books": await client.list_books()}
+        return {"shelves": await client.list_shelves()}
     except (docs_sync.SyncError, LookupError) as exc:
         message = str(exc) if isinstance(exc, docs_sync.SyncError) else "BookStack API not found."
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, message) from exc
 
 
-@router.put("/book")
-async def select_book(
-    body: BookSelection,
+@router.put("/shelf")
+async def select_shelf(
+    body: ShelfSelection,
     request: Request,
     context: PlatformContext = Depends(require_roles(*OPERATORS)),
     db: AsyncSession = Depends(get_db),
@@ -205,27 +208,31 @@ async def select_book(
     require_recent_auth(context, settings)
     client = await _client(db, settings)
     try:
-        books = {book["id"]: book["name"] for book in await client.list_books()}
+        shelves = {shelf["id"]: shelf["name"] for shelf in await client.list_shelves()}
     except (docs_sync.SyncError, LookupError) as exc:
-        raise HTTPException(status.HTTP_502_BAD_GATEWAY, "Could not load BookStack books.") from exc
-    if body.book_id not in books:
-        raise _bad_request("That book is not visible to the configured token.")
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY, "Could not load BookStack shelves."
+        ) from exc
+    if body.shelf_id not in shelves:
+        raise _bad_request("That shelf is not visible to the configured token.")
     config = await docs_sync.load(db, docs_sync.CONFIG_KEY)
-    previous = {"book_id": config.get("book_id"), "book_name": config.get("book_name")}
-    config.update(book_id=body.book_id, book_name=books[body.book_id])
+    previous = {"shelf_id": config.get("shelf_id"), "shelf_name": config.get("shelf_name")}
+    config.update(shelf_id=body.shelf_id, shelf_name=shelves[body.shelf_id])
+    config.pop("book_id", None)
+    config.pop("book_name", None)
     await docs_sync.store(db, docs_sync.CONFIG_KEY, config, context.administrator.id)
     platform_audit(
         db,
         request,
         context,
-        "docs_sync.book_selected",
+        "docs_sync.shelf_selected",
         "setting",
         reason=body.reason,
         previous=previous,
-        new={"book_id": body.book_id, "book_name": books[body.book_id]},
+        new={"shelf_id": body.shelf_id, "shelf_name": shelves[body.shelf_id]},
     )
     await db.commit()
-    return {"book_id": body.book_id, "book_name": books[body.book_id]}
+    return {"shelf_id": body.shelf_id, "shelf_name": shelves[body.shelf_id]}
 
 
 @router.put("/auto")
@@ -240,7 +247,7 @@ async def set_auto_sync(
     config = await docs_sync.load(db, docs_sync.CONFIG_KEY)
     if body.enabled and not docs_sync.is_configured(config):
         raise HTTPException(
-            status.HTTP_409_CONFLICT, "Configure the connection and a book before enabling."
+            status.HTTP_409_CONFLICT, "Configure the connection and a shelf before enabling."
         )
     config["auto_enabled"] = body.enabled
     await docs_sync.store(db, docs_sync.CONFIG_KEY, config, context.administrator.id)
@@ -270,7 +277,7 @@ async def request_sync(
     config = await docs_sync.load(db, docs_sync.CONFIG_KEY)
     if not docs_sync.is_configured(config):
         raise HTTPException(
-            status.HTTP_409_CONFLICT, "Configure the connection and a book before syncing."
+            status.HTTP_409_CONFLICT, "Configure the connection and a shelf before syncing."
         )
     state = await docs_sync.load(db, docs_sync.STATUS_KEY)
     state["requested"] = True
@@ -282,7 +289,7 @@ async def request_sync(
         "docs_sync.sync_requested",
         "setting",
         reason=body.reason,
-        new={"book_id": config.get("book_id")},
+        new={"shelf_id": config.get("shelf_id")},
     )
     await db.commit()
     return {"requested": True}

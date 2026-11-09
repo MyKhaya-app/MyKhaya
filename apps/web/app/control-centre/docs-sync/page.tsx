@@ -30,8 +30,8 @@ type Overview = {
   has_token_secret: boolean;
   repository_url: string | null;
   include_paths: string[];
-  book_id: number | null;
-  book_name: string | null;
+  shelf_id: number | null;
+  shelf_name: string | null;
   auto_enabled: boolean;
   configured: boolean;
   connection: { ok: boolean; message: string; checked_at: string } | null;
@@ -42,7 +42,7 @@ type Overview = {
   source: { available: boolean; documents?: number; error?: string };
 };
 
-type Book = { id: number; name: string };
+type Shelf = { id: number; name: string };
 type Pending = { title: string; confirm: string; run: (reason: string) => Promise<string> };
 
 function safeError(cause: unknown, fallback: string): string {
@@ -51,14 +51,14 @@ function safeError(cause: unknown, fallback: string): string {
 
 /**
  * Documentation Sync: publishes the repository docs bundled in this build
- * to a BookStack book. Owner/Administrator only (enforced by the API). The
+ * to managed books within a BookStack shelf. Owner/Administrator only (enforced by the API). The
  * token secret is write-only: the page only ever learns whether one is set.
  */
 export default function DocsSyncPage() {
   const [data, setData] = useState<Overview | null>(null);
-  const [books, setBooks] = useState<Book[] | null>(null);
+  const [shelves, setShelves] = useState<Shelf[] | null>(null);
   const [form, setForm] = useState({ url: "", token_id: "", token_secret: "", repository_url: "", include_paths: "" });
-  const [bookId, setBookId] = useState("");
+  const [shelfId, setShelfId] = useState("");
   const [pending, setPending] = useState<Pending | null>(null);
   const [error, setError] = useState("");
   const [notice, setNotice] = useState("");
@@ -74,7 +74,7 @@ export default function DocsSyncPage() {
         repository_url: next.repository_url ?? "",
         include_paths: next.include_paths.join(", "),
       }));
-      setBookId(next.book_id ? String(next.book_id) : "");
+      setShelfId(next.shelf_id ? String(next.shelf_id) : "");
     } catch (cause) {
       setError(safeError(cause, "Documentation sync is unavailable."));
     }
@@ -84,12 +84,12 @@ export default function DocsSyncPage() {
     void load();
   }, [load]);
 
-  async function refreshBooks() {
+  async function refreshShelves() {
     setError("");
     try {
-      setBooks((await platformApi.get<{ books: Book[] }>("/docs-sync/books")).books);
+      setShelves((await platformApi.get<{ shelves: Shelf[] }>("/docs-sync/shelves")).shelves);
     } catch (cause) {
-      setError(safeError(cause, "Could not load BookStack books."));
+      setError(safeError(cause, "Could not load BookStack shelves."));
     }
   }
 
@@ -130,7 +130,7 @@ export default function DocsSyncPage() {
         <CcPageHeader
           eyebrow="Platform"
           title="Documentation Sync"
-          description={`Publishes this build's repository documentation (${data.branch} branch, ${data.environment}) to a private BookStack book. One-way; pages are never deleted.`}
+          description={`Publishes this build's repository documentation (${data.branch} branch, ${data.environment}) to managed books in a private BookStack shelf. One-way; content is never deleted.`}
         />
         {error && <CcNotice tone="error">{error}</CcNotice>}
         {notice && <CcNotice tone="success">{notice}</CcNotice>}
@@ -150,7 +150,7 @@ export default function DocsSyncPage() {
             onSubmit={(event) => {
               event.preventDefault();
               confirm("Save BookStack connection", "Save", async (reason) => {
-                const result = await platformApi.put<{ book_cleared: boolean }>("/docs-sync/connection", {
+                const result = await platformApi.put<{ shelf_cleared: boolean }>("/docs-sync/connection", {
                   url: form.url,
                   token_id: form.token_id,
                   token_secret: form.token_secret || null,
@@ -159,7 +159,7 @@ export default function DocsSyncPage() {
                   reason,
                   confirmed: true,
                 });
-                return result.book_cleared ? "Saved. Select a destination book for this instance." : "Connection saved.";
+                return result.shelf_cleared ? "Saved. Select a destination shelf for this instance." : "Connection saved.";
               });
             }}
           >
@@ -210,38 +210,38 @@ export default function DocsSyncPage() {
           {data.connection && !data.connection.ok && <p className="cc-service-action">{data.connection.message}</p>}
         </CcCard>
 
-        <CcCard title="Destination book" description="Books visible to the API token. Changing book never alters pages already published.">
+        <CcCard title="Destination shelf" description="Shelves visible to the API token. Each docs/ folder becomes a managed book within the selected shelf; changing shelf never alters earlier content.">
           <div className="cc-monitor-form">
             <label>
-              Book
-              <select value={bookId} onChange={(e) => setBookId(e.target.value)} aria-label="Destination book">
-                <option value="">{books ? "Select a book" : data.book_name ?? "Refresh to load books"}</option>
-                {(books ?? []).map((book) => (
-                  <option key={book.id} value={book.id}>
-                    {book.name}
+              Shelf
+              <select value={shelfId} onChange={(e) => setShelfId(e.target.value)} aria-label="Destination shelf">
+                <option value="">{shelves ? "Select a shelf" : data.shelf_name ?? "Refresh to load shelves"}</option>
+                {(shelves ?? []).map((shelf) => (
+                  <option key={shelf.id} value={shelf.id}>
+                    {shelf.name}
                   </option>
                 ))}
               </select>
             </label>
             <div className="cc-monitor-actions">
-              <button type="button" className="secondary" disabled={!data.has_token_secret} onClick={() => void refreshBooks()}>
-                Refresh list
+              <button type="button" className="secondary" disabled={!data.has_token_secret} onClick={() => void refreshShelves()}>
+                Refresh shelves
               </button>
               <button
                 type="button"
-                disabled={!books || !bookId || Number(bookId) === data.book_id}
+                disabled={!shelves || !shelfId || Number(shelfId) === data.shelf_id}
                 onClick={() =>
-                  confirm("Set destination book", "Save", async (reason) => {
-                    const result = await platformApi.put<{ book_name: string }>("/docs-sync/book", {
-                      book_id: Number(bookId),
+                  confirm("Set destination shelf", "Save", async (reason) => {
+                    const result = await platformApi.put<{ shelf_name: string }>("/docs-sync/shelf", {
+                      shelf_id: Number(shelfId),
                       reason,
                       confirmed: true,
                     });
-                    return `Destination set to ${result.book_name}.`;
+                    return `Destination set to ${result.shelf_name}.`;
                   })
                 }
               >
-                Use this book
+                Use this shelf
               </button>
             </div>
           </div>
@@ -252,7 +252,7 @@ export default function DocsSyncPage() {
           actions={<CcBadge tone={data.auto_enabled ? "success" : "neutral"}>{data.auto_enabled ? "Automatic" : "Manual only"}</CcBadge>}
         >
           <CcMetadataGrid dense>
-            <CcMetadataItem label="Destination">{data.book_name ?? "Not selected"}</CcMetadataItem>
+            <CcMetadataItem label="Destination shelf">{data.shelf_name ?? "Not selected"}</CcMetadataItem>
             <CcMetadataItem label="Documents in this build">
               {data.source.available ? data.source.documents : data.source.error}
             </CcMetadataItem>

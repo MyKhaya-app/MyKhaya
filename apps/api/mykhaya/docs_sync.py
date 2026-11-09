@@ -3,7 +3,7 @@
 The Markdown under ``docs/`` is copied into the API image at build time, so a
 DEV image carries the ``dev`` branch's docs and a PROD image carries ``main``'s
 (see apps/api/Dockerfile). No GitHub access or token is involved. A background
-loop in the scheduler publishes them to the BookStack book an administrator
+loop in the scheduler publishes them to the BookStack shelf an administrator
 selected in PCC, when (a) automatic sync is enabled and the bundled docs'
 content hash has changed since the last successful sync, or (b) an
 administrator pressed "Sync now".
@@ -16,9 +16,9 @@ Safety rules:
 - The BookStack URL must be public HTTPS; every request re-validates the
   resolved addresses with the same SSRF guard used for link previews, and
   redirects are never followed.
-- Only pages this publisher created (tracked by ID per instance+book) are ever
-  updated. Nothing is deleted. Changing the URL or book starts a fresh
-  association set rather than touching earlier pages.
+- Only books, chapters and pages this publisher created (tracked by ID per
+  instance+shelf) are ever updated. Nothing is deleted. Changing the URL or
+  shelf starts a fresh association set rather than touching earlier content.
 - A failure is recorded in the status and never affects other MyKhaya work.
 """
 
@@ -49,6 +49,9 @@ log = structlog.get_logger()
 CONFIG_KEY = "bookstack_sync"
 STATUS_KEY = "bookstack_sync_status"
 PAGES_KEY = "bookstack_sync_pages"
+ROOT_BOOK_KEY = "__root__"
+ROOT_BOOK_NAME = "Repository Documentation"
+MANAGED_DESCRIPTION = "Managed by MyKhaya repository documentation sync."
 _SECRET_INFO = b"mykhaya-bookstack-token-v1"
 _LOCK_KEY = 0x4D4B444F4353  # "MKDOCS"
 LOOP_SECONDS = 30
@@ -109,9 +112,8 @@ def encrypt_token_secret(settings: Settings, secret: str) -> str:
 
 
 def association_key(config: dict[str, Any]) -> str:
-    """Associations are scoped to instance host + book, so a different
-    instance or book never reuses (and so never overwrites) earlier pages."""
-    return f"{urlsplit(config.get('url', '')).hostname}|{config.get('book_id')}"
+    """Associations are scoped to instance host + shelf."""
+    return f"{urlsplit(config.get('url', '')).hostname}|{config.get('shelf_id')}"
 
 
 def is_configured(config: dict[str, Any]) -> bool:
@@ -119,7 +121,7 @@ def is_configured(config: dict[str, Any]) -> bool:
         config.get("url")
         and config.get("token_id")
         and config.get("token_secret_encrypted")
-        and config.get("book_id")
+        and config.get("shelf_id")
     )
 
 
@@ -172,13 +174,36 @@ class BookStack:
         except ValueError as exc:
             raise SyncError("BookStack returned an unexpected (non-JSON) response.") from exc
 
-    async def list_books(self) -> list[dict[str, Any]]:
-        data = await self.request("GET", "books?count=500&sort=+name")
+    async def list_shelves(self) -> list[dict[str, Any]]:
+        data = await self.request("GET", "shelves?count=500&sort=+name")
         return [
             {"id": int(item["id"]), "name": str(item["name"])}
             for item in data.get("data", [])
             if isinstance(item, dict) and "id" in item and "name" in item
         ]
+
+    async def read_shelf(self, shelf_id: int) -> dict[str, Any]:
+        data = await self.request("GET", f"shelves/{shelf_id}")
+        return data.get("data", data) if isinstance(data, dict) else {}
+
+    async def create_book(self, name: str, source: str) -> int:
+        created = await self.request(
+            "POST",
+            "books",
+            {"name": name, "description": f"{MANAGED_DESCRIPTION} Source: {source}"},
+        )
+        return int(created["id"])
+
+    async def attach_book_to_shelf(self, shelf_id: int, book_id: int) -> None:
+        shelf = await self.read_shelf(shelf_id)
+        existing = [
+            int(book["id"])
+            for book in shelf.get("books", [])
+            if isinstance(book, dict) and "id" in book
+        ]
+        if book_id in existing:
+            return
+        await self.request("PUT", f"shelves/{shelf_id}", {"books": [*existing, book_id]})
 
 
 def client_for(settings: Settings, config: dict[str, Any]) -> BookStack:
@@ -203,6 +228,8 @@ _transport_override: httpx.AsyncBaseTransport | None = None
 class Doc:
     path: str  # relative to the docs root, POSIX
     name: str
+    book_key: str
+    book_name: str
     chapter: str | None
     markdown: str
     digest: str = field(default="")
@@ -233,7 +260,15 @@ def discover(settings: Settings, config: dict[str, Any]) -> list[Doc]:
         name = heading.group(1).strip() if heading else _title_from_path(rel)
         if heading:
             body = body[: heading.start()] + body[heading.end() :]
-        folder = rel.split("/", 1)[0] if "/" in rel else None
+        parts = rel.split("/")
+        if len(parts) == 1:
+            book_key = ROOT_BOOK_KEY
+            book_name = ROOT_BOOK_NAME
+            chapter = None
+        else:
+            book_key = parts[0]
+            book_name = _title_from_path(parts[0])
+            chapter = " / ".join(_title_from_path(part) for part in parts[1:-1]) or None
 
         def link(match: re.Match[str], rel: str = rel) -> str:
             if not repo:
@@ -259,7 +294,9 @@ def discover(settings: Settings, config: dict[str, Any]) -> list[Doc]:
             Doc(
                 rel,
                 name[:255],
-                folder.replace("-", " ").title() if folder else None,
+                book_key,
+                book_name[:255],
+                chapter[:255] if chapter else None,
                 f"{notice}\n\n{body}\n",
             )
         )
@@ -271,7 +308,7 @@ def discover(settings: Settings, config: dict[str, Any]) -> list[Doc]:
         if counts[doc.name.casefold()] > 1:
             doc.name = f"{doc.name} ({doc.path})"[:255]
         doc.digest = hashlib.sha256(
-            f"{doc.name}\n{doc.chapter}\n{doc.markdown}".encode()
+            f"{doc.book_key}\n{doc.book_name}\n{doc.name}\n{doc.chapter}\n{doc.markdown}".encode()
         ).hexdigest()
     return docs
 
@@ -291,50 +328,108 @@ class Result:
 
 
 async def publish(
-    client: BookStack, docs: list[Doc], book_id: int, pages: dict[str, Any], save: Any
+    client: BookStack, docs: list[Doc], shelf_id: int, pages: dict[str, Any], save: Any
 ) -> Result:
-    """Create or update each doc. `pages` is this instance+book's persistent
-    association map ({"pages": {path: {id, digest}}, "chapters": {name: id}});
+    """Create or update docs under publisher-owned books in a shelf.
+
+    The association map is scoped to this instance+shelf and records ownership
+    for every created book, chapter and page. Existing untracked BookStack
+    content is never selected, updated or deleted.
+
     `save` persists it after every write so a crash can never cause
     duplicates on the next run."""
     result = Result()
     page_map: dict[str, Any] = pages.setdefault("pages", {})
+    books: dict[str, Any] = pages.setdefault("books", {})
     chapters: dict[str, Any] = pages.setdefault("chapters", {})
+
+    book_ids: dict[str, int] = {}
+    for book_key, name in sorted({(doc.book_key, doc.book_name) for doc in docs}):
+        tracked = books.get(book_key)
+        if tracked and tracked.get("id"):
+            book_id = int(tracked["id"])
+        else:
+            source = "docs/" if book_key == ROOT_BOOK_KEY else f"docs/{book_key}/"
+            book_id = await client.create_book(name, source)
+            books[book_key] = {
+                "id": book_id,
+                "name": name,
+                "source": source,
+                "owned": True,
+                "attached": False,
+            }
+            await save()
+        if not books[book_key].get("attached"):
+            await client.attach_book_to_shelf(shelf_id, book_id)
+            books[book_key]["attached"] = True
+            await save()
+        book_ids[book_key] = book_id
+
     for doc in docs:
+        book_id = book_ids[doc.book_key]
+        chapter_id: int | None = None
+        chapter_key = f"{doc.book_key}|{doc.chapter}" if doc.chapter else None
+        if chapter_key:
+            tracked_chapter = chapters.get(chapter_key)
+            if tracked_chapter and tracked_chapter.get("id"):
+                chapter_id = int(tracked_chapter["id"])
+            else:
+                created_chapter = await client.request(
+                    "POST", "chapters", {"book_id": book_id, "name": doc.chapter}
+                )
+                chapter_id = int(created_chapter["id"])
+                chapters[chapter_key] = {
+                    "id": chapter_id,
+                    "name": doc.chapter,
+                    "book_id": book_id,
+                    "owned": True,
+                }
+                await save()
+                await asyncio.sleep(WRITE_PAUSE_SECONDS)
         known = page_map.get(doc.path)
         if known and known.get("digest") == doc.digest:
             result.skipped += 1
             continue
+        target = {"chapter_id": chapter_id} if chapter_id else {"book_id": book_id}
         payload = {"name": doc.name, "markdown": doc.markdown}
         if known:
             try:
-                await client.request("PUT", f"pages/{int(known['id'])}", payload)
+                await client.request("PUT", f"pages/{int(known['id'])}", {**target, **payload})
                 known["digest"] = doc.digest
+                known.update(book_id=book_id, chapter_id=chapter_id, owned=True)
                 result.updated += 1
                 await save()
                 await asyncio.sleep(WRITE_PAUSE_SECONDS)
                 continue
             except LookupError:
                 pass  # our page was deleted in BookStack: recreate it below
-        if doc.chapter:
-            chapter_id = chapters.get(doc.chapter)
-            if chapter_id is None:
-                created = await client.request(
-                    "POST", "chapters", {"book_id": book_id, "name": doc.chapter}
-                )
-                chapter_id = chapters[doc.chapter] = int(created["id"])
-                await save()
-                await asyncio.sleep(WRITE_PAUSE_SECONDS)
-            target = {"chapter_id": chapter_id}
-        else:
-            target = {"book_id": book_id}
         try:
             created = await client.request("POST", "pages", {**target, **payload})
         except LookupError:
-            # The chapter we created earlier was deleted: fall back to the book.
-            chapters.pop(doc.chapter or "", None)
-            created = await client.request("POST", "pages", {"book_id": book_id, **payload})
-        page_map[doc.path] = {"id": int(created["id"]), "digest": doc.digest}
+            # A managed chapter was deleted; recreate it rather than writing
+            # into an unrelated manual chapter.
+            if chapter_key:
+                chapters.pop(chapter_key, None)
+                recreated = await client.request(
+                    "POST", "chapters", {"book_id": book_id, "name": doc.chapter}
+                )
+                chapter_id = int(recreated["id"])
+                chapters[chapter_key] = {
+                    "id": chapter_id,
+                    "name": doc.chapter,
+                    "book_id": book_id,
+                    "owned": True,
+                }
+                await save()
+                target = {"chapter_id": chapter_id}
+            created = await client.request("POST", "pages", {**target, **payload})
+        page_map[doc.path] = {
+            "id": int(created["id"]),
+            "digest": doc.digest,
+            "book_id": book_id,
+            "chapter_id": chapter_id,
+            "owned": True,
+        }
         result.created += 1
         await save()
         await asyncio.sleep(WRITE_PAUSE_SECONDS)
@@ -370,10 +465,10 @@ async def _locked_sync(settings: Settings, trigger: str) -> dict[str, Any]:
     outcome: dict[str, Any] = {"trigger": trigger, "started_at": started.isoformat()}
     try:
         if not is_configured(config):
-            raise SyncError("BookStack is not fully configured (URL, token and book).")
+            raise SyncError("BookStack is not fully configured (URL, token and shelf).")
         docs = discover(settings, config)
         result = await publish(
-            client_for(settings, config), docs, int(config["book_id"]), pages, save
+            client_for(settings, config), docs, int(config["shelf_id"]), pages, save
         )
         outcome.update(
             status="succeeded",
