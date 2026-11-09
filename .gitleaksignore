@@ -63,6 +63,15 @@ bea11e6cd595a803ffba16923d5c5f9da7c0f556:apps/api/tests/test_billing_config.py:g
 6d5f78c05c9ab91843e9b89b58c13eb0bb8d41d2:compose.e2e.yml:generic-api-key:94
 6d5f78c05c9ab91843e9b89b58c13eb0bb8d41d2:compose.e2e.yml:generic-api-key:111
 bc2220223a9e9e141675c38a68d1a067c839c5e3:apps/api/tests/test_billing_config.py:generic-api-key:131
+
+# Synthetic OAuth E2E fixture values in the committed social-auth integration.
+# These exact historical findings are confined to the disposable development
+# stack and have no live-system access. Do not broaden these exceptions.
+a80415dd31c2b26f334a5138861c0be15ae01aa7:compose.e2e.yml:generic-api-key:45
+a80415dd31c2b26f334a5138861c0be15ae01aa7:compose.e2e.yml:generic-api-key:57
+a80415dd31c2b26f334a5138861c0be15ae01aa7:compose.e2e.yml:generic-api-key:73
+a80415dd31c2b26f334a5138861c0be15ae01aa7:compose.e2e.yml:generic-api-key:94
+a80415dd31c2b26f334a5138861c0be15ae01aa7:compose.e2e.yml:generic-api-key:111
 # Documentation placeholder, not a secret: the literal instructional string
 # "GENERATE_A_UNIQUE_32_PLUS_CHARACTER_SECRET" that MYKHAYA_SECRET_KEY is set
 # to in the production .env template, telling the operator what to generate.

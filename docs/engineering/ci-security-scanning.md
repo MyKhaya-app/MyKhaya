@@ -56,6 +56,37 @@ directory-wide exclusions, a `.gitleaks.toml` allowlist, or `--no-git`.
 | 1–5 | `generic-api-key` | `compose.e2e.yml` lines 45, 57, 73, 94, 111 (`6d5f78c`) | Current tree and history (release branch only) | Synthetic E2E `MYKHAYA_SECRET_KEY`, explicitly labelled "e2e"/"synthetic", used only by the disposable E2E stack (`MYKHAYA_ENVIRONMENT=development`). Not in any real `.env`. | None | Five exact fingerprints. No rotation. |
 | 6 | `generic-api-key` | `apps/api/tests/test_billing_config.py` line 131 (`bc22202`) | History on `dev` only, not in the candidate's history | The already-reviewed SEC-18 synthetic Stripe placeholder (documented placeholder suffix, far too short to be a Stripe key), moved to a new line on `dev` | None | One exact fingerprint. No rotation. |
 
+### Social-auth integration dispositions (2026-11-09, commit `a80415d`)
+
+The social-auth integration introduced five identical synthetic OAuth fixture
+matches in `compose.e2e.yml`. Each is used only by the disposable development
+E2E stack, is not loaded from a real environment, and cannot access a live
+provider or production system. The current fixture remains explicitly marked
+as synthetic; replacing it would not remove these already-committed historical
+matches without rewriting history.
+
+The remediation is limited to these five exact historical fingerprints:
+
+| Rule | Location | Fingerprint scope | Disposition |
+|---|---|---|---|
+| `generic-api-key` | `compose.e2e.yml:45` | `a80415d:compose.e2e.yml:generic-api-key:45` | Synthetic fixture; exact ignore |
+| `generic-api-key` | `compose.e2e.yml:57` | `a80415d:compose.e2e.yml:generic-api-key:57` | Synthetic fixture; exact ignore |
+| `generic-api-key` | `compose.e2e.yml:73` | `a80415d:compose.e2e.yml:generic-api-key:73` | Synthetic fixture; exact ignore |
+| `generic-api-key` | `compose.e2e.yml:94` | `a80415d:compose.e2e.yml:generic-api-key:94` | Synthetic fixture; exact ignore |
+| `generic-api-key` | `compose.e2e.yml:111` | `a80415d:compose.e2e.yml:generic-api-key:111` | Synthetic fixture; exact ignore |
+
+Reproduce the historical validation from a fresh clone with full history:
+
+```powershell
+docker run --rm -v "${PWD}:/repo" zricethezav/gitleaks:latest detect `
+  --source=/repo --redact --no-banner --log-opts=--all
+```
+
+Review findings by rule, file, line, commit and fingerprint only. Never print
+or copy the fixture value. The scan must return no findings after these exact
+dispositions are present; any new fingerprint or any finding outside this
+table requires separate investigation.
+
 ## Synthetic fixture conventions
 
 - Make synthetic values obviously synthetic: include `synthetic`, `e2e`,
