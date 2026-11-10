@@ -172,6 +172,35 @@ TEMPLATES: dict[str, TemplateDefault] = {
         disableable=False,
         security_critical=True,
     ),
+    # Sent after a PCC Owner/Administrator disconnects an Apple/Google
+    # identity (routers.platform.disconnect_user_sign_in_provider). Names the
+    # provider only: never the provider identifier, provider email or the
+    # administrator.
+    "account.sign_in_method_disconnected": TemplateDefault(
+        subject="{{provider_name}} sign-in was removed from your MyKhaya account",
+        body=(
+            "Hi {{user_first_name}},\n\n"
+            "On {{disconnected_at}}, the MyKhaya support team removed the connection "
+            "between your {{provider_name}} account and your MyKhaya account.\n\n"
+            "You can no longer sign in to MyKhaya with {{provider_name}} until you "
+            "reconnect it. Your {{provider_name}} account itself has not been changed, and "
+            "your Homes, information and subscription are not affected.\n\n"
+            "You can still sign in with your other sign-in methods, and reconnect "
+            "{{provider_name}} at any time from Settings > Security > Sign-in methods.\n\n"
+            "If you did not expect this change, please contact {{support_email}}.\n\n"
+            "MyKhaya"
+        ),
+        allowed_variables=frozenset(
+            {"user_first_name", "provider_name", "disconnected_at", "support_email"}
+        ),
+        required_variables=frozenset({"provider_name"}),
+        description=(
+            "Sent when a Platform administrator disconnects a user's Apple or Google sign-in."
+        ),
+        module="account_security",
+        disableable=False,
+        security_critical=True,
+    ),
     "household_invitation": TemplateDefault(
         subject="You're invited to join a MyKhaya Home",
         body=(
@@ -713,6 +742,12 @@ SAMPLE_VARIABLES: dict[str, dict[str, str]] = {
         "link": "https://example.com/home",
     },
     "password_reset": {"link": "https://example.com/reset-password?token=SAMPLE-TOKEN"},
+    "account.sign_in_method_disconnected": {
+        "user_first_name": "Jamie",
+        "provider_name": "Apple",
+        "disconnected_at": "10 November 2026, 09:30 UTC",
+        "support_email": "support@example.com",
+    },
     "household_invitation": {
         "inviter_display_name": "Jamie Example",
         "home_name": "The Example Family",

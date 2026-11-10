@@ -3,10 +3,11 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import DetailPage from "./page";
 
+const navigation = vi.hoisted(() => ({ pathname: "/users/user-1" }));
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push: vi.fn(), replace: vi.fn() }),
   useParams: () => ({ id: "user-1" }),
-  usePathname: () => "/users/user-1",
+  usePathname: () => navigation.pathname,
 }));
 vi.mock("@mykhaya/api-client", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@mykhaya/api-client")>();
@@ -59,6 +60,7 @@ function findDialog(name: RegExp | string) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  navigation.pathname = "/users/user-1";
   get.mockResolvedValue(verifiedUser);
   post.mockResolvedValue({ message: "ok" });
 });
@@ -491,5 +493,116 @@ describe("User detail — Anonymise", () => {
     expect(screen.queryByRole("button", { name: "Restore user" })).not.toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Anonymise user" })).not.toBeInTheDocument();
     expect(screen.queryByText("jane@example.com")).not.toBeInTheDocument();
+  });
+});
+
+describe("User detail — Authentication tab", () => {
+  const operator = {
+    ...verifiedUser,
+    viewer_permissions: { change_mfa_policy: true, disconnect_sign_in_methods: true, revoke_sessions: true },
+  };
+  const supportViewer = {
+    ...verifiedUser,
+    viewer_permissions: { change_mfa_policy: false, disconnect_sign_in_methods: false, revoke_sessions: true },
+  };
+  const summary = {
+    providers: [
+      { provider: "apple", name: "Apple", connected: true, connected_at: "2026-10-01T09:00:00Z", last_used_at: "2026-11-01T09:00:00Z", enabled_in_environment: true },
+      { provider: "google", name: "Google", connected: false, connected_at: null, last_used_at: null, enabled_in_environment: true },
+    ],
+    password: { available: true, changed_at: "2026-09-01T09:00:00Z" },
+    passkeys: { count: 2, last_used_at: null },
+    sessions: { active_sessions: 3, trusted_devices: 1, last_session_activity_at: "2026-11-09T09:00:00Z" },
+    native_apps: [
+      { platform: "ios", label: "iOS", active_registrations: 1, disabled_registrations: 0, push_environments: ["production"], last_seen_at: "2026-11-09T08:00:00Z" },
+      { platform: "android", label: "Android", active_registrations: 0, disabled_registrations: 0, push_environments: [], last_seen_at: null },
+    ],
+    web_push_subscriptions: 0,
+    recent_events: [
+      { label: "Apple sign-in failed", outcome: "failure", initiated_by: "user", occurred_at: "2026-11-09T07:00:00Z" },
+      { label: "All sessions revoked by an administrator", outcome: "success", initiated_by: "administrator", occurred_at: "2026-11-08T07:00:00Z" },
+    ],
+  };
+
+  function serve(user: object, auth: unknown = summary) {
+    get.mockImplementation((path: string) => {
+      if (path === "/users/user-1/authentication") return auth instanceof Error ? Promise.reject(auth) : Promise.resolve(auth);
+      if (path === "/users/user-1") return Promise.resolve(user);
+      return Promise.reject(new Error("not used"));
+    });
+  }
+
+  beforeEach(() => {
+    navigation.pathname = "/users/user-1/authentication";
+  });
+
+  it("shows connected sign-in methods, support status and recent activity", async () => {
+    serve(operator);
+    render(<DetailPage />);
+    const card = (await screen.findByRole("heading", { name: "Connected Sign-in Methods" })).closest("section")!;
+    expect(await within(card).findByText("Apple", { selector: "strong" })).toBeInTheDocument();
+    expect(within(card).getByText("Connected")).toBeInTheDocument();
+    expect(within(card).getByText("Not connected")).toBeInTheDocument();
+    expect(within(card).getByText(/Password sign-in is available/)).toBeInTheDocument();
+    expect(within(card).getByText("2 registered")).toBeInTheDocument();
+    // Disconnect is offered only for the connected provider.
+    expect(within(card).getByRole("button", { name: "Disconnect Apple" })).toBeInTheDocument();
+    expect(within(card).queryByRole("button", { name: "Disconnect Google" })).not.toBeInTheDocument();
+
+    expect(screen.getByRole("heading", { name: "Sessions & Trusted Devices" })).toBeInTheDocument();
+    const activity = screen.getByRole("heading", { name: "Recent Authentication Activity" }).closest("section")!;
+    expect(within(activity).getByText("Apple sign-in failed")).toBeInTheDocument();
+    expect(within(activity).getByText(/· Failed/)).toBeInTheDocument();
+    expect(within(activity).getByText(/PCC administrator/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Save MFA policy" })).toBeInTheDocument();
+    // The generic Recent Activity/Notes cards are not repeated on this tab.
+    expect(document.querySelector(".is-tab-authentication")).toBeInTheDocument();
+  });
+
+  it("hides administrative controls a Support operator cannot use", async () => {
+    serve(supportViewer);
+    render(<DetailPage />);
+    await screen.findByText("Apple", { selector: "strong" });
+    expect(screen.queryByRole("button", { name: /Disconnect/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Save MFA policy" })).not.toBeInTheDocument();
+    expect(screen.getByText(/requires a Platform Owner or Administrator/)).toBeInTheDocument();
+    expect(screen.getAllByRole("button", { name: /Revoke all sessions/ }).length).toBeGreaterThan(0);
+  });
+
+  it("disconnects a provider after confirmation and a reason, then refreshes the status", async () => {
+    serve(operator);
+    post.mockResolvedValue({ message: "Apple sign-in was disconnected from this MyKhaya account.", changed: true });
+    render(<DetailPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Disconnect Apple" }));
+    const dialog = await findDialog(/Disconnect Apple sign-in/i);
+    expect(within(dialog).getByText(/does not change or delete their Apple account, revoke access at Apple/)).toBeInTheDocument();
+    serve(operator, { ...summary, providers: [{ ...summary.providers[0], connected: false }, summary.providers[1]] });
+    await userEvent.type(within(dialog).getByLabelText(/reason for this administrative action/i), "User reports Apple sign-in loop");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Disconnect" }));
+    await waitFor(() =>
+      expect(post).toHaveBeenCalledWith("/users/user-1/sign-in-methods/apple/disconnect", {
+        reason: "User reports Apple sign-in loop",
+        confirmed: true,
+      }),
+    );
+    expect(await screen.findByText("Apple sign-in was disconnected from this MyKhaya account.")).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole("button", { name: "Disconnect Apple" })).not.toBeInTheDocument());
+  });
+
+  it("shows the server's refusal when the provider is the last way to sign in", async () => {
+    serve(operator);
+    post.mockRejectedValueOnce(new ApiError(409, "Apple is this user's only way to sign in, so it cannot be disconnected."));
+    render(<DetailPage />);
+    await userEvent.click(await screen.findByRole("button", { name: "Disconnect Apple" }));
+    const dialog = await findDialog(/Disconnect Apple sign-in/i);
+    await userEvent.type(within(dialog).getByLabelText(/reason for this administrative action/i), "User reports Apple sign-in loop");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Disconnect" }));
+    expect(await screen.findByText(/only way to sign in/)).toBeInTheDocument();
+  });
+
+  it("shows a safe error state when sign-in methods cannot be loaded", async () => {
+    serve(operator, new Error("Unable to load sign-in methods."));
+    render(<DetailPage />);
+    expect(await screen.findByText("Unable to load sign-in methods.")).toBeInTheDocument();
   });
 });

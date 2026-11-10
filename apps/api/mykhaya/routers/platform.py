@@ -86,6 +86,11 @@ from mykhaya.entitlements import (
     resolve_effective_plan,
     resolve_effective_state,
 )
+from mykhaya.external_identities import (
+    ExternalIdentityNotFound,
+    LastAuthenticationMethodError,
+    unlink_external_identity,
+)
 from mykhaya.founding_beta_schemas import SignupStateResponse
 from mykhaya.home_migration_pcc import (
     PACKAGE_STORE,
@@ -118,6 +123,8 @@ from mykhaya.models import (
     CalendarShare,
     ChildProfile,
     ConsumerMfaPolicy,
+    ExternalIdentity,
+    ExternalIdentityProvider,
     FeatureFlag,
     FeatureKey,
     FeatureOverride,
@@ -3069,7 +3076,7 @@ async def users(
 @router.get("/users/{user_id}")
 async def user_detail(
     user_id: uuid.UUID,
-    _: PlatformContext = Depends(require_roles(*SUPPORT)),
+    context: PlatformContext = Depends(require_roles(*SUPPORT)),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
@@ -3166,7 +3173,374 @@ async def user_detail(
                 {"method": method.value, "enabled": enabled} for method, enabled in mfa_methods
             ],
         },
+        # What the signed-in administrator may do here, derived from the same
+        # role tuples the mutation routes enforce. The UI only hides controls
+        # with this; every route still enforces its own role server-side.
+        "viewer_permissions": _user_viewer_permissions(context),
     }
+
+
+def _user_viewer_permissions(context: PlatformContext) -> dict[str, bool]:
+    role = context.administrator.role
+    return {
+        "change_mfa_policy": role in OPERATORS,
+        "disconnect_sign_in_methods": role in OPERATORS,
+        "revoke_sessions": role in SUPPORT,
+    }
+
+
+# Consumer audit actions (written by mykhaya.audit for the user's own
+# authentication ceremonies) shown in the PCC Authentication tab. Only fixed,
+# operator-safe labels are returned; audit metadata is never exposed. The
+# generic external_identity.* actions are omitted because the provider routes
+# also write the provider-specific actions below for the same event.
+_USER_AUTH_EVENT_LABELS: dict[str, tuple[str, str]] = {
+    "session.created": ("Signed in", "success"),
+    "MFA_LOGIN_SUCCEEDED": ("Two-factor verification completed", "success"),
+    "MFA_LOGIN_FAILED": ("Two-factor verification failed", "failure"),
+    "APPLE_LOGIN_SUCCESS": ("Signed in with Apple", "success"),
+    "APPLE_LOGIN_FAILED": ("Apple sign-in failed", "failure"),
+    "GOOGLE_LOGIN_SUCCESS": ("Signed in with Google", "success"),
+    "APPLE_IDENTITY_REGISTERED": ("Registered with Apple", "info"),
+    "GOOGLE_IDENTITY_REGISTERED": ("Registered with Google", "info"),
+    "APPLE_IDENTITY_LINKED": ("Apple connected", "info"),
+    "GOOGLE_IDENTITY_LINKED": ("Google connected", "info"),
+    "APPLE_IDENTITY_UNLINKED": ("Apple disconnected by the user", "info"),
+    "GOOGLE_IDENTITY_UNLINKED": ("Google disconnected by the user", "info"),
+    "session.revoked": ("Signed out of a session", "info"),
+    "trusted_device.others_revoked": ("Signed out of other devices", "info"),
+    "password.reset": ("Password reset", "info"),
+    "MFA_TOTP_ENROLLED": ("Authenticator app enrolled", "info"),
+    "MFA_TOTP_REMOVED": ("Authenticator app removed", "info"),
+    "MFA_TOTP_RESET": ("Authenticator app reset", "info"),
+}
+# Administrative audit actions (target_type="user") relevant to sign-in.
+_ADMIN_AUTH_EVENT_LABELS: dict[str, str] = {
+    "user.sessions_revoked": "All sessions revoked by an administrator",
+    "user.password_reset_sent": "Password-reset email sent by an administrator",
+    "user.suspended": "Suspended by an administrator",
+    "user.reactivated": "Reactivated by an administrator",
+    "user.external_identity_disconnected": "Sign-in provider disconnected by an administrator",
+    "MFA_USER_FORCED": "MFA required by an administrator",
+    "MFA_USER_FORCE_REMOVED": "MFA requirement removed by an administrator",
+    "MFA_USER_POLICY_CHANGED": "MFA policy changed by an administrator",
+}
+_PROVIDER_NAMES = {
+    ExternalIdentityProvider.apple: "Apple",
+    ExternalIdentityProvider.google: "Google",
+}
+RECENT_AUTH_EVENT_LIMIT = 10
+# Notification type sent to the user after an administrative disconnect.
+SIGN_IN_METHOD_DISCONNECTED = "account.sign_in_method_disconnected"
+
+
+@router.get("/users/{user_id}/authentication")
+async def user_authentication_summary(
+    user_id: uuid.UUID,
+    _: PlatformContext = Depends(require_roles(*SUPPORT)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    """Operational sign-in status for support: which methods exist, counts
+    and timestamps only. Never returns provider subjects, provider email,
+    tokens, credential material, push tokens or device identifiers."""
+    user = await db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That user could not be found.")
+    now = datetime.now(UTC)
+    identities = {
+        row.provider: row
+        for row in await db.scalars(
+            select(ExternalIdentity).where(ExternalIdentity.user_id == user_id)
+        )
+    }
+    password = await db.scalar(select(AuthIdentity).where(AuthIdentity.user_id == user_id))
+    passkey_count, passkey_last_used = (
+        await db.execute(
+            select(func.count(UserPasskey.id), func.max(UserPasskey.last_used_at)).where(
+                UserPasskey.user_id == user_id, UserPasskey.revoked_at.is_(None)
+            )
+        )
+    ).one()
+    active_sessions, last_session_seen = (
+        await db.execute(
+            select(func.count(Session.id), func.max(Session.last_seen_at)).where(
+                Session.user_id == user_id,
+                Session.revoked_at.is_(None),
+                Session.expires_at > now,
+            )
+        )
+    ).one()
+    trusted_devices = await db.scalar(
+        select(func.count(TrustedDevice.id)).where(
+            TrustedDevice.user_id == user_id,
+            TrustedDevice.revoked_at.is_(None),
+            TrustedDevice.expires_at > now,
+        )
+    )
+    native_rows = (
+        await db.execute(
+            select(
+                NativePushDevice.platform,
+                NativePushDevice.apns_environment,
+                NativePushDevice.disabled_at,
+                NativePushDevice.last_seen_at,
+            ).where(NativePushDevice.user_id == user_id)
+        )
+    ).all()
+    native_apps = []
+    for platform_key, label in (("ios", "iOS"), ("android", "Android")):
+        rows = [row for row in native_rows if row.platform == platform_key]
+        active = [row for row in rows if row.disabled_at is None]
+        seen = [row.last_seen_at for row in rows if row.last_seen_at is not None]
+        native_apps.append(
+            {
+                "platform": platform_key,
+                "label": label,
+                "active_registrations": len(active),
+                "disabled_registrations": len(rows) - len(active),
+                "push_environments": sorted(
+                    {row.apns_environment for row in active if row.apns_environment}
+                ),
+                "last_seen_at": max(seen) if seen else None,
+            }
+        )
+    web_push_active = await db.scalar(
+        select(func.count(PushSubscription.id)).where(
+            PushSubscription.user_id == user_id, PushSubscription.disabled_at.is_(None)
+        )
+    )
+
+    user_events = (
+        await db.scalars(
+            select(AuditEvent)
+            .where(
+                AuditEvent.actor_user_id == user_id,
+                AuditEvent.action.in_(list(_USER_AUTH_EVENT_LABELS)),
+            )
+            .order_by(AuditEvent.created_at.desc())
+            .limit(RECENT_AUTH_EVENT_LIMIT)
+        )
+    ).all()
+    admin_events = (
+        await db.scalars(
+            select(AdministrativeAuditEvent)
+            .where(
+                AdministrativeAuditEvent.target_type == "user",
+                AdministrativeAuditEvent.target_id == user_id,
+                AdministrativeAuditEvent.action.in_(list(_ADMIN_AUTH_EVENT_LABELS)),
+                # Refused attempts stay in the full PCC audit log.
+                AdministrativeAuditEvent.outcome == "succeeded",
+            )
+            .order_by(AdministrativeAuditEvent.created_at.desc())
+            .limit(RECENT_AUTH_EVENT_LIMIT)
+        )
+    ).all()
+    events: list[dict[str, Any]] = [
+        {
+            "label": _USER_AUTH_EVENT_LABELS[row.action][0],
+            "outcome": _USER_AUTH_EVENT_LABELS[row.action][1],
+            "initiated_by": "user",
+            "occurred_at": row.created_at,
+        }
+        for row in user_events
+    ]
+    for row in admin_events:
+        label = _ADMIN_AUTH_EVENT_LABELS[row.action]
+        provider_value = (row.new_values or {}).get("provider")
+        if row.action == "user.external_identity_disconnected" and provider_value in {
+            item.value for item in _PROVIDER_NAMES
+        }:
+            label = (
+                f"{_PROVIDER_NAMES[ExternalIdentityProvider(provider_value)]} "
+                "disconnected by an administrator"
+            )
+        events.append(
+            {
+                "label": label,
+                "outcome": "success",
+                "initiated_by": "administrator",
+                "occurred_at": row.created_at,
+            }
+        )
+    events.sort(key=lambda item: item["occurred_at"], reverse=True)
+
+    return {
+        "providers": [
+            {
+                "provider": provider.value,
+                "name": name,
+                "connected": provider in identities,
+                "connected_at": identities[provider].linked_at if provider in identities else None,
+                # Set when the identity is linked and on every successful
+                # sign-in with that provider (touch_external_identity).
+                "last_used_at": identities[provider].last_used_at
+                if provider in identities
+                else None,
+                "enabled_in_environment": external_auth_provider_status(
+                    settings, provider.value
+                ).enabled,
+            }
+            for provider, name in _PROVIDER_NAMES.items()
+        ],
+        "password": {
+            "available": password is not None,
+            "changed_at": password.password_changed_at if password else None,
+        },
+        "passkeys": {"count": passkey_count, "last_used_at": passkey_last_used},
+        "sessions": {
+            "active_sessions": active_sessions,
+            "trusted_devices": trusted_devices or 0,
+            "last_session_activity_at": last_session_seen,
+        },
+        "native_apps": native_apps,
+        "web_push_subscriptions": web_push_active or 0,
+        "recent_events": events[:RECENT_AUTH_EVENT_LIMIT],
+    }
+
+
+@router.post("/users/{user_id}/sign-in-methods/{provider}/disconnect")
+async def disconnect_user_sign_in_provider(
+    user_id: uuid.UUID,
+    provider: ExternalIdentityProvider,
+    body: SensitiveActionRequest,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    """Administrative unlink of an Apple/Google identity from a MyKhaya
+    account, through the provider-neutral identity service and its
+    last-usable-sign-in protection. It does not revoke OAuth grants at the
+    provider, change the provider account, end sessions, or touch the
+    user's Homes, data or subscription. Idempotent: an identity that is
+    already disconnected is reported as such, and the user is notified only
+    when something was actually disconnected."""
+    require_recent_auth(context, settings)
+    user = await db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That user could not be found.")
+    first_name = (user.display_name or "there").split(" ", 1)[0]
+    name = _PROVIDER_NAMES[provider]
+    try:
+        removed = await unlink_external_identity(
+            db,
+            request,
+            user_id=user_id,
+            provider=provider,
+            settings=settings,
+            administrator_initiated=True,
+        )
+    except ExternalIdentityNotFound:
+        # Nothing was written; the request session ends without a commit.
+        return {
+            "message": f"{name} sign-in is not connected to this account. Nothing was changed.",
+            "changed": False,
+        }
+    except LastAuthenticationMethodError:
+        # The service raises before deleting anything, so only the refusal
+        # is committed (which also releases the User row lock).
+        platform_audit(
+            db,
+            request,
+            context,
+            "user.external_identity_disconnected",
+            "user",
+            user_id,
+            outcome="failed",
+            reason=body.reason,
+            new={"provider": provider.value},
+            failure_category="last_sign_in_method",
+        )
+        await db.commit()
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"{name} is this user's only way to sign in, so it cannot be disconnected. "
+            "The user must add a password, passkey or another provider first.",
+        ) from None
+    platform_audit(
+        db,
+        request,
+        context,
+        "user.external_identity_disconnected",
+        "user",
+        user_id,
+        reason=body.reason,
+        previous={"provider": provider.value, "connected": True},
+        new={"provider": provider.value, "connected": False},
+    )
+    # Unique per linked identity row, so a retry can never notify twice.
+    notification_key = f"{SIGN_IN_METHOD_DISCONNECTED}:{removed.id}"
+    disconnected_at = datetime.now(UTC)
+    await db.commit()
+
+    # The disconnection is committed above and stands on its own. The
+    # security email is queued separately: a failure here is logged and
+    # reported, never allowed to reverse the disconnection. Delivery itself
+    # runs later in the worker via the outbox, with its own retries.
+    notified = await _queue_sign_in_method_disconnected_email(
+        db,
+        settings,
+        user_id=user_id,
+        first_name=first_name,
+        provider_name=name,
+        disconnected_at=disconnected_at,
+        idempotency_key=notification_key,
+    )
+    return {
+        "message": f"{name} sign-in was disconnected from this MyKhaya account. "
+        + (
+            "The user has been sent a security email."
+            if notified
+            else "The security email could not be queued; tell the user directly."
+        ),
+        "changed": True,
+        "user_notified": notified,
+    }
+
+
+async def _queue_sign_in_method_disconnected_email(
+    db: AsyncSession,
+    settings: Settings,
+    *,
+    user_id: uuid.UUID,
+    first_name: str,
+    provider_name: str,
+    disconnected_at: datetime,
+    idempotency_key: str,
+) -> bool:
+    try:
+        subject, message, html = await render_notification_email(
+            db,
+            settings,
+            SIGN_IN_METHOD_DISCONNECTED,
+            {
+                "user_first_name": first_name,
+                "provider_name": provider_name,
+                "disconnected_at": f"{disconnected_at.day} {disconnected_at:%B %Y, %H:%M} UTC",
+                "support_email": settings.smtp_reply_to or settings.email_from,
+            },
+        )
+        await notify(
+            db,
+            settings=settings,
+            recipient_user_id=user_id,
+            notification_type=SIGN_IN_METHOD_DISCONNECTED,
+            title=subject,
+            body=message,
+            html_body=html,
+            idempotency_key=idempotency_key,
+        )
+        await db.commit()
+    except Exception as exc:  # noqa: BLE001 - must never undo the committed unlink
+        await db.rollback()
+        log.warning(
+            "user.sign_in_method_disconnect_notification_failed",
+            user_id=str(user_id),
+            error=type(exc).__name__,
+        )
+        return False
+    return True
 
 
 async def _user_state_action(

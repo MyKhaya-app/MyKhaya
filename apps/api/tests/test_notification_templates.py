@@ -148,6 +148,7 @@ def test_registry_matches_migration_version() -> None:
     assert DEFAULT_TEMPLATE_VERSION >= 1
     assert set(TEMPLATES) == {
         "mfa_email_code",
+        "account.sign_in_method_disconnected",
         "email_verification",
         "founding_beta_welcome",
         "password_reset",
@@ -1144,6 +1145,8 @@ def test_security_critical_templates_all_require_their_link() -> None:
         "legal_acceptance_confirmation": frozenset(
             {"document_name", "document_version", "acceptance_reference"}
         ),
+        # A security notice with nothing to click: it names the provider.
+        "account.sign_in_method_disconnected": frozenset({"provider_name"}),
     }
     for template_type, default in TEMPLATES.items():
         if default.security_critical:

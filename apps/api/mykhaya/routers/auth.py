@@ -1143,6 +1143,7 @@ async def unlink_apple_identity(
     request: Request,
     auth: AuthContext = Depends(auth_context),
     db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
 ) -> dict[str, str]:
     require_fresh_adult_auth(auth)
     try:
@@ -1151,6 +1152,7 @@ async def unlink_apple_identity(
             request,
             user_id=auth.user.id,
             provider=ExternalIdentityProvider.apple,
+            settings=settings,
         )
     except ExternalIdentityNotFound:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No Apple identity is linked.") from None
@@ -1676,11 +1678,16 @@ async def unlink_google_identity(
     request: Request,
     auth: AuthContext = Depends(auth_context),
     db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
 ) -> dict[str, str]:
     require_fresh_adult_auth(auth)
     try:
         await unlink_external_identity(
-            db, request, user_id=auth.user.id, provider=ExternalIdentityProvider.google
+            db,
+            request,
+            user_id=auth.user.id,
+            provider=ExternalIdentityProvider.google,
+            settings=settings,
         )
     except ExternalIdentityNotFound:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "No Google identity is linked.") from None

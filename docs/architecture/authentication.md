@@ -44,7 +44,7 @@ Database ownership, provider-subject lookup, metadata refresh, linking,
 concurrency conflict handling and safe unlinking live in the provider-neutral
 `mykhaya.external_identities` service. Provider boundaries supply only a
 verified stable subject and provider metadata. Unlinking refuses to remove a
-user's final usable password, passkey or external identity. Apple retains its
+user's final usable password, passkey or external identity, where an external identity counts only if its provider is enabled in this environment. It locks the user row, so concurrent unlinks for one user cannot both pass that check. PCC Owners and Administrators can disconnect an Apple or Google identity through the same service (see "User Authentication tab" in [Platform Control Centre](platform-control-centre.md)). That is an audited unlink from MyKhaya, not OAuth token revocation at the provider, and the user is sent an account-security email. Apple retains its
 own OAuth state, nonce, code exchange, JWT validation and recovery-transaction
 storage; a future Google ceremony can use the same identity service without
 introducing a second account-linking policy.

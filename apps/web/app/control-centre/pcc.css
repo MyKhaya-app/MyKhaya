@@ -3727,6 +3727,43 @@
 .pcc-root .cc-user-profile-page.is-tab-activity .cc-user-bottom-grid > #notes, .pcc-root .cc-user-profile-page.is-tab-notes .cc-user-bottom-grid > #activity { display: none; }
 .pcc-root .cc-user-profile-page.is-tab-activity .cc-user-bottom-grid, .pcc-root .cc-user-profile-page.is-tab-notes .cc-user-bottom-grid { grid-template-columns: minmax(0, 1fr); }
 
+/* PCC user Authentication tab: Authentication & MFA beside Connected Sign-in
+   Methods, then sessions/app registrations and recent authentication
+   activity. Desktop-first; stacks to one column on narrow PCC windows. */
+.pcc-root .cc-user-profile-page.is-tab-authentication .cc-user-detail-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.pcc-root .cc-user-profile-page.is-tab-authentication .cc-user-bottom-grid { display: none; }
+.pcc-root .cc-user-auth-support { display: grid; gap: 16px; margin-top: 16px; }
+.pcc-root .cc-user-auth-support-grid { align-items: start; display: grid; gap: 16px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.pcc-root .cc-user-sign-in-list { list-style: none; margin: 0; padding: 4px 16px 8px; }
+.pcc-root .cc-user-sign-in-item { align-items: center; border-bottom: 1px solid #f2f4f7; display: grid; gap: 10px; grid-template-columns: 34px minmax(0, 1fr) auto auto; padding: 10px 2px; }
+.pcc-root .cc-user-sign-in-item:last-child { border-bottom: 0; }
+.pcc-root .cc-user-sign-in-icon { align-items: center; background: #f2f4f7; border-radius: 8px; color: #101828; display: inline-flex; height: 34px; justify-content: center; width: 34px; }
+.pcc-root .cc-user-sign-in-copy { display: grid; gap: 2px; min-width: 0; }
+.pcc-root .cc-user-sign-in-copy strong { color: #344054; font-size: 13px; }
+.pcc-root .cc-user-sign-in-copy small { color: #667085; font-size: 12px; line-height: 1.4; overflow-wrap: anywhere; }
+.pcc-root .cc-user-sign-in-copy .cc-user-sign-in-warning { color: #b54708; }
+.pcc-root .cc-user-sign-in-disconnect { align-items: center; background: #fff; border: 1px solid #fda29b; border-radius: 7px; color: #b42318; cursor: pointer; display: inline-flex; font-size: 12px; font-weight: 600; gap: 6px; justify-content: center; min-height: 32px; padding: 6px 11px; white-space: nowrap; }
+.pcc-root .cc-user-sign-in-disconnect:hover:not(:disabled) { background: #fef3f2; }
+.pcc-root .cc-user-sign-in-disconnect:focus-visible { outline: 2px solid #d92d20; outline-offset: 2px; }
+.pcc-root .cc-user-sign-in-disconnect:disabled { cursor: not-allowed; opacity: .55; }
+.pcc-root .cc-user-auth-card-actions { padding: 0 16px 14px; }
+/* The legacy `.platform-page section` bottom margin would add to the grid
+   gaps on this tab; spacing here comes from the grid gaps alone. */
+.pcc-root .cc-user-profile-page.is-tab-authentication .cc-user-detail-grid > section, .pcc-root .cc-user-auth-support section { margin-bottom: 0; }
+/* Labels are written in their final case ("iOS App"), so PCC's capitalised
+   definition-list styling must not rewrite them to "IOS App". */
+.pcc-root .cc-user-auth-native dt { text-transform: none; }
+.pcc-root .cc-user-auth-support .cc-user-profile-empty { padding: 12px 2px; }
+.pcc-root .cc-user-activity-dot.is-success { background: #12b76a; border-color: #d1fadf; }
+.pcc-root .cc-user-activity-dot.is-failure { background: #d92d20; border-color: #fee4e2; }
+@media (max-width: 900px) {
+  .pcc-root .cc-user-profile-page.is-tab-authentication .cc-user-detail-grid, .pcc-root .cc-user-auth-support-grid { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 560px) {
+  .pcc-root .cc-user-sign-in-item { grid-template-columns: 34px minmax(0, 1fr); }
+  .pcc-root .cc-user-sign-in-item > .cc-badge, .pcc-root .cc-user-sign-in-item > .cc-user-sign-in-disconnect { grid-column: 2; justify-self: start; }
+}
+
 /* Users list: use the full PCC data-management canvas without changing the
    shared page/card/table components used by other management pages. */
 .pcc-root .cc-users-proof { margin-inline: 0; max-width: none; width: 100%; }

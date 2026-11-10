@@ -1100,7 +1100,17 @@ class CalendarShare(UuidTimeMixin, Base):
 
 class AuditEvent(Base):
     __tablename__ = "audit_events"
-    __table_args__ = (Index("ix_audit_group_created", "group_id", "created_at"),)
+    __table_args__ = (
+        Index("ix_audit_group_created", "group_id", "created_at"),
+        # A user's own recent events (PCC Authentication tab); built
+        # concurrently by migration 0127.
+        Index(
+            "ix_audit_actor_created",
+            "actor_user_id",
+            "created_at",
+            postgresql_where=text("actor_user_id IS NOT NULL"),
+        ),
+    )
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid7)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     group_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("groups.id", ondelete="SET NULL"))

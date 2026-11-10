@@ -261,3 +261,107 @@ session flow is introduced by the PCC. A complete Apple configuration is
 reported as enabled only when the deployment flag is explicitly enabled; the
 PCC has no secret-write or provider-disable control, so shutdown remains an
 infrastructure change subject to the deployment runbook.
+
+## User Authentication tab
+
+**People → Users → user → Authentication** gives Support and administrators an
+operational view of how a consumer account signs in, without exposing identity
+data. It is served by `GET /api/v1/platform/users/{id}/authentication` (Owner,
+Administrator and Support, the same roles as the user detail) and contains:
+
+- **Authentication & MFA**: the effective MFA requirement, where it comes from
+  (platform default, a Home policy, a user-specific override or the rollout
+  setting), allowed and enrolled methods, and the existing policy override
+  form. The form is shown only to roles that can change the policy.
+- **Connected Sign-in Methods**: for Apple and Google, whether an identity is
+  connected, when it was connected, and when it was last used (set on linking
+  and on every successful sign-in with that provider), plus a warning when the
+  provider is turned off in this environment. It also shows whether password
+  sign-in is available (with its last change) and how many active passkeys
+  exist. Provider subject identifiers, provider email addresses, tokens and
+  credential material are never returned.
+- **Sessions & Trusted Devices**: active session and trusted-device counts and
+  the latest session activity, with the existing **Revoke all sessions** action
+  for roles that already have it.
+- **App & Push Registrations**: active and disabled iOS/Android push
+  registrations, their APNs environment and last-seen time, and the number of
+  active web push subscriptions. Push tokens, installation identifiers and
+  device labels are never returned, and app versions are not recorded.
+- **Recent Authentication Activity**: up to ten recent events with fixed
+  labels, drawn from the user's own authentication audit events (sign-in,
+  MFA outcome, Apple/Google sign-in, connect/disconnect, sign-out, password
+  reset, authenticator changes) and from succeeded administrative actions on
+  the user (session revocation, password-reset email, suspension, MFA policy,
+  provider disconnection). Audit metadata is never returned. Failed password
+  attempts and passkey changes are not recorded per user, so they cannot
+  appear. Refused administrative attempts remain in the full Audit log. The
+  user-side read uses the partial index `ix_audit_actor_created`
+  (`audit_events (actor_user_id, created_at) WHERE actor_user_id IS NOT
+  NULL`, migration 0127, built concurrently).
+
+The user detail response carries `viewer_permissions`, derived from the same
+role tuples the mutation routes enforce, so the UI hides controls a role cannot
+use. Every route still enforces its own role server-side.
+
+### Administrative Apple/Google disconnection
+
+`POST /api/v1/platform/users/{id}/sign-in-methods/{apple|google}/disconnect`
+removes the link between a provider identity and the MyKhaya account by calling
+the provider-neutral `unlink_external_identity` service, the same service the
+user's own Sign-in Methods page uses. It:
+
+- is restricted to **Platform Owner and Administrator**. Support can see the
+  status but cannot disconnect, because removing a sign-in method can lock a
+  user out of a method they rely on;
+- requires recent administrator authentication, explicit confirmation and a
+  reason of at least 10 characters;
+- is refused with `409` when the provider is the user's last usable sign-in
+  method. Usable means a password, an unrevoked passkey, or another linked
+  provider that is enabled in this environment. A linked identity for a
+  provider that is switched off does not count, because it cannot be used to
+  sign in. The refusal is audited with `failure_category="last_sign_in_method"`;
+- is idempotent: an identity that is already disconnected returns
+  `changed: false`, writes nothing and sends nothing;
+- locks the user row inside the service, so concurrent unlinks for one user
+  (by the user and by an administrator) cannot both pass the last-method
+  check;
+- records `user.external_identity_disconnected` in the administrative audit
+  (acting administrator, target user, provider, time and reason). The user's
+  own audit row `external_identity.unlinked` is written with no user actor and
+  `initiated_by: platform_administrator`, so it never claims the user did it;
+- sends the user an `account.sign_in_method_disconnected` security email
+  through `notify()`. It is a mandatory, non-disableable account-security
+  type, so preferences cannot suppress it. The email names the provider and
+  explains what was and was not changed. It never includes the provider
+  identifier, provider email, the administrator or the reason. It is queued
+  only after the disconnection and its audit row are committed, in a separate
+  step. A failure there is logged and returned as `user_notified: false` (the
+  PCC message then tells the operator to contact the user), and never reverses
+  the disconnection. Its idempotency key is the removed identity's row ID, so
+  a retry cannot send it twice. Actual delivery is the worker's outbox
+  delivery with its normal retries.
+
+It is **not** OAuth token revocation. It does not contact Apple or Google,
+revoke the user's grant there, or change their provider account. It also does
+not end sessions, and does not touch Homes, data or subscription. The user can
+reconnect the provider from their own Sign-in Methods page, or sign in with the
+provider again and explicitly link it to their account through the existing
+recovery flow.
+
+### Support troubleshooting workflow
+
+1. Open the user's **Authentication** tab and check **Connected Sign-in
+   Methods**. A "turned off in this environment" warning means the provider
+   is disabled in deployment configuration, not that the user's account is at
+   fault.
+2. Check **Recent Authentication Activity** for failed Apple/Google sign-ins or
+   MFA failures, and **Sessions & Trusted Devices** for whether the user is
+   signed in anywhere.
+3. If a provider link is broken (for example the user cannot complete Apple
+   sign-in and needs to relink), confirm the user has another way to sign in,
+   then ask an Owner or Administrator to **Disconnect** it with the support
+   ticket reference as the reason. The user receives a security email and can
+   then reconnect it. If PCC reports that the email could not be queued, tell
+   the user directly.
+4. Use the existing **Send password-reset email** or **Revoke all sessions**
+   actions where appropriate. Disconnecting a provider does neither.

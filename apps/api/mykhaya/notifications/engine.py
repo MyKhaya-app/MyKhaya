@@ -69,6 +69,8 @@ MANDATORY_EMAIL_TYPES = {
     # a household_invitation — the recipient can't accept/decline without it.
     "calendar_share_invitation",
     "mfa_email_code",
+    # A Platform administrator removed one of the user's sign-in methods.
+    "account.sign_in_method_disconnected",
     # Confirmation of a Founding Beta enrolment the user has just completed.
     "founding_beta_welcome",
     "support.ticket.received",

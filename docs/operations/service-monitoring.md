@@ -146,10 +146,12 @@ Run on DEV only, by an operator with DEV PCC Owner/Administrator access.
 Never inject faults in PROD (the API and runner both refuse), and never
 disrupt a real provider or account.
 
-1. **Deploy and migrate.** After the approved DEV deployment, confirm
-   `docker compose exec api alembic current` shows
-   `0126_monitoring_internal_checks (head)`, and the internal probes above
-   return `SUCCESS`.
+1. **Deploy and migrate.** After the approved DEV deployment, run
+   `docker compose exec api alembic heads` and
+   `docker compose exec api alembic current`. `current` must print the same
+   single revision as `heads`, marked `(head)`. Monitoring needs
+   `0126_monitoring_internal_checks` or later; any later head includes it.
+   The internal probes above must also return `SUCCESS`.
 2. **Scheduler active.** In `docker compose logs scheduler`, look for
    `monitoring.transition` lines on first start (`unknown → healthy`).
    PCC **Health → Automated monitoring** shows *Monitoring running* and

@@ -13,10 +13,13 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.audit import audit
+from mykhaya.auth_providers import external_auth_provider_status
+from mykhaya.config import Settings
 from mykhaya.models import (
     AuthIdentity,
     ExternalIdentity,
     ExternalIdentityProvider,
+    User,
     UserPasskey,
 )
 
@@ -118,9 +121,25 @@ async def unlink_external_identity(
     *,
     user_id: UUID,
     provider: ExternalIdentityProvider,
+    settings: Settings,
+    administrator_initiated: bool = False,
 ) -> ExternalIdentity:
-    """Unlink an identity only when another usable sign-in remains."""
+    """Unlink an identity only when another usable sign-in remains.
 
+    Usable means: a password, an unrevoked passkey, or another provider
+    identity whose provider is enabled in this environment. A linked
+    identity for a provider that is switched off cannot be used to sign in,
+    so it does not count (password and passkey sign-in have no such switch).
+
+    The User row is locked first, so concurrent unlinks for the same User
+    (for example the user in the app and an administrator in PCC) are
+    serialised and cannot both pass the last-usable-sign-in check.
+
+    ``administrator_initiated`` is set by the Platform Control Centre: the
+    user audit row then records no user as the actor (the acting
+    administrator is recorded in the administrative audit by the caller)."""
+
+    await db.scalar(select(User.id).where(User.id == user_id).with_for_update())
     identity = await db.scalar(
         select(ExternalIdentity)
         .where(ExternalIdentity.user_id == user_id, ExternalIdentity.provider == provider)
@@ -131,11 +150,21 @@ async def unlink_external_identity(
     password_identity = await db.scalar(
         select(AuthIdentity.id).where(AuthIdentity.user_id == user_id)
     )
-    other_external_identity = await db.scalar(
-        select(ExternalIdentity.id).where(
-            ExternalIdentity.user_id == user_id,
-            ExternalIdentity.id != identity.id,
+    enabled_providers = [
+        item
+        for item in ExternalIdentityProvider
+        if external_auth_provider_status(settings, item.value).enabled
+    ]
+    other_external_identity = (
+        await db.scalar(
+            select(ExternalIdentity.id).where(
+                ExternalIdentity.user_id == user_id,
+                ExternalIdentity.id != identity.id,
+                ExternalIdentity.provider.in_(enabled_providers),
+            )
         )
+        if enabled_providers
+        else None
     )
     active_passkey = await db.scalar(
         select(UserPasskey.id).where(
@@ -146,5 +175,16 @@ async def unlink_external_identity(
     if password_identity is None and other_external_identity is None and active_passkey is None:
         raise LastAuthenticationMethodError
     await db.delete(identity)
-    audit(db, request, "external_identity.unlinked", user_id, target_type="external_identity")
+    if administrator_initiated:
+        audit(
+            db,
+            request,
+            "external_identity.unlinked",
+            None,
+            target_type="user",
+            target_id=user_id,
+            metadata={"initiated_by": "platform_administrator", "provider": provider.value},
+        )
+    else:
+        audit(db, request, "external_identity.unlinked", user_id, target_type="external_identity")
     return identity
