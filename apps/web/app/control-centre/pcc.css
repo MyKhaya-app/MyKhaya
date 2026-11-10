@@ -4286,8 +4286,16 @@
 .pcc-root .cc-legal-history-item { border-bottom: 1px solid var(--cc-border); padding: 0.9rem 0; }
 .pcc-root .cc-legal-history-item:last-child { border-bottom: 0; }
 .pcc-root .cc-user-legal-card { margin: 1rem 0; }
-.pcc-root .cc-user-legal-row { border-top: 1px solid var(--cc-border); display: flex; gap: 1rem; justify-content: space-between; padding: 0.7rem 0; }
-.pcc-root .cc-user-legal-row span { color: var(--cc-text-muted); }
+.pcc-root .cc-user-legal-body { padding: 4px 16px 6px; }
+.pcc-root .cc-user-legal-body > p { font-size: 13px; margin: 8px 2px 10px; }
+.pcc-root .cc-user-legal-row { align-items: center; border-top: 1px solid #f2f4f7; display: flex; flex-wrap: wrap; gap: 6px 16px; justify-content: space-between; padding: 10px 2px; }
+.pcc-root .cc-user-legal-row strong { color: #344054; font-size: 13px; }
+.pcc-root .cc-user-legal-status { align-items: center; display: inline-flex; flex-wrap: wrap; gap: 6px 10px; justify-content: flex-end; min-width: 0; }
+.pcc-root .cc-user-legal-status > span { color: var(--cc-text-muted); font-size: 13px; overflow-wrap: anywhere; }
+@media (max-width: 560px) {
+  .pcc-root .cc-user-legal-row { align-items: flex-start; flex-direction: column; }
+  .pcc-root .cc-user-legal-status { justify-content: flex-start; }
+}
 .pcc-root .cc-legal-history-item h3 { margin: 0 0 0.35rem; }
 @media (max-width: 900px) {
   .pcc-root .cc-legal-filter-bar, .pcc-root .cc-compliance-form { grid-template-columns: repeat(2, minmax(0, 1fr)); }

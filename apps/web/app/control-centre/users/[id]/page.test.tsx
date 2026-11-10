@@ -606,3 +606,29 @@ describe("User detail — Authentication tab", () => {
     expect(await screen.findByText("Unable to load sign-in methods.")).toBeInTheDocument();
   });
 });
+
+describe("User detail — Legal & Privacy", () => {
+  it("states what each document needs in plain words, with a status badge", async () => {
+    get.mockImplementation((path: string) => {
+      if (path === "/compliance/acceptance/user-1") {
+        return Promise.resolve({
+          account_type: "adult",
+          history: [],
+          current_status: [
+            { display_name: "Privacy Policy", action_verb: "acknowledge", current_version: "1.0", satisfied: true, last_version: "1.0" },
+            { display_name: "Terms & Conditions", action_verb: "accept", current_version: "1.4", satisfied: false, last_version: "1.3" },
+            { display_name: "Founding Beta Terms", action_verb: "accept", current_version: "1.1", satisfied: false, last_version: null },
+          ],
+        });
+      }
+      return Promise.resolve(verifiedUser);
+    });
+    render(<DetailPage />);
+    const card = (await screen.findByRole("heading", { name: /Legal & Privacy/ })).closest("section")!;
+    expect(await within(card).findByText("Acknowledged version 1.0")).toBeInTheDocument();
+    expect(within(card).getByText("Needs to accept version 1.4 (accepted 1.3)")).toBeInTheDocument();
+    expect(within(card).getByText("Needs to accept version 1.1")).toBeInTheDocument();
+    expect(within(card).getByText("Current")).toBeInTheDocument();
+    expect(within(card).getAllByText("Action required")).toHaveLength(2);
+  });
+});
