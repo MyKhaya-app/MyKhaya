@@ -629,7 +629,11 @@ async def test_pcc_fault_injection_confirms_immediately_and_stop_recovers(
     assert [alert.kind for alert in raised] == ["unavailable"]
     assert raised[0].suppressed_reason is None
     assert "DEV fault injection" in raised[0].summary
-    assert len(await deliveries_for(raised[0])) == 1
+    # One email per configured recipient (other tests may leave further
+    # active administrators behind), including this owner.
+    delivery_keys = {delivery.idempotency_key for delivery in await deliveries_for(raised[0])}
+    assert len(delivery_keys) == raised[0].recipient_count
+    assert any(f"admin:{owner.id}" in key for key in delivery_keys)
 
     # Scheduled checks during the simulation repeat the state: nothing new.
     now = datetime.now(UTC)
