@@ -25,6 +25,7 @@ from mykhaya.db import SessionFactory
 from mykhaya.main import app
 from mykhaya.models import (
     ActionToken,
+    AuditEvent,
     FeatureFlag,
     FeatureKey,
     HouseholdRelationship,
@@ -34,6 +35,7 @@ from mykhaya.models import (
     Role,
     SupportTicket,
     SupportTicketDiagnostic,
+    SupportTicketStatus,
     TokenPurpose,
     User,
 )
@@ -682,3 +684,121 @@ async def test_ticket_is_invisible_to_other_member_of_same_home_including_owner(
         )
         assert diagnostic is not None
     assert user_b_id
+
+
+# --- requester closes their own ticket --------------------------------------
+
+
+async def _create_ticket_via_api(client: AsyncClient, subject: str = "Close me") -> str:
+    created = await unsafe(
+        client,
+        "POST",
+        "/api/v1/support/tickets",
+        json={"type": "support", "subject": subject, "description": "Details.", "source": "web"},
+    )
+    assert created.status_code == 201, created.text
+    return str(created.json()["id"])
+
+
+async def _set_status(ticket_id: str, status: SupportTicketStatus, **fields: object) -> None:
+    async with SessionFactory() as db:
+        ticket = await db.get(SupportTicket, uuid.UUID(ticket_id))
+        assert ticket is not None
+        ticket.status = status
+        for key, value in fields.items():
+            setattr(ticket, key, value)
+        await db.commit()
+
+
+async def _close_audits(ticket_id: str) -> list[AuditEvent]:
+    async with SessionFactory() as db:
+        rows = await db.scalars(
+            select(AuditEvent).where(
+                AuditEvent.action == "support.ticket.closed_by_requester",
+                AuditEvent.target_id == uuid.UUID(ticket_id),
+            )
+        )
+        return list(rows.all())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "starting_status",
+    [
+        SupportTicketStatus.open,
+        SupportTicketStatus.in_progress,
+        SupportTicketStatus.waiting_for_user,
+        SupportTicketStatus.resolved,
+    ],
+)
+async def test_requester_closes_own_ticket_from_any_open_status(
+    client: AsyncClient, starting_status: SupportTicketStatus
+) -> None:
+    user_id = await create_verified_user(client, unique_email("closer"), "Closer User")
+    ticket_id = await _create_ticket_via_api(client)
+    reply = await unsafe(
+        client, "POST", f"/api/v1/support/tickets/{ticket_id}/messages", json={"message": "Hi"}
+    )
+    assert reply.status_code == 201
+    resolved_at = datetime(2026, 1, 2, 3, 4, tzinfo=UTC)
+    if starting_status == SupportTicketStatus.resolved:
+        await _set_status(ticket_id, starting_status, resolved_at=resolved_at)
+    elif starting_status != SupportTicketStatus.open:
+        await _set_status(ticket_id, starting_status)
+
+    closed = await unsafe(client, "POST", f"/api/v1/support/tickets/{ticket_id}/close")
+    assert closed.status_code == 200, closed.text
+    body = closed.json()
+    assert body["status"] == "closed"
+    assert body["resolved_at"] is not None
+    if starting_status == SupportTicketStatus.resolved:
+        # The resolution time the team recorded is kept.
+        assert datetime.fromisoformat(body["resolved_at"]) == resolved_at
+    # The conversation is kept.
+    assert [message["message"] for message in body["messages"]] == ["Hi"]
+    audits = await _close_audits(ticket_id)
+    assert len(audits) == 1
+    assert audits[0].actor_user_id == user_id
+    assert audits[0].metadata_["previous_status"] == starting_status.value
+
+
+@pytest.mark.asyncio
+async def test_closing_an_already_closed_ticket_changes_nothing(client: AsyncClient) -> None:
+    await create_verified_user(client, unique_email("closetwice"), "Close Twice User")
+    ticket_id = await _create_ticket_via_api(client)
+    first = await unsafe(client, "POST", f"/api/v1/support/tickets/{ticket_id}/close")
+    second = await unsafe(client, "POST", f"/api/v1/support/tickets/{ticket_id}/close")
+    assert first.status_code == 200 and second.status_code == 200
+    assert second.json()["status"] == "closed"
+    assert second.json()["resolved_at"] == first.json()["resolved_at"]
+    assert len(await _close_audits(ticket_id)) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_user_cannot_close_someone_elses_ticket(client: AsyncClient) -> None:
+    await create_verified_user(client, unique_email("ticketowner"), "Ticket Owner")
+    group_id = await create_home(client, "Shared Support Home")
+    ticket_id = await _create_ticket_via_api(client, "Owner's private ticket")
+    async with AsyncClient(
+        transport=ASGITransport(app=app, client=("127.0.0.2", 123)),
+        base_url=ORIGIN,
+        headers={"Origin": ORIGIN},
+    ) as other:
+        other_id = await create_verified_user(other, unique_email("otheruser"), "Other User")
+        # Even the Owner of the same Home cannot close it.
+        async with SessionFactory() as db:
+            db.add(
+                Membership(
+                    group_id=group_id,
+                    user_id=other_id,
+                    role=Role.owner,
+                    relationship=HouseholdRelationship.partner,
+                    permission_profile=PermissionProfile.home_admin,
+                )
+            )
+            await db.commit()
+        response = await unsafe(other, "POST", f"/api/v1/support/tickets/{ticket_id}/close")
+        assert response.status_code == 404
+    owned = await unsafe(client, "GET", f"/api/v1/support/tickets/{ticket_id}")
+    assert owned.json()["status"] == "open"
+    assert await _close_audits(ticket_id) == []

@@ -557,6 +557,13 @@ export class MyKhayaClient {
       `/support/tickets/${encodeURIComponent(ticketId)}/messages`,
       { method: "POST", body: JSON.stringify(body) },
     );
+  // The requester closes their own ticket; returns the updated ticket.
+  // Closing an already-closed ticket is a no-op on the server.
+  closeSupportTicket = (ticketId: string) =>
+    this.request<SupportTicketResponse>(
+      `/support/tickets/${encodeURIComponent(ticketId)}/close`,
+      { method: "POST", body: "{}" },
+    );
   activityHeartbeat = () =>
     this.request<void>("/activity/heartbeat", { method: "POST", body: "{}" });
   productUsageEvent = (body: {

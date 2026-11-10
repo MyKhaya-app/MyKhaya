@@ -80,6 +80,9 @@ MANDATORY_EMAIL_TYPES = {
     # always None — see support_notifications.ticket_follow_up), so it must
     # be mandatory to satisfy notify()'s "no user account yet" exemption.
     "support.ticket.follow_up",
+    # Team-only, like follow_up: sent by address to PCC administrators (and
+    # optionally the support inbox), who have no consumer account.
+    "support.ticket.new_for_team",
     "legal_acceptance_confirmation",
     # Platform Control Centre monitoring alerts (mykhaya.monitoring.alerts).
     # Recipients are PCC administrators, who have no MyKhaya consumer account,

@@ -2917,6 +2917,19 @@ html.native-shell .home-section-overlap {
 .support-request-created {
   font-size: 0.85rem;
 }
+/* Requester's Close ticket action and its confirmation sheet body. */
+.support-request-actions {
+  display: flex;
+  justify-content: flex-start;
+  margin-top: 0.75rem;
+}
+.support-close-confirmation {
+  display: grid;
+  gap: 0.85rem;
+}
+.support-close-confirmation p {
+  margin: 0;
+}
 .vehicle-photo-card {
   align-items: center;
   display: grid;

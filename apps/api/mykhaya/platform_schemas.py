@@ -1283,6 +1283,34 @@ class PlatformSupportTicketMessageCreate(StrictModel):
     message: str = Field(min_length=1, max_length=4000)
 
 
+PlatformRoleValue = Literal[
+    "platform_owner",
+    "platform_administrator",
+    "support_operator",
+    "security_operator",
+    "read_only_operator",
+]
+
+
+class SupportNewTicketNotificationSettings(BaseModel):
+    """Who is emailed when a new support ticket is created. `configured`
+    is false until an administrator first saves it; until then the original
+    behaviour applies (only the support inbox gets the team copy)."""
+
+    configured: bool
+    enabled: bool
+    roles: list[PlatformRoleValue]
+    include_support_inbox: bool
+    recipient_count: int
+    can_manage: bool
+
+
+class SupportNewTicketNotificationUpdate(SensitiveActionRequest):
+    enabled: bool
+    roles: list[PlatformRoleValue] = Field(max_length=5)
+    include_support_inbox: bool
+
+
 class PlatformSupportSettingsResponse(BaseModel):
     """Read-only support-behaviour summary for PCC's Support Settings page.
     Deliberately does NOT repeat `support_enabled` (see GET /platform/modules
@@ -1290,9 +1318,11 @@ class PlatformSupportSettingsResponse(BaseModel):
     `service_status_url` (see GET /platform/settings — the PlatformSetting
     row is that value's one owner). This exists only for the one value
     neither of those surfaces already exposes: the env-only, non-runtime-
-    editable support-team notification destination."""
+    editable support-team notification destination, and the runtime-editable
+    new-ticket email recipients."""
 
     support_notification_email: str | None
+    new_ticket_notifications: SupportNewTicketNotificationSettings
 
 
 class AcceptanceDocumentSummary(BaseModel):

@@ -4647,3 +4647,16 @@
 .pcc-root .pccs-root .pccs-savebar-sum div { color: var(--pccs-text-2); }
 .pcc-root .pccs-root .pccs-savebar-reason { display: block; flex: 1 1 320px; font-weight: 400; margin: 0; }
 .pcc-root .pccs-confirm-list { margin: 0 0 12px; padding-left: 1.2rem; }
+
+/* PCC Support settings: new ticket email notifications form. */
+.pcc-root .cc-support-notify-form { border-top: 1px solid var(--cc-border); display: grid; gap: 0.9rem; margin-top: 1rem; max-width: 42rem; padding-top: 1rem; }
+.pcc-root .cc-support-notify-form fieldset { border: 0; display: grid; gap: 0.45rem; margin: 0; min-width: 0; padding: 0; }
+.pcc-root .cc-support-notify-form legend { color: var(--cc-text); font-size: 0.8125rem; font-weight: 600; margin-bottom: 0.35rem; padding: 0; }
+.pcc-root .cc-support-notify-form small { color: var(--cc-text-muted); font-size: 0.75rem; line-height: 1.4; }
+.pcc-root .cc-support-notify-roles { display: grid; gap: 0.4rem 1rem; grid-template-columns: repeat(auto-fill, minmax(12rem, 1fr)); }
+.pcc-root .cc-support-notify-check { align-items: flex-start; color: var(--cc-text); display: flex; font-size: 0.875rem; gap: 0.5rem; line-height: 1.4; }
+/* The shared PCC input rule makes inputs full width; a checkbox must keep
+   its own size so its label wraps beside it instead of overflowing. */
+.pcc-root .cc-support-notify-check input { flex: 0 0 auto; height: auto; margin: 0.2rem 0 0; min-height: 0; min-width: 0; width: auto; }
+.pcc-root .cc-support-notify-check { min-width: 0; overflow-wrap: anywhere; }
+.pcc-root .cc-support-notify-form .cc-field { margin: 0; }

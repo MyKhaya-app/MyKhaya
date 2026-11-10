@@ -7,17 +7,47 @@ Notification Engine and never makes a support state change fail.
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
+from typing import Any
 
 import structlog
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.config import Settings
-from mykhaya.models import SupportMessageVisibility, SupportTicket, SupportTicketStatus, User
+from mykhaya.models import (
+    PlatformAdministrator,
+    PlatformRole,
+    PlatformSetting,
+    SupportMessageVisibility,
+    SupportTicket,
+    SupportTicketStatus,
+    User,
+)
 from mykhaya.notifications.deep_links import DeepLinkTarget, target
 from mykhaya.notifications.engine import notify
 from mykhaya.notifications.templates import render_notification_email
 
 log = structlog.get_logger()
+
+# PCC Support settings: who is emailed when a new ticket is created. Stored as
+# a PlatformSetting in this environment's own database (DEV and PROD are
+# independent). Defaults keep the original behaviour (see
+# load_new_ticket_settings) until an administrator saves it.
+NEW_TICKET_SETTINGS_KEY = "support_ticket_notifications"
+NEW_TICKET_TEAM_TYPE = "support.ticket.new_for_team"
+DEFAULT_NEW_TICKET_SETTINGS: dict[str, Any] = {
+    "enabled": True,
+    "roles": [],
+    "include_support_inbox": True,
+}
+PRIORITY_LABELS = {"normal": "Normal", "elevated": "Elevated", "blocking": "Blocking"}
+
+
+def _environment_label(settings: Settings) -> str:
+    return {"production": "PROD", "development": "DEV"}.get(
+        settings.environment, settings.environment.upper()
+    )
 
 
 def _ticket_type(ticket: SupportTicket) -> str:
@@ -94,19 +124,52 @@ async def _notify_reply_in_app_and_push(
     )
 
 
-async def ticket_received(
-    db: AsyncSession, settings: Settings, ticket: SupportTicket, requester: User
-) -> None:
-    try:
-        await _queue(
-            db,
-            settings,
-            recipient_user_id=requester.id,
-            recipient_email=requester.email,
-            notification_type="support.ticket.received",
-            ticket=ticket,
-            idempotency_key=f"support.ticket.received:{ticket.id}:requester",
+async def load_new_ticket_settings(db: AsyncSession) -> tuple[bool, dict[str, Any]]:
+    """(configured, values). Not configured means no administrator has saved
+    the setting yet, and the original behaviour applies unchanged: the
+    deployment's support inbox (MYKHAYA_SUPPORT_NOTIFICATION_EMAIL) gets its
+    copy of support.ticket.received, and no PCC role is emailed."""
+    row = await db.scalar(
+        select(PlatformSetting).where(PlatformSetting.key == NEW_TICKET_SETTINGS_KEY)
+    )
+    stored = dict((row.value if row else {}).get("value") or {})
+    return row is not None, {**DEFAULT_NEW_TICKET_SETTINGS, **stored}
+
+
+async def resolve_new_ticket_recipients(
+    db: AsyncSession, settings: Settings, values: dict[str, Any]
+) -> list[tuple[str, str]]:
+    """(stable recipient key, email): every active PCC administrator in the
+    selected roles who has an email address, plus the support inbox when
+    included. Resolved at send time, so role changes and deactivations apply
+    immediately. Deduplicated case-insensitively, so someone in several
+    selected roles, or whose address is also the inbox, gets one email."""
+    recipients: dict[str, tuple[str, str]] = {}
+    roles = [PlatformRole(value) for value in values.get("roles", []) if value]
+    if roles:
+        admins = await db.scalars(
+            select(PlatformAdministrator)
+            .where(
+                PlatformAdministrator.is_active.is_(True),
+                PlatformAdministrator.role.in_(roles),
+            )
+            .order_by(PlatformAdministrator.created_at)
         )
+        for admin in admins:
+            if admin.email and "@" in admin.email:
+                recipients.setdefault(admin.email.casefold(), (f"admin:{admin.id}", admin.email))
+    inbox = settings.support_notification_email
+    if values.get("include_support_inbox") and inbox and "@" in inbox:
+        recipients.setdefault(inbox.casefold(), ("inbox", inbox))
+    return list(recipients.values())
+
+
+async def _notify_team_of_new_ticket(
+    db: AsyncSession, settings: Settings, ticket: SupportTicket
+) -> None:
+    configured, values = await load_new_ticket_settings(db)
+    if not configured:
+        # Original behaviour, kept until an administrator saves the setting.
         if settings.support_notification_email:
             await _queue(
                 db,
@@ -119,8 +182,70 @@ async def ticket_received(
             )
         else:
             log.info("support.notification_destination_missing", ticket_id=str(ticket.id))
+        return
+    if not values.get("enabled"):
+        log.info("support.new_ticket_notifications_disabled", ticket_id=str(ticket.id))
+        return
+    recipients = await resolve_new_ticket_recipients(db, settings, values)
+    if not recipients:
+        log.info("support.new_ticket_notifications_no_recipients", ticket_id=str(ticket.id))
+        return
+    submitted = datetime.now(UTC)
+    variables = {
+        "environment": _environment_label(settings),
+        "reference": ticket.reference,
+        "subject": ticket.subject,
+        "ticket_type": _ticket_type(ticket),
+        "priority": PRIORITY_LABELS.get(ticket.priority.value, ticket.priority.value),
+        "submitted_at": f"{submitted.day} {submitted:%B %Y, %H:%M} UTC",
+        "link": f"{settings.admin_url.rstrip('/')}/support/tickets/{ticket.id}",
+    }
+    subject, body, html = await render_notification_email(
+        db, settings, NEW_TICKET_TEAM_TYPE, variables
+    )
+    for recipient_key, email in recipients:
+        await notify(
+            db,
+            settings=settings,
+            recipient_email=email,
+            notification_type=NEW_TICKET_TEAM_TYPE,
+            title=subject,
+            body=body,
+            html_body=html,
+            idempotency_key=f"{NEW_TICKET_TEAM_TYPE}:{ticket.id}:{recipient_key}",
+        )
+    log.info(
+        "support.new_ticket_notifications_queued",
+        ticket_id=str(ticket.id),
+        recipients=len(recipients),
+    )
+
+
+async def ticket_received(
+    db: AsyncSession, settings: Settings, ticket: SupportTicket, requester: User
+) -> None:
+    """Queue the requester's confirmation and the team's new-ticket emails.
+    Each runs in its own savepoint: a failure (including a database error)
+    rolls back only that notification's writes, never the ticket, which the
+    caller then commits as normal."""
+    try:
+        async with db.begin_nested():
+            await _queue(
+                db,
+                settings,
+                recipient_user_id=requester.id,
+                recipient_email=requester.email,
+                notification_type="support.ticket.received",
+                ticket=ticket,
+                idempotency_key=f"support.ticket.received:{ticket.id}:requester",
+            )
     except Exception:
         log.exception("support.ticket_received_email_queue_failed", ticket_id=str(ticket.id))
+    try:
+        async with db.begin_nested():
+            await _notify_team_of_new_ticket(db, settings, ticket)
+    except Exception:
+        log.exception("support.new_ticket_team_email_queue_failed", ticket_id=str(ticket.id))
 
 
 async def ticket_reply(

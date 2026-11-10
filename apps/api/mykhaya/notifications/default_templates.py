@@ -352,6 +352,39 @@ TEMPLATES: dict[str, TemplateDefault] = {
         disableable=False,
         security_critical=False,
     ),
+    # Sent to the PCC roles (and optionally the support inbox) selected in PCC
+    # Support settings when a new ticket is created
+    # (support_notifications._notify_team_of_new_ticket). Operational detail
+    # only: never the description, attachments or diagnostics.
+    "support.ticket.new_for_team": TemplateDefault(
+        subject="[MyKhaya {{environment}}] New {{priority}} support ticket {{reference}}",
+        body=(
+            "A new {{ticket_type}} has been submitted.\n\n"
+            "Reference: {{reference}}\n"
+            "Subject: {{subject}}\n"
+            "Priority: {{priority}}\n"
+            "Submitted: {{submitted_at}}\n\n"
+            "Open it in the Platform Control Centre:\n\n{{link}}"
+        ),
+        allowed_variables=frozenset(
+            {
+                "environment",
+                "reference",
+                "subject",
+                "ticket_type",
+                "priority",
+                "submitted_at",
+                "link",
+            }
+        ),
+        required_variables=frozenset({"reference", "link"}),
+        description=(
+            "Sent to the PCC roles selected in Support settings when a new ticket is created."
+        ),
+        module="support",
+        disableable=False,
+        security_critical=False,
+    ),
     # --- Platform monitoring ----------------------------------------------------
     # Sent to Platform Control Centre administrators by mykhaya.monitoring.alerts.
     # The subject/summary are composed by monitoring itself (service, environment,
@@ -857,6 +890,15 @@ SAMPLE_VARIABLES: dict[str, dict[str, str]] = {
         "reference": "MK-1042",
         "ticket_type": "support request",
         "subject": "Account help",
+    },
+    "support.ticket.new_for_team": {
+        "environment": "DEV",
+        "reference": "MK-1042",
+        "subject": "Account help",
+        "ticket_type": "support request",
+        "priority": "Normal",
+        "submitted_at": "10 November 2026, 09:30 UTC",
+        "link": "https://admin.example.test/support/tickets/00000000-0000-0000-0000-000000000000",
     },
     "support.ticket.reply": {
         "reference": "MK-1042",

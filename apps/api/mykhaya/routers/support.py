@@ -15,6 +15,7 @@ exist specifically to keep this true even for a same-Home Owner/Admin.
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
 from sqlalchemy import select
@@ -43,6 +44,7 @@ from mykhaya.models import (
     SupportTicketAttachment,
     SupportTicketDiagnostic,
     SupportTicketMessage,
+    SupportTicketStatus,
 )
 from mykhaya.notifications.visibility import active_membership
 from mykhaya.rate_limit import enforce_rate_limit
@@ -321,6 +323,39 @@ async def get_ticket(
     db: AsyncSession = Depends(get_db),
 ) -> SupportTicketResponse:
     ticket = await _owned_ticket(ticket_id, auth, db)
+    return _ticket_response(ticket)
+
+
+@router.post("/tickets/{ticket_id}/close", response_model=SupportTicketResponse)
+async def close_ticket(
+    ticket_id: uuid.UUID,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> SupportTicketResponse:
+    """The requester closes their own ticket (any status but closed). The
+    row is locked, as PCC's status update also locks it, so a simultaneous
+    staff change cannot silently overwrite the closure or the reverse.
+    Closing an already-closed ticket changes nothing and is not re-audited.
+    The conversation and attachments are kept; reopening is not offered."""
+    ticket = await _owned_ticket(ticket_id, auth, db, for_update=True)
+    if ticket.status != SupportTicketStatus.closed:
+        previous_status = ticket.status
+        ticket.status = SupportTicketStatus.closed
+        # A resolution time already recorded by the team is kept.
+        ticket.resolved_at = ticket.resolved_at or datetime.now(UTC)
+        audit(
+            db,
+            request,
+            "support.ticket.closed_by_requester",
+            auth.user.id,
+            ticket.group_id,
+            "support_ticket",
+            ticket.id,
+            metadata={"previous_status": previous_status.value},
+        )
+        await db.commit()
+        ticket = await _owned_ticket(ticket_id, auth, db)
     return _ticket_response(ticket)
 
 

@@ -149,6 +149,7 @@ def test_registry_matches_migration_version() -> None:
     assert set(TEMPLATES) == {
         "mfa_email_code",
         "account.sign_in_method_disconnected",
+        "support.ticket.new_for_team",
         "email_verification",
         "founding_beta_welcome",
         "password_reset",

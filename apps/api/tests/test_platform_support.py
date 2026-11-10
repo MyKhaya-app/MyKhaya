@@ -30,6 +30,7 @@ from mykhaya.models import (
     OutboxEvent,
     PlatformAdministrator,
     PlatformRole,
+    PlatformSetting,
     SupportTicket,
     SupportTicketAttachment,
     TokenPurpose,
@@ -273,7 +274,7 @@ async def test_support_settings_reports_the_configured_team_notification_email(
         await admin_login(admin_client, admin)
         response = await admin_client.get("/api/v1/platform/support/settings")
         assert response.status_code == 200
-        assert response.json() == {"support_notification_email": "support-team@example.com"}
+        assert response.json()["support_notification_email"] == "support-team@example.com"
     finally:
         app.dependency_overrides.pop(get_settings, None)
 
@@ -289,7 +290,7 @@ async def test_support_settings_reports_null_when_team_notification_email_is_not
         await admin_login(admin_client, admin)
         response = await admin_client.get("/api/v1/platform/support/settings")
         assert response.status_code == 200
-        assert response.json() == {"support_notification_email": None}
+        assert response.json()["support_notification_email"] is None
     finally:
         app.dependency_overrides.pop(get_settings, None)
 
@@ -792,3 +793,108 @@ async def test_consumer_session_cannot_patch_pcc_ticket(consumer_client: AsyncCl
         f"/api/v1/platform/support/tickets/{ticket_id}", json={"status": "resolved"}
     )
     assert response.status_code in (401, 403, 404)
+
+
+# --- new-ticket email notification settings -------------------------------
+
+
+@pytest.fixture
+async def clean_new_ticket_settings() -> AsyncIterator[None]:
+    from mykhaya.support_notifications import NEW_TICKET_SETTINGS_KEY
+
+    async def clear() -> None:
+        async with SessionFactory() as db:
+            await db.execute(
+                delete(PlatformSetting).where(PlatformSetting.key == NEW_TICKET_SETTINGS_KEY)
+            )
+            await db.commit()
+
+    await clear()
+    yield
+    await clear()
+
+
+NEW_TICKET_PATH = "/api/v1/platform/support/settings/new-ticket-notifications"
+NEW_TICKET_BODY = {
+    "enabled": True,
+    "roles": ["support_operator", "platform_administrator"],
+    "include_support_inbox": False,
+    "reason": "Route new tickets to the support team",
+    "confirmed": True,
+}
+
+
+@pytest.mark.asyncio
+async def test_new_ticket_settings_default_to_the_original_behaviour(
+    admin_client: AsyncClient, admin_factory: AdminFactory, clean_new_ticket_settings: None
+) -> None:
+    await admin_login(admin_client, await admin_factory(PlatformRole.support))
+    settings = (await admin_client.get("/api/v1/platform/support/settings")).json()
+    assert settings["new_ticket_notifications"] == {
+        "configured": False,
+        "enabled": True,
+        "roles": [],
+        "include_support_inbox": True,
+        "recipient_count": 0,
+        "can_manage": False,
+    }
+
+
+@pytest.mark.asyncio
+async def test_only_owners_and_administrators_can_change_new_ticket_settings(
+    admin_client: AsyncClient, admin_factory: AdminFactory, clean_new_ticket_settings: None
+) -> None:
+    for role in (PlatformRole.support, PlatformRole.security, PlatformRole.readonly):
+        await admin_login(admin_client, await admin_factory(role))
+        response = await admin_unsafe(admin_client, "PUT", NEW_TICKET_PATH, json=NEW_TICKET_BODY)
+        assert response.status_code == 403, role
+    owner = await admin_factory(PlatformRole.owner)
+    await admin_login(admin_client, owner)
+    missing_reason = {**NEW_TICKET_BODY, "reason": "short"}
+    assert (
+        await admin_unsafe(admin_client, "PUT", NEW_TICKET_PATH, json=missing_reason)
+    ).status_code == 422
+    unknown_role = {**NEW_TICKET_BODY, "roles": ["household_owner"]}
+    assert (
+        await admin_unsafe(admin_client, "PUT", NEW_TICKET_PATH, json=unknown_role)
+    ).status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_new_ticket_settings_persist_and_are_audited(
+    admin_client: AsyncClient, admin_factory: AdminFactory, clean_new_ticket_settings: None
+) -> None:
+    owner = await admin_factory(PlatformRole.owner)
+    # A member of a selected role, so the recipient count is not left to
+    # whatever other tests happen to leave behind.
+    await admin_factory(PlatformRole.support)
+    await admin_login(admin_client, owner)
+    saved = await admin_unsafe(admin_client, "PUT", NEW_TICKET_PATH, json=NEW_TICKET_BODY)
+    assert saved.status_code == 200, saved.text
+    body = saved.json()
+    assert body["configured"] is True
+    assert body["roles"] == ["platform_administrator", "support_operator"]
+    assert body["include_support_inbox"] is False
+    assert body["can_manage"] is True
+    assert body["recipient_count"] >= 1
+
+    reread = (await admin_client.get("/api/v1/platform/support/settings")).json()
+    assert reread["new_ticket_notifications"] == body
+    async with SessionFactory() as db:
+        event = await db.scalar(
+            select(AdministrativeAuditEvent)
+            .where(
+                AdministrativeAuditEvent.action == "support.notification_settings_updated",
+                AdministrativeAuditEvent.administrator_id == owner.id,
+            )
+            .order_by(AdministrativeAuditEvent.created_at.desc())
+        )
+    assert event is not None
+    assert event.reason == NEW_TICKET_BODY["reason"]
+    assert event.new_values["roles"] == ["platform_administrator", "support_operator"]
+
+    disabled = await admin_unsafe(
+        admin_client, "PUT", NEW_TICKET_PATH, json={**NEW_TICKET_BODY, "enabled": False}
+    )
+    assert disabled.json()["enabled"] is False
+    assert disabled.json()["recipient_count"] == 0
