@@ -13,6 +13,7 @@ import { CcMetadataGrid, CcMetadataItem } from "@/components/control-centre/meta
 import { CcRecordCard, CcRecordList } from "@/components/control-centre/record-list";
 import { CcActionBar } from "@/components/control-centre/action-bar";
 import { CcNotice, CcLoadingState, CcEmptyState } from "@/components/control-centre/status-message";
+import { MonitoringPanel } from "./monitoring-panel";
 
 type HealthComponent = {
   name: string;
@@ -185,6 +186,7 @@ export default function HealthPage() {
             )}
           </>
         )}
+        <MonitoringPanel />
       </CcPage>
     </PlatformShell>
   );

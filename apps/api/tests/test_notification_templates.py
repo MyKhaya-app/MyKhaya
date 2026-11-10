@@ -148,6 +148,8 @@ def test_registry_matches_migration_version() -> None:
     assert DEFAULT_TEMPLATE_VERSION >= 1
     assert set(TEMPLATES) == {
         "mfa_email_code",
+        "account.sign_in_method_disconnected",
+        "support.ticket.new_for_team",
         "email_verification",
         "founding_beta_welcome",
         "password_reset",
@@ -183,6 +185,8 @@ def test_registry_matches_migration_version() -> None:
         "support.ticket.reply",
         "support.ticket.resolved",
         "support.ticket.follow_up",
+        "legal_acceptance_confirmation",
+        "platform.monitoring_alert",
     }
 
 
@@ -221,11 +225,12 @@ def test_mandatory_email_types_are_registered_as_non_disableable() -> None:
         assert template_type in TEMPLATES
         assert TEMPLATES[template_type].disableable is False
         # Transactional confirmations (support tickets, the Founding Beta
-        # welcome) are always delivered but are not account-security mail.
-        if (
-            not template_type.startswith("support.ticket.")
-            and template_type != "founding_beta_welcome"
-        ):
+        # welcome) and operational PCC monitoring alerts are always
+        # delivered but are not account-security mail.
+        if not template_type.startswith("support.ticket.") and template_type not in {
+            "founding_beta_welcome",
+            "platform.monitoring_alert",
+        }:
             assert TEMPLATES[template_type].security_critical is True
 
 
@@ -1136,7 +1141,14 @@ def test_security_critical_templates_all_require_their_link() -> None:
     for the email MFA code, a single one-time code — today. If a future one
     doesn't, this test should be updated deliberately rather than silently
     passing."""
-    required_by_type = {"mfa_email_code": frozenset({"code"})}
+    required_by_type = {
+        "mfa_email_code": frozenset({"code"}),
+        "legal_acceptance_confirmation": frozenset(
+            {"document_name", "document_version", "acceptance_reference"}
+        ),
+        # A security notice with nothing to click: it names the provider.
+        "account.sign_in_method_disconnected": frozenset({"provider_name"}),
+    }
     for template_type, default in TEMPLATES.items():
         if default.security_critical:
             expected = required_by_type.get(template_type, frozenset({"link"}))

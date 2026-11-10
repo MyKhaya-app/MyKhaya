@@ -535,8 +535,24 @@ class ActionToken(UuidTimeMixin, Base):
 
 class Group(UuidTimeMixin, Base):
     __tablename__ = "groups"
+    __table_args__ = (
+        Index(
+            "uq_groups_created_by_onboarding_key",
+            "created_by",
+            "onboarding_key",
+            unique=True,
+            postgresql_where=text("onboarding_key IS NOT NULL"),
+        ),
+    )
     name: Mapped[str] = mapped_column(String(100))
     created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id", ondelete="RESTRICT"))
+    # Present only for the consumer onboarding create flow. Ordinary Home
+    # creation deliberately leaves this NULL so legitimate multi-Home use is
+    # unaffected. The unique index makes retries for one onboarding journey
+    # converge on one Home, while the transaction lock in the route closes the
+    # concurrent-request gap before the row is created.
+    onboarding_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    onboarding_completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
     last_activity_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     suspended_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
@@ -1084,7 +1100,17 @@ class CalendarShare(UuidTimeMixin, Base):
 
 class AuditEvent(Base):
     __tablename__ = "audit_events"
-    __table_args__ = (Index("ix_audit_group_created", "group_id", "created_at"),)
+    __table_args__ = (
+        Index("ix_audit_group_created", "group_id", "created_at"),
+        # A user's own recent events (PCC Authentication tab); built
+        # concurrently by migration 0127.
+        Index(
+            "ix_audit_actor_created",
+            "actor_user_id",
+            "created_at",
+            postgresql_where=text("actor_user_id IS NOT NULL"),
+        ),
+    )
     id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid7)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     group_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("groups.id", ondelete="SET NULL"))
@@ -2030,6 +2056,16 @@ class LegalPlatform(StrEnum):
     android = "android"
 
 
+class LegalEvidenceStatus(StrEnum):
+    pending = "pending"
+    generating = "generating"
+    ready = "ready"
+    sending = "sending"
+    sent = "sent"
+    failed = "failed"
+    retry_pending = "retry_pending"
+
+
 class LegalDocument(UuidTimeMixin, Base):
     """Source-of-truth registry of legal/policy document *types* (Terms,
     Privacy Policy, Family & Children's Privacy Notice, Cookie Policy, and
@@ -2228,6 +2264,62 @@ class LegalAcceptance(Base):
     user_agent: Mapped[str | None] = mapped_column(String(300))
 
 
+class LegalAcceptanceEvidence(Base):
+    """Immutable snapshot and delivery lifecycle for one legal action.
+
+    This is deliberately separate from LegalAcceptance: the acceptance remains
+    the legal history record, while this row tracks a reproducible evidence
+    artefact and operational delivery without mutating that history.
+    """
+
+    __tablename__ = "legal_acceptance_evidence"
+    __table_args__ = (
+        UniqueConstraint("acceptance_id", name="uq_legal_acceptance_evidence_acceptance"),
+        Index("ix_legal_acceptance_evidence_status", "status"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid7)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    acceptance_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("legal_acceptances.id", ondelete="RESTRICT"), nullable=False
+    )
+    user_id: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id", ondelete="SET NULL"))
+    registered_email: Mapped[str | None] = mapped_column(String(320))
+    account_name: Mapped[str | None] = mapped_column(String(100))
+    document_name: Mapped[str] = mapped_column(String(200))
+    document_version: Mapped[str] = mapped_column(String(20))
+    content_markdown: Mapped[str] = mapped_column(Text)
+    content_sha256: Mapped[str] = mapped_column(String(64))
+    accepted_at_utc: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    accepted_timezone: Mapped[str] = mapped_column(String(100), nullable=False)
+    ip_address: Mapped[str | None] = mapped_column(String(64))
+    platform: Mapped[LegalPlatform] = mapped_column(
+        Enum(LegalPlatform, name="legal_platform", create_type=False), nullable=False
+    )
+    action_type: Mapped[LegalRecordType] = mapped_column(
+        Enum(LegalRecordType, name="legal_record_type", create_type=False), nullable=False
+    )
+    status: Mapped[LegalEvidenceStatus] = mapped_column(
+        Enum(
+            LegalEvidenceStatus,
+            name="legal_evidence_status",
+            values_callable=lambda e: [x.value for x in e],
+        ),
+        default=LegalEvidenceStatus.pending,
+        server_default=LegalEvidenceStatus.pending.value,
+        nullable=False,
+    )
+    pdf_storage_key: Mapped[str | None] = mapped_column(String(255))
+    pdf_sha256: Mapped[str | None] = mapped_column(String(64))
+    generated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    email_status: Mapped[str] = mapped_column(
+        String(30), default="pending", server_default="pending"
+    )
+    email_sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    provider_message_id: Mapped[str | None] = mapped_column(String(255))
+    last_error: Mapped[str | None] = mapped_column(String(500))
+
+
 class IncidentLifecycleState(StrEnum):
     """Where a status incident sits in its own investigation/communication
     process — distinct from ServiceState, which is the customer-facing
@@ -2284,9 +2376,20 @@ class PublicIncident(UuidTimeMixin, Base):
     # never returned by the public /status endpoint. See
     # routers.status/.platform for the enforced boundary.
     internal_notes: Mapped[str | None] = mapped_column(String(2000))
-    created_by: Mapped[uuid.UUID] = mapped_column(
+    # NULL only for an incident opened by automated monitoring (source
+    # "automated"); every administrator-created incident still records its
+    # author. See mykhaya.monitoring.incidents.
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("platform_administrators.id", ondelete="RESTRICT")
     )
+    # "manual" (PCC) or "automated" (mykhaya.monitoring). Automated incidents
+    # are ordinary incidents once open: administrators can update, resolve or
+    # delete them through the existing endpoints.
+    source: Mapped[str] = mapped_column(String(20), default="manual", server_default="manual")
+    # The public service key automated monitoring opened this incident for,
+    # used to find "the open automated incident for this service" without
+    # parsing titles. NULL for manual incidents.
+    monitor_service_key: Mapped[str | None] = mapped_column(String(60), index=True)
 
 
 class StatusIncidentService(UuidTimeMixin, Base):
@@ -2337,7 +2440,8 @@ class StatusIncidentUpdate(UuidTimeMixin, Base):
     )
     message: Mapped[str] = mapped_column(String(1000))
     occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
-    created_by: Mapped[uuid.UUID] = mapped_column(
+    # NULL for an update written by automated monitoring.
+    created_by: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("platform_administrators.id", ondelete="RESTRICT")
     )
 
@@ -2348,6 +2452,165 @@ class OperationalHeartbeat(Base):
     observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
     last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     safe_detail: Mapped[str | None] = mapped_column(String(300))
+
+
+# --- Automated service monitoring ---------------------------------------------
+# See mykhaya/monitoring/ and docs/architecture/service-monitoring.md. Every row
+# lives in the environment's own database, so DEV and PROD monitoring never mix.
+
+
+class MonitorComponent(Base):
+    """One monitored component (a single health check): its operator-editable
+    configuration plus its persisted current state. Rows are created from the
+    code catalogue (mykhaya.monitoring.catalogue) on the first monitoring cycle;
+    afterwards only configuration columns are editable from PCC. State survives
+    restarts because it is read back from here, never rebuilt in memory."""
+
+    __tablename__ = "monitor_components"
+    key: Mapped[str] = mapped_column(String(60), primary_key=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    interval_seconds: Mapped[int] = mapped_column(Integer)
+    timeout_seconds: Mapped[int] = mapped_column(Integer)
+    failure_threshold: Mapped[int] = mapped_column(Integer)
+    recovery_threshold: Mapped[int] = mapped_column(Integer)
+    public_visible: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    # "critical" | "warning" | "info": drives both the public impact of an
+    # Unavailable state and whether administrators are emailed.
+    severity: Mapped[str] = mapped_column(String(20))
+    # healthy | degraded | unavailable | unknown | not_applicable
+    state: Mapped[str] = mapped_column(String(20), default="unknown", server_default="unknown")
+    # verified | limited: how much a success actually proves (see catalogue).
+    confidence: Mapped[str | None] = mapped_column(String(20))
+    consecutive_failures: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    consecutive_successes: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    # When the check last ran at all (including a monitor error).
+    last_attempted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # When the check last produced a conclusive result. Freshness is judged
+    # from this, so a check that keeps erroring goes stale and becomes Unknown.
+    last_checked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_success_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_failure_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_latency_ms: Mapped[int | None] = mapped_column(Integer)
+    last_failure_category: Mapped[str | None] = mapped_column(String(40))
+    # Sanitised operator-facing text only (never a raw exception, URL with
+    # credentials, header or response body). Never returned by /status.
+    last_failure_detail: Mapped[str | None] = mapped_column(String(300))
+    state_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    # DEV-only controlled fault injection: while set and in the future, the
+    # runner records a simulated failure instead of running the real check.
+    # Refused in production by the PCC endpoint.
+    simulate_failure_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    simulate_failure_severity: Mapped[str | None] = mapped_column(String(20))
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+    updated_by_administrator_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("platform_administrators.id", ondelete="SET NULL")
+    )
+
+
+class MonitorObservation(Base):
+    """One check execution. Detailed history, purged after ~90 days."""
+
+    __tablename__ = "monitor_observations"
+    __table_args__ = (Index("ix_monitor_observations_component", "component_key", "observed_at"),)
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid7)
+    component_key: Mapped[str] = mapped_column(
+        ForeignKey("monitor_components.key", ondelete="CASCADE")
+    )
+    observed_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    # success | failure | monitor_error | not_applicable
+    outcome: Mapped[str] = mapped_column(String(20))
+    # For a failure: the state the check asked for (degraded | unavailable).
+    failure_severity: Mapped[str | None] = mapped_column(String(20))
+    latency_ms: Mapped[int | None] = mapped_column(Integer)
+    failure_category: Mapped[str | None] = mapped_column(String(40))
+    detail: Mapped[str | None] = mapped_column(String(300))
+    # scheduled | manual (an administrator's on-demand run) | simulated (DEV
+    # fault injection) | watchdog (the worker's monitor-the-monitor check).
+    trigger: Mapped[str] = mapped_column(
+        String(20), default="scheduled", server_default="scheduled"
+    )
+
+
+class MonitorTransition(Base):
+    """A confirmed state change of one component: the durable record the
+    alerting and automatic public-incident logic hangs off."""
+
+    __tablename__ = "monitor_transitions"
+    __table_args__ = (Index("ix_monitor_transitions_component", "component_key", "occurred_at"),)
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid7)
+    component_key: Mapped[str] = mapped_column(
+        ForeignKey("monitor_components.key", ondelete="CASCADE")
+    )
+    occurred_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    from_state: Mapped[str] = mapped_column(String(20))
+    to_state: Mapped[str] = mapped_column(String(20))
+    consecutive_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    failure_category: Mapped[str | None] = mapped_column(String(40))
+    detail: Mapped[str | None] = mapped_column(String(300))
+    incident_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("public_incidents.id", ondelete="SET NULL")
+    )
+
+
+class MonitorOverride(UuidTimeMixin, Base):
+    """An administrator's audited, expiring override of automated public
+    reporting for one public service key. `forced_state` NULL means
+    "suppress": automated observations stop affecting the public page for
+    that service and no automated incident is opened (manual incidents still
+    apply). A non-NULL forced_state publishes that state regardless of
+    monitoring."""
+
+    __tablename__ = "monitor_overrides"
+    service_key: Mapped[str] = mapped_column(String(60), index=True)
+    forced_state: Mapped[str | None] = mapped_column(String(30))
+    reason: Mapped[str] = mapped_column(String(500))
+    starts_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    created_by: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("platform_administrators.id", ondelete="RESTRICT")
+    )
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    revoked_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("platform_administrators.id", ondelete="SET NULL")
+    )
+
+
+class MonitorAlert(Base):
+    """One administrator alert raised by monitoring. Email deliveries are
+    ordinary NotificationDelivery rows (idempotency key prefix
+    ``monitoring_alert:<id>:``) so they inherit the outbox's durable retry and
+    appear in PCC's existing delivery diagnostics. `dedupe_key` is unique, so
+    two runners racing on the same transition can never raise it twice."""
+
+    __tablename__ = "monitor_alerts"
+    __table_args__ = (UniqueConstraint("dedupe_key", name="uq_monitor_alerts_dedupe_key"),)
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid7)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    dedupe_key: Mapped[str] = mapped_column(String(200))
+    component_key: Mapped[str | None] = mapped_column(
+        ForeignKey("monitor_components.key", ondelete="SET NULL"), index=True
+    )
+    transition_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("monitor_transitions.id", ondelete="SET NULL")
+    )
+    incident_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("public_incidents.id", ondelete="SET NULL")
+    )
+    # degraded | unavailable | recovered | monitoring_stale | monitoring_recovered
+    kind: Mapped[str] = mapped_column(String(30))
+    severity: Mapped[str] = mapped_column(String(20))
+    subject: Mapped[str] = mapped_column(String(200))
+    summary: Mapped[str] = mapped_column(String(1000))
+    # Why no email was sent (cooldown, alerting disabled, no recipients, info
+    # severity). NULL when emails were queued.
+    suppressed_reason: Mapped[str | None] = mapped_column(String(100))
+    recipient_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    acknowledged_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    acknowledged_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("platform_administrators.id", ondelete="SET NULL")
+    )
 
 
 # --- Notification Engine -----------------------------------------------------
@@ -2538,6 +2801,7 @@ class NotificationDelivery(Base):
     )
     retry_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     sanitised_failure_reason: Mapped[str | None] = mapped_column(String(300))
+    provider_message_id: Mapped[str | None] = mapped_column(String(255))
     used_template_default: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="false"
     )
@@ -3505,6 +3769,40 @@ class PlatformStripeSettings(UuidTimeMixin, Base):
     )
 
 
+class StripeWebhookIpSecurityMode(StrEnum):
+    monitoring = "monitoring"
+    enforcement = "enforcement"
+
+
+class StripeWebhookIpSecuritySettings(UuidTimeMixin, Base):
+    """Environment-local Stripe webhook source-IP policy.
+
+    The row is deliberately separate from Stripe credentials: DEV and PROD have
+    independent databases/configuration, and changing this policy must never
+    change Stripe mode or signing-secret selection.
+    """
+
+    __tablename__ = "stripe_webhook_ip_security_settings"
+    mode: Mapped[StripeWebhookIpSecurityMode] = mapped_column(
+        Enum(
+            StripeWebhookIpSecurityMode,
+            name="stripe_webhook_ip_security_mode",
+            values_callable=lambda enum: [item.value for item in enum],
+        ),
+        default=StripeWebhookIpSecurityMode.monitoring,
+        server_default=StripeWebhookIpSecurityMode.monitoring.value,
+    )
+    trusted_ips: Mapped[list[str]] = mapped_column(JSON, default=list, server_default="[]")
+    last_sync_attempt_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_successful_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_sync_error: Mapped[str | None] = mapped_column(String(500))
+    blocked_request_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    last_blocked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    updated_by_administrator_id: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("platform_administrators.id", ondelete="SET NULL")
+    )
+
+
 class NotificationTemplate(UuidTimeMixin, Base):
     """Override-only: trusted default copy lives in code
     (mykhaya/notifications/default_templates.py). A row here exists only once a Platform
@@ -3647,6 +3945,17 @@ class HomeSubscription(UuidTimeMixin, Base):
     billing_interval: Mapped[BillingInterval | None] = mapped_column(
         Enum(BillingInterval, name="billing_interval")
     )
+    # A server-scheduled Stripe plan change. These fields are display state only;
+    # Stripe remains authoritative and the webhook clears/updates them when the
+    # scheduled phase becomes effective.
+    pending_plan: Mapped[SubscriptionPlan | None] = mapped_column(
+        Enum(SubscriptionPlan, name="subscription_plan", create_type=False)
+    )
+    pending_billing_interval: Mapped[BillingInterval | None] = mapped_column(
+        Enum(BillingInterval, name="billing_interval", create_type=False)
+    )
+    pending_effective_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    stripe_schedule_id: Mapped[str | None] = mapped_column(String(255), index=True)
     current_period_start: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     current_period_end: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     # Complimentary access — a first-class MyKhaya concept, not a fake/100%-off

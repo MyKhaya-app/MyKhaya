@@ -23,6 +23,8 @@ def config(
     db: str = "postgresql://app@postgres:5432/mykhaya",
     redis: str = "redis://redis:6379/0",
     apns: bool = False,
+    environment: str = "development",
+    apns_bundle_id: str = "app.mykhaya.mobile",
 ):
     db_hash, db_length = module.fingerprint(db)
     redis_hash, redis_length = module.fingerprint(redis)
@@ -39,6 +41,8 @@ def config(
         "mailpit",
         1025,
         apns,
+        environment,
+        apns_bundle_id,
     )
 
 
@@ -73,6 +77,46 @@ class BackendConfigTests(unittest.TestCase):
         values = self.base()
         values[1] = config("worker", apns=True)
         self.assertEqual(module.validate(values), [])
+
+    def production(self, *, apns: bool, apns_bundle_id: str):
+        values = [config(name, environment="production", apns_bundle_id="") for name in module.SERVICES]
+        values[1] = config("worker", environment="production", apns=apns, apns_bundle_id=apns_bundle_id)
+        return values
+
+    def test_production_with_the_prod_apns_topic_passes(self):
+        values = self.production(apns=True, apns_bundle_id="app.mykhaya.mobile.prod")
+        self.assertEqual(module.validate(values), [])
+
+    def test_production_with_the_dev_apns_topic_fails(self):
+        values = self.production(apns=True, apns_bundle_id="app.mykhaya.mobile")
+        self.assertEqual(
+            module.validate(values),
+            [
+                "worker APNs topic (MYKHAYA_APNS_BUNDLE_ID) is 'app.mykhaya.mobile', "
+                "expected 'app.mykhaya.mobile.prod' for the production app"
+            ],
+        )
+
+    def test_production_with_an_empty_apns_topic_fails(self):
+        values = self.production(apns=True, apns_bundle_id="")
+        self.assertEqual(len(module.validate(values)), 1)
+
+    def test_production_without_apns_delivery_ignores_the_topic(self):
+        values = self.production(apns=False, apns_bundle_id="app.mykhaya.mobile")
+        self.assertEqual(module.validate(values), [])
+
+    def test_development_apns_topic_is_not_held_to_the_production_app(self):
+        values = self.base()
+        values[1] = config("worker", apns=True, apns_bundle_id="app.mykhaya.mobile")
+        self.assertEqual(module.validate(values), [])
+
+    def test_probe_record_carries_environment_and_apns_topic(self):
+        record = module.parse_config(
+            "worker",
+            'MYKHAYA_RUNTIME_CONFIG={"database_hash":"db","database_length":2,"database_target":"postgresql://postgres:5432/db","redis_hash":"r","redis_length":1,"secret_hash":"s","secret_length":1,"smtp_host":"mailpit","smtp_port":1025,"apns_delivery_configured":true,"environment":"production","apns_bundle_id":"app.mykhaya.mobile.prod"}',
+        )
+        self.assertEqual(record.environment, "production")
+        self.assertEqual(record.apns_bundle_id, "app.mykhaya.mobile.prod")
 
     def test_failure_output_does_not_include_secret_values(self):
         secret_db = "postgresql://secret-password@wrong-host:5432/mykhaya"

@@ -19,6 +19,8 @@ import { isImageFormatRejection, normalizeAvatarFile } from "@/components/avatar
 import { ColourSwatchPicker } from "@/components/colour-swatch-picker";
 import { FamilyUpsell } from "@/components/family-upsell";
 import { FormStatus } from "@/components/form-status";
+import { FormField, FormLayout } from "@/components/form-layout";
+import { useFormFieldErrors } from "@/components/form-field-errors";
 import { canAddMember, memberLimitMessage } from "@/components/member-entitlement-logic";
 import { useActiveHome } from "@/components/use-active-home";
 
@@ -101,6 +103,7 @@ export default function ManageMembers() {
   const [joinRequestBusy, setJoinRequestBusy] = useState<string | null>(null);
   const [status, setStatus] = useState<PageStatus>({ kind: "idle" });
   const [sending, setSending] = useState(false);
+  const inviteFields = useFormFieldErrors({ email: { missing: "Enter their email address." } });
   const [filter, setFilter] = useState<FamilyFilter>("all");
   const [currentUserId, setCurrentUserId] = useState<string | null>(null);
   const [colourEditing, setColourEditing] = useState<string | null>(null);
@@ -275,6 +278,7 @@ export default function ManageMembers() {
   async function invite(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!activeHomeId || relationship === "child" || sending) return;
+    if (!inviteFields.check()) return;
     // Captured now, before any `await` — React can null out event.currentTarget once
     // this handler yields (and setOpen(false) below unmounts the form on the next
     // render regardless), so touching event.currentTarget after the request was the
@@ -585,23 +589,10 @@ export default function ManageMembers() {
                 </div>
 
                 {inviteMethod === "email" && (
-                  <form onSubmit={invite}>
-                    <label>
-                      Relationship
-                      <select
-                        value={relationship}
-                        onChange={(event) =>
-                          setRelationship(event.target.value as HouseholdRelationship)
-                        }
-                      >
-                        {canAssignHomeAdmin && <option value="home_admin">Home Admin</option>}
-                        <option value="partner">Partner</option>
-                        <option value="adult">Adult</option>
-                        <option value="child">Child</option>
-                      </select>
-                    </label>
-                    <p className="relationship-help">
-                      {
+                  <FormLayout ref={inviteFields.formRef} onSubmit={invite}>
+                    <FormField
+                      label="Relationship"
+                      hint={
                         relationshipHelp[
                           relationship as Exclude<
                             HouseholdRelationship,
@@ -609,7 +600,22 @@ export default function ManageMembers() {
                           >
                         ]
                       }
-                    </p>
+                    >
+                      {(control) => (
+                        <select
+                          {...control}
+                          value={relationship}
+                          onChange={(event) =>
+                            setRelationship(event.target.value as HouseholdRelationship)
+                          }
+                        >
+                          {canAssignHomeAdmin && <option value="home_admin">Home Admin</option>}
+                          <option value="partner">Partner</option>
+                          <option value="adult">Adult</option>
+                          <option value="child">Child</option>
+                        </select>
+                      )}
+                    </FormField>
                     {relationship === "child" ? (
                       <div className="child-flow-callout">
                         <p>
@@ -626,17 +632,20 @@ export default function ManageMembers() {
                       </div>
                     ) : (
                       <>
-                        <label>
-                          Email
-                          <input
-                            name="email"
-                            type="email"
-                            autoComplete="email"
-                            required
-                          />
-                        </label>
+                        <FormField label="Email" error={inviteFields.errors.email}>
+                          {(control) => (
+                            <input
+                              {...control}
+                              name="email"
+                              type="email"
+                              autoComplete="email"
+                              onChange={() => inviteFields.clear("email")}
+                              required
+                            />
+                          )}
+                        </FormField>
                         {familyAccess && (
-                          <label className="check-row">
+                          <label className="check-row check-row-described">
                             <input
                               name="family_sponsorship"
                               type="checkbox"
@@ -673,7 +682,7 @@ export default function ManageMembers() {
                     >
                       Back
                     </button>
-                  </form>
+                  </FormLayout>
                 )}
 
                 {inviteMethod === "code" && (
@@ -793,7 +802,7 @@ export default function ManageMembers() {
                       <option value="adult">Adult</option>
                     </select>
                     {familyAccess && (
-                      <label className="check-row">
+                      <label className="check-row check-row-described">
                         <input
                           type="checkbox"
                           checked={joinRequestSponsorship[request.id] === true}

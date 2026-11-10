@@ -158,9 +158,12 @@ describe("Vehicle Reminders — add reminder", () => {
     await user.click(screen.getByRole("button", { name: /add reminder/i }));
     const dialog = screen.getByRole("dialog");
     await user.click(within(dialog).getByRole("button", { name: "Add reminder" }));
-    expect(
-      await screen.findByText("Add a title and a due date to continue."),
-    ).toBeInTheDocument();
+    // Each problem is shown on, and announced with, the field it concerns.
+    const title = within(dialog).getByLabelText("Title");
+    expect(title).toHaveAttribute("aria-invalid", "true");
+    expect(title).toHaveAccessibleDescription("Add a title.");
+    expect(within(dialog).getByLabelText("Due date")).toHaveAccessibleDescription("Choose a due date.");
+    await waitFor(() => expect(title).toHaveFocus());
     expect(api.createVehicleReminder).not.toHaveBeenCalled();
   });
 });
@@ -187,5 +190,56 @@ describe("Vehicle Reminders — not found", () => {
     (api.vehicleReminders as ReturnType<typeof vi.fn>).mockRejectedValue(new ApiError(404, "Not found"));
     renderPage();
     expect(await screen.findByText("That vehicle could not be found.")).toBeInTheDocument();
+  });
+});
+
+// The Add reminder sheet on the shared FormSheet (docs/design/forms.md).
+describe("Vehicle Reminders — add reminder sheet", () => {
+  async function openSheet() {
+    (api.vehicleReminders as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [] });
+    const user = userEvent.setup();
+    renderPage();
+    await screen.findByText("No reminders yet");
+    await user.click(screen.getByRole("button", { name: /add reminder/i }));
+    return { user, dialog: screen.getByRole("dialog", { name: "Add reminder" }) };
+  }
+
+  it("has a Save and Cancel footer outside the scrolling form, and pairs the date and time", async () => {
+    const { dialog } = await openSheet();
+    const footer = dialog.querySelector(".sheet-footer")!;
+    const add = within(dialog).getByRole("button", { name: "Add reminder" });
+    expect(footer).toContainElement(add);
+    expect(footer).toContainElement(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(add).toHaveAttribute("form", "vehicle-reminder-form");
+    expect(within(dialog).getByLabelText("Due date").closest(".form-row")).toBe(within(dialog).getByLabelText("Due time").closest(".form-row"));
+  });
+
+  it("cancels without creating a reminder", async () => {
+    const { user, dialog } = await openSheet();
+    await user.type(within(dialog).getByLabelText("Title"), "Tyres");
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(api.createVehicleReminder).not.toHaveBeenCalled();
+  });
+
+  it("locks every dismissal while saving, then shows a failure inside the sheet and keeps the draft", async () => {
+    let reject: (cause: unknown) => void = () => {};
+    (api.createVehicleReminder as ReturnType<typeof vi.fn>).mockReturnValue(new Promise((_, fail) => { reject = fail; }));
+    const { user, dialog } = await openSheet();
+    await user.type(within(dialog).getByLabelText("Title"), "Tyres");
+    await user.type(within(dialog).getByLabelText("Due date"), "2026-11-20");
+    await user.click(within(dialog).getByRole("button", { name: "Add reminder" }));
+
+    expect(await within(dialog).findByRole("button", { name: "Adding…" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "Cancel" })).toBeDisabled();
+    await user.keyboard("{Escape}");
+    expect(screen.getByRole("dialog", { name: "Add reminder" })).toBeInTheDocument();
+
+    reject(new ApiError(422, "Give the reminder a name."));
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("Give the reminder a name.");
+    expect(within(dialog).getByLabelText("Title")).toHaveValue("Tyres");
+    expect(within(dialog).getByLabelText("Due date")).toHaveValue("2026-11-20");
+    expect(within(dialog).getByRole("button", { name: "Add reminder" })).toBeEnabled();
+    expect(within(dialog).getByRole("button", { name: "Cancel" })).toBeEnabled();
   });
 });

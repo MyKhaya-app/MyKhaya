@@ -16,7 +16,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mykhaya.billing.client import call_stripe
 from mykhaya.billing.config import StripeConfig, StripeNotConfiguredError
 from mykhaya.billing.diagnostics import record_billing_diagnostic
-from mykhaya.billing.state import apply_stripe_subscription_state
+from mykhaya.billing.state import (
+    SubscriptionOwnershipMismatchError,
+    SubscriptionStateOutcome,
+    SubscriptionStateResult,
+    apply_stripe_subscription_state,
+    select_subscription_item,
+)
 from mykhaya.entitlements import (
     ensure_home_subscription,
     get_home_subscription,
@@ -37,6 +43,10 @@ class CheckoutNotCompleteError(CheckoutConfirmationError):
     """Stripe has not completed the Checkout Session or its subscription yet."""
 
 
+class ReconciliationValidationError(RuntimeError):
+    """Stripe state is not safe to apply to the Home automatically."""
+
+
 def _stripe_id(value: object) -> str | None:
     if isinstance(value, str):
         return value
@@ -44,6 +54,73 @@ def _stripe_id(value: object) -> str | None:
         raw_id = value.get("id")
         return str(raw_id) if raw_id else None
     return None
+
+
+def _invoice_subscription_id(invoice: dict[str, object]) -> str | None:
+    """Return the subscription reference from legacy or Basil invoices.
+
+    Stripe API 2025-03-31.basil moved the subscription reference to
+    ``parent.subscription_details.subscription``.  A legacy top-level
+    reference remains authoritative when present, but contradictory fields
+    are an integrity failure rather than an opportunity to guess.
+    """
+    legacy_id = _stripe_id(invoice.get("subscription"))
+    parent = invoice.get("parent")
+    parent_id: str | None = None
+    if isinstance(parent, dict) and parent.get("type") == "subscription_details":
+        details = parent.get("subscription_details")
+        if isinstance(details, dict):
+            parent_id = _stripe_id(details.get("subscription"))
+    if legacy_id and parent_id and legacy_id != parent_id:
+        raise ReconciliationValidationError(
+            "Stripe invoice subscription references contradict each other."
+        )
+    return legacy_id or parent_id
+
+
+async def _require_paid_latest_invoice(
+    latest_invoice: object,
+    *,
+    secret_key: str,
+    expected_customer_id: str,
+    expected_subscription_id: str,
+) -> dict[str, object]:
+    """Resolve and validate the subscription's authoritative latest invoice.
+
+    Stripe may return ``latest_invoice`` as either an ID or an expanded
+    Invoice object.  An expanded object that lacks payment fields is treated
+    like an ID and re-fetched, because a subscription snapshot is not itself
+    proof of payment.  PaymentIntent presence is deliberately not required:
+    paid invoices can legitimately have no usable PaymentIntent field.
+    """
+    invoice: object = latest_invoice
+    invoice_id = _stripe_id(invoice)
+    if not invoice_id:
+        raise ReconciliationValidationError(
+            "The Stripe subscription has no resolvable latest invoice."
+        )
+    required_fields = ("status", "customer")
+    if not isinstance(invoice, dict) or any(field not in invoice for field in required_fields):
+        invoice = await call_stripe(lambda: stripe.Invoice.retrieve(invoice_id, api_key=secret_key))
+    if not isinstance(invoice, dict):
+        raise ReconciliationValidationError("Stripe returned an invalid latest invoice.")
+    if _stripe_id(invoice.get("id")) != invoice_id:
+        raise ReconciliationValidationError("Stripe returned a different latest invoice.")
+    if invoice.get("status") != "paid":
+        raise ReconciliationValidationError("The latest Stripe invoice is not confirmed paid.")
+    if "paid" in invoice and invoice.get("paid") is not True:
+        raise ReconciliationValidationError(
+            "The latest Stripe invoice has contradictory payment fields."
+        )
+    if _stripe_id(invoice.get("customer")) != expected_customer_id:
+        raise SubscriptionOwnershipMismatchError(
+            "The latest Stripe invoice belongs to a different customer."
+        )
+    if _invoice_subscription_id(invoice) != expected_subscription_id:
+        raise ReconciliationValidationError(
+            "The latest Stripe invoice belongs to a different subscription."
+        )
+    return invoice
 
 
 async def confirm_checkout_session(
@@ -117,20 +194,24 @@ async def confirm_checkout_session(
     if subscription_group_raw and str(subscription_group_raw) != str(group_id):
         raise CheckoutConfirmationError("The Stripe subscription does not belong to this Home.")
 
-    items = (stripe_subscription.get("items") or {}).get("data") or []
-    price_id = (items[0].get("price") or {}).get("id") if items else None
-    configured_prices = {
-        config.family_monthly_price_id,
-        config.family_annual_price_id,
-        config.ultimate_monthly_price_id,
-        config.ultimate_annual_price_id,
+    configured_prices: set[str] = {
+        price_id
+        for price_id in (
+            config.family_monthly_price_id,
+            config.family_annual_price_id,
+            config.ultimate_monthly_price_id,
+            config.ultimate_annual_price_id,
+        )
+        if price_id is not None
     }
+    item = select_subscription_item(stripe_subscription, known_price_ids=configured_prices)
+    price_id = _stripe_id(item.get("price")) if item else None
     if price_id not in configured_prices:
         raise CheckoutConfirmationError(
             "The Stripe subscription does not use a configured MyKhaya plan price."
         )
 
-    reconciled = await apply_stripe_subscription_state(
+    result = await apply_stripe_subscription_state(
         db,
         group_id=group_id,
         stripe_subscription=stripe_subscription,
@@ -148,7 +229,24 @@ async def confirm_checkout_session(
             if price_id
         },
     )
-    subscription = reconciled or await ensure_home_subscription(db, group_id)
+    if (
+        result.outcome == SubscriptionStateOutcome.INVALID_STATE
+        and result.reason == "unrecognised_or_unconfirmed_stripe_status"
+    ):
+        # A complete Checkout Session can still have an incomplete first
+        # payment (for example, a pending 3DS challenge). Preserve the
+        # pending response contract and never activate entitlements.
+        subscription = result.subscription or await ensure_home_subscription(db, group_id)
+        await db.commit()
+        return False, subscription
+    if result.outcome not in (
+        SubscriptionStateOutcome.APPLIED,
+        SubscriptionStateOutcome.UNCHANGED,
+    ):
+        raise CheckoutConfirmationError(
+            f"Stripe subscription state could not be applied: {result.reason or result.outcome}"
+        )
+    subscription = result.subscription or await ensure_home_subscription(db, group_id)
     subscription.external_customer_id = session_customer_id
     subscription.external_subscription_id = session_subscription_id
     await db.commit()
@@ -208,32 +306,95 @@ async def reconcile_home_subscription(
     group_id: uuid.UUID,
     *,
     actor_administrator_id: uuid.UUID,
-) -> HomeSubscription | None:
+) -> SubscriptionStateResult:
     if not config.configured or not config.secret_key:
         raise StripeNotConfiguredError("Stripe billing is not configured.")
     subscription = await get_home_subscription(db, group_id)
-    subscription_id = subscription.external_subscription_id if subscription else None
-    if not subscription_id:
+    if subscription is None or not subscription.external_subscription_id:
         raise NoStripeSubscriptionError("This Home has no Stripe subscription to reconcile.")
+    subscription_id = subscription.external_subscription_id
 
     stripe_subscription = await call_stripe(
-        lambda: stripe.Subscription.retrieve(subscription_id, api_key=config.secret_key)
+        lambda: stripe.Subscription.retrieve(
+            subscription_id,
+            expand=["items.data.price", "latest_invoice"],
+            api_key=config.secret_key,
+        )
     )
-    return await apply_stripe_subscription_state(
+    if _stripe_id(stripe_subscription.get("id")) != subscription_id:
+        raise SubscriptionOwnershipMismatchError(
+            "Stripe returned a different subscription identifier."
+        )
+    stripe_customer_id = _stripe_id(stripe_subscription.get("customer"))
+    external_customer_id = subscription.external_customer_id
+    if not external_customer_id:
+        raise SubscriptionOwnershipMismatchError(
+            "This Home subscription has no external customer identifier."
+        )
+    if stripe_customer_id != external_customer_id:
+        raise SubscriptionOwnershipMismatchError(
+            "Stripe returned a subscription for a different customer."
+        )
+    metadata_group_id = (stripe_subscription.get("metadata") or {}).get("mykhaya_group_id")
+    if metadata_group_id and str(metadata_group_id) != str(group_id):
+        raise SubscriptionOwnershipMismatchError(
+            "Stripe subscription metadata belongs to a different Home."
+        )
+
+    if stripe_subscription.get("status") not in {"active", "trialing", "past_due"}:
+        raise ReconciliationValidationError("The Stripe subscription is not in an eligible state.")
+    if stripe_subscription.get("pending_update"):
+        raise ReconciliationValidationError(
+            "The Stripe subscription has an unresolved pending update."
+        )
+
+    plan_by_price = {
+        price_id: plan
+        for price_id, plan in (
+            (config.family_monthly_price_id, SubscriptionPlan.family),
+            (config.family_annual_price_id, SubscriptionPlan.family),
+            (config.ultimate_monthly_price_id, SubscriptionPlan.ultimate),
+            (config.ultimate_annual_price_id, SubscriptionPlan.ultimate),
+        )
+        if price_id
+    }
+    item = select_subscription_item(
+        stripe_subscription,
+        preferred_price_id=None,
+        known_price_ids=set(plan_by_price),
+    )
+    actual_price_id = _stripe_id(item.get("price")) if item else None
+    if item is None:
+        raise ReconciliationValidationError(
+            "The Stripe subscription does not contain one unique configured plan item."
+        )
+    if actual_price_id not in plan_by_price:
+        raise ReconciliationValidationError(
+            "The Stripe subscription Price is not configured for a MyKhaya plan."
+        )
+
+    latest_invoice = stripe_subscription.get("latest_invoice")
+    await _require_paid_latest_invoice(
+        latest_invoice,
+        secret_key=config.secret_key,
+        expected_customer_id=external_customer_id,
+        expected_subscription_id=subscription_id,
+    )
+
+    result = await apply_stripe_subscription_state(
         db,
         group_id=group_id,
         stripe_subscription=stripe_subscription,
         actor_administrator_id=actor_administrator_id,
         reason="Manual reconciliation from the Platform Control Centre",
         event_type_hint="stripe_reconciled",
-        plan_by_price={
-            price_id: plan
-            for price_id, plan in (
-                (config.family_monthly_price_id, SubscriptionPlan.family),
-                (config.family_annual_price_id, SubscriptionPlan.family),
-                (config.ultimate_monthly_price_id, SubscriptionPlan.ultimate),
-                (config.ultimate_annual_price_id, SubscriptionPlan.ultimate),
-            )
-            if price_id
-        },
+        plan_by_price=plan_by_price,
     )
+    if result.outcome not in (
+        SubscriptionStateOutcome.APPLIED,
+        SubscriptionStateOutcome.UNCHANGED,
+    ):
+        raise ReconciliationValidationError(
+            f"Stripe state was not applied: {result.reason or result.outcome}"
+        )
+    return result

@@ -4,6 +4,7 @@ import {
   NativeMyKhayaClient,
   api,
   nativeApiBaseUrlForWebHost,
+  type NativeMfaContinuation,
   type NativeSessionStore,
 } from "@mykhaya/api-client";
 import { isNativeShell, nativePlatform } from "./native-runtime";
@@ -12,6 +13,7 @@ import { setBiometricSignInEnabled } from "./native-biometric-preference";
 import { authenticateWithBiometrics, getBiometricCapability, isBiometricCancellation } from "./native-biometric";
 import { markUnlocked } from "./native-app-lock";
 import { clearWidgetSnapshot, syncWidgetSnapshot } from "./widget-bridge";
+import { NativeExternalAuth, type NativeProviderAssertion } from "./native-external-auth";
 
 export class NativeBiometricUnlockError extends Error {
   readonly code: string;
@@ -43,6 +45,27 @@ let sharedStore: NativeSessionStore | undefined;
 let sharedClient: NativeMyKhayaClient | undefined;
 let lastNativeLoginDiagnostic: string | null = null;
 let offerBiometricAfterLogin = false;
+const nativeRedemptionVerifiers = new Map<string, string>();
+
+function newNativeRedemptionVerifier(): string {
+  const bytes = new Uint8Array(32);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, (value) => value.toString(16).padStart(2, "0")).join("");
+}
+
+function redemptionVerifierFor(transactionId: string): string {
+  const verifier = nativeRedemptionVerifiers.get(transactionId);
+  if (!verifier) throw new Error("The native sign-in attempt is no longer available.");
+  return verifier;
+}
+
+function retainNativeRedemptionVerifier(transactionId: string, verifier: string): void {
+  nativeRedemptionVerifiers.set(transactionId, verifier);
+}
+
+function finishNativeRedemption(transactionId: string): void {
+  nativeRedemptionVerifiers.delete(transactionId);
+}
 
 function biometricDebug(event: string, fields: Record<string, unknown> = {}): void {
   console.info("[BIOMETRIC DEBUG]", event, fields);
@@ -137,12 +160,21 @@ export function bootstrapNativeSession(): Promise<User | null> {
   })();
 }
 
-export function nativeLogin(email: string, password: string): Promise<User> {
+/** Native email/password sign-in. When the consumer MFA policy applies the
+ * server returns a continuation instead of a session; the per-attempt
+ * redemption verifier is retained under that continuation's transaction id so
+ * nativeMfaOptions/Start/Verify can prove they are the same client. */
+export function nativeLogin(email: string, password: string): Promise<User | NativeMfaContinuation> {
   lastNativeLoginDiagnostic = null;
-  return client().login(email, password).then((user) => {
+  const verifier = newNativeRedemptionVerifier();
+  return client().login(email, password, verifier).then((result) => {
+    if ("authentication_state" in result) {
+      retainNativeRedemptionVerifier(result.transaction_id, verifier);
+      return result;
+    }
     offerBiometricAfterLogin = true;
     void syncWidgetSnapshot();
-    return user;
+    return result;
   }).catch((error: unknown) => {
     if (error instanceof Error && "status" in error && typeof error.status === "number") {
       const code = "code" in error && typeof error.code === "string" ? error.code : `http_${error.status}`;
@@ -238,4 +270,98 @@ export async function nativeLogout(): Promise<void> {
  * null (session cannot be silently restored; fall back to Login). */
 export function nativeRenewSession(): Promise<User> {
   return client().renew();
+}
+
+export async function nativeExternalStart(
+  provider: "apple" | "google",
+  intent: "login" | "link" = "login",
+  correlationId?: string,
+): Promise<{ transaction_id: string; nonce: string; provider: "apple" | "google"; client_id: string | null }> {
+  const platform = nativePlatform();
+  if (platform !== "ios" && platform !== "android") throw new Error("Native provider sign-in is unavailable.");
+  const verifier = newNativeRedemptionVerifier();
+  const result = await client().startExternal(provider, platform, verifier, intent, correlationId);
+  retainNativeRedemptionVerifier(result.transaction_id, verifier);
+  return result;
+}
+
+export async function nativeExternalAssertion(
+  provider: "apple" | "google",
+  nonce: string,
+  clientId: string | null,
+): Promise<NativeProviderAssertion> {
+  if (provider === "apple") return NativeExternalAuth.signInApple({ nonce });
+  if (!clientId) throw new Error("Google sign-in is not configured for this environment.");
+  return NativeExternalAuth.signInGoogle({ nonce, client_id: clientId });
+}
+
+export async function nativeExternalExchange(transactionId: string, identityToken: string, correlationId?: string) {
+  const verifier = redemptionVerifierFor(transactionId);
+  const result = await client().exchangeExternal(transactionId, identityToken, verifier, correlationId);
+  if ("id" in result) finishNativeRedemption(transactionId);
+  else if ("transaction_id" in result) retainNativeRedemptionVerifier(result.transaction_id, verifier);
+  return result;
+}
+
+export async function nativeExternalRecoveryLink(transactionId: string) {
+  const result = await client().externalRecoveryLink(transactionId, redemptionVerifierFor(transactionId));
+  finishNativeRedemption(transactionId);
+  return result;
+}
+
+export async function nativeExternalRecoveryRegister(body: {
+  transaction_id: string;
+  display_name?: string;
+  legal_acceptances: { document_key: string; document_version_id: string }[];
+  platform: "ios" | "android";
+}): Promise<User | { authentication_state: "additional_auth_required"; transaction_id: string; provider: "apple" | "google" }> {
+  const verifier = redemptionVerifierFor(body.transaction_id);
+  const result = await client().externalRecoveryRegister({ ...body, redemption_verifier: verifier });
+  if ("id" in result) finishNativeRedemption(body.transaction_id);
+  else retainNativeRedemptionVerifier(result.transaction_id, verifier);
+  return result;
+}
+
+export async function nativeExternalBrowserStart(provider: "apple" | "google", intent: "login" | "link" = "login") {
+  const platform = nativePlatform();
+  if (platform !== "ios" && platform !== "android") throw new Error("Native provider sign-in is unavailable.");
+  const host = typeof window === "undefined" ? "" : window.location.hostname;
+  const production = host === "mykhaya.app";
+  const returnUri = platform === "ios"
+    ? `${production ? "mykhaya-prod" : "mykhaya"}://auth/callback`
+    : `${production ? "app.mykhaya.mobile.prod" : "app.mykhaya.mobile"}://auth/callback`;
+  const verifier = newNativeRedemptionVerifier();
+  const result = await client().externalBrowserStart(provider, platform, returnUri, verifier, intent);
+  retainNativeRedemptionVerifier(result.transaction_id, verifier);
+  return result;
+}
+
+export async function nativeExternalRedeem(transactionId: string) {
+  const result = await client().externalRedeem(transactionId, redemptionVerifierFor(transactionId));
+  if ("id" in result || "message" in result) finishNativeRedemption(transactionId);
+  else if ("transaction_id" in result) retainNativeRedemptionVerifier(result.transaction_id, redemptionVerifierFor(transactionId));
+  return result;
+}
+
+export function nativeMfaOptions(transactionId: string) {
+  return client().nativeMfaOptions(transactionId, redemptionVerifierFor(transactionId));
+}
+
+export function nativeMfaStart(transactionId: string, method: "totp" | "email") {
+  return client().nativeMfaStart(transactionId, method, redemptionVerifierFor(transactionId));
+}
+
+export function nativeMfaVerify(transactionId: string, method: "totp" | "email", code: string) {
+  return client().nativeMfaVerify(transactionId, method, code, redemptionVerifierFor(transactionId)).then((user) => {
+    finishNativeRedemption(transactionId);
+    offerBiometricAfterLogin = true;
+    void syncWidgetSnapshot();
+    return user;
+  });
+}
+
+/** Abandon a native MFA continuation (the person chose "Use a different
+ * sign-in method"). The server transaction simply expires. */
+export function cancelNativeMfa(transactionId: string): void {
+  finishNativeRedemption(transactionId);
 }

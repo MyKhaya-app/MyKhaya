@@ -13,7 +13,7 @@ import {
 import type { User } from "@mykhaya/shared-types";
 import { SettingsPage } from "@/components/settings-page";
 import { Logo } from "@/components/logo";
-import { useBuildInfo } from "@/components/app-version";
+import { buildTimeText, shortCommit, useBuildInfo, webBuild } from "@/components/app-version";
 import { isNativeShell, nativePlatform } from "@/components/native-runtime";
 import { useNotificationPermission } from "@/components/use-notification-permission";
 import { nativePushDiagnostics } from "@/components/native-push";
@@ -192,6 +192,7 @@ function versionText(value: string): string {
 
 export default function About() {
   const build = useBuildInfo();
+  const web = webBuild();
   const nativeInfo = useNativeAppInfo();
   const { status: notificationPermission } = useNotificationPermission();
   const pushDiagnostics = useNativePushDiagnostics();
@@ -237,6 +238,26 @@ export default function About() {
                       : build.environment}
                 </dd>
               </div>
+            )}
+            {/* Development builds only (webBuild() is null in a stable
+                build), and only once the signed-in API build has loaded. */}
+            {build && web && (
+              <>
+                <div className="about-build-row">
+                  <dt>Web build</dt>
+                  <dd>
+                    {shortCommit(web.commit)}
+                    <small>{buildTimeText(web.buildTime)}</small>
+                  </dd>
+                </div>
+                <div className="about-build-row">
+                  <dt>API build</dt>
+                  <dd>
+                    {shortCommit(build.commit)}
+                    <small>{buildTimeText(build.build_time)}</small>
+                  </dd>
+                </div>
+              </>
             )}
           </dl>
         </section>

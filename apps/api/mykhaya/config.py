@@ -2,10 +2,13 @@ import os
 from email.utils import parseaddr
 from functools import lru_cache
 from ipaddress import ip_network
+from pathlib import Path
 from typing import Literal
 from urllib.parse import urlsplit
 
-from pydantic import Field, SecretStr, field_validator, model_validator
+from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric.ec import SECP256R1, EllipticCurvePrivateKey
+from pydantic import Field, SecretStr, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from mykhaya.url_validation import is_valid_http_url
@@ -138,17 +141,26 @@ class Settings(BaseSettings):
     # implement a provider ceremony.
     apple_sign_in_enabled: bool = False
     apple_client_id: str | None = None
+    apple_native_client_id: str | None = None
     apple_service_id: str | None = None
     apple_team_id: str | None = None
     apple_key_id: str | None = None
     apple_private_key: SecretStr | None = None
+    apple_private_key_file: str | None = None
     apple_redirect_uri: str | None = None
+    native_apple_return_uri: str | None = None
     apple_authorize_url: str = "https://appleid.apple.com/auth/authorize"
     apple_token_url: str = "https://appleid.apple.com/auth/token"  # noqa: S105 — a URL
     apple_jwks_url: str = "https://appleid.apple.com/auth/keys"
     google_sign_in_enabled: bool = False
     google_client_id: str | None = None
+    google_native_client_id: str | None = None
     google_client_secret: SecretStr | None = None
+    google_redirect_uri: str | None = None
+    native_google_return_uri: str | None = None
+    google_authorize_url: str = "https://accounts.google.com/o/oauth2/v2/auth"
+    google_token_url: str = "https://oauth2.googleapis.com/token"  # noqa: S105 — a URL
+    google_jwks_url: str = "https://www.googleapis.com/oauth2/v3/certs"
     # Stripe billing (Phase 3) — deliberately environment-only, unlike SMTP/push,
     # which also support a Platform-Admin-managed DB override. A payment
     # provider's credentials are rotated through infrastructure, not typed into
@@ -234,6 +246,7 @@ class Settings(BaseSettings):
     # package is the only transport between environments; this path is never
     # accepted from package contents or request parameters.
     home_migration_storage_dir: str = "/data/home-migrations"
+    legal_evidence_storage_dir: str = "/data/legal-evidence"
     # How long a package file that hasn't completed an import may stay on
     # disk before the scheduler purges it (completed imports are removed
     # immediately). Packages are full plaintext Home copies — keep this short.
@@ -265,6 +278,35 @@ class Settings(BaseSettings):
     # scheduling mechanism (the application never triggers backups itself).
     backup_expected_interval_hours: int = Field(default=26, ge=1, le=24 * 30)
     status_public_enabled: bool = True
+    # Automated service monitoring (mykhaya.monitoring). Runs inside the
+    # scheduler process; every observation, transition and alert is stored in
+    # *this* environment's own database, so DEV and PROD never share monitoring
+    # state. Disabling it does not make services look healthy: the public
+    # status page reports Unknown for anything without a fresh observation.
+    monitoring_enabled: bool = True
+    # Internal targets for monitoring MyKhaya's own web and API services. These
+    # are the Docker service addresses Caddy itself proxies to on the internal
+    # `app` network (compose.yml), identical in DEV and PROD, so the monitor
+    # checks the services from inside the trusted application environment and
+    # never routes out through a public hostname, Cloudflare or NetBird. Blank
+    # means the default. They prove internal component health only, not that
+    # customers can reach MyKhaya over the internet.
+    monitoring_web_url: str = "http://web:3000"
+    monitoring_api_url: str = "http://api:8000"
+    # Optional independent dead-man's-switch (e.g. a healthchecks.io check URL).
+    # The scheduler pings it after each healthy monitoring cycle and pings
+    # `<url><fail suffix>` while a critical component is unavailable, so an
+    # external service raises the alarm if MyKhaya, its host, or its own email
+    # delivery is down. A secret: the URL embeds the check's token.
+    monitoring_watchdog_url: SecretStr | None = None
+    monitoring_watchdog_fail_suffix: str = "/fail"
+    # BookStack documentation sync (mykhaya.docs_sync). The docs are bundled
+    # into the image at build time (apps/api/Dockerfile); the branch label
+    # defaults from the environment (production -> main, otherwise dev) and
+    # is only used for the source notice and GitHub links. Everything else
+    # (URL, token, book, schedule) is configured per environment in PCC.
+    docs_sync_source_dir: str = "/app/docs"
+    docs_sync_branch: str | None = None
     commit_sha: str = "unknown"
     build_time: str = "unknown"
     build_channel: Literal["development", "stable"] = "development"
@@ -294,6 +336,16 @@ class Settings(BaseSettings):
         """
         if isinstance(value, str) and (not value.strip() or value.strip() == "unknown"):
             return resolve_app_version()
+        return value
+
+    @field_validator("monitoring_web_url", "monitoring_api_url", mode="before")
+    @classmethod
+    def resolve_blank_monitoring_targets(cls, value: object, info: ValidationInfo) -> object:
+        """`.env.example` ships these blank: blank means the internal default."""
+        if value is None or (isinstance(value, str) and not value.strip()):
+            if info.field_name == "monitoring_web_url":
+                return "http://web:3000"
+            return "http://api:8000"
         return value
 
     @field_validator(
@@ -394,6 +446,82 @@ class Settings(BaseSettings):
                 "MYKHAYA_FIELD_ENCRYPTION_KEYS / MYKHAYA_BLIND_INDEX_KEYS are a development/test "
                 "fallback only. Production must supply sensitive-field keyrings as mounted files."
             )
+        return self
+
+    @model_validator(mode="after")
+    def resolve_apple_private_key(self) -> "Settings":
+        """Load and validate the Apple signing key from exactly one source.
+
+        The file source is intentionally opt-in. This keeps existing deployments
+        startable when Apple sign-in is disabled and the optional secret mount is
+        absent, while still failing closed when an operator explicitly configures
+        a bad or conflicting key source.
+        """
+        env_key = (
+            self.apple_private_key.get_secret_value().strip() if self.apple_private_key else ""
+        )
+        key_file = (self.apple_private_key_file or "").strip()
+        if env_key and key_file:
+            raise ValueError(
+                "MYKHAYA_APPLE_PRIVATE_KEY and MYKHAYA_APPLE_PRIVATE_KEY_FILE must not both "
+                "be configured"
+            )
+        if key_file:
+            path = Path(key_file)
+            try:
+                if not path.is_file():
+                    raise ValueError("not a regular file")
+                file_key = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeError, ValueError) as exc:
+                raise ValueError(
+                    "MYKHAYA_APPLE_PRIVATE_KEY_FILE is missing or inaccessible"
+                ) from exc
+            env_key = file_key.strip()
+            self.apple_private_key = SecretStr(file_key)
+        if env_key:
+            source = "MYKHAYA_APPLE_PRIVATE_KEY_FILE" if key_file else "MYKHAYA_APPLE_PRIVATE_KEY"
+            self._validate_apple_private_key(
+                env_key,
+                source=source,
+            )
+        return self
+
+    @staticmethod
+    def _validate_apple_private_key(value: str, *, source: str) -> None:
+        try:
+            key = serialization.load_pem_private_key(value.encode("utf-8"), password=None)
+        except (TypeError, ValueError, UnicodeError) as exc:
+            raise ValueError(f"{source} must contain an unencrypted P-256 PEM key") from exc
+        if not isinstance(key, EllipticCurvePrivateKey) or not isinstance(key.curve, SECP256R1):
+            raise ValueError(f"{source} must contain an unencrypted P-256 PEM key")
+
+    @model_validator(mode="after")
+    def validate_production_fcm_configuration(self) -> "Settings":
+        """Keep production FCM on the production Firebase project.
+
+        FCM is deployment-only configuration. A production process may be
+        started with delivery disabled, but it must never be allowed to start
+        a configured sender against a DEV project or with an incomplete PEM.
+        The values themselves are deliberately never included in the error.
+        """
+        if self.environment != "production":
+            return self
+
+        if self.fcm_project_id and self.fcm_project_id != "mykhaya-prod":
+            raise ValueError("MYKHAYA_FCM_PROJECT_ID must be mykhaya-prod in production")
+
+        if self.fcm_delivery_configured:
+            if not (self.fcm_project_id and self.fcm_client_email and self.fcm_private_key):
+                raise ValueError(
+                    "Production FCM delivery requires project ID, client email, and private key"
+                )
+            pem = self.fcm_private_key.get_secret_value().replace("\\n", "\n").strip()
+            if not (
+                pem.startswith("-----BEGIN PRIVATE KEY-----")
+                and pem.endswith("-----END PRIVATE KEY-----")
+            ):
+                raise ValueError("MYKHAYA_FCM_PRIVATE_KEY must contain a PKCS#8 PEM key")
+
         return self
 
     @field_validator("cookie_secure")

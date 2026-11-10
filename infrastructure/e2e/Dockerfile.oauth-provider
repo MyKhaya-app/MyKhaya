@@ -1,0 +1,12 @@
+FROM python:3.13.5-slim-bookworm
+WORKDIR /app
+RUN pip install --no-cache-dir cryptography python-jose[cryptography]
+COPY infrastructure/e2e/oauth-provider.py ./oauth-provider.py
+USER 65532:65532
+EXPOSE 8081
+# Healthy only when the provider serves its signing key on the internal JWKS
+# endpoint used by the API to verify synthetic ID tokens. This does not touch
+# authorization or token endpoints and cannot consume synthetic auth state.
+HEALTHCHECK --interval=10s --timeout=3s --start-period=10s --retries=3 \
+  CMD ["python", "-c", "import json, os, sys, urllib.request; port = os.environ.get('PORT', '8081'); request = urllib.request.Request(f'http://127.0.0.1:{port}/jwks', headers={'Host': 'oauth-provider:8081'}); keys = json.load(urllib.request.urlopen(request, timeout=2))['keys']; sys.exit(0 if keys and keys[0].get('kid') == 'synthetic-e2e-key' else 1)"]
+CMD ["python", "oauth-provider.py"]

@@ -276,6 +276,20 @@ describe("entitlements and Info.plists take every environment value from the bui
     expect(read("native/widgets/MyKhayaWidgets.entitlements")).not.toContain("aps-environment");
   });
 
+  // NativeExternalAuthPlugin uses ASAuthorizationAppleIDProvider. Without this
+  // entitlement in the signed app, AuthenticationServices fails every request
+  // with ASAuthorizationError.unknown (1000) before any UI is shown — the
+  // cause of native "Apple sign-in could not be completed". The widget never
+  // signs in, so it must not carry it.
+  it("entitles the main app (DEV and PROD) to Sign in with Apple, and only the main app", () => {
+    for (const path of ["ios/App/App/AppDebug.entitlements", "ios/App/App/AppRelease.entitlements"]) {
+      const block = /<key>com\.apple\.developer\.applesignin<\/key>\s*<array>([\s\S]*?)<\/array>/.exec(read(path))?.[1];
+      expect(block, path).toBeDefined();
+      expect([...block!.matchAll(/<string>([^<]*)<\/string>/g)].map((m) => m[1])).toEqual(["Default"]);
+    }
+    expect(read("native/widgets/MyKhayaWidgets.entitlements")).not.toContain("applesignin");
+  });
+
   it("the app registers only its own widget URL scheme and knows its environment", () => {
     const info = read("ios/App/App/Info.plist");
     const urlTypes = /<key>CFBundleURLTypes<\/key>\s*<array>([\s\S]*?)<\/array>\s*<key>/.exec(info)![1]!;

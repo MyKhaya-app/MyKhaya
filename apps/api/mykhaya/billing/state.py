@@ -37,8 +37,10 @@ reconciliation; see docs/architecture/commercial-entitlements.md#checkout-lifecy
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from enum import StrEnum
+from typing import Any, cast
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -64,6 +66,48 @@ class SubscriptionOwnershipMismatchError(RuntimeError):
     as defence-in-depth against a future code path, data-integrity bug, or
     operator error attaching the wrong Stripe object to a Home. See
     "Reconciliation authority" in docs/security/platform-administration-security.md."""
+
+
+class SubscriptionStateOutcome(StrEnum):
+    APPLIED = "applied"
+    UNCHANGED = "unchanged"
+    STALE_EVENT = "stale_event"
+    UNKNOWN_PRICE_ID = "unknown_price_id"
+    MISSING_OR_AMBIGUOUS_ITEM = "missing_or_ambiguous_item"
+    OWNERSHIP_MISMATCH = "ownership_mismatch"
+    INVALID_STATE = "invalid_state"
+
+
+@dataclass(frozen=True)
+class SubscriptionStateResult:
+    """Structured result for Stripe state application."""
+
+    outcome: SubscriptionStateOutcome
+    subscription: HomeSubscription | None = None
+    reason: str | None = None
+    retryable: bool = False
+
+    @property
+    def status(self) -> SubscriptionStatus | None:
+        """Expose the legacy subscription status without losing ``outcome``.
+
+        A number of callers historically treated the return value as the
+        ``HomeSubscription`` itself.  Keeping this read-only compatibility
+        property makes the result migration safe while ``outcome`` remains
+        the authoritative processing classification.
+        """
+        return self.subscription.status if self.subscription is not None else None
+
+    def __getattr__(self, name: str) -> Any:
+        """Keep older internal callers source-compatible during migration."""
+        if self.subscription is not None:
+            return getattr(self.subscription, name)
+        raise AttributeError(name)
+
+    @property
+    def outcome_status(self) -> SubscriptionStateOutcome:
+        """Short alias for integrations that prefer a status-like name."""
+        return self.outcome
 
 
 _STRIPE_STATUS_MAP: dict[str, SubscriptionStatus] = {
@@ -103,21 +147,66 @@ def map_stripe_subscription_status(
     return mapped
 
 
+def select_subscription_item(
+    stripe_subscription: dict[str, Any],
+    *,
+    preferred_price_id: str | None = None,
+    known_price_ids: set[str] | None = None,
+) -> dict[str, Any] | None:
+    """Select the MyKhaya recurring item without assuming Stripe's order.
+
+    A stored current Price ID is the strongest signal. For webhook and
+    reconciliation payloads, configured MyKhaya Price IDs are the next-best
+    signal. A single-item subscription remains unambiguous even when its
+    grandfathered Price is no longer in current configuration. Multiple items
+    without exactly one matching signal are rejected safely.
+    """
+    items = cast(list[dict[str, Any]], (stripe_subscription.get("items") or {}).get("data") or [])
+    if not items:
+        return None
+    if preferred_price_id:
+        matches = [
+            item for item in items if _stripe_object_id(item.get("price")) == preferred_price_id
+        ]
+        if len(matches) == 1:
+            return matches[0]
+    if known_price_ids:
+        matches = [
+            item
+            for item in items
+            if (_stripe_object_id(item.get("price")) or "") in known_price_ids
+        ]
+        if len(matches) == 1:
+            return matches[0]
+    return items[0] if len(items) == 1 else None
+
+
 def extract_price_and_interval(
     stripe_subscription: dict[str, Any],
+    *,
+    preferred_price_id: str | None = None,
+    known_price_ids: set[str] | None = None,
 ) -> tuple[str | None, BillingInterval | None]:
-    items = (stripe_subscription.get("items") or {}).get("data") or []
-    if not items:
+    item = select_subscription_item(
+        stripe_subscription,
+        preferred_price_id=preferred_price_id,
+        known_price_ids=known_price_ids,
+    )
+    if item is None:
         return None, None
-    price = items[0].get("price") or {}
-    price_id = price.get("id")
-    recurring = price.get("recurring") or {}
+    price = item.get("price") or {}
+    price_id = _stripe_object_id(price)
+    recurring = price.get("recurring") or {} if isinstance(price, dict) else {}
     interval_raw = recurring.get("interval")
     interval = BillingInterval(interval_raw) if interval_raw in ("month", "year") else None
     return price_id, interval
 
 
-def extract_period(stripe_subscription: dict[str, Any]) -> tuple[datetime | None, datetime | None]:
+def extract_period(
+    stripe_subscription: dict[str, Any],
+    *,
+    item: dict[str, Any] | None = None,
+) -> tuple[datetime | None, datetime | None]:
     """Stripe's 2025 API versions moved current_period_start/end from the
     subscription object onto its first item for multi-item-subscription
     support. Read the subscription-level fields first (older/simpler
@@ -128,10 +217,11 @@ def extract_period(stripe_subscription: dict[str, Any]) -> tuple[datetime | None
     start = stripe_subscription.get("current_period_start")
     end = stripe_subscription.get("current_period_end")
     if start is None or end is None:
-        items = (stripe_subscription.get("items") or {}).get("data") or []
-        if items:
-            start = start if start is not None else items[0].get("current_period_start")
-            end = end if end is not None else items[0].get("current_period_end")
+        if item is None:
+            item = select_subscription_item(stripe_subscription)
+        if item is not None:
+            start = start if start is not None else item.get("current_period_start")
+            end = end if end is not None else item.get("current_period_end")
     return (
         datetime.fromtimestamp(start, tz=UTC) if start is not None else None,
         datetime.fromtimestamp(end, tz=UTC) if end is not None else None,
@@ -182,14 +272,15 @@ async def apply_stripe_subscription_state(
     reason: str,
     event_type_hint: str,
     plan_by_price: dict[str, SubscriptionPlan] | None = None,
-) -> HomeSubscription | None:
-    """Returns the updated HomeSubscription, or None if the incoming Stripe
-    object produced no mutation (unrecognised/unconfirmed status, or a
-    stale/out-of-order event — see module docstring and the two guards
-    below)."""
+) -> SubscriptionStateResult:
+    """Apply authoritative Stripe state and report why it did or did not apply."""
     mapped_status = map_stripe_subscription_status(stripe_subscription)
     if mapped_status is None:
-        return None
+        return SubscriptionStateResult(
+            SubscriptionStateOutcome.INVALID_STATE,
+            reason="unrecognised_or_unconfirmed_stripe_status",
+            retryable=False,
+        )
 
     # Renewal and purge must serialize on the same Home lifecycle lock.
     await db.execute(
@@ -204,8 +295,10 @@ async def apply_stripe_subscription_state(
         except ValueError:
             metadata_group_id = None
         if metadata_group_id is not None and metadata_group_id != group_id:
-            raise SubscriptionOwnershipMismatchError(
-                f"Stripe subscription metadata belongs to Home {metadata_group_id}, not {group_id}."
+            return SubscriptionStateResult(
+                SubscriptionStateOutcome.OWNERSHIP_MISMATCH,
+                reason="subscription_metadata_home_mismatch",
+                retryable=False,
             )
 
     subscription = await get_home_subscription(db, group_id)
@@ -216,6 +309,23 @@ async def apply_stripe_subscription_state(
 
     incoming_subscription_id = _stripe_object_id(stripe_subscription.get("id"))
     current_subscription_id = subscription.external_subscription_id
+    incoming_customer_id = _stripe_object_id(stripe_subscription.get("customer"))
+
+    if subscription.external_customer_id and not incoming_customer_id:
+        return SubscriptionStateResult(
+            SubscriptionStateOutcome.OWNERSHIP_MISMATCH,
+            reason="subscription_customer_missing",
+            retryable=False,
+        )
+    if (
+        subscription.external_customer_id
+        and incoming_customer_id != subscription.external_customer_id
+    ):
+        return SubscriptionStateResult(
+            SubscriptionStateOutcome.OWNERSHIP_MISMATCH,
+            reason="subscription_customer_mismatch",
+            retryable=False,
+        )
 
     # Out-of-order guard 1: an event for a *different* subscription ID than
     # the one currently tracked (and that tracked one hasn't itself already
@@ -227,18 +337,58 @@ async def apply_stripe_subscription_state(
         and current_subscription_id != incoming_subscription_id
         and subscription.status != SubscriptionStatus.cancelled
     ):
-        return None
+        return SubscriptionStateResult(
+            SubscriptionStateOutcome.STALE_EVENT,
+            subscription=subscription,
+            reason="different_active_subscription_id",
+        )
 
-    price_id, interval = extract_price_and_interval(stripe_subscription)
+    known_price_ids = set(plan_by_price or {})
+    item = select_subscription_item(
+        stripe_subscription,
+        preferred_price_id=subscription.external_price_id,
+        known_price_ids=known_price_ids,
+    )
+    if item is None:
+        return SubscriptionStateResult(
+            SubscriptionStateOutcome.MISSING_OR_AMBIGUOUS_ITEM,
+            subscription=subscription,
+            reason="no_unique_subscription_item",
+            retryable=True,
+        )
+    price = item.get("price") or {}
+    price_id = _stripe_object_id(price)
+    recurring = price.get("recurring") or {}
+    interval_raw = recurring.get("interval")
+    interval = BillingInterval(interval_raw) if interval_raw in ("month", "year") else None
+    if not price_id or interval is None:
+        return SubscriptionStateResult(
+            SubscriptionStateOutcome.INVALID_STATE,
+            subscription=subscription,
+            reason="price_id_or_billing_interval_missing",
+            retryable=True,
+        )
     requested_plan = (stripe_subscription.get("metadata") or {}).get("mykhaya_plan")
     price_plan = plan_by_price.get(price_id) if plan_by_price and price_id else None
+    if plan_by_price is not None and price_plan is None:
+        return SubscriptionStateResult(
+            SubscriptionStateOutcome.UNKNOWN_PRICE_ID,
+            subscription=subscription,
+            reason="price_id_not_in_configured_plan_mapping",
+            retryable=True,
+        )
     try:
         incoming_plan = price_plan or SubscriptionPlan(
             requested_plan or SubscriptionPlan.family.value
         )
     except ValueError:
-        incoming_plan = SubscriptionPlan.family
-    period_start, period_end = extract_period(stripe_subscription)
+        return SubscriptionStateResult(
+            SubscriptionStateOutcome.INVALID_STATE,
+            subscription=subscription,
+            reason="invalid_plan_metadata",
+            retryable=True,
+        )
+    period_start, period_end = extract_period(stripe_subscription, item=item)
 
     # Out-of-order guard 2: for the *same* subscription ID, current_period_end
     # only ever advances forward until cancellation — a delayed/retried event
@@ -252,7 +402,11 @@ async def apply_stripe_subscription_state(
         and period_end < subscription.current_period_end
         and mapped_status != SubscriptionStatus.cancelled
     ):
-        return None
+        return SubscriptionStateResult(
+            SubscriptionStateOutcome.STALE_EVENT,
+            subscription=subscription,
+            reason="older_subscription_period_end",
+        )
 
     from_plan, from_provider, from_status = (
         subscription.plan,
@@ -260,7 +414,7 @@ async def apply_stripe_subscription_state(
         subscription.status,
     )
     was_complimentary = subscription.provider == SubscriptionProvider.complimentary
-    customer_id = _stripe_object_id(stripe_subscription.get("customer"))
+    customer_id = incoming_customer_id
 
     materially_changed = (
         subscription.provider != SubscriptionProvider.stripe
@@ -280,6 +434,27 @@ async def apply_stripe_subscription_state(
     subscription.billing_interval = interval
     subscription.current_period_start = period_start
     subscription.current_period_end = period_end
+    pending_matches = (
+        subscription.pending_plan is not None
+        and subscription.pending_plan == incoming_plan
+        and (
+            subscription.pending_billing_interval is None
+            or subscription.pending_billing_interval == interval
+        )
+    )
+    # A verified Stripe update is the only authority that clears a pending
+    # local transition. For a scheduled Free downgrade, Stripe reports the
+    # terminal cancellation instead of a Free price, so that status also
+    # completes the pending request.
+    pending_cleared = pending_matches or (
+        subscription.pending_plan == SubscriptionPlan.free
+        and mapped_status == SubscriptionStatus.cancelled
+    )
+    if pending_cleared:
+        subscription.pending_plan = None
+        subscription.pending_billing_interval = None
+        subscription.pending_effective_at = None
+        subscription.stripe_schedule_id = None
     if was_complimentary:
         # The transition itself is preserved in HomeSubscriptionEvent history
         # below (from_provider=complimentary); these live fields would
@@ -291,8 +466,11 @@ async def apply_stripe_subscription_state(
     from mykhaya.family_retention import restore_family_retention
 
     await restore_family_retention(db, group_id)
-    if not materially_changed:
-        return subscription
+    if not materially_changed and not pending_cleared:
+        return SubscriptionStateResult(
+            SubscriptionStateOutcome.UNCHANGED,
+            subscription=subscription,
+        )
 
     event_type = _pick_event_type(from_provider, from_status, mapped_status, event_type_hint)
     await record_subscription_event(
@@ -308,4 +486,7 @@ async def apply_stripe_subscription_state(
         actor_administrator_id=actor_administrator_id,
         reason=reason,
     )
-    return subscription
+    return SubscriptionStateResult(
+        SubscriptionStateOutcome.APPLIED,
+        subscription=subscription,
+    )

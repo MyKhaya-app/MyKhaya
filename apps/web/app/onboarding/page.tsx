@@ -15,11 +15,12 @@ import {
   savingLabelFor,
   ultimatePricingOptionFor,
 } from "@/components/family-pricing-logic";
-import { clearOnboardingIntent, readOnboardingIntent } from "@/components/onboarding-intent";
+import { clearOnboardingHomeKey, clearOnboardingIntent, ensureOnboardingHomeKey, readOnboardingIntent } from "@/components/onboarding-intent";
 import type { BillingIntervalChoice } from "@/components/onboarding-intent";
 import { nativeLogout } from "@/components/native-auth";
 import { isNativeShell } from "@/components/native-runtime";
 import { BetaEnrolment } from "@/components/beta-enrolment";
+import { useActiveHome } from "@/components/use-active-home";
 
 type Step = "choice" | "join-code" | "join-confirm" | "join-sent" | "home" | "plan";
 
@@ -38,6 +39,7 @@ type Step = "choice" | "join-code" | "join-confirm" | "join-sent" | "home" | "pl
 // Neither branch is forced: an account may sit Home-less indefinitely.
 export default function Onboarding() {
   const router = useRouter();
+  const { setActiveHomeId, refreshHomes } = useActiveHome();
   const params = useSearchParams();
   const [step, setStep] = useState<Step>("choice");
   const [error, setError] = useState(""),
@@ -57,6 +59,7 @@ export default function Onboarding() {
   // known, so the normal onboarding never flashes first.
   const betaRequested = params.get("beta") === "1";
   const [route, setRoute] = useState<"loading" | "beta" | "normal">(betaRequested ? "beta" : "loading");
+  const onboardingHomeKey = ensureOnboardingHomeKey();
   useEffect(() => {
     if (betaRequested) {
       setRoute("beta");
@@ -77,6 +80,16 @@ export default function Onboarding() {
   }, [betaRequested]);
 
   useEffect(() => {
+    if (route !== "normal" || step !== "choice") return;
+    api.resumeOnboardingHome()
+      .then((home) => {
+        setHomeId(home.id);
+        setStep("plan");
+      })
+      .catch(() => undefined);
+  }, [route, step]);
+
+  useEffect(() => {
     if (step !== "plan") return;
     const intent = readOnboardingIntent();
     if (intent) {
@@ -93,7 +106,10 @@ export default function Onboarding() {
     setError("");
     const d = new FormData(e.currentTarget);
     try {
-      const group = await api.post<{ id: string }>("/groups", { name: d.get("name") });
+      const group = await api.post<{ id: string }>("/groups", {
+        name: d.get("name"),
+        onboarding_key: onboardingHomeKey,
+      });
       setHomeId(group.id);
       setStep("plan");
     } catch (err) {
@@ -145,12 +161,26 @@ export default function Onboarding() {
     router.push("/login");
   }
 
-  function continueWithFree() {
-    clearOnboardingIntent();
-    router.push("/home");
+  async function continueWithFree() {
+    if (!homeId || busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      await api.completeOnboarding(homeId);
+      clearOnboardingIntent();
+      clearOnboardingHomeKey();
+      setActiveHomeId(homeId);
+      await refreshHomes();
+      setActiveHomeId(homeId);
+      router.replace("/home");
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "We couldn’t finish setting up your Home.");
+    } finally {
+      setBusy(false);
+    }
   }
 
-  async function upgradeToFamily(plan: "family" | "ultimate" = requestedPlan) {
+  async function startPaidCheckout(plan: "family" | "ultimate") {
     if (!homeId || busy) return;
     setBusy(true);
     setError("");
@@ -249,7 +279,7 @@ export default function Onboarding() {
                     disabled={busy || !ultimatePricingOptionFor(pricing, billingInterval)}
                     onClick={() => {
                       setRequestedPlan("ultimate");
-                      void upgradeToFamily("ultimate");
+                      void startPaidCheckout("ultimate");
                     }}
                   >
                     {busy ? "One moment…" : "Upgrade to Ultimate"}
@@ -357,6 +387,7 @@ export default function Onboarding() {
 
   if (step === "plan") {
     const selected = pricing ? pricingOptionFor(pricing, billingInterval) : null;
+    const selectedUltimate = pricing ? ultimatePricingOptionFor(pricing, billingInterval) : null;
     const saving = pricing ? savingLabelFor(pricing, billingInterval) : null;
     const bestValue = pricing ? isBestValueInterval(pricing, billingInterval) : false;
     const paidCheckoutLegalReady = Boolean(
@@ -370,6 +401,25 @@ export default function Onboarding() {
           <p className="step">Your plan</p>
           <h1>Choose your MyKhaya plan</h1>
           <p className="muted">You can change this at any time from Settings.</p>
+
+          <div className="interval-toggle" role="group" aria-label="Billing interval">
+            <button
+              type="button"
+              className={billingInterval === "month" ? "toggle-active" : "secondary"}
+              aria-pressed={billingInterval === "month"}
+              onClick={() => setBillingInterval("month")}
+            >
+              Monthly
+            </button>
+            <button
+              type="button"
+              className={billingInterval === "year" ? "toggle-active" : "secondary"}
+              aria-pressed={billingInterval === "year"}
+              onClick={() => setBillingInterval("year")}
+            >
+              Annual
+            </button>
+          </div>
 
           <div className="feature-card-grid pricing-cards">
             <article className="card feature-card">
@@ -394,24 +444,6 @@ export default function Onboarding() {
                 {bestValue && <span className="release-badge core">Best value</span>}
               </div>
               <p className="muted">The complete MyKhaya experience for your whole household.</p>
-              <div className="interval-toggle" role="group" aria-label="Billing interval">
-                <button
-                  type="button"
-                  className={billingInterval === "month" ? "toggle-active" : "secondary"}
-                  aria-pressed={billingInterval === "month"}
-                  onClick={() => setBillingInterval("month")}
-                >
-                  Monthly
-                </button>
-                <button
-                  type="button"
-                  className={billingInterval === "year" ? "toggle-active" : "secondary"}
-                  aria-pressed={billingInterval === "year"}
-                  onClick={() => setBillingInterval("year")}
-                >
-                  Annual
-                </button>
-              </div>
               {pricingError ? (
                 <p className="notice error" role="alert">
                   Family pricing is temporarily unavailable.
@@ -451,13 +483,59 @@ export default function Onboarding() {
               ) : (
                 <button
                   type="button"
+                  aria-pressed={requestedPlan === "family"}
                   disabled={busy || pricingError || !selected || !paidCheckoutLegalReady}
-                  onClick={() => void upgradeToFamily()}
+                  onClick={() => void startPaidCheckout("family")}
                 >
                   {busy ? "One moment…" : "Upgrade to Family"}
                 </button>
               )}
             </article>
+
+            {pricing?.ultimate_options?.length ? (
+              <article className="card feature-card">
+                <div className="feature-card-heading">
+                  <h3>Ultimate</h3>
+                  {billingInterval === "year" && pricing.ultimate_annual_is_best_value && (
+                    <span className="release-badge core">Best value</span>
+                  )}
+                </div>
+                <p className="muted">
+                  Everything in Family, plus Budget, Driveway and future premium modules.
+                </p>
+                {!selectedUltimate ? (
+                  <p role="status">Ultimate pricing is temporarily unavailable.</p>
+                ) : (
+                  <>
+                    <p className="pricing-amount">
+                      <strong>{selectedUltimate.formatted_amount}</strong>
+                      <span aria-hidden="true"> / {intervalSuffix(billingInterval)}</span>
+                      <span className="sr-only"> per {billingInterval}</span>
+                    </p>
+                    <p className="hint">
+                      Renews {billingInterval === "month" ? "monthly" : "annually"} until cancelled.
+                      {billingInterval === "year" && pricing.ultimate_annual_saving_formatted
+                        ? ` Save ${pricing.ultimate_annual_saving_formatted} per year.`
+                        : ""}
+                    </p>
+                    {!canStartUltimateCheckout(pricing) ? (
+                      <p className="notice" role="status">
+                        New Ultimate sign-ups are temporarily paused.
+                      </p>
+                    ) : (
+                      <button
+                        type="button"
+                        aria-pressed={requestedPlan === "ultimate"}
+                        disabled={busy || !paidCheckoutLegalReady}
+                        onClick={() => void startPaidCheckout("ultimate")}
+                      >
+                        {busy ? "One moment..." : "Upgrade to Ultimate"}
+                      </button>
+                    )}
+                  </>
+                )}
+              </article>
+            ) : null}
           </div>
         </section>
       </main>

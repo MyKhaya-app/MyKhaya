@@ -9,11 +9,11 @@ from mykhaya.config import Settings, get_settings
 from mykhaya.db import get_db
 from mykhaya.models import PublicIncident, StatusIncidentService, StatusIncidentUpdate
 from mykhaya.status_aggregation import (
-    PUBLIC_SERVICES,
-    highest_severity,
+    ALL_STATUS_SERVICES,
+    ServiceStatus,
+    StatusSnapshot,
+    compute_status_snapshot,
     is_incident_active,
-    overall_message,
-    service_states_from_impacts,
 )
 
 router = APIRouter(prefix="/status", tags=["public-status"])
@@ -42,7 +42,7 @@ def _incident_summary(
         "services": [
             {
                 "key": entry.service,
-                "name": PUBLIC_SERVICES.get(entry.service, entry.service),
+                "name": ALL_STATUS_SERVICES.get(entry.service, entry.service),
                 "impact": entry.impact,
             }
             for entry in services
@@ -61,20 +61,21 @@ def _incident_summary(
     }
 
 
-@router.get("")
-async def public_status(
-    request: Request,
-    response: Response,
-    db: AsyncSession = Depends(get_db),
-    settings: Settings = Depends(get_settings),
-) -> dict[str, Any]:
-    enforce_status_host(request, settings)
-    if not settings.status_public_enabled:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found")
-    response.headers["Cache-Control"] = "no-store, max-age=0"
-    response.headers["Pragma"] = "no-cache"
+def _service_row(status: ServiceStatus) -> dict[str, Any]:
+    # Customer-safe only: a state, a confidence word and a timestamp. Never a
+    # component name, failure category, latency, provider error or host.
+    return {
+        "key": status.key,
+        "name": status.name,
+        "state": status.state,
+        "confidence": status.confidence,
+        "last_checked": status.last_checked,
+    }
 
+
+async def _public_payload(db: AsyncSession) -> dict[str, Any]:
     now = datetime.now(UTC)
+    snapshot: StatusSnapshot = await compute_status_snapshot(db, now)
     rows = (
         await db.scalars(
             select(PublicIncident)
@@ -103,24 +104,18 @@ async def public_status(
             row.starts_at, row.resolved_at, lifecycle_state=row.lifecycle_state, now=now
         )
     ]
-    active_impacts = [
-        (entry.service, entry.impact)
-        for row in active_rows
-        for entry in services_by_incident[row.id]
-    ]
-    service_states = service_states_from_impacts(active_impacts)
-    overall = highest_severity(list(service_states.values()))
-
     cutoff = now - timedelta(days=90)
     resolved_rows = [row for row in rows if row.resolved_at and row.resolved_at >= cutoff]
 
     return {
-        "overall": overall,
-        "overall_message": overall_message(overall),
-        "services": [
-            {"key": key, "name": label, "state": service_states[key]}
-            for key, label in PUBLIC_SERVICES.items()
-        ],
+        "overall": snapshot.overall,
+        "overall_message": snapshot.overall_message,
+        "services": [_service_row(item) for item in snapshot.services],
+        # Additive (service monitoring): customer-relevant providers in use
+        # in this environment, and whether live monitoring is running.
+        "external_services": [_service_row(item) for item in snapshot.external_services],
+        "monitoring": {"active": snapshot.monitoring_active},
+        "generated_at": snapshot.generated_at,
         "current_incidents": [
             _incident_summary(row, services_by_incident[row.id], updates_by_incident[row.id])
             for row in active_rows
@@ -136,3 +131,36 @@ async def public_status(
         ][:20],
         "last_updated": max((row.updated_at for row in rows), default=now),
     }
+
+
+@router.get("")
+async def public_status(
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    enforce_status_host(request, settings)
+    if not settings.status_public_enabled:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found")
+    response.headers["Cache-Control"] = "no-store, max-age=0"
+    response.headers["Pragma"] = "no-cache"
+    return await _public_payload(db)
+
+
+@router.get("/snapshot")
+async def public_status_snapshot(
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    """The same public payload, cacheable: intended for an independent
+    edge/static origin (or CDN) to fetch and keep serving its last good copy
+    while the platform is unreachable. `generated_at` lets that copy show
+    its age honestly. See docs/architecture/public-status-service.md."""
+    enforce_status_host(request, settings)
+    if not settings.status_public_enabled:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "Not found")
+    response.headers["Cache-Control"] = "public, max-age=30, stale-if-error=86400"
+    return await _public_payload(db)

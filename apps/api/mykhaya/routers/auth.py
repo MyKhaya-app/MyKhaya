@@ -2,22 +2,28 @@ import json
 import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
+from urllib.parse import parse_qs, quote
 
 import structlog
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import RedirectResponse
 from sqlalchemy import delete, func, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 from webauthn.helpers import base64url_to_bytes, bytes_to_base64url
 
 from mykhaya.apple_auth import (
     AppleAuthenticationError,
     AppleFlowState,
+    ApplePendingIdentity,
     authorization_url,
     consume_flow_state,
+    consume_pending_identity,
     exchange_code,
+    load_pending_identity,
     require_apple_configuration,
     store_flow_state,
+    store_pending_identity,
     verify_identity_token,
 )
 from mykhaya.audit import audit
@@ -47,12 +53,37 @@ from mykhaya.consumer_mfa_policy import (
 )
 from mykhaya.db import get_db
 from mykhaya.dependencies import AuthContext, auth_context, require_adult_session
+from mykhaya.external_identities import (
+    ExternalIdentityNotFound,
+    ExternalIdentityOwnershipConflict,
+    LastAuthenticationMethodError,
+    find_external_identity,
+    link_external_identity,
+    touch_external_identity,
+    unlink_external_identity,
+)
 from mykhaya.founding_beta import (
     beta_invitation_valid,
     current_programme,
     invitation_token_hash,
 )
+from mykhaya.google_auth import (
+    GoogleAuthenticationError,
+    GoogleFlowState,
+    GooglePendingIdentity,
+    require_google_configuration,
+)
+from mykhaya.google_auth import authorization_url as google_authorization_url
+from mykhaya.google_auth import consume_flow_state as consume_google_flow_state
+from mykhaya.google_auth import consume_pending_identity as consume_google_pending_identity
+from mykhaya.google_auth import exchange_code as exchange_google_code
+from mykhaya.google_auth import load_pending_identity as load_google_pending_identity
+from mykhaya.google_auth import new_code_verifier as new_google_code_verifier
+from mykhaya.google_auth import store_flow_state as store_google_flow_state
+from mykhaya.google_auth import store_pending_identity as store_google_pending_identity
+from mykhaya.google_auth import verify_identity_token as verify_google_identity_token
 from mykhaya.legal import validate_signup_acceptances
+from mykhaya.legal_evidence import queue_acceptance_evidence
 from mykhaya.models import (
     ActionToken,
     AuthIdentity,
@@ -78,6 +109,21 @@ from mykhaya.models import (
     UserMfaMethodRecord,
     UserPasskey,
 )
+from mykhaya.native_external_auth import (
+    NativeExternalPendingIdentity,
+    NativeMfaTransaction,
+    consume_native_external_pending,
+    consume_native_external_transaction,
+    consume_native_mfa_transaction,
+    hash_redemption_verifier,
+    load_native_external_pending,
+    load_native_mfa_transaction,
+    new_native_external_transaction,
+    store_native_external_pending,
+    store_native_external_transaction,
+    store_native_mfa_transaction,
+    verify_redemption_verifier,
+)
 from mykhaya.notifications.engine import notify
 from mykhaya.notifications.templates import render_notification_email
 from mykhaya.platform_mfa import (
@@ -93,10 +139,15 @@ from mykhaya.platform_mfa import (
 from mykhaya.platform_runtime import email_verification_required, evaluate_signup_policy
 from mykhaya.rate_limit import enforce_rate_limit
 from mykhaya.schemas import (
+    AppleRecoveryOptionsResponse,
+    AppleRecoveryRequest,
     AuthContinuationResponse,
     ChildLoginRequest,
     ConsumerMfaStatusResponse,
+    ExternalIdentityResponse,
     ForgotRequest,
+    GoogleRecoveryOptionsResponse,
+    GoogleRecoveryRequest,
     LoginRequest,
     MessageResponse,
     MfaOptionsResponse,
@@ -106,7 +157,19 @@ from mykhaya.schemas import (
     MfaTotpVerifyRequest,
     MfaVerifyRequest,
     MobileDeviceRenewRequest,
+    MobileLoginRequest,
     MobileSessionResponse,
+    NativeExternalBrowserStartRequest,
+    NativeExternalBrowserStartResponse,
+    NativeExternalExchangeRequest,
+    NativeExternalLinkRequest,
+    NativeExternalRecoveryResponse,
+    NativeExternalRegisterRequest,
+    NativeExternalStartRequest,
+    NativeExternalStartResponse,
+    NativeMfaContinuationResponse,
+    NativeMfaStartRequest,
+    NativeMfaVerifyRequest,
     PasskeyAuthenticationVerifyRequest,
     PasskeyOptionsResponse,
     PasskeyRegistrationVerifyRequest,
@@ -117,6 +180,7 @@ from mykhaya.schemas import (
     RegistrationResponse,
     ResetRequest,
     SessionResponse,
+    SignInMethodsResponse,
     TokenRequest,
     TrustedDeviceResponse,
     UserResponse,
@@ -146,10 +210,29 @@ from mykhaya.security import (
 router = APIRouter(prefix="/auth", tags=["authentication"])
 GENERIC_EMAIL_MESSAGE = "If that address is registered, an email is on its way."
 auth_diag_log = structlog.get_logger("auth_diag")
+
+
+def _native_external_failure(
+    request: Request, stage: str, category: str, *, provider: str | None, **fields: str | None
+) -> None:
+    """Safe native provider diagnostics: fixed categories and the request id
+    (the client's per-attempt correlation id) only. Never tokens, nonces,
+    transaction ids, provider subjects or email addresses."""
+    auth_diag_log.warning(
+        "native_external_auth_failed",
+        stage=stage,
+        category=category,
+        provider=provider,
+        request_id=getattr(request.state, "request_id", None),
+        **fields,
+    )
+
+
 PASSKEY_LOGIN_COOKIE = "mk_passkey_challenge"
 PASSKEY_CHALLENGE_TTL_SECONDS = 300
 FRESH_AUTH_WINDOW = timedelta(minutes=10)
 APPLE_LOGIN_ERROR = "apple=error"
+GOOGLE_LOGIN_ERROR = "google=error"
 
 
 async def complete_browser_authentication(
@@ -290,6 +373,7 @@ async def browser_mfa_options(
     return MfaOptionsResponse(
         methods=methods,
         destination=_masked_email(user.email),
+        primary_auth_method=_state.method,
         onboarding=_state.onboarding,
         policy="required" if policy.required else "optional",
         policy_source=policy.source,
@@ -673,9 +757,67 @@ def _safe_return_path(value: str | None) -> str | None:
     return None
 
 
+def _native_browser_return_uri(
+    settings: Settings, provider: ExternalIdentityProvider, platform: str
+) -> str:
+    """Return the only supported browser-mediated native callback.
+
+    iOS Apple and Android Google use their native SDK boundaries. Android
+    Apple and iOS Google use the system browser, so those are the only
+    provider/platform pairs accepted by this endpoint.
+    """
+    if provider == ExternalIdentityProvider.apple and platform == "android":
+        value = settings.native_apple_return_uri
+    elif provider == ExternalIdentityProvider.google and platform == "ios":
+        value = settings.native_google_return_uri
+    else:
+        value = None
+    if not value:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "This native browser sign-in callback is not configured.",
+        )
+    return value
+
+
 def _apple_redirect(settings: Settings, suffix: str) -> RedirectResponse:
     return RedirectResponse(
         f"{settings.public_web_url.rstrip('/')}/login?{suffix}",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+def _apple_settings_redirect(settings: Settings, suffix: str) -> RedirectResponse:
+    return RedirectResponse(
+        f"{settings.public_web_url.rstrip('/')}/settings/security?{suffix}",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+def _google_redirect(settings: Settings, suffix: str) -> RedirectResponse:
+    return RedirectResponse(
+        f"{settings.public_web_url.rstrip('/')}/login?{suffix}",
+        status_code=status.HTTP_303_SEE_OTHER,
+    )
+
+
+def _social_registration_context(return_path: str | None) -> str:
+    """Carry only the signed-in registration intent through provider choice."""
+    if not return_path or not return_path.startswith("/register?"):
+        return ""
+    query = parse_qs(return_path.split("?", 1)[1], keep_blank_values=False)
+    if query.get("beta") != ["1"]:
+        return ""
+    invitation = query.get("beta_invitation", [None])[0]
+    suffix = "&beta=1"
+    if invitation:
+        suffix += f"&beta_invitation={quote(invitation, safe='')}"
+    return suffix
+
+
+def _google_settings_redirect(settings: Settings, suffix: str) -> RedirectResponse:
+    return RedirectResponse(
+        f"{settings.public_web_url.rstrip('/')}/settings/security?{suffix}",
         status_code=status.HTTP_303_SEE_OTHER,
     )
 
@@ -687,22 +829,30 @@ def _apple_audit_failure(
 
 
 def _apple_name(raw: str | None) -> str:
-    if not raw:
+    if not raw or len(raw) > 8192:
         return "Apple user"
     try:
         parsed = json.loads(raw)
         name = parsed.get("name") if isinstance(parsed, dict) else None
         if isinstance(name, dict):
-            value = " ".join(
-                str(name.get(part, "")).strip()
-                for part in ("firstName", "lastName")
-                if name.get(part)
-            )
+            parts = []
+            for part in ("firstName", "lastName"):
+                value = name.get(part)
+                if isinstance(value, str) and value.strip():
+                    parts.append(" ".join(value.split())[:100])
+            value = " ".join(parts)
             if value:
                 return value[:100]
     except (TypeError, ValueError, json.JSONDecodeError):
         pass
     return "Apple user"
+
+
+def _google_name(claims: dict[str, object]) -> str:
+    value = claims.get("name")
+    if isinstance(value, str) and value.strip():
+        return " ".join(value.split())[:100]
+    return "Google user"
 
 
 @router.get("/apple/start")
@@ -759,50 +909,278 @@ async def apple_link_start(
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
 
 
+@router.get("/identities", response_model=SignInMethodsResponse)
+async def authenticated_external_identities(
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> SignInMethodsResponse:
+    require_adult_session(auth)
+    password_available = await db.scalar(
+        select(AuthIdentity.id).where(AuthIdentity.user_id == auth.user.id)
+    )
+    identities = await db.scalars(
+        select(ExternalIdentity)
+        .where(ExternalIdentity.user_id == auth.user.id)
+        .order_by(ExternalIdentity.linked_at.asc())
+    )
+    return SignInMethodsResponse(
+        password_available=password_available is not None,
+        identities=[
+            ExternalIdentityResponse(
+                provider=identity.provider.value,
+                provider_email=identity.provider_email,
+                provider_email_verified=identity.provider_email_verified,
+                linked_at=identity.linked_at,
+                last_used_at=identity.last_used_at,
+            )
+            for identity in identities
+        ],
+    )
+
+
+@router.get("/apple/recovery/options", response_model=AppleRecoveryOptionsResponse)
+async def apple_recovery_options(
+    transaction_id: str,
+    settings: Settings = Depends(get_settings),
+) -> AppleRecoveryOptionsResponse:
+    pending = await load_pending_identity(settings, transaction_id)
+    if pending is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This Apple sign-in attempt has expired.")
+    return AppleRecoveryOptionsResponse(
+        can_register=pending.can_register,
+        provider_email=pending.provider_email,
+        display_name=pending.display_name,
+    )
+
+
+@router.post(
+    "/apple/recovery/link",
+    response_model=MessageResponse,
+)
+async def apple_recovery_link(
+    body: AppleRecoveryRequest,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> MessageResponse:
+    require_fresh_adult_auth(auth)
+    pending = await load_pending_identity(settings, body.transaction_id)
+    if pending is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This Apple sign-in attempt has expired.")
+    if pending.intended_user_id and pending.intended_user_id != str(auth.user.id):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "This Apple linking attempt is invalid.")
+    pending = await consume_pending_identity(settings, body.transaction_id)
+    if pending is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This Apple sign-in attempt has expired.")
+    current = await db.get(User, auth.user.id, with_for_update=True)
+    if current is None or not current.is_active:
+        raise HTTPException(
+            status.HTTP_401_UNAUTHORIZED, "Your sign-in session is no longer valid."
+        )
+    try:
+        await link_external_identity(
+            db,
+            request,
+            user_id=current.id,
+            provider=ExternalIdentityProvider.apple,
+            provider_subject=pending.subject,
+            provider_email=pending.provider_email,
+            provider_email_verified=pending.email_verified,
+        )
+    except ExternalIdentityOwnershipConflict:
+        audit(
+            db, request, "APPLE_IDENTITY_LINK_FAILED", current.id, target_type="external_identity"
+        )
+        await db.commit()
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "This Apple identity is already linked."
+        ) from None
+    audit(db, request, "APPLE_IDENTITY_LINKED", current.id, target_type="external_identity")
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "This Apple identity was linked by another request. Please retry sign-in.",
+        ) from None
+    return MessageResponse(message="Apple sign-in has been linked to your account.")
+
+
+@router.post(
+    "/apple/recovery/register",
+    response_model=UserResponse | AuthContinuationResponse,
+)
+async def apple_recovery_register(
+    body: AppleRecoveryRequest,
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> UserResponse | AuthContinuationResponse:
+    pending = await load_pending_identity(settings, body.transaction_id)
+    if pending is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This Apple sign-in attempt has expired.")
+    if not pending.can_register or not pending.provider_email:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "This Apple identity must be linked to an existing account.",
+        )
+    provider_email = pending.provider_email
+    if not provider_email:
+        raise HTTPException(status.HTTP_409_CONFLICT, "This Apple identity has no usable email.")
+    policy = await evaluate_signup_policy(db, settings)
+    if body.beta:
+        beta_allowed = policy.beta_path and (
+            not policy.invitation_required
+            or bool(body.beta_invitation_token)
+            and await beta_invitation_valid(db, body.beta_invitation_token or "", provider_email)
+        )
+    else:
+        beta_allowed = policy.normal_path and not policy.invitation_required
+    if not beta_allowed or not policy.domain_allowed(provider_email):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "New accounts cannot be created with Apple right now.",
+        )
+    resolved_legal_acceptances = await validate_signup_acceptances(
+        db,
+        [(item.document_key, item.document_version_id) for item in body.legal_acceptances],
+    )
+    pending = await consume_pending_identity(settings, body.transaction_id)
+    if pending is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This Apple sign-in attempt has expired.")
+    existing = await db.scalar(
+        select(User).where(User.email == normalise_email(provider_email)).with_for_update()
+    )
+    if existing is not None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "An account already uses this email. Sign in and link Apple instead.",
+        )
+    identity = await find_external_identity(
+        db, ExternalIdentityProvider.apple, pending.subject, for_update=True
+    )
+    if identity is not None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "This Apple identity is already linked.")
+    user = User(
+        email=normalise_email(provider_email),
+        display_name=pending.display_name,
+        email_verified_at=datetime.now(UTC) if pending.email_verified else None,
+    )
+    db.add(user)
+    await db.flush()
+    for resolved in resolved_legal_acceptances:
+        record_type = (
+            LegalRecordType.user_acceptance
+            if resolved.document.action_verb == LegalActionVerb.accept
+            else LegalRecordType.user_acknowledgement
+        )
+        acceptance = LegalAcceptance(
+            created_at=datetime.now(UTC),
+            record_type=record_type,
+            document_version_id=resolved.version.id,
+            user_id=user.id,
+            context=(
+                LegalAcceptanceContext.beta_registration
+                if body.beta
+                else LegalAcceptanceContext.signup
+            ),
+            platform=body.platform,
+            ip_address=resolve_client_ip(request, settings),
+            user_agent=request.headers.get("user-agent", "")[:300] or None,
+        )
+        db.add(acceptance)
+        await queue_acceptance_evidence(
+            db,
+            acceptance=acceptance,
+            document=resolved.document,
+            version=resolved.version,
+            user=user,
+        )
+    await link_external_identity(
+        db,
+        request,
+        user_id=user.id,
+        provider=ExternalIdentityProvider.apple,
+        provider_subject=pending.subject,
+        provider_email=pending.provider_email,
+        provider_email_verified=pending.email_verified,
+    )
+    if body.beta:
+        programme = await current_programme(db)
+        db.add(
+            BetaPendingRegistration(
+                user_id=user.id,
+                programme_id=programme.id,
+                token_hash=hash_secret(
+                    secrets.token_urlsafe(32), settings.secret_key.get_secret_value()
+                ),
+                invitation_token_hash=invitation_token_hash(body.beta_invitation_token)
+                if body.beta_invitation_token
+                else None,
+                expires_at=datetime.now(UTC) + timedelta(days=BETA_INTENT_TTL_DAYS),
+            )
+        )
+    result = await complete_browser_authentication(
+        db,
+        response,
+        request,
+        user,
+        settings,
+        method="apple",
+        destination=pending.return_path or "/onboarding",
+        onboarding=True,
+    )
+    audit(db, request, "APPLE_IDENTITY_REGISTERED", user.id, target_type="external_identity")
+    await db.commit()
+    return result
+
+
 @router.delete("/apple/link")
 async def unlink_apple_identity(
     request: Request,
     auth: AuthContext = Depends(auth_context),
     db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
 ) -> dict[str, str]:
     require_fresh_adult_auth(auth)
-    identity = await db.scalar(
-        select(ExternalIdentity)
-        .where(
-            ExternalIdentity.user_id == auth.user.id,
-            ExternalIdentity.provider == ExternalIdentityProvider.apple,
+    try:
+        await unlink_external_identity(
+            db,
+            request,
+            user_id=auth.user.id,
+            provider=ExternalIdentityProvider.apple,
+            settings=settings,
         )
-        .with_for_update()
-    )
-    if identity is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "No Apple identity is linked.")
-    password_identity = await db.scalar(
-        select(AuthIdentity.id).where(AuthIdentity.user_id == auth.user.id)
-    )
-    other_external_identity = await db.scalar(
-        select(ExternalIdentity.id).where(
-            ExternalIdentity.user_id == auth.user.id,
-            ExternalIdentity.id != identity.id,
-        )
-    )
-    if password_identity is None and other_external_identity is None:
+    except ExternalIdentityNotFound:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No Apple identity is linked.") from None
+    except LastAuthenticationMethodError:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             "Add another sign-in method before unlinking Apple.",
-        )
-    await db.delete(identity)
+        ) from None
     audit(db, request, "APPLE_IDENTITY_UNLINKED", auth.user.id, target_type="external_identity")
     await db.commit()
     return {"message": "Apple sign-in has been unlinked."}
 
 
-@router.get("/apple/callback")
-async def apple_callback(
+def _apple_form_value(fields: dict[str, list[str]], name: str) -> str | None:
+    values = fields.get(name)
+    if not values:
+        return None
+    if len(values) != 1:
+        raise AppleAuthenticationError("Invalid Apple sign-in response.")
+    return values[0]
+
+
+async def _apple_callback(
     request: Request,
-    state: str | None = None,
-    code: str | None = None,
-    error: str | None = None,
-    user: str | None = None,
+    state: str | None,
+    code: str | None,
+    error: str | None,
+    user: str | None,
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> Response:
@@ -824,112 +1202,126 @@ async def apple_callback(
         )
         email_verified = claims.get("email_verified") in (True, "true", "1")
 
-        identity = await db.scalar(
-            select(ExternalIdentity)
-            .where(
-                ExternalIdentity.provider == ExternalIdentityProvider.apple,
-                ExternalIdentity.provider_subject == subject,
-            )
-            .with_for_update()
+        identity = await find_external_identity(
+            db, ExternalIdentityProvider.apple, subject, for_update=True
         )
 
-        if flow.intent == "link":
-            linked_user, _session = await current_user(request, db, settings)
-            if flow.user_id != str(linked_user.id):
-                raise AppleAuthenticationError("This Apple linking attempt is invalid.")
-            if identity is not None:
-                if identity.user_id != linked_user.id:
-                    audit(
-                        db,
-                        request,
-                        "APPLE_IDENTITY_LINK_FAILED",
-                        linked_user.id,
-                        target_type="external_identity",
-                    )
-                    await db.commit()
-                    raise HTTPException(
-                        status.HTTP_409_CONFLICT, "This Apple identity is already linked."
-                    )
-                identity.last_used_at = datetime.now(UTC)
-            else:
-                identity = ExternalIdentity(
-                    user_id=linked_user.id,
-                    provider=ExternalIdentityProvider.apple,
-                    provider_subject=subject,
-                    provider_email=provider_email,
-                    provider_email_verified=email_verified,
-                    last_used_at=datetime.now(UTC),
+        if flow.native_return_uri:
+            if (
+                flow.native_platform is None
+                or flow.native_environment != settings.environment
+                or flow.native_transaction_id is None
+                or flow.native_redemption_verifier_hash is None
+                or _native_browser_return_uri(
+                    settings, ExternalIdentityProvider.apple, flow.native_platform
                 )
-                db.add(identity)
-            audit(
-                db,
-                request,
-                "APPLE_IDENTITY_LINKED",
-                linked_user.id,
-                target_type="external_identity",
+                != flow.native_return_uri
+            ):
+                raise AppleAuthenticationError("This native callback is invalid.")
+            if identity is None and not provider_email:
+                raise AppleAuthenticationError("Apple did not provide an email for this account.")
+            policy = await evaluate_signup_policy(db, settings)
+            await store_native_external_pending(
+                settings,
+                NativeExternalPendingIdentity(
+                    transaction_id=flow.native_transaction_id,
+                    provider=ExternalIdentityProvider.apple,
+                    subject=subject,
+                    provider_email=provider_email,
+                    email_verified=email_verified,
+                    display_name=_apple_name(user),
+                    can_register=identity is None
+                    and bool(provider_email)
+                    and policy.normal_path
+                    and not policy.invitation_required
+                    and policy.domain_allowed(provider_email or ""),
+                    platform=flow.native_platform,
+                    redemption_verifier_hash=flow.native_redemption_verifier_hash,
+                    intended_user_id=flow.user_id if flow.intent == "link" else None,
+                    intent=flow.intent,
+                ),
             )
             await db.commit()
-            return _apple_redirect(settings, "apple=linked")
+            return RedirectResponse(
+                f"{flow.native_return_uri}?transaction={flow.native_transaction_id}&provider=apple",
+                status_code=status.HTTP_303_SEE_OTHER,
+            )
+
+        if flow.intent == "link":
+            if not flow.user_id:
+                raise AppleAuthenticationError("This Apple linking attempt is invalid.")
+            pending_transaction = secrets.token_urlsafe(32)
+            await store_pending_identity(
+                settings,
+                pending_transaction,
+                ApplePendingIdentity(
+                    transaction_id=pending_transaction,
+                    subject=subject,
+                    provider_email=provider_email,
+                    email_verified=email_verified,
+                    display_name=_apple_name(user),
+                    can_register=False,
+                    return_path=None,
+                    intended_user_id=flow.user_id,
+                ),
+            )
+            await db.commit()
+            return _apple_settings_redirect(
+                settings, f"apple=link_required&transaction={pending_transaction}"
+            )
 
         if identity is not None:
             candidate = await db.get(User, identity.user_id, with_for_update=True)
             if candidate is None or not candidate.is_active:
                 raise AppleAuthenticationError("Apple sign-in could not be completed.")
             linked_user = candidate
-            identity.provider_email = provider_email or identity.provider_email
-            identity.provider_email_verified = email_verified or identity.provider_email_verified
-            identity.last_used_at = datetime.now(UTC)
+            await touch_external_identity(
+                db,
+                identity=identity,
+                provider_email=provider_email,
+                provider_email_verified=email_verified,
+            )
         else:
-            # An email match is never an implicit identity link. The user must
-            # first sign in to the canonical account and then start the
-            # authenticated link ceremony above.
+            # An email match is never an implicit identity link. Keep the
+            # verified provider identity in a short-lived, single-use recovery
+            # transaction and require an explicit account decision. This is
+            # essential for Apple private-relay addresses, which may not match
+            # the user's existing MyKhaya email at all.
             existing = (
                 await db.scalar(select(User).where(User.email == provider_email))
                 if provider_email
                 else None
             )
-            if existing is not None:
-                _apple_audit_failure(db, request, existing.id)
-                await db.commit()
-                return _apple_redirect(settings, "apple=link_required")
             if not provider_email:
                 raise AppleAuthenticationError("Apple did not provide an email for this account.")
-            # Apple creates a brand-new account, so it is subject to the same
-            # signup policy as password registration. It carries no Home/Beta
-            # invitation and is not the Founding Beta path, so it is available
-            # only while ordinary signup is open and not invitation-gated.
             policy = await evaluate_signup_policy(db, settings)
-            if (
-                not policy.normal_path
-                or policy.invitation_required
-                or not policy.domain_allowed(provider_email)
-            ):
-                _apple_audit_failure(db, request)
-                await db.commit()
-                return _apple_redirect(settings, "apple=registration_unavailable")
-            linked_user = User(
-                email=provider_email,
-                display_name=_apple_name(user),
-                email_verified_at=datetime.now(UTC) if email_verified else None,
-            )
-            db.add(linked_user)
-            await db.flush()
-            db.add(
-                ExternalIdentity(
-                    user_id=linked_user.id,
-                    provider=ExternalIdentityProvider.apple,
-                    provider_subject=subject,
+            beta_registration = bool(_social_registration_context(flow.return_path))
+            pending_transaction = secrets.token_urlsafe(32)
+            await store_pending_identity(
+                settings,
+                pending_transaction,
+                ApplePendingIdentity(
+                    transaction_id=pending_transaction,
+                    subject=subject,
                     provider_email=provider_email,
-                    provider_email_verified=email_verified,
-                    last_used_at=datetime.now(UTC),
-                )
+                    email_verified=email_verified,
+                    display_name=_apple_name(user),
+                    can_register=(
+                        existing is None
+                        and (
+                            (policy.beta_path if beta_registration else policy.normal_path)
+                            and (beta_registration or not policy.invitation_required)
+                        )
+                        and policy.domain_allowed(provider_email)
+                    ),
+                    return_path=flow.return_path,
+                ),
             )
-            audit(
-                db,
-                request,
-                "APPLE_IDENTITY_LINKED",
-                linked_user.id,
-                target_type="external_identity",
+            audit(db, request, "APPLE_RECOVERY_CREATED", target_type="external_identity")
+            await db.commit()
+            return _apple_redirect(
+                settings,
+                f"apple=choose&transaction={pending_transaction}{_social_registration_context(flow.return_path)}",
             )
 
         has_home = await db.scalar(
@@ -960,6 +1352,8 @@ async def apple_callback(
         return session_response
     except HTTPException:
         await db.rollback()
+        if flow is not None and flow.intent == "link":
+            return _apple_settings_redirect(settings, "apple=error")
         raise
     except Exception as exc:
         await db.rollback()
@@ -975,8 +1369,488 @@ async def apple_callback(
         audit(db, request, action, user_id, target_type="external_identity")
         await db.commit()
         if isinstance(exc, AppleAuthenticationError):
+            if flow is not None and flow.intent == "link":
+                return _apple_settings_redirect(settings, "apple=error")
             return _apple_redirect(settings, APPLE_LOGIN_ERROR)
+        if flow is not None and flow.intent == "link":
+            return _apple_settings_redirect(settings, "apple=error")
         return _apple_redirect(settings, APPLE_LOGIN_ERROR)
+
+
+@router.get("/apple/callback")
+async def apple_callback_get(
+    request: Request,
+    state: str | None = None,
+    code: str | None = None,
+    error: str | None = None,
+    user: str | None = None,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> Response:
+    # Retain GET only for compatibility with previously-issued authorization
+    # attempts. New authorization requests always use Apple's form_post mode.
+    return await _apple_callback(request, state, code, error, user, db, settings)
+
+
+@router.post("/apple/callback")
+async def apple_callback_post(
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> Response:
+    content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    if content_type != "application/x-www-form-urlencoded":
+        raise HTTPException(
+            status.HTTP_415_UNSUPPORTED_MEDIA_TYPE, "Invalid Apple response format."
+        )
+    try:
+        body = await request.body()
+        fields = parse_qs(body.decode("utf-8"), keep_blank_values=True, max_num_fields=8)
+        state = _apple_form_value(fields, "state")
+        code = _apple_form_value(fields, "code")
+        error = _apple_form_value(fields, "error")
+        user = _apple_form_value(fields, "user")
+    except (UnicodeDecodeError, ValueError, AppleAuthenticationError) as exc:
+        if isinstance(exc, AppleAuthenticationError):
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, str(exc)) from exc
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "Invalid Apple response format.") from exc
+    return await _apple_callback(request, state, code, error, user, db, settings)
+
+
+@router.get("/google/start")
+async def google_login_start(
+    request: Request,
+    next_path: str | None = None,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> RedirectResponse:
+    try:
+        require_google_configuration(settings)
+        state = secrets.token_urlsafe(32)
+        nonce = secrets.token_urlsafe(32)
+        verifier = new_google_code_verifier()
+        await store_google_flow_state(
+            settings,
+            state,
+            GoogleFlowState(
+                nonce=nonce,
+                code_verifier=verifier,
+                intent="login",
+                user_id=None,
+                return_path=_safe_return_path(next_path),
+            ),
+        )
+        audit(db, request, "GOOGLE_LOGIN_STARTED", target_type="external_identity")
+        await db.commit()
+        return RedirectResponse(
+            google_authorization_url(settings, state, nonce, verifier),
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+    except GoogleAuthenticationError as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+
+
+@router.post("/google/link/start")
+async def google_link_start(
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, str]:
+    require_fresh_adult_auth(auth)
+    try:
+        require_google_configuration(settings)
+        state = secrets.token_urlsafe(32)
+        nonce = secrets.token_urlsafe(32)
+        verifier = new_google_code_verifier()
+        await store_google_flow_state(
+            settings,
+            state,
+            GoogleFlowState(
+                nonce=nonce,
+                code_verifier=verifier,
+                intent="link",
+                user_id=str(auth.user.id),
+                return_path=None,
+            ),
+        )
+        audit(db, request, "GOOGLE_LOGIN_STARTED", auth.user.id, target_type="external_identity")
+        await db.commit()
+        return {"authorization_url": google_authorization_url(settings, state, nonce, verifier)}
+    except GoogleAuthenticationError as exc:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, str(exc)) from exc
+
+
+@router.get("/google/recovery/options", response_model=GoogleRecoveryOptionsResponse)
+async def google_recovery_options(
+    transaction_id: str, settings: Settings = Depends(get_settings)
+) -> GoogleRecoveryOptionsResponse:
+    pending = await load_google_pending_identity(settings, transaction_id)
+    if pending is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This Google sign-in attempt has expired.")
+    return GoogleRecoveryOptionsResponse(
+        can_register=pending.can_register,
+        provider_email=pending.provider_email,
+        display_name=pending.display_name,
+    )
+
+
+@router.post("/google/recovery/link", response_model=MessageResponse)
+async def google_recovery_link(
+    body: GoogleRecoveryRequest,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> MessageResponse:
+    require_fresh_adult_auth(auth)
+    pending = await load_google_pending_identity(settings, body.transaction_id)
+    if pending is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This Google sign-in attempt has expired.")
+    current = await db.get(User, auth.user.id, with_for_update=True)
+    if current is None or not current.is_active:
+        raise HTTPException(
+            status.HTTP_401_UNAUTHORIZED, "Your sign-in session is no longer valid."
+        )
+    if current.email != pending.provider_email:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "This Google linking attempt is invalid.")
+    pending = await consume_google_pending_identity(settings, body.transaction_id)
+    if pending is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This Google sign-in attempt has expired.")
+    try:
+        await link_external_identity(
+            db,
+            request,
+            user_id=current.id,
+            provider=ExternalIdentityProvider.google,
+            provider_subject=pending.subject,
+            provider_email=pending.provider_email,
+            provider_email_verified=pending.email_verified,
+        )
+    except ExternalIdentityOwnershipConflict:
+        await db.rollback()
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "This Google identity is already linked."
+        ) from None
+    audit(db, request, "GOOGLE_IDENTITY_LINKED", current.id, target_type="external_identity")
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "This Google identity was linked by another request."
+        ) from None
+    return MessageResponse(message="Google sign-in has been linked to your account.")
+
+
+@router.post("/google/recovery/register", response_model=UserResponse | AuthContinuationResponse)
+async def google_recovery_register(
+    body: GoogleRecoveryRequest,
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> UserResponse | AuthContinuationResponse:
+    pending = await load_google_pending_identity(settings, body.transaction_id)
+    if pending is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This Google sign-in attempt has expired.")
+    if not pending.can_register or not pending.email_verified:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "This Google identity must be linked to an existing account."
+        )
+    provider_email = pending.provider_email
+    if not provider_email:
+        raise HTTPException(status.HTTP_409_CONFLICT, "This Google identity has no usable email.")
+    policy = await evaluate_signup_policy(db, settings)
+    if body.beta:
+        beta_allowed = policy.beta_path and (
+            not policy.invitation_required
+            or bool(body.beta_invitation_token)
+            and await beta_invitation_valid(db, body.beta_invitation_token or "", provider_email)
+        )
+    else:
+        beta_allowed = policy.normal_path and not policy.invitation_required
+    if not beta_allowed or not policy.domain_allowed(provider_email):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, "New accounts cannot be created with Google right now."
+        )
+    resolved_legal_acceptances = await validate_signup_acceptances(
+        db, [(item.document_key, item.document_version_id) for item in body.legal_acceptances]
+    )
+    pending = await consume_google_pending_identity(settings, body.transaction_id)
+    if pending is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This Google sign-in attempt has expired.")
+    existing = await db.scalar(
+        select(User).where(User.email == normalise_email(provider_email)).with_for_update()
+    )
+    if existing is not None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "An account already uses this email. Sign in and link Google instead.",
+        )
+    identity = await find_external_identity(
+        db, ExternalIdentityProvider.google, pending.subject, for_update=True
+    )
+    if identity is not None:
+        raise HTTPException(status.HTTP_409_CONFLICT, "This Google identity is already linked.")
+    user = User(
+        email=normalise_email(provider_email),
+        display_name=pending.display_name,
+        email_verified_at=datetime.now(UTC),
+    )
+    db.add(user)
+    await db.flush()
+    for resolved in resolved_legal_acceptances:
+        record_type = (
+            LegalRecordType.user_acceptance
+            if resolved.document.action_verb == LegalActionVerb.accept
+            else LegalRecordType.user_acknowledgement
+        )
+        acceptance = LegalAcceptance(
+            created_at=datetime.now(UTC),
+            record_type=record_type,
+            document_version_id=resolved.version.id,
+            user_id=user.id,
+            context=(
+                LegalAcceptanceContext.beta_registration
+                if body.beta
+                else LegalAcceptanceContext.signup
+            ),
+            platform=body.platform,
+            ip_address=resolve_client_ip(request, settings),
+            user_agent=request.headers.get("user-agent", "")[:300] or None,
+        )
+        db.add(acceptance)
+        await queue_acceptance_evidence(
+            db,
+            acceptance=acceptance,
+            document=resolved.document,
+            version=resolved.version,
+            user=user,
+        )
+    await link_external_identity(
+        db,
+        request,
+        user_id=user.id,
+        provider=ExternalIdentityProvider.google,
+        provider_subject=pending.subject,
+        provider_email=pending.provider_email,
+        provider_email_verified=pending.email_verified,
+    )
+    if body.beta:
+        programme = await current_programme(db)
+        db.add(
+            BetaPendingRegistration(
+                user_id=user.id,
+                programme_id=programme.id,
+                token_hash=hash_secret(
+                    secrets.token_urlsafe(32), settings.secret_key.get_secret_value()
+                ),
+                invitation_token_hash=invitation_token_hash(body.beta_invitation_token)
+                if body.beta_invitation_token
+                else None,
+                expires_at=datetime.now(UTC) + timedelta(days=BETA_INTENT_TTL_DAYS),
+            )
+        )
+    result = await complete_browser_authentication(
+        db,
+        response,
+        request,
+        user,
+        settings,
+        method="google",
+        destination=pending.return_path or "/onboarding",
+        onboarding=True,
+    )
+    audit(db, request, "GOOGLE_IDENTITY_REGISTERED", user.id, target_type="external_identity")
+    try:
+        await db.commit()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "This Google identity is already linked."
+        ) from None
+    return result
+
+
+@router.delete("/google/link")
+async def unlink_google_identity(
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, str]:
+    require_fresh_adult_auth(auth)
+    try:
+        await unlink_external_identity(
+            db,
+            request,
+            user_id=auth.user.id,
+            provider=ExternalIdentityProvider.google,
+            settings=settings,
+        )
+    except ExternalIdentityNotFound:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No Google identity is linked.") from None
+    except LastAuthenticationMethodError:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "Add another sign-in method before unlinking Google."
+        ) from None
+    audit(db, request, "GOOGLE_IDENTITY_UNLINKED", auth.user.id, target_type="external_identity")
+    await db.commit()
+    return {"message": "Google sign-in has been unlinked."}
+
+
+@router.get("/google/callback")
+async def google_callback(
+    request: Request,
+    state: str | None = None,
+    code: str | None = None,
+    error: str | None = None,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> Response:
+    flow: GoogleFlowState | None = None
+    try:
+        if not state or len(state) > 512:
+            raise GoogleAuthenticationError("Invalid Google sign-in state.")
+        flow = await consume_google_flow_state(settings, state)
+        if error:
+            raise GoogleAuthenticationError("Google sign-in was cancelled.")
+        if not code:
+            raise GoogleAuthenticationError("Google sign-in did not return an authorization code.")
+        token = await exchange_google_code(settings, code, flow.code_verifier)
+        claims = await verify_google_identity_token(settings, token, flow.nonce)
+        subject = str(claims["sub"])
+        provider_email = str(claims["email"]).strip().casefold()
+        identity = await find_external_identity(
+            db, ExternalIdentityProvider.google, subject, for_update=True
+        )
+        if flow.native_return_uri:
+            if (
+                flow.native_platform is None
+                or flow.native_environment != settings.environment
+                or flow.native_transaction_id is None
+                or flow.native_redemption_verifier_hash is None
+                or _native_browser_return_uri(
+                    settings, ExternalIdentityProvider.google, flow.native_platform
+                )
+                != flow.native_return_uri
+            ):
+                raise GoogleAuthenticationError("This native callback is invalid.")
+            policy = await evaluate_signup_policy(db, settings)
+            await store_native_external_pending(
+                settings,
+                NativeExternalPendingIdentity(
+                    transaction_id=flow.native_transaction_id,
+                    provider=ExternalIdentityProvider.google,
+                    subject=subject,
+                    provider_email=provider_email,
+                    email_verified=True,
+                    display_name=_google_name(claims),
+                    can_register=identity is None
+                    and policy.normal_path
+                    and not policy.invitation_required
+                    and policy.domain_allowed(provider_email),
+                    platform=flow.native_platform,
+                    redemption_verifier_hash=flow.native_redemption_verifier_hash,
+                    intended_user_id=flow.user_id if flow.intent == "link" else None,
+                    intent=flow.intent,
+                ),
+            )
+            await db.commit()
+            return RedirectResponse(
+                f"{flow.native_return_uri}?transaction={flow.native_transaction_id}&provider=google",
+                status_code=status.HTTP_303_SEE_OTHER,
+            )
+        if flow.intent == "link":
+            linked_user, _session = await current_user(request, db, settings)
+            if flow.user_id != str(linked_user.id):
+                raise GoogleAuthenticationError("This Google linking attempt is invalid.")
+            await link_external_identity(
+                db,
+                request,
+                user_id=linked_user.id,
+                provider=ExternalIdentityProvider.google,
+                provider_subject=subject,
+                provider_email=provider_email,
+                provider_email_verified=True,
+            )
+            await db.commit()
+            return _google_settings_redirect(settings, "google=linked")
+        if identity is not None:
+            candidate_user = await db.get(User, identity.user_id, with_for_update=True)
+            if candidate_user is None or not candidate_user.is_active:
+                raise GoogleAuthenticationError("Google sign-in could not be completed.")
+            linked_user = candidate_user
+            await touch_external_identity(
+                db, identity=identity, provider_email=provider_email, provider_email_verified=True
+            )
+        else:
+            existing = await db.scalar(select(User).where(User.email == provider_email))
+            policy = await evaluate_signup_policy(db, settings)
+            beta_registration = bool(_social_registration_context(flow.return_path))
+            transaction_id = secrets.token_urlsafe(32)
+            await store_google_pending_identity(
+                settings,
+                transaction_id,
+                GooglePendingIdentity(
+                    transaction_id=transaction_id,
+                    subject=subject,
+                    provider_email=provider_email,
+                    email_verified=True,
+                    display_name=_google_name(claims),
+                    can_register=existing is None
+                    and (
+                        (policy.beta_path if beta_registration else policy.normal_path)
+                        and (beta_registration or not policy.invitation_required)
+                    )
+                    and policy.domain_allowed(provider_email),
+                    return_path=flow.return_path,
+                ),
+            )
+            audit(db, request, "GOOGLE_RECOVERY_CREATED", target_type="external_identity")
+            await db.commit()
+            return _google_redirect(
+                settings,
+                f"google=choose&transaction={transaction_id}{_social_registration_context(flow.return_path)}",
+            )
+        has_home = await db.scalar(
+            select(Membership.id).where(Membership.user_id == linked_user.id)
+        )
+        destination = flow.return_path or ("/home" if has_home else "/onboarding")
+        response = RedirectResponse(
+            f"{settings.public_web_url.rstrip('/')}{destination}",
+            status_code=status.HTTP_303_SEE_OTHER,
+        )
+        result = await complete_browser_authentication(
+            db,
+            response,
+            request,
+            linked_user,
+            settings,
+            method="google",
+            destination=destination,
+            onboarding=has_home is None,
+        )
+        if isinstance(result, AuthContinuationResponse):
+            response = _google_redirect(
+                settings, f"auth=additional&transaction={result.transaction_id}"
+            )
+        audit(db, request, "GOOGLE_LOGIN_SUCCESS", linked_user.id, target_type="external_identity")
+        await db.commit()
+        return response
+    except HTTPException:
+        await db.rollback()
+        if flow is not None and flow.intent == "link":
+            return _google_settings_redirect(settings, GOOGLE_LOGIN_ERROR)
+        raise
+    except Exception as exc:
+        await db.rollback()
+        if flow is not None and flow.intent == "link":
+            return _google_settings_redirect(settings, GOOGLE_LOGIN_ERROR)
+        if isinstance(exc, GoogleAuthenticationError):
+            return _google_redirect(settings, GOOGLE_LOGIN_ERROR)
+        return _google_redirect(settings, GOOGLE_LOGIN_ERROR)
 
 
 @router.get("/providers")
@@ -1082,6 +1956,7 @@ async def issue_session(
     device_token: str | None = None,
     device_csrf: str | None = None,
     fresh_auth_at: datetime | None = None,
+    expires_at: datetime | None = None,
 ) -> Session:
     raw = new_session_token()
     csrf = secrets.token_urlsafe(32)
@@ -1089,7 +1964,7 @@ async def issue_session(
         user_id=user.id,
         trusted_device_id=trusted_device_id,
         token_hash=hash_secret(raw, settings.secret_key.get_secret_value()),
-        expires_at=datetime.now(UTC) + timedelta(minutes=settings.session_minutes),
+        expires_at=expires_at or datetime.now(UTC) + timedelta(minutes=settings.session_minutes),
         fresh_auth_at=fresh_auth_at,
         user_agent=request.headers.get("user-agent", "Unknown device")[:300],
         kind=kind,
@@ -1187,6 +2062,8 @@ async def issue_mobile_session(
     kind: SessionKind = SessionKind.adult,
     fresh_auth_at: datetime | None = None,
     existing_device_id: uuid.UUID | None = None,
+    expires_at: datetime | None = None,
+    mint_device: bool = True,
 ) -> tuple[str, Session, str | None]:
     """Bearer-transport equivalent of issue_session: same Session model, same
     token scheme, no cookies. Returns the raw session token - callers must
@@ -1209,11 +2086,16 @@ async def issue_mobile_session(
     rotate_mobile_session), the existing device is reused unchanged rather
     than minting a new TrustedDevice on every rotation; the returned device
     token is None in that case since nothing about the device credential
-    changed and there is nothing new to persist."""
+    changed and there is nothing new to persist.
+
+    Rotation passes expires_at when it must not extend the session's lifetime
+    (see _rotated_session_expiry) and then also mint_device=False, so a
+    device-less session cannot gain a renewal credential while consumer MFA
+    is required."""
     raw = new_session_token()
     device_raw: str | None = None
     device_id = existing_device_id
-    if device_id is None:
+    if device_id is None and mint_device:
         device, device_raw, _device_csrf = await issue_trusted_device(
             db, request, user, settings, kind
         )
@@ -1221,7 +2103,7 @@ async def issue_mobile_session(
     session = Session(
         user_id=user.id,
         token_hash=hash_secret(raw, settings.secret_key.get_secret_value()),
-        expires_at=datetime.now(UTC) + timedelta(minutes=settings.session_minutes),
+        expires_at=expires_at or datetime.now(UTC) + timedelta(minutes=settings.session_minutes),
         fresh_auth_at=fresh_auth_at,
         user_agent=mobile_client_descriptor(request),
         trusted_device_id=device_id,
@@ -1386,20 +2268,27 @@ async def register(
                 if resolved.document.action_verb == LegalActionVerb.accept
                 else LegalRecordType.user_acknowledgement
             )
-            db.add(
-                LegalAcceptance(
-                    record_type=record_type,
-                    document_version_id=resolved.version.id,
-                    user_id=user.id,
-                    context=(
-                        LegalAcceptanceContext.beta_registration
-                        if beta
-                        else LegalAcceptanceContext.signup
-                    ),
-                    platform=body.platform,
-                    ip_address=resolve_client_ip(request, settings),
-                    user_agent=request.headers.get("user-agent", "")[:300] or None,
-                )
+            acceptance = LegalAcceptance(
+                created_at=datetime.now(UTC),
+                record_type=record_type,
+                document_version_id=resolved.version.id,
+                user_id=user.id,
+                context=(
+                    LegalAcceptanceContext.beta_registration
+                    if beta
+                    else LegalAcceptanceContext.signup
+                ),
+                platform=body.platform,
+                ip_address=resolve_client_ip(request, settings),
+                user_agent=request.headers.get("user-agent", "")[:300] or None,
+            )
+            db.add(acceptance)
+            await queue_acceptance_evidence(
+                db,
+                acceptance=acceptance,
+                document=resolved.document,
+                version=resolved.version,
+                user=user,
             )
         if verification_required:
             token = await create_action_token(
@@ -1571,14 +2460,14 @@ async def passkey_login_options(
     return PasskeyOptionsResponse(options_json=options_json)
 
 
-@router.post("/passkeys/login/verify", response_model=UserResponse)
+@router.post("/passkeys/login/verify", response_model=UserResponse | AuthContinuationResponse)
 async def passkey_login_verify(
     body: PasskeyAuthenticationVerifyRequest,
     request: Request,
     response: Response,
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
-) -> UserResponse:
+) -> UserResponse | AuthContinuationResponse:
     require_secure_transport(request, settings)
     await enforce_rate_limit(request, settings, "family-passkey-login", 8, 300)
     token = request.cookies.get(PASSKEY_LOGIN_COOKIE)
@@ -1619,17 +2508,18 @@ async def passkey_login_verify(
     now = datetime.now(UTC)
     row.sign_count = new_sign_count
     row.last_used_at = now
-    session = await issue_family_session(
+    result = await complete_browser_authentication(
         db,
         response,
         request,
         user,
         settings,
-        SessionKind.adult,
-        fresh_auth_at=now,
+        method="passkey",
+        destination="/home",
     )
-    user.last_login_at = now
-    user.last_activity_at = now
+    if isinstance(result, UserResponse):
+        user.last_login_at = now
+        user.last_activity_at = now
     audit(
         db,
         request,
@@ -1644,7 +2534,7 @@ async def passkey_login_verify(
         path="/",
         domain=settings.cookie_domain,
     )
-    return user_response(user, session)
+    return result
 
 
 @router.get("/passkeys", response_model=list[PasskeyResponse])
@@ -1912,6 +2802,29 @@ async def renew(
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Please sign in to continue.")
     user, device = pair
 
+    if device.kind == SessionKind.adult:
+        policy = await _resolve_browser_mfa_policy(db, user.id, settings)
+        if policy.enforcement_enabled and policy.required:
+            device.revoked_at = now
+            audit(
+                db,
+                request,
+                "session.renewal_blocked_mfa_required",
+                user.id,
+                target_type="trusted_device",
+                target_id=device.id,
+            )
+            await db.commit()
+            _auth_diag(
+                request,
+                "RENEW_FAILED",
+                result="MFA_REQUIRED",
+                user_id=str(user.id),
+                device_id=str(device.id),
+                status_code=401,
+            )
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Please sign in to continue.")
+
     if device.kind == SessionKind.managed_child:
         child_active = await db.scalar(
             select(ChildProfile.id)
@@ -1968,20 +2881,77 @@ async def renew(
     return user_response(user, session)
 
 
-@router.post("/mobile/login", response_model=MobileSessionResponse)
+async def _native_mfa_continuation(
+    db: AsyncSession,
+    request: Request,
+    settings: Settings,
+    user: User,
+    *,
+    primary: str,
+    platform: str,
+    redemption_verifier_hash: str,
+) -> NativeMfaContinuationResponse:
+    """Hold a native sign-in at pre-authentication until the consumer MFA
+    policy is satisfied through /auth/mobile/mfa/*. No session or device
+    credential exists until /auth/mobile/mfa/verify succeeds."""
+    mfa_transaction = NativeMfaTransaction(
+        transaction_id=secrets.token_urlsafe(32),
+        user_id=str(user.id),
+        provider=primary,
+        platform=platform,
+        redemption_verifier_hash=redemption_verifier_hash,
+    )
+    await store_native_mfa_transaction(settings, mfa_transaction)
+    audit(db, request, "native.pre_auth.created", user.id, target_type="native_pre_auth")
+    return NativeMfaContinuationResponse(
+        authentication_state="additional_auth_required",
+        transaction_id=mfa_transaction.transaction_id,
+        provider=primary,
+    )
+
+
+@router.post("/mobile/login", response_model=MobileSessionResponse | NativeMfaContinuationResponse)
 async def mobile_login(
-    body: LoginRequest,
+    body: MobileLoginRequest,
     request: Request,
     response: Response,
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
-) -> MobileSessionResponse:
+) -> MobileSessionResponse | NativeMfaContinuationResponse:
     """Native-client equivalent of /login: same credential check, opaque
     Session token, but returned in the body (not a cookie) since a native
     app has no cookie jar to rely on. Sets no cookies. Never logs the raw
-    token - only the caller who receives this response ever sees it."""
+    token - only the caller who receives this response ever sees it.
+
+    The consumer MFA policy applies exactly as it does to browser /login:
+    nothing about a request proves it came from the MyKhaya app (no app
+    attestation exists; X-MyKhaya-* headers are display-only), so exempting
+    this endpoint would let any password holder bypass required MFA."""
     require_secure_transport(request, settings)
     user = await authenticate_credentials(db, request, settings, body, "mobile_login")
+    response.headers["Cache-Control"] = "no-store"
+    response.headers["Pragma"] = "no-cache"
+    policy = await _resolve_browser_mfa_policy(db, user.id, settings)
+    if policy.enforcement_enabled and policy.required:
+        if body.redemption_verifier is None:
+            # An older client that cannot continue an MFA challenge. Fail
+            # closed: the password was correct, but no session is issued.
+            await db.commit()
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST,
+                "Additional verification is required. Update MyKhaya and sign in again.",
+            )
+        continuation = await _native_mfa_continuation(
+            db,
+            request,
+            settings,
+            user,
+            primary="password",
+            platform=device_platform(request),
+            redemption_verifier_hash=hash_redemption_verifier(body.redemption_verifier),
+        )
+        await db.commit()
+        return continuation
     raw, session, device_raw = await issue_mobile_session(
         db, request, user, settings, fresh_auth_at=datetime.now(UTC)
     )
@@ -1990,6 +2960,870 @@ async def mobile_login(
     await db.commit()
     response.headers["Cache-Control"] = "no-store"
     response.headers["Pragma"] = "no-cache"
+    return MobileSessionResponse(
+        **user_response(user, session).model_dump(), session_token=raw, device_token=device_raw
+    )
+
+
+@router.post("/mobile/external/start", response_model=NativeExternalStartResponse)
+async def mobile_external_start(
+    body: NativeExternalStartRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> NativeExternalStartResponse:
+    require_secure_transport(request, settings)
+    provider = ExternalIdentityProvider(body.provider)
+    if (provider, body.platform) not in {
+        (ExternalIdentityProvider.apple, "ios"),
+        (ExternalIdentityProvider.google, "android"),
+    }:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "This provider must use the system-browser native flow on this platform.",
+        )
+    if (provider == ExternalIdentityProvider.apple and not settings.apple_sign_in_enabled) or (
+        provider == ExternalIdentityProvider.google and not settings.google_sign_in_enabled
+    ):
+        _native_external_failure(request, "start", "provider_disabled", provider=provider.value)
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "This sign-in method is unavailable.")
+    native_client_id = (
+        settings.apple_native_client_id
+        if provider == ExternalIdentityProvider.apple
+        else settings.google_native_client_id
+    )
+    if not native_client_id:
+        _native_external_failure(
+            request, "start", "native_client_id_not_configured", provider=provider.value
+        )
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE, "This native sign-in method is not configured."
+        )
+    user_id: str | None = None
+    if body.intent == "link":
+        auth = await auth_context(request, db, settings)
+        require_adult_session(auth)
+        if (
+            auth.session.fresh_auth_at is None
+            or auth.session.fresh_auth_at < datetime.now(UTC) - FRESH_AUTH_WINDOW
+        ):
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "Fresh authentication is required.")
+        user_id = str(auth.user.id)
+    tx = new_native_external_transaction(
+        provider,
+        client_id=native_client_id,
+        environment=settings.environment,
+        intent=body.intent,
+        user_id=user_id,
+        platform=body.platform,
+        redemption_verifier=body.redemption_verifier,
+        apple_nonce_hash=provider == ExternalIdentityProvider.apple,
+    )
+    await store_native_external_transaction(settings, tx)
+    return NativeExternalStartResponse(
+        transaction_id=tx.transaction_id,
+        nonce=tx.client_nonce,
+        provider=body.provider,
+        client_id=native_client_id,
+    )
+
+
+@router.post("/mobile/external/browser/start", response_model=NativeExternalBrowserStartResponse)
+async def mobile_external_browser_start(
+    body: NativeExternalBrowserStartRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> NativeExternalBrowserStartResponse:
+    require_secure_transport(request, settings)
+    provider = ExternalIdentityProvider(body.provider)
+    expected_return_uri = _native_browser_return_uri(settings, provider, body.platform)
+    if not expected_return_uri or body.return_uri != expected_return_uri:
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST,
+            "This native callback is not registered for the environment.",
+        )
+    user_id: str | None = None
+    if body.intent == "link":
+        auth = await auth_context(request, db, settings)
+        require_adult_session(auth)
+        if (
+            auth.session.fresh_auth_at is None
+            or auth.session.fresh_auth_at < datetime.now(UTC) - FRESH_AUTH_WINDOW
+        ):
+            raise HTTPException(status.HTTP_403_FORBIDDEN, "Fresh authentication is required.")
+        user_id = str(auth.user.id)
+    state = secrets.token_urlsafe(32)
+    nonce = secrets.token_urlsafe(32)
+    transaction_id = secrets.token_urlsafe(32)
+    redemption_verifier_hash = hash_redemption_verifier(body.redemption_verifier)
+    if body.provider == "apple":
+        require_apple_configuration(settings)
+        await store_flow_state(
+            settings,
+            state,
+            AppleFlowState(
+                nonce=nonce,
+                intent=body.intent,
+                user_id=user_id,
+                return_path=None,
+                native_return_uri=body.return_uri,
+                native_platform=body.platform,
+                native_environment=settings.environment,
+                native_transaction_id=transaction_id,
+                native_redemption_verifier_hash=redemption_verifier_hash,
+            ),
+        )
+        url = authorization_url(settings, state, nonce)
+    else:
+        require_google_configuration(settings)
+        verifier = new_google_code_verifier()
+        await store_google_flow_state(
+            settings,
+            state,
+            GoogleFlowState(
+                nonce=nonce,
+                code_verifier=verifier,
+                intent=body.intent,
+                user_id=user_id,
+                return_path=None,
+                native_return_uri=body.return_uri,
+                native_platform=body.platform,
+                native_environment=settings.environment,
+                native_transaction_id=transaction_id,
+                native_redemption_verifier_hash=redemption_verifier_hash,
+            ),
+        )
+        url = google_authorization_url(settings, state, nonce, verifier)
+    audit(db, request, "native.external_login_started", target_type="external_identity")
+    await db.commit()
+    return NativeExternalBrowserStartResponse(
+        authorization_url=url,
+        transaction_id=transaction_id,
+    )
+
+
+@router.post(
+    "/mobile/external/exchange",
+    response_model=MobileSessionResponse
+    | NativeExternalRecoveryResponse
+    | NativeMfaContinuationResponse
+    | MessageResponse,
+)
+async def mobile_external_exchange(
+    body: NativeExternalExchangeRequest,
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> (
+    MobileSessionResponse
+    | NativeExternalRecoveryResponse
+    | NativeMfaContinuationResponse
+    | MessageResponse
+):
+    require_secure_transport(request, settings)
+    tx = await consume_native_external_transaction(settings, body.transaction_id)
+    if tx is None:
+        # Unknown, expired or already redeemed (replay) — indistinguishable by design.
+        _native_external_failure(
+            request, "exchange", "transaction_missing_expired_or_replayed", provider=None
+        )
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "This sign-in attempt is invalid or has expired."
+        )
+    if tx.environment != settings.environment:
+        _native_external_failure(
+            request, "exchange", "environment_mismatch", provider=tx.provider.value
+        )
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "This sign-in attempt is invalid or has expired."
+        )
+    if not verify_redemption_verifier(body.redemption_verifier, tx.redemption_verifier_hash):
+        _native_external_failure(
+            request, "exchange", "redemption_verifier_mismatch", provider=tx.provider.value
+        )
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "This sign-in attempt is invalid or has expired."
+        )
+    try:
+        if tx.provider == ExternalIdentityProvider.apple:
+            claims = await verify_identity_token(
+                settings,
+                body.identity_token,
+                tx.nonce,
+                tx.client_id,
+            )
+            subject = str(claims["sub"])
+            provider_email = claims.get("email") if isinstance(claims.get("email"), str) else None
+            email_verified = (
+                claims.get("email_verified") is True or claims.get("email_verified") == "true"
+            )
+            display_name = str(claims.get("name") or claims.get("given_name") or "Apple user")
+        else:
+            claims = await verify_google_identity_token(
+                settings,
+                body.identity_token,
+                tx.nonce,
+                tx.client_id,
+            )
+            subject = str(claims["sub"])
+            provider_email = str(claims["email"])
+            email_verified = True
+            display_name = str(claims.get("name") or "Google user")
+    except (
+        AppleAuthenticationError,
+        GoogleAuthenticationError,
+        KeyError,
+        TypeError,
+        ValueError,
+    ) as exc:
+        _native_external_failure(
+            request,
+            "exchange",
+            "provider_token_rejected",
+            provider=tx.provider.value,
+            reason=getattr(exc, "reason", None) or type(exc).__name__,
+        )
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "The provider sign-in could not be verified."
+        ) from None
+
+    identity = await find_external_identity(db, tx.provider, subject, for_update=True)
+    if tx.intent == "link":
+        if tx.user_id is None:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "This linking attempt is invalid.")
+        auth = await auth_context(request, db, settings)
+        if str(auth.user.id) != tx.user_id:
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN, "This linking attempt belongs to another session."
+            )
+        if identity is not None and identity.user_id != auth.user.id:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT, "This provider identity is already linked."
+            )
+        try:
+            await link_external_identity(
+                db,
+                request,
+                user_id=auth.user.id,
+                provider=tx.provider,
+                provider_subject=subject,
+                provider_email=provider_email,
+                provider_email_verified=email_verified,
+            )
+            await db.commit()
+        except (ExternalIdentityOwnershipConflict, IntegrityError):
+            await db.rollback()
+            raise HTTPException(
+                status.HTTP_409_CONFLICT, "This provider identity is already linked."
+            ) from None
+        return MessageResponse(
+            message=f"{tx.provider.value.title()} sign-in has been linked to your account."
+        )
+
+    if identity is not None:
+        user = await db.get(User, identity.user_id)
+        if user is None or not user.is_active:
+            raise HTTPException(
+                status.HTTP_400_BAD_REQUEST, "This provider identity is unavailable."
+            )
+        mfa_policy = await _resolve_browser_mfa_policy(db, user.id, settings)
+        if mfa_policy.enforcement_enabled and mfa_policy.required:
+            continuation = await _native_mfa_continuation(
+                db,
+                request,
+                settings,
+                user,
+                primary=tx.provider.value,
+                platform=tx.platform,
+                redemption_verifier_hash=tx.redemption_verifier_hash,
+            )
+            await db.commit()
+            return continuation
+        await touch_external_identity(
+            db,
+            identity=identity,
+            provider_email=provider_email,
+            provider_email_verified=email_verified,
+        )
+        raw, session, device_raw = await issue_mobile_session(
+            db, request, user, settings, fresh_auth_at=datetime.now(UTC)
+        )
+        user.last_login_at = datetime.now(UTC)
+        user.last_activity_at = datetime.now(UTC)
+        await db.commit()
+        response.headers["Cache-Control"] = "no-store"
+        return MobileSessionResponse(
+            **user_response(user, session).model_dump(), session_token=raw, device_token=device_raw
+        )
+
+    signup_policy = await evaluate_signup_policy(db, settings)
+    can_register = bool(
+        provider_email
+        and email_verified
+        and signup_policy.normal_path
+        and not signup_policy.invitation_required
+        and signup_policy.domain_allowed(provider_email)
+    )
+    await store_native_external_pending(
+        settings,
+        NativeExternalPendingIdentity(
+            transaction_id=tx.transaction_id,
+            provider=tx.provider,
+            subject=subject,
+            provider_email=provider_email,
+            email_verified=email_verified,
+            display_name=display_name,
+            can_register=can_register,
+            platform=tx.platform,
+            redemption_verifier_hash=tx.redemption_verifier_hash,
+        ),
+    )
+    return NativeExternalRecoveryResponse(
+        authentication_state="account_choice",
+        transaction_id=tx.transaction_id,
+        provider=tx.provider.value,
+        provider_email=provider_email,
+        display_name=display_name,
+        can_register=can_register,
+    )
+
+
+@router.post(
+    "/mobile/external/redeem",
+    response_model=MobileSessionResponse
+    | NativeExternalRecoveryResponse
+    | NativeMfaContinuationResponse
+    | MessageResponse,
+)
+async def mobile_external_redeem(
+    body: NativeExternalLinkRequest,
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> (
+    MobileSessionResponse
+    | NativeExternalRecoveryResponse
+    | NativeMfaContinuationResponse
+    | MessageResponse
+):
+    require_secure_transport(request, settings)
+    pending = await load_native_external_pending(settings, body.transaction_id)
+    if pending is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This sign-in attempt has expired.")
+    if not verify_redemption_verifier(body.redemption_verifier, pending.redemption_verifier_hash):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "This sign-in attempt is invalid or has expired."
+        )
+    identity = await find_external_identity(db, pending.provider, pending.subject, for_update=True)
+    if pending.intended_user_id is not None:
+        auth = await auth_context(request, db, settings)
+        require_adult_session(auth)
+        if str(auth.user.id) != pending.intended_user_id:
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN, "This linking attempt belongs to another session."
+            )
+        if identity is not None and identity.user_id != auth.user.id:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT, "This provider identity is already linked."
+            )
+        consumed = await consume_native_external_pending(settings, body.transaction_id)
+        if consumed is None:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "This sign-in attempt has expired.")
+        try:
+            await link_external_identity(
+                db,
+                request,
+                user_id=auth.user.id,
+                provider=pending.provider,
+                provider_subject=pending.subject,
+                provider_email=pending.provider_email,
+                provider_email_verified=pending.email_verified,
+            )
+            await db.commit()
+        except (ExternalIdentityOwnershipConflict, IntegrityError):
+            await db.rollback()
+            raise HTTPException(
+                status.HTTP_409_CONFLICT, "This provider identity is already linked."
+            ) from None
+        return MessageResponse(
+            message=f"{pending.provider.value.title()} sign-in has been linked to your account."
+        )
+    if identity is None:
+        return NativeExternalRecoveryResponse(
+            authentication_state="account_choice",
+            transaction_id=pending.transaction_id,
+            provider=pending.provider.value,
+            provider_email=pending.provider_email,
+            display_name=pending.display_name,
+            can_register=pending.can_register,
+        )
+    consumed = await consume_native_external_pending(settings, body.transaction_id)
+    if consumed is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This sign-in attempt has expired.")
+    user = await db.get(User, identity.user_id, with_for_update=True)
+    if user is None or not user.is_active:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This provider identity is unavailable.")
+    await touch_external_identity(
+        db,
+        identity=identity,
+        provider_email=pending.provider_email,
+        provider_email_verified=pending.email_verified,
+    )
+    policy = await _resolve_browser_mfa_policy(db, user.id, settings)
+    if policy.enforcement_enabled and policy.required:
+        continuation = await _native_mfa_continuation(
+            db,
+            request,
+            settings,
+            user,
+            primary=pending.provider.value,
+            platform=pending.platform,
+            redemption_verifier_hash=pending.redemption_verifier_hash,
+        )
+        await db.commit()
+        return continuation
+    raw, session, device_raw = await issue_mobile_session(
+        db, request, user, settings, fresh_auth_at=datetime.now(UTC)
+    )
+    user.last_login_at = datetime.now(UTC)
+    user.last_activity_at = datetime.now(UTC)
+    await db.commit()
+    response.headers["Cache-Control"] = "no-store"
+    return MobileSessionResponse(
+        **user_response(user, session).model_dump(), session_token=raw, device_token=device_raw
+    )
+
+
+@router.post("/mobile/external/recovery/link", response_model=MessageResponse)
+async def mobile_external_recovery_link(
+    body: NativeExternalLinkRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> MessageResponse:
+    require_secure_transport(request, settings)
+    auth = await auth_context(request, db, settings)
+    require_adult_session(auth)
+    if (
+        auth.session.fresh_auth_at is None
+        or auth.session.fresh_auth_at < datetime.now(UTC) - FRESH_AUTH_WINDOW
+    ):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Fresh authentication is required.")
+    pending = await load_native_external_pending(settings, body.transaction_id)
+    if pending is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This sign-in attempt has expired.")
+    if pending.intent == "link":
+        if not pending.intended_user_id:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "This linking attempt is invalid.")
+        if pending.intended_user_id != str(auth.user.id):
+            raise HTTPException(
+                status.HTTP_403_FORBIDDEN, "This linking attempt belongs to another session."
+            )
+    if not verify_redemption_verifier(body.redemption_verifier, pending.redemption_verifier_hash):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "This sign-in attempt is invalid or has expired."
+        )
+    pending = await consume_native_external_pending(settings, body.transaction_id)
+    if pending is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This sign-in attempt has expired.")
+    try:
+        await link_external_identity(
+            db,
+            request,
+            user_id=auth.user.id,
+            provider=pending.provider,
+            provider_subject=pending.subject,
+            provider_email=pending.provider_email,
+            provider_email_verified=pending.email_verified,
+        )
+        await db.commit()
+    except (ExternalIdentityOwnershipConflict, IntegrityError):
+        await db.rollback()
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "This provider identity is already linked."
+        ) from None
+    return MessageResponse(
+        message=f"{pending.provider.value.title()} sign-in has been linked to your account."
+    )
+
+
+@router.post(
+    "/mobile/external/recovery/register",
+    response_model=MobileSessionResponse | NativeMfaContinuationResponse,
+)
+async def mobile_external_recovery_register(
+    body: NativeExternalRegisterRequest,
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> MobileSessionResponse | NativeMfaContinuationResponse:
+    require_secure_transport(request, settings)
+    pending = await load_native_external_pending(settings, body.transaction_id)
+    if pending is None or not pending.can_register or not pending.provider_email:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "This provider identity must be linked to an existing account.",
+        )
+    if not verify_redemption_verifier(body.redemption_verifier, pending.redemption_verifier_hash):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "This sign-in attempt is invalid or has expired."
+        )
+    resolved = await validate_signup_acceptances(
+        db, [(item.document_key, item.document_version_id) for item in body.legal_acceptances]
+    )
+    existing = await db.scalar(
+        select(User).where(User.email == normalise_email(pending.provider_email)).with_for_update()
+    )
+    if existing is not None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "An account already uses this email. Sign in and link the provider instead.",
+        )
+    if (
+        await find_external_identity(db, pending.provider, pending.subject, for_update=True)
+        is not None
+    ):
+        raise HTTPException(status.HTTP_409_CONFLICT, "This provider identity is already linked.")
+    consumed = await consume_native_external_pending(settings, body.transaction_id)
+    if consumed is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This sign-in attempt has expired.")
+    assert consumed is not None
+    pending = consumed
+    assert pending.provider_email is not None
+    user = User(
+        email=normalise_email(pending.provider_email),
+        display_name=body.display_name or pending.display_name,
+        email_verified_at=datetime.now(UTC) if pending.email_verified else None,
+    )
+    db.add(user)
+    await db.flush()
+    for item in resolved:
+        acceptance = LegalAcceptance(
+            created_at=datetime.now(UTC),
+            record_type=(
+                LegalRecordType.user_acceptance
+                if item.document.action_verb == LegalActionVerb.accept
+                else LegalRecordType.user_acknowledgement
+            ),
+            document_version_id=item.version.id,
+            user_id=user.id,
+            context=LegalAcceptanceContext.signup,
+            platform=body.platform,
+            ip_address=resolve_client_ip(request, settings),
+            user_agent=request.headers.get("user-agent", "")[:300] or None,
+        )
+        db.add(acceptance)
+        await queue_acceptance_evidence(
+            db, acceptance=acceptance, document=item.document, version=item.version, user=user
+        )
+    await link_external_identity(
+        db,
+        request,
+        user_id=user.id,
+        provider=pending.provider,
+        provider_subject=pending.subject,
+        provider_email=pending.provider_email,
+        provider_email_verified=pending.email_verified,
+    )
+    policy = await _resolve_browser_mfa_policy(db, user.id, settings)
+    if policy.enforcement_enabled and policy.required:
+        continuation = await _native_mfa_continuation(
+            db,
+            request,
+            settings,
+            user,
+            primary=pending.provider.value,
+            platform=pending.platform,
+            redemption_verifier_hash=pending.redemption_verifier_hash,
+        )
+        await db.commit()
+        return continuation
+    raw, session, device_raw = await issue_mobile_session(
+        db, request, user, settings, fresh_auth_at=datetime.now(UTC)
+    )
+    user.last_login_at = datetime.now(UTC)
+    user.last_activity_at = datetime.now(UTC)
+    await db.commit()
+    response.headers["Cache-Control"] = "no-store"
+    return MobileSessionResponse(
+        **user_response(user, session).model_dump(), session_token=raw, device_token=device_raw
+    )
+
+
+@router.get("/mobile/mfa/options", response_model=MfaOptionsResponse)
+async def mobile_mfa_options(
+    transaction_id: str,
+    redemption_verifier: str,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> MfaOptionsResponse:
+    require_secure_transport(request, settings)
+    state = await load_native_mfa_transaction(settings, transaction_id)
+    if state is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This sign-in attempt has expired.")
+    if not verify_redemption_verifier(redemption_verifier, state.redemption_verifier_hash):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "This sign-in attempt is invalid or has expired."
+        )
+    user = await db.get(User, uuid.UUID(state.user_id))
+    if user is None or not user.is_active:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This sign-in attempt is invalid.")
+    policy = await _resolve_browser_mfa_policy(db, user.id, settings)
+    active = await _active_mfa_methods(db, user.id)
+    allowed = {UserMfaMethod(method) for method in policy.allowed_methods}
+    methods = _usable_browser_mfa_methods(
+        allowed, active, user.email_verified_at is not None, allow_totp_enrolment=True
+    )
+    return MfaOptionsResponse(
+        methods=methods,
+        destination=_masked_email(user.email),
+        primary_auth_method=state.provider,
+        policy="required" if policy.required else "optional",
+        policy_source=policy.source,
+        enrolment_required=not bool(active & allowed),
+        preferred_method=_preferred_browser_mfa_method(user, methods),
+    )
+
+
+@router.post("/mobile/mfa/start", response_model=MfaStartResponse)
+async def mobile_mfa_start(
+    body: NativeMfaStartRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> MfaStartResponse:
+    require_secure_transport(request, settings)
+    state = await load_native_mfa_transaction(settings, body.transaction_id)
+    if state is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This sign-in attempt has expired.")
+    if not verify_redemption_verifier(body.redemption_verifier, state.redemption_verifier_hash):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "This sign-in attempt is invalid or has expired."
+        )
+    user = await db.get(User, uuid.UUID(state.user_id))
+    if user is None or not user.is_active:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This sign-in attempt is invalid.")
+    policy = await _resolve_browser_mfa_policy(db, user.id, settings)
+    active = await _active_mfa_methods(db, user.id)
+    allowed = {UserMfaMethod(method) for method in policy.allowed_methods}
+    usable = _usable_browser_mfa_methods(
+        allowed, active, user.email_verified_at is not None, allow_totp_enrolment=True
+    )
+    if body.method not in usable:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "That MFA method is not allowed by policy.")
+    if body.method == UserMfaMethod.email.value:
+        await enforce_rate_limit(request, settings, f"mfa-email-send:{user.id}", 3, 900)
+        now = datetime.now(UTC)
+        reference_hash = hash_transaction(settings, body.transaction_id)
+        await db.execute(
+            update(MfaEmailChallenge)
+            .where(
+                MfaEmailChallenge.user_id == user.id,
+                MfaEmailChallenge.transaction_reference_hash == reference_hash,
+                MfaEmailChallenge.consumed_at.is_(None),
+                MfaEmailChallenge.superseded_at.is_(None),
+            )
+            .values(superseded_at=now)
+        )
+        code = new_email_code()
+        challenge = MfaEmailChallenge(
+            user_id=user.id,
+            transaction_reference_hash=reference_hash,
+            code_hash=hash_email_code(settings, code),
+            expires_at=now + timedelta(seconds=EMAIL_CHALLENGE_TTL_SECONDS),
+        )
+        db.add(challenge)
+        await db.flush()
+        subject, message, html = await render_notification_email(
+            db, settings, "mfa_email_code", {"code": code}
+        )
+        await notify(
+            db,
+            settings=settings,
+            recipient_user_id=user.id,
+            notification_type="mfa_email_code",
+            title=subject,
+            body=message,
+            html_body=html,
+            idempotency_key=f"mfa-email:{challenge.id}",
+            is_critical=True,
+            sensitive_email_expires_at=challenge.expires_at,
+        )
+        audit(
+            db,
+            request,
+            "MFA_EMAIL_CHALLENGE_CREATED",
+            user.id,
+            target_type="mfa_email_challenge",
+        )
+        await db.commit()
+        return MfaStartResponse(
+            method="email", destination=_masked_email(user.email), enrolling=False
+        )
+    await enforce_rate_limit(request, settings, f"mfa-totp-start:{user.id}", 5, 300)
+    factor = await db.scalar(
+        select(UserMfaMethodRecord).where(
+            UserMfaMethodRecord.user_id == user.id,
+            UserMfaMethodRecord.method == UserMfaMethod.totp,
+        )
+    )
+    enrolling = factor is None or not factor.enabled or factor.revoked_at is not None
+    if enrolling:
+        secret = generate_totp_secret()
+        if factor is None:
+            factor = UserMfaMethodRecord(user_id=user.id, method=UserMfaMethod.totp)
+            db.add(factor)
+        factor.encrypted_secret = encrypt_user_mfa_totp(settings, secret)
+        factor.enabled = False
+        factor.revoked_at = None
+        await db.commit()
+        return MfaStartResponse(
+            method="totp",
+            provisioning_uri=totp_provisioning_uri(secret, user.email),
+            manual_key=secret,
+            enrolling=True,
+        )
+    await db.commit()
+    return MfaStartResponse(method="totp", enrolling=False)
+
+
+@router.post("/mobile/mfa/verify", response_model=MobileSessionResponse)
+async def mobile_mfa_verify(
+    body: NativeMfaVerifyRequest,
+    request: Request,
+    response: Response,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> MobileSessionResponse:
+    """Mirror of /auth/mfa/verify for native pre-authentication.
+
+    The transaction is read (not consumed) while the code is checked, so a
+    mistyped code does not discard the primary factor; failed attempts are
+    rate limited and audited exactly like the browser flow. The transaction
+    is consumed atomically only after a correct code, immediately before the
+    session is issued, so a transaction can never yield two sessions."""
+    require_secure_transport(request, settings)
+    state = await load_native_mfa_transaction(settings, body.transaction_id)
+    if state is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This sign-in attempt has expired.")
+    if not verify_redemption_verifier(body.redemption_verifier, state.redemption_verifier_hash):
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "This sign-in attempt is invalid or has expired."
+        )
+    user = await db.get(User, uuid.UUID(state.user_id), with_for_update=True)
+    if user is None or not user.is_active:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This sign-in attempt is invalid.")
+    policy = await _resolve_browser_mfa_policy(db, user.id, settings)
+    if body.method not in policy.allowed_methods:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "That MFA method is not allowed by policy.")
+    now = datetime.now(UTC)
+    if body.method == UserMfaMethod.email.value:
+        await enforce_rate_limit(request, settings, f"mfa-email-verify:{user.id}", 10, 900)
+        challenge = await db.scalar(
+            select(MfaEmailChallenge)
+            .where(
+                MfaEmailChallenge.user_id == user.id,
+                MfaEmailChallenge.transaction_reference_hash
+                == hash_transaction(settings, body.transaction_id),
+                MfaEmailChallenge.consumed_at.is_(None),
+                MfaEmailChallenge.superseded_at.is_(None),
+            )
+            .order_by(MfaEmailChallenge.created_at.desc())
+            .with_for_update()
+        )
+        if (
+            challenge is None
+            or challenge.expires_at <= now
+            or challenge.attempts >= EMAIL_MAX_ATTEMPTS
+        ):
+            audit(
+                db,
+                request,
+                "MFA_EMAIL_CHALLENGE_FAILED",
+                user.id,
+                target_type="mfa_email_challenge",
+            )
+            audit(db, request, "MFA_LOGIN_FAILED", user.id, target_type="native_mfa")
+            await db.commit()
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "That verification code is invalid.")
+        challenge.attempts += 1
+        if not secrets.compare_digest(challenge.code_hash, hash_email_code(settings, body.code)):
+            audit(
+                db,
+                request,
+                "MFA_EMAIL_CHALLENGE_FAILED",
+                user.id,
+                target_type="mfa_email_challenge",
+            )
+            audit(db, request, "MFA_LOGIN_FAILED", user.id, target_type="native_mfa")
+            await db.commit()
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "That verification code is invalid.")
+        challenge.consumed_at = now
+        factor = await db.scalar(
+            select(UserMfaMethodRecord).where(
+                UserMfaMethodRecord.user_id == user.id,
+                UserMfaMethodRecord.method == UserMfaMethod.email,
+            )
+        )
+        if factor is None:
+            factor = UserMfaMethodRecord(user_id=user.id, method=UserMfaMethod.email)
+            db.add(factor)
+        factor.enabled = True
+        factor.enrolled_at = factor.enrolled_at or now
+        factor.last_used_at = now
+        audit(
+            db,
+            request,
+            "MFA_EMAIL_CHALLENGE_SUCCEEDED",
+            user.id,
+            target_type="mfa_email_challenge",
+        )
+    else:
+        await enforce_rate_limit(request, settings, f"mfa-totp-verify:{user.id}", 10, 300)
+        factor = await db.scalar(
+            select(UserMfaMethodRecord).where(
+                UserMfaMethodRecord.user_id == user.id,
+                UserMfaMethodRecord.method == UserMfaMethod.totp,
+                UserMfaMethodRecord.revoked_at.is_(None),
+            )
+        )
+        if factor is None or not factor.encrypted_secret:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "Authenticator setup is required.")
+        was_enabled = factor.enabled
+        step = matched_totp_step(
+            decrypt_user_mfa_totp(settings, factor.encrypted_secret), body.code
+        )
+        if step is None or not await claim_totp_step(settings, user.id, step):
+            audit(db, request, "MFA_TOTP_VERIFICATION_FAILED", user.id, target_type="mfa_method")
+            audit(db, request, "MFA_LOGIN_FAILED", user.id, target_type="native_mfa")
+            await db.commit()
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "That verification code is invalid.")
+        factor.enabled = True
+        factor.enrolled_at = factor.enrolled_at or now
+        factor.last_used_at = now
+        audit(db, request, "MFA_TOTP_VERIFICATION_SUCCEEDED", user.id, target_type="mfa_method")
+        if not was_enabled:
+            audit(db, request, "MFA_TOTP_ENROLLED", user.id, target_type="mfa_method")
+
+    # Single issuance: only the request that atomically consumes the
+    # pre-authentication may mint the session (replay/race protection).
+    consumed = await consume_native_mfa_transaction(settings, body.transaction_id)
+    if consumed is None or consumed.user_id != str(user.id):
+        await db.rollback()
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This sign-in attempt has expired.")
+    raw, session, device_raw = await issue_mobile_session(
+        db, request, user, settings, fresh_auth_at=now
+    )
+    user.last_login_at = now
+    user.last_activity_at = now
+    audit(db, request, "MFA_LOGIN_SUCCEEDED", user.id, target_type="session")
+    await db.commit()
+    response.headers["Cache-Control"] = "no-store"
     return MobileSessionResponse(
         **user_response(user, session).model_dump(), session_token=raw, device_token=device_raw
     )
@@ -2112,6 +3946,36 @@ def require_bearer_transport(auth: AuthContext) -> None:
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST, "This endpoint requires bearer authentication."
         )
+
+
+def require_cookie_transport(auth: AuthContext) -> None:
+    """Counterpart of require_bearer_transport for endpoints that issue browser
+    cookies, so a bearer request cannot be converted into a cookie session."""
+    if auth.transport != "cookie":
+        raise HTTPException(
+            status.HTTP_400_BAD_REQUEST, "This endpoint requires browser session authentication."
+        )
+
+
+async def _rotated_session_expiry(
+    db: AsyncSession, auth: AuthContext, settings: Settings
+) -> datetime | None:
+    """Expiry for the session that replaces ``auth.session`` on rotation.
+
+    Session expiry never slides, so rotation is the only way a still-valid
+    session's lifetime could be extended. While the effective consumer MFA
+    policy is enforced and Required, rotation still replaces the credential but
+    keeps the original expiry: an adult session (including one issued before
+    the policy changed) then ends on schedule, and only a new sign-in that
+    satisfies the policy starts a new lifetime. ``None`` means the normal
+    fresh lifetime (MFA not required, or a managed-child session).
+    """
+    if auth.session.kind != SessionKind.adult:
+        return None
+    policy = await _resolve_browser_mfa_policy(db, auth.user.id, settings)
+    if policy.enforcement_enabled and policy.required:
+        return auth.session.expires_at
+    return None
 
 
 @router.post("/mobile/logout", status_code=status.HTTP_204_NO_CONTENT)
@@ -2299,12 +4163,18 @@ async def rotate_session(
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> UserResponse:
+    # Browser rotation issues cookies; a bearer (native) token must use
+    # /auth/mobile/sessions/rotate and is never converted into a cookie session.
+    require_cookie_transport(auth)
+    expires_at = await _rotated_session_expiry(db, auth, settings)
     auth.session.revoked_at = datetime.now(UTC)
     # kind must be carried over from the session being rotated, never left to
     # issue_session's adult default — otherwise a managed Child session rotating
     # its own session would silently come back as an *adult* session for the same
     # underlying User row, defeating require_adult_session and every other
-    # kind-based check from that point on.
+    # kind-based check from that point on. The trusted device link is carried
+    # over too, so device revocation (DELETE /auth/devices/{id}, revoke-others)
+    # still reaches the rotated session.
     new_session = await issue_session(
         db,
         response,
@@ -2312,7 +4182,9 @@ async def rotate_session(
         auth.user,
         settings,
         kind=auth.session.kind,
+        trusted_device_id=auth.session.trusted_device_id,
         fresh_auth_at=auth.session.fresh_auth_at,
+        expires_at=expires_at,
     )
     audit(
         db,
@@ -2341,6 +4213,10 @@ async def rotate_mobile_session(
     intended safe failure mode, not a bug."""
     require_secure_transport(request, settings)
     require_bearer_transport(auth)
+    # While consumer MFA is required, rotation keeps the original expiry (see
+    # _rotated_session_expiry) rather than refusing: the credential can still
+    # be rotated, but a session can never be extended past its lifetime.
+    expires_at = await _rotated_session_expiry(db, auth, settings)
     auth.session.revoked_at = datetime.now(UTC)
     # See the identical comment in rotate_session: kind must carry over from the
     # session being rotated, not silently reset to issue_mobile_session's adult
@@ -2357,6 +4233,11 @@ async def rotate_mobile_session(
         kind=auth.session.kind,
         fresh_auth_at=auth.session.fresh_auth_at,
         existing_device_id=auth.session.trusted_device_id,
+        expires_at=expires_at,
+        # A legacy device-less session still gains a renewal device here (the
+        # established compatibility path), but only when rotation grants a
+        # fresh lifetime anyway; never while MFA is required.
+        mint_device=expires_at is None,
     )
     audit(
         db,
@@ -2419,6 +4300,26 @@ async def renew_mobile_session(
     if pair is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Please sign in to continue.")
     user, device = pair
+
+    # Same rule as browser /auth/renew: a long-lived device credential must
+    # not keep minting sessions once the consumer MFA policy is required, or
+    # a credential issued before the policy (or from a pre-MFA sign-in)
+    # would bypass it indefinitely. The person signs in again and completes
+    # MFA through /auth/mobile/login or the native provider exchange.
+    if device.kind == SessionKind.adult:
+        policy = await _resolve_browser_mfa_policy(db, user.id, settings)
+        if policy.enforcement_enabled and policy.required:
+            device.revoked_at = now
+            audit(
+                db,
+                request,
+                "session.renewal_blocked_mfa_required",
+                user.id,
+                target_type="trusted_device",
+                target_id=device.id,
+            )
+            await db.commit()
+            raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Please sign in to continue.")
 
     if device.kind == SessionKind.managed_child:
         child_active = await db.scalar(

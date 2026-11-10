@@ -10,7 +10,7 @@ from mykhaya.features import platform_feature_enabled
 from mykhaya.models import FeatureKey, PlatformSetting
 from mykhaya.platform_runtime import maintenance_active
 from mykhaya.platform_settings import SETTINGS_SCHEMA, resolve_environment_fallback
-from mykhaya.status_aggregation import overall_message, overall_public_state
+from mykhaya.status_aggregation import compute_status_snapshot
 
 router = APIRouter(prefix="/config", tags=["public-config"])
 
@@ -44,7 +44,7 @@ async def public_config(
     client calling the API through its own origin can never reach it. The
     Help & Support hub's compact status summary needs the exact same
     overall-severity computation (mykhaya.status_aggregation.
-    overall_public_state — no separate model, no raw health data) from a
+    compute_status_snapshot — no separate model, no raw health data) from a
     surface it can actually call. Omitted entirely when
     settings.status_public_enabled is False, exactly like /status 404s in
     that case, so the frontend's existing "status unavailable" fallback
@@ -78,7 +78,7 @@ async def public_config(
     # the boolean - the real enforcement is the 503 on every consumer route.
     payload["maintenance_mode"] = await maintenance_active(db)
     if settings.status_public_enabled:
-        overall = await overall_public_state(db)
-        payload["status_overall"] = overall
-        payload["status_overall_message"] = overall_message(overall)
+        snapshot = await compute_status_snapshot(db)
+        payload["status_overall"] = snapshot.overall
+        payload["status_overall_message"] = snapshot.overall_message
     return payload

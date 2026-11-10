@@ -105,6 +105,13 @@ class SensitiveDataInfrastructureTests(unittest.TestCase):
             self.assertRegex(block, r'MYKHAYA_FIELD_ENCRYPTION_KEYS: ""', name)
             self.assertRegex(block, r'MYKHAYA_BLIND_INDEX_KEYS: ""', name)
 
+    def test_services_without_apple_key_access_disable_and_blank_apple_settings(self) -> None:
+        for name in ("migrate", "test"):
+            block = _service_block(self.compose, name)
+            self.assertRegex(block, r'MYKHAYA_APPLE_SIGN_IN_ENABLED: "false"', name)
+            self.assertRegex(block, r'MYKHAYA_APPLE_PRIVATE_KEY: ""', name)
+            self.assertRegex(block, r'MYKHAYA_APPLE_PRIVATE_KEY_FILE: ""', name)
+
     def test_syslog_debug_is_opt_in(self) -> None:
         self.assertNotIn('MYKHAYA_SYSLOG_DEBUG: "true"', self.compose)
         self.assertIn('MYKHAYA_SYSLOG_DEBUG: "${MYKHAYA_SYSLOG_DEBUG:-false}"', self.compose)

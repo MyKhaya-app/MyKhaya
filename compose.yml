@@ -118,7 +118,7 @@ services:
     # Phase 2A). Set MYKHAYA_FIELD_KEYS_HOST_DIR (production:
     # /etc/mykhaya/field-keys). See docs/operations/sensitive-field-keys.md.
     volumes:
-      ["avatar_data:/data/avatars", "support_attachment_data:/data/support-attachments", "vehicle_photo_data:/data/vehicle-photos", "meal_image_data:/data/meal-images", "home_migration_data:/data/home-migrations", "${MYKHAYA_FIELD_KEYS_HOST_DIR:-./secrets/field-keys}:/run/secrets/mykhaya:ro"]
+      ["avatar_data:/data/avatars", "support_attachment_data:/data/support-attachments", "vehicle_photo_data:/data/vehicle-photos", "meal_image_data:/data/meal-images", "home_migration_data:/data/home-migrations", "legal_evidence_data:/data/legal-evidence", "${MYKHAYA_FIELD_KEYS_HOST_DIR:-./secrets/field-keys}:/run/secrets/mykhaya:ro", "${MYKHAYA_APPLE_KEY_HOST_DIR:-./secrets/apple}:/run/secrets/mykhaya-apple:ro"]
     restart: unless-stopped
     logging: *default-logging
     cap_drop: [ALL]
@@ -173,6 +173,12 @@ services:
         MYKHAYA_APNS_KEY_ID: "",
         MYKHAYA_APNS_BUNDLE_ID: "",
         MYKHAYA_APNS_PRIVATE_KEY: "",
+        # Migrations never authenticate with Apple and do not receive the
+        # optional Apple secret mount. Blank inherited values so Settings
+        # cannot attempt to load a host-only key path.
+        MYKHAYA_APPLE_SIGN_IN_ENABLED: "false",
+        MYKHAYA_APPLE_PRIVATE_KEY: "",
+        MYKHAYA_APPLE_PRIVATE_KEY_FILE: "",
       }
     command: ["alembic", "upgrade", "head"]
     depends_on: { postgres: { condition: service_healthy } }
@@ -196,6 +202,11 @@ services:
       MYKHAYA_APNS_KEY_ID: ""
       MYKHAYA_APNS_BUNDLE_ID: ""
       MYKHAYA_APNS_PRIVATE_KEY: ""
+      # The isolated test service also has no Apple secret mount. Keep
+      # provider configuration disabled and explicit when .env enables Apple.
+      MYKHAYA_APPLE_SIGN_IN_ENABLED: "false"
+      MYKHAYA_APPLE_PRIVATE_KEY: ""
+      MYKHAYA_APPLE_PRIVATE_KEY_FILE: ""
       # Raised from the original 100/300 once the full suite's total
       # register+login volume (now several hundred, following Phase 3's
       # Stripe billing tests, each doing a full register/verify/login/create-Home
@@ -346,3 +357,4 @@ volumes:
   vehicle_photo_data: {}
   meal_image_data: {}
   home_migration_data: {}
+  legal_evidence_data: {}

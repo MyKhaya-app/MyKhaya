@@ -37,6 +37,7 @@ def _settings(**overrides: object) -> Settings:
         "environment": "development",
         "public_web_url": "https://mykhaya.app",
         "native_api_url": "http://api.localhost:8080",
+        "fcm_project_id": "mykhaya-prod",
         "cookie_secure": True,
         "admin_mfa_required": True,
         "trusted_hosts": [
@@ -351,6 +352,7 @@ def test_production_rejects_mailpit_host_once_email_is_configured() -> None:
             {
                 "secret_key": SECRET_KEY,
                 "environment": "production",
+                "fcm_project_id": "mykhaya-prod",
                 "public_web_url": "https://mykhaya.app",
                 "admin_url": "https://admin.mykhaya.app",
                 "status_url": "https://status.mykhaya.app",
@@ -378,6 +380,7 @@ def test_production_rejects_local_placeholder_from_address() -> None:
             {
                 "secret_key": SECRET_KEY,
                 "environment": "production",
+                "fcm_project_id": "mykhaya-prod",
                 "public_web_url": "https://mykhaya.app",
                 "admin_url": "https://admin.mykhaya.app",
                 "status_url": "https://status.mykhaya.app",
@@ -404,6 +407,7 @@ def test_production_accepts_a_real_smtp_relay_and_from_address() -> None:
         {
             "secret_key": SECRET_KEY,
             "environment": "production",
+            "fcm_project_id": "mykhaya-prod",
             "public_web_url": "https://mykhaya.app",
             "admin_url": "https://admin.mykhaya.app",
             "status_url": "https://status.mykhaya.app",
@@ -435,6 +439,7 @@ def test_production_without_email_delivery_configured_is_unaffected_by_dev_defau
         {
             "secret_key": SECRET_KEY,
             "environment": "production",
+            "fcm_project_id": "mykhaya-prod",
             "public_web_url": "https://mykhaya.app",
             "admin_url": "https://admin.mykhaya.app",
             "status_url": "https://status.mykhaya.app",

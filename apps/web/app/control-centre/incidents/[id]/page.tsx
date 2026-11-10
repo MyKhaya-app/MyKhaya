@@ -128,6 +128,7 @@ export default function IncidentDetailPage({ params }: { params: Promise<{ id: s
               <>
                 <span>Started {readableDate(data.starts_at)}</span>
                 <span>{data.resolved_at ? `Resolved ${readableDate(data.resolved_at)}` : "Active"}</span>
+                {data.source === "automated" && <span>Opened automatically by service monitoring</span>}
               </>
             )
           }

@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { EventOccurrence, EventPayload, Member } from "@mykhaya/shared-types";
 import {
+  addMonths,
   agendaRange,
   applyAllDayToggle,
   canDeleteEvent,
@@ -196,6 +197,28 @@ describe("Calendar presentation", () => {
     expect(
       cells.some((day) => day.toISOString().startsWith("2026-08-01")),
     ).toBe(true);
+  });
+
+  it("clamps month navigation at month ends without overflowing", () => {
+    const octoberThirtyFirst = new Date("2026-10-31T14:25:36.123Z");
+    const november = addMonths(octoberThirtyFirst, 1);
+    expect(november.toISOString()).toBe("2026-11-30T14:25:36.123Z");
+    expect(addMonths(november, -1).toISOString()).toBe("2026-10-30T14:25:36.123Z");
+  });
+
+  it("handles February, leap years and year boundaries", () => {
+    expect(addMonths(new Date("2024-01-31T00:00:00Z"), 1).toISOString()).toBe(
+      "2024-02-29T00:00:00.000Z",
+    );
+    expect(addMonths(new Date("2023-01-31T00:00:00Z"), 1).toISOString()).toBe(
+      "2023-02-28T00:00:00.000Z",
+    );
+    expect(addMonths(new Date("2026-12-31T00:00:00Z"), 1).toISOString()).toBe(
+      "2027-01-31T00:00:00.000Z",
+    );
+    expect(addMonths(new Date("2027-01-31T00:00:00Z"), -1).toISOString()).toBe(
+      "2026-12-31T00:00:00.000Z",
+    );
   });
 
   it("orders all-day events before timed events", () => {

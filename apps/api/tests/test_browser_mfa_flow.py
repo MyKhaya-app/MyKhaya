@@ -183,6 +183,7 @@ async def test_email_mfa_handoff_has_no_session_before_success(
 
         options = await client.get(f"/api/v1/auth/mfa/options?transaction_id={transaction}")
         assert options.status_code == 200
+        assert options.json()["primary_auth_method"] == "password"
         start = await client.post(
             "/api/v1/auth/mfa/start",
             json={"transaction_id": transaction, "method": "email"},
@@ -338,19 +339,15 @@ def test_issue_family_session_call_sites_are_an_explicit_reviewed_allowlist() ->
     - `complete_browser_authentication` itself, after the MFA gate passes.
     - the `/auth/mfa/verify` completion endpoint, which only runs after a
       caller has already proven possession of an enrolled MFA factor.
-    - `/auth/passkeys/login/verify`, which is intentionally exempt: a WebAuthn
-      passkey is itself a phishing-resistant, possession-bound credential, and
-      registering one (`/auth/passkeys/register/verify`) requires
-      `require_fresh_adult_auth`, i.e. a session that already satisfied
-      whatever policy was in force at registration time. There is no path to
-      register a passkey without first clearing the required-MFA gate.
+    - `/auth/passkeys/login/verify`, which uses the shared completion seam so a
+      required browser policy cannot be bypassed by choosing a passkey.
     - `/auth/child-login`, which issues a `SessionKind.child` session; the
       consumer MFA policy only ever applies to `SessionKind.adult`.
     """
     import inspect
 
     source = inspect.getsource(auth_router)
-    assert source.count("await issue_family_session(") == 4
+    assert source.count("await issue_family_session(") == 3
 
 
 def _fake_request():

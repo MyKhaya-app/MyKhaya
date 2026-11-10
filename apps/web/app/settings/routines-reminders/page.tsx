@@ -36,6 +36,7 @@ import type {
 import { api } from "@mykhaya/api-client";
 import { BottomSheet } from "@/components/bottom-sheet";
 import { FamilyUpsell } from "@/components/family-upsell";
+import { FormField, FormLayout, FormRow, FormSection, FormSheet } from "@/components/form-layout";
 import { SettingsPage } from "@/components/settings-page";
 import { useActiveHome } from "@/components/use-active-home";
 import { dueCountdownSuffix, routineDueLabel } from "@/app/home/routine-utils";
@@ -330,6 +331,9 @@ export default function RoutinesRemindersPage() {
     setEditingReminder(null);
     setEditingTodo(null);
     setShowCreateMenu(false);
+    // A save error belongs to the editor it was shown in; dismissing the
+    // editor discards the draft and the error with it.
+    setError("");
   }
 
   function openNewRoutine() {
@@ -994,7 +998,8 @@ export default function RoutinesRemindersPage() {
           />
         </div>
 
-        {error && (
+        {/* While an editor is open its save error shows inside the sheet. */}
+        {error && formKind === null && (
           <p className="notice error" role="alert">
             {error}
           </p>
@@ -1419,56 +1424,52 @@ export default function RoutinesRemindersPage() {
         (() => {
           const formId = `routine-form-${editingRoutine?.id ?? "new"}`;
           return (
-        <BottomSheet
+        <FormSheet
           title={editingRoutine ? "Edit routine" : "New routine"}
           onDismiss={closeForms}
+          busy={busy}
           fullHeight
-          footer={
-            <div className="routine-form-actions">
-              <button form={formId} disabled={busy}>{busy ? "Saving…" : "Save"}</button>
-              <button type="button" className="secondary" onClick={closeForms}>
-                Cancel
-              </button>
-            </div>
-          }
+          primaryAction={<button type="submit" form={formId} disabled={busy}>{busy ? "Saving…" : "Save"}</button>}
         >
-        <form id={formId} className="routine-form" key={editingRoutine?.id ?? "new-routine"} onSubmit={saveRoutine}>
-          <fieldset>
-            <legend>Routine</legend>
-            <label>
-              Title
-              <input name="title" required maxLength={160} defaultValue={editingRoutine?.title ?? ""} />
-            </label>
-            <label>
-              Description (optional)
-              <input name="description" maxLength={1000} defaultValue={editingRoutine?.description ?? ""} />
-            </label>
-          </fieldset>
-          <fieldset>
-            <legend>Schedule</legend>
-            <label>
-              Who this is for
-              <select
-                name="scope"
-                defaultValue={editingRoutine?.scope ?? (householdRoutinesEnabled ? scopeTab : "personal")}
-              >
-                <option
-                  value="household"
-                  disabled={!householdRoutinesEnabled && editingRoutine?.scope !== "household"}
-                >
-                  {SCOPE_LABELS.household}
-                  {!householdRoutinesEnabled && editingRoutine?.scope !== "household" ? " (Family)" : ""}
-                </option>
-                <option value="personal">{SCOPE_LABELS.personal}</option>
-              </select>
-            </label>
-            <label>
-              Category (optional)
-              <select name="category_id" defaultValue={editingRoutine?.category?.id ?? ""}>
-                <option value="">No category</option>
-                {assignableCategories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
-              </select>
-            </label>
+        <FormLayout id={formId} className="rr-form" key={editingRoutine?.id ?? "new-routine"} onSubmit={saveRoutine} noValidate={false}>
+          {error && <p className="notice error" role="alert">{error}</p>}
+          <FormSection title="Routine">
+            <FormField label="Title">
+              {(control) => <input {...control} name="title" required maxLength={160} defaultValue={editingRoutine?.title ?? ""} />}
+            </FormField>
+            <FormField label="Description (optional)">
+              {(control) => <input {...control} name="description" maxLength={1000} defaultValue={editingRoutine?.description ?? ""} />}
+            </FormField>
+          </FormSection>
+          <FormSection title="Schedule" divider>
+            <FormRow minColumnWidth="14rem">
+              <FormField label="Who this is for">
+                {(control) => (
+                  <select
+                    {...control}
+                    name="scope"
+                    defaultValue={editingRoutine?.scope ?? (householdRoutinesEnabled ? scopeTab : "personal")}
+                  >
+                    <option
+                      value="household"
+                      disabled={!householdRoutinesEnabled && editingRoutine?.scope !== "household"}
+                    >
+                      {SCOPE_LABELS.household}
+                      {!householdRoutinesEnabled && editingRoutine?.scope !== "household" ? " (Family)" : ""}
+                    </option>
+                    <option value="personal">{SCOPE_LABELS.personal}</option>
+                  </select>
+                )}
+              </FormField>
+              <FormField label="Category (optional)">
+                {(control) => (
+                  <select {...control} name="category_id" defaultValue={editingRoutine?.category?.id ?? ""}>
+                    <option value="">No category</option>
+                    {assignableCategories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
+                  </select>
+                )}
+              </FormField>
+            </FormRow>
             {!householdRoutinesEnabled && (
               <FamilyUpsell
                 title="Household routines"
@@ -1489,47 +1490,50 @@ export default function RoutinesRemindersPage() {
                 </button>
               ))}
             </div>
-            {repeatUnit === "weekly" && (
-              <label>
-                Every
-                <select
-                  name="interval_weeks"
-                  value={weekInterval}
-                  onChange={(event) => setWeekInterval(Number(event.target.value))}
-                >
-                  <option value={1}>1 week</option>
-                  <option value={2}>2 weeks</option>
-                  <option value={3}>3 weeks</option>
-                  <option value={4}>4 weeks</option>
+            <FormRow minColumnWidth="10rem">
+              {repeatUnit === "weekly" && (
+                <FormField label="Every">
+                  {(control) => (
+                    <select
+                      {...control}
+                      name="interval_weeks"
+                      value={weekInterval}
+                      onChange={(event) => setWeekInterval(Number(event.target.value))}
+                    >
+                      <option value={1}>1 week</option>
+                      <option value={2}>2 weeks</option>
+                      <option value={3}>3 weeks</option>
+                      <option value={4}>4 weeks</option>
+                    </select>
+                  )}
+                </FormField>
+              )}
+              <FormField
+                label={repeatUnit === "daily" ? "Start date" : "Anchor date"}
+                hint={repeatUnit === "daily" ? "Repeats every day from this date." : "Choose a date when this routine occurs."}
+              >
+                {(control) => <input {...control} type="date" name="week_anchor_date" required defaultValue={editingRoutine?.week_anchor_date ?? todayIso()} />}
+              </FormField>
+            </FormRow>
+            <FormField label="Remind">
+              {(control) => (
+                <select {...control} name="reminder_timing" defaultValue={editingRoutine?.reminder_timing ?? "evening_before"}>
+                  <option value="evening_before">{TIMING_LABELS.evening_before}</option>
+                  <option value="same_day">{TIMING_LABELS.same_day}</option>
+                  <option value="both">{TIMING_LABELS.both}</option>
                 </select>
-              </label>
-            )}
-            <label>
-              {repeatUnit === "daily" ? "Start date" : "Anchor date"}
-              <input className="consumer-date-time-control" type="date" name="week_anchor_date" required defaultValue={editingRoutine?.week_anchor_date ?? todayIso()} />
-              <small>{repeatUnit === "daily" ? "Repeats every day from this date." : "Choose a date when this routine occurs."}</small>
-            </label>
-            <label>
-              Remind
-              <select name="reminder_timing" defaultValue={editingRoutine?.reminder_timing ?? "evening_before"}>
-                <option value="evening_before">{TIMING_LABELS.evening_before}</option>
-                <option value="same_day">{TIMING_LABELS.same_day}</option>
-                <option value="both">{TIMING_LABELS.both}</option>
-              </select>
-            </label>
-            <div className="routine-date-grid">
-              <label>
-                Starts
-                <input className="consumer-date-time-control" type="date" name="start_date" required defaultValue={editingRoutine?.start_date ?? todayIso()} />
-              </label>
-              <label>
-                Ends (optional)
-                <input className="consumer-date-time-control" type="date" name="end_date" defaultValue={editingRoutine?.end_date ?? ""} />
-              </label>
-            </div>
-          </fieldset>
-          <fieldset>
-            <legend>Notifications & Home</legend>
+              )}
+            </FormField>
+            <FormRow minColumnWidth="10rem">
+              <FormField label="Starts">
+                {(control) => <input {...control} type="date" name="start_date" required defaultValue={editingRoutine?.start_date ?? todayIso()} />}
+              </FormField>
+              <FormField label="Ends (optional)">
+                {(control) => <input {...control} type="date" name="end_date" defaultValue={editingRoutine?.end_date ?? ""} />}
+              </FormField>
+            </FormRow>
+          </FormSection>
+          <FormSection title="Notifications & Home" divider>
             <label className="routine-setting">
               <input type="checkbox" name="is_critical" defaultChecked={editingRoutine?.is_critical ?? false} />
               <span>
@@ -1544,9 +1548,9 @@ export default function RoutinesRemindersPage() {
                 <small>Keep this routine visible on your Home screen.</small>
               </span>
             </label>
-          </fieldset>
-        </form>
-        </BottomSheet>
+          </FormSection>
+        </FormLayout>
+        </FormSheet>
           );
         })()
       )}
@@ -1555,98 +1559,96 @@ export default function RoutinesRemindersPage() {
         (() => {
           const formId = `reminder-form-${editingReminder?.id ?? "new"}`;
           return (
-        <BottomSheet
+        <FormSheet
           title={editingReminder ? "Edit reminder" : "New reminder"}
           onDismiss={closeForms}
+          busy={busy}
           fullHeight
-          footer={
-            <div className="routine-form-actions">
-              <button form={formId} disabled={busy}>{busy ? "Saving…" : "Save"}</button>
-              <button type="button" className="secondary" onClick={closeForms}>
-                Cancel
-              </button>
-            </div>
-          }
+          primaryAction={<button type="submit" form={formId} disabled={busy}>{busy ? "Saving…" : "Save"}</button>}
         >
-        <form id={formId} className="routine-form" key={editingReminder?.id ?? "new-reminder"} onSubmit={saveReminder}>
-          <fieldset>
-            <legend>Reminder</legend>
-            <label>
-              Title
-              <input name="title" required maxLength={160} defaultValue={editingReminder?.title ?? ""} />
-            </label>
-            <label>
-              Notes (optional)
-              <input name="description" maxLength={1000} defaultValue={editingReminder?.description ?? ""} />
-            </label>
-          </fieldset>
-          <fieldset>
-            <legend>Who</legend>
-            <label>
-              Scope
-              <select name="scope" defaultValue={editingReminder?.scope ?? scopeTab}>
-                <option value="personal">Personal — only reminds you</option>
-                <option value="household">Household — reminds the home</option>
-              </select>
-            </label>
-            <label>
-              Assign to (household only)
-              <select name="assignee" defaultValue={editingReminder?.member_ids[0] ?? ""}>
-                <option value="">Household / everyone</option>
-                {members.map((member) => (
-                  <option key={member.user_id} value={member.user_id}>
-                    {member.display_name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Category (optional)
-              <select
-                name="category_id"
-                defaultValue={editingReminder?.category?.id ?? ""}
-                disabled={Boolean(editingReminder?.category?.system)}
-              >
-                {editingReminder?.category?.system && (
-                  <option value={editingReminder.category.id}>{editingReminder.category.name}</option>
+        <FormLayout id={formId} className="rr-form" key={editingReminder?.id ?? "new-reminder"} onSubmit={saveReminder} noValidate={false}>
+          {error && <p className="notice error" role="alert">{error}</p>}
+          <FormSection title="Reminder">
+            <FormField label="Title">
+              {(control) => <input {...control} name="title" required maxLength={160} defaultValue={editingReminder?.title ?? ""} />}
+            </FormField>
+            <FormField label="Notes (optional)">
+              {(control) => <input {...control} name="description" maxLength={1000} defaultValue={editingReminder?.description ?? ""} />}
+            </FormField>
+          </FormSection>
+          <FormSection title="Who" divider>
+            <FormField label="Scope">
+              {(control) => (
+                <select {...control} name="scope" defaultValue={editingReminder?.scope ?? scopeTab}>
+                  <option value="personal">Personal — only reminds you</option>
+                  <option value="household">Household — reminds the home</option>
+                </select>
+              )}
+            </FormField>
+            <FormRow minColumnWidth="14rem">
+              <FormField label="Assign to (household only)">
+                {(control) => (
+                  <select {...control} name="assignee" defaultValue={editingReminder?.member_ids[0] ?? ""}>
+                    <option value="">Household / everyone</option>
+                    {members.map((member) => (
+                      <option key={member.user_id} value={member.user_id}>
+                        {member.display_name}
+                      </option>
+                    ))}
+                  </select>
                 )}
-                <option value="">No category</option>
-                {assignableCategories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
-              </select>
-            </label>
-          </fieldset>
-          <fieldset>
-            <legend>When</legend>
-            <div className="routine-date-grid">
-              <label>
-                Due date
-                <input className="consumer-date-time-control" type="date" name="due_date" required defaultValue={editingReminder?.due_date ?? today} />
-              </label>
-              <label>
-                Due time
-                <input className="consumer-date-time-control" type="time" name="due_time" required defaultValue={editingReminder?.due_time.slice(0, 5) ?? "09:00"} />
-              </label>
-            </div>
-            <label>
-              Repeat
-              <select name="repeat" defaultValue={editingReminder?.repeat ?? "never"}>
-                <option value="never">{REPEAT_LABELS.never}</option>
-                <option value="daily">{REPEAT_LABELS.daily}</option>
-                <option value="weekly">{REPEAT_LABELS.weekly}</option>
-              </select>
-            </label>
-            <label>
-              Remind
-              <select name="cadence" defaultValue={editingReminder?.cadence ?? "once"}>
-                <option value="once">{CADENCE_LABELS.once}</option>
-                <option value="hourly">{CADENCE_LABELS.hourly}</option>
-                <option value="daily">{CADENCE_LABELS.daily}</option>
-                <option value="weekly">{CADENCE_LABELS.weekly}</option>
-              </select>
-            </label>
-          </fieldset>
-        </form>
-        </BottomSheet>
+              </FormField>
+              <FormField label="Category (optional)">
+                {(control) => (
+                  <select
+                    {...control}
+                    name="category_id"
+                    defaultValue={editingReminder?.category?.id ?? ""}
+                    disabled={Boolean(editingReminder?.category?.system)}
+                  >
+                    {editingReminder?.category?.system && (
+                      <option value={editingReminder.category.id}>{editingReminder.category.name}</option>
+                    )}
+                    <option value="">No category</option>
+                    {assignableCategories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
+                  </select>
+                )}
+              </FormField>
+            </FormRow>
+          </FormSection>
+          <FormSection title="When" divider>
+            <FormRow minColumnWidth="10rem">
+              <FormField label="Due date">
+                {(control) => <input {...control} type="date" name="due_date" required defaultValue={editingReminder?.due_date ?? today} />}
+              </FormField>
+              <FormField label="Due time">
+                {(control) => <input {...control} type="time" name="due_time" required defaultValue={editingReminder?.due_time.slice(0, 5) ?? "09:00"} />}
+              </FormField>
+            </FormRow>
+            <FormRow minColumnWidth="14rem">
+              <FormField label="Repeat">
+                {(control) => (
+                  <select {...control} name="repeat" defaultValue={editingReminder?.repeat ?? "never"}>
+                    <option value="never">{REPEAT_LABELS.never}</option>
+                    <option value="daily">{REPEAT_LABELS.daily}</option>
+                    <option value="weekly">{REPEAT_LABELS.weekly}</option>
+                  </select>
+                )}
+              </FormField>
+              <FormField label="Remind">
+                {(control) => (
+                  <select {...control} name="cadence" defaultValue={editingReminder?.cadence ?? "once"}>
+                    <option value="once">{CADENCE_LABELS.once}</option>
+                    <option value="hourly">{CADENCE_LABELS.hourly}</option>
+                    <option value="daily">{CADENCE_LABELS.daily}</option>
+                    <option value="weekly">{CADENCE_LABELS.weekly}</option>
+                  </select>
+                )}
+              </FormField>
+            </FormRow>
+          </FormSection>
+        </FormLayout>
+        </FormSheet>
           );
         })()
       )}
@@ -1655,58 +1657,57 @@ export default function RoutinesRemindersPage() {
         (() => {
           const formId = `todo-form-${editingTodo?.id ?? "new"}`;
           return (
-        <BottomSheet
+        <FormSheet
           title={editingTodo ? "Edit To-do" : "New To-do"}
           onDismiss={closeForms}
-          footer={
-            <div className="routine-form-actions">
-              <button form={formId} disabled={busy}>{busy ? "Saving…" : "Save"}</button>
-              <button type="button" className="secondary" onClick={closeForms}>Cancel</button>
-            </div>
-          }
+          busy={busy}
+          primaryAction={<button type="submit" form={formId} disabled={busy}>{busy ? "Saving…" : "Save"}</button>}
         >
-          <form id={formId} className="routine-form" key={editingTodo?.id ?? "new-todo"} onSubmit={saveTodo}>
-            <fieldset>
-              <legend>To-do</legend>
-              <label>
-                Title
-                <input name="title" required maxLength={160} defaultValue={editingTodo?.title ?? ""} />
-              </label>
-              <label>
-                Notes (optional)
-                <input name="description" maxLength={1000} defaultValue={editingTodo?.description ?? ""} />
-              </label>
-            </fieldset>
-            <fieldset>
-              <legend>When and who</legend>
-              <label>
-                Due date
-                <input className="consumer-date-time-control" type="date" name="due_date" required defaultValue={editingTodo?.due_date ?? today} />
-              </label>
-              <label>
-                Scope
-                <select name="scope" defaultValue={editingTodo?.scope ?? scopeTab}>
-                  <option value="personal">Personal — only you</option>
-                  <option value="household">Household</option>
-                </select>
-              </label>
-              <label>
-                Category (optional)
-                <select name="category_id" defaultValue={editingTodo?.category?.id ?? ""}>
-                  <option value="">No category</option>
-                  {assignableCategories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
-                </select>
-              </label>
-              <label>
-                Assign to (household only)
-                <select name="assignee" defaultValue={editingTodo?.member_ids[0] ?? ""}>
-                  <option value="">Household / everyone</option>
-                  {members.map((member) => <option key={member.user_id} value={member.user_id}>{member.display_name}</option>)}
-                </select>
-              </label>
-            </fieldset>
-          </form>
-        </BottomSheet>
+          <FormLayout id={formId} className="rr-form" key={editingTodo?.id ?? "new-todo"} onSubmit={saveTodo} noValidate={false}>
+            {error && <p className="notice error" role="alert">{error}</p>}
+            <FormSection title="To-do">
+              <FormField label="Title">
+                {(control) => <input {...control} name="title" required maxLength={160} defaultValue={editingTodo?.title ?? ""} />}
+              </FormField>
+              <FormField label="Notes (optional)">
+                {(control) => <input {...control} name="description" maxLength={1000} defaultValue={editingTodo?.description ?? ""} />}
+              </FormField>
+            </FormSection>
+            <FormSection title="When and who" divider>
+              <FormRow minColumnWidth="14rem">
+                <FormField label="Due date">
+                  {(control) => <input {...control} type="date" name="due_date" required defaultValue={editingTodo?.due_date ?? today} />}
+                </FormField>
+                <FormField label="Scope">
+                  {(control) => (
+                    <select {...control} name="scope" defaultValue={editingTodo?.scope ?? scopeTab}>
+                      <option value="personal">Personal — only you</option>
+                      <option value="household">Household</option>
+                    </select>
+                  )}
+                </FormField>
+              </FormRow>
+              <FormRow minColumnWidth="14rem">
+                <FormField label="Category (optional)">
+                  {(control) => (
+                    <select {...control} name="category_id" defaultValue={editingTodo?.category?.id ?? ""}>
+                      <option value="">No category</option>
+                      {assignableCategories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
+                    </select>
+                  )}
+                </FormField>
+                <FormField label="Assign to (household only)">
+                  {(control) => (
+                    <select {...control} name="assignee" defaultValue={editingTodo?.member_ids[0] ?? ""}>
+                      <option value="">Household / everyone</option>
+                      {members.map((member) => <option key={member.user_id} value={member.user_id}>{member.display_name}</option>)}
+                    </select>
+                  )}
+                </FormField>
+              </FormRow>
+            </FormSection>
+          </FormLayout>
+        </FormSheet>
           );
         })()
       )}

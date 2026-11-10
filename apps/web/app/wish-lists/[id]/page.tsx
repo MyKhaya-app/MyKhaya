@@ -15,7 +15,6 @@ import type {
   WishlistItemUpdatePayload,
   WishlistItemViewer,
   WishlistLinkPreview,
-  WishlistOccasion,
   WishlistOwnerDetail,
   WishlistUpdatePayload,
 } from "@mykhaya/shared-types";
@@ -23,9 +22,12 @@ import { ApiError, api } from "@mykhaya/api-client";
 import { AppShellContent } from "@/components/app-shell";
 import { BottomSheet } from "@/components/bottom-sheet";
 import { FormStatus } from "@/components/form-status";
+import { FormField, FormLayout, FormRow, FormSheet } from "@/components/form-layout";
+import { useFormFieldErrors, type FormFieldErrors, type FormFieldMessages } from "@/components/form-field-errors";
 import { openExternalUrl } from "@/components/open-external-url";
 import { useActiveHome } from "@/components/use-active-home";
-import { WISHLIST_OCCASION_OPTIONS, occasionGlyph, occasionLabel } from "../occasion";
+import { occasionGlyph, occasionLabel } from "../occasion";
+import { WISHLIST_FIELD_MESSAGES, WishlistFields, type WishlistFieldValues } from "../wishlist-fields";
 
 // Wishlist detail — the one non-negotiable rule for this whole page: an
 // owner must never see, anywhere in this component tree, whether their own
@@ -185,11 +187,10 @@ function LinkPreviewField({
   onFindDetails: () => void;
 }) {
   return (
-    <>
-      <label>
-        Link (optional)
-        <input value={url} onChange={(event) => onUrlChange(event.target.value)} maxLength={2000} placeholder="https://…" />
-      </label>
+    <div className="wishlists-link-field">
+      <FormField label="Link (optional)">
+        {(control) => <input {...control} value={url} onChange={(event) => onUrlChange(event.target.value)} maxLength={2000} placeholder="https://…" />}
+      </FormField>
       <button
         type="button"
         className="secondary wishlists-preview-button"
@@ -224,6 +225,114 @@ function LinkPreviewField({
           <WishlistImage src={imageUrl} alt="" /> Image ready
         </p>
       )}
+    </div>
+  );
+}
+
+const ITEM_FIELD_MESSAGES: FormFieldMessages = {
+  name: { missing: "Give this item a name.", blank: "Give this item a name." },
+};
+
+/** The item fields shared by Add item and Edit item; each sheet keeps its
+ * own state, payload and save. */
+function WishlistItemFields({
+  homeId,
+  name,
+  setName,
+  url,
+  setUrl,
+  price,
+  setPrice,
+  currency,
+  setCurrency,
+  imageUrl,
+  setImageUrl,
+  note,
+  setNote,
+  quantity,
+  setQuantity,
+  errors,
+  onEdit,
+  autoFocusName = false,
+}: {
+  homeId: string;
+  name: string;
+  setName: (value: string) => void;
+  url: string;
+  setUrl: (value: string) => void;
+  price: string;
+  setPrice: (value: string) => void;
+  currency: string;
+  setCurrency: (value: string) => void;
+  imageUrl: string;
+  setImageUrl: (value: string) => void;
+  note: string;
+  setNote: (value: string) => void;
+  quantity: number;
+  setQuantity: (value: number) => void;
+  errors: FormFieldErrors;
+  onEdit: (field: string) => void;
+  autoFocusName?: boolean;
+}) {
+  const { previewState, previewResult, previewLink } = useLinkPreview({
+    homeId,
+    name,
+    setName,
+    imageUrl,
+    setImageUrl,
+    price,
+    setPrice,
+    currency,
+    setCurrency,
+  });
+  return (
+    <>
+      <FormField label="Item name" error={errors.name}>
+        {(control) => (
+          <input
+            {...control}
+            name="name"
+            value={name}
+            onChange={(event) => {
+              setName(event.target.value);
+              onEdit("name");
+            }}
+            maxLength={200}
+            autoFocus={autoFocusName}
+            required
+          />
+        )}
+      </FormField>
+      <LinkPreviewField
+        url={url}
+        onUrlChange={setUrl}
+        imageUrl={imageUrl}
+        previewState={previewState}
+        previewResult={previewResult}
+        onFindDetails={() => void previewLink(url)}
+      />
+      <FormRow columns={3}>
+        <FormField label="Price (optional)">
+          {(control) => <input {...control} value={price} onChange={(event) => setPrice(event.target.value)} placeholder="e.g. 29.99" />}
+        </FormField>
+        <FormField label="Currency">
+          {(control) => <input {...control} value={currency} onChange={(event) => setCurrency(event.target.value.toUpperCase())} maxLength={3} placeholder="GBP" />}
+        </FormField>
+        <FormField label="Quantity">
+          {(control) => (
+            <input
+              {...control}
+              type="number"
+              min={1}
+              value={quantity}
+              onChange={(event) => setQuantity(Math.max(1, Number(event.target.value) || 1))}
+            />
+          )}
+        </FormField>
+      </FormRow>
+      <FormField label="Note (optional)">
+        {(control) => <input {...control} value={note} onChange={(event) => setNote(event.target.value)} maxLength={500} />}
+      </FormField>
     </>
   );
 }
@@ -600,27 +709,31 @@ function EditWishlistSheet({
   onClose: () => void;
   onSaved: (detail: WishlistOwnerDetail) => void;
 }) {
-  const [title, setTitle] = useState(detail.title);
-  const [occasion, setOccasion] = useState<WishlistOccasion>(detail.occasion);
-  const [occasionDate, setOccasionDate] = useState(detail.occasion_date ?? "");
-  const [description, setDescription] = useState(detail.description ?? "");
+  const [values, setValues] = useState<WishlistFieldValues>({
+    title: detail.title,
+    occasion: detail.occasion,
+    occasionDate: detail.occasion_date ?? "",
+    description: detail.description ?? "",
+  });
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const fields = useFormFieldErrors(WISHLIST_FIELD_MESSAGES);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!title.trim()) {
-      setError("Give this wishlist a title.");
+    if (busy) return;
+    if (!fields.check()) {
+      setError("");
       return;
     }
     setBusy(true);
     setError("");
     try {
       const payload: WishlistUpdatePayload = {
-        title: title.trim(),
-        occasion,
-        occasion_date: occasionDate || null,
-        description: description.trim() || null,
+        title: values.title.trim(),
+        occasion: values.occasion,
+        occasion_date: values.occasionDate || null,
+        description: values.description.trim() || null,
         expected_updated_at: detail.updated_at,
       };
       const updated = await api.updateWishlist(homeId, detail.id, payload);
@@ -633,38 +746,28 @@ function EditWishlistSheet({
   }
 
   return (
-    <BottomSheet title="Edit wishlist" onDismiss={onClose}>
-      <form onSubmit={submit}>
-        <label>
-          Title
-          <input value={title} onChange={(event) => setTitle(event.target.value)} maxLength={160} required />
-        </label>
-        <div className="meal-time-row">
-          <label>
-            Occasion
-            <select value={occasion} onChange={(event) => setOccasion(event.target.value as WishlistOccasion)}>
-              {WISHLIST_OCCASION_OPTIONS.map((row) => (
-                <option key={row.key} value={row.key}>
-                  {row.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Date (optional)
-            <input className="consumer-date-time-control" type="date" value={occasionDate} onChange={(event) => setOccasionDate(event.target.value)} />
-          </label>
-        </div>
-        <label>
-          Description (optional)
-          <input value={description} onChange={(event) => setDescription(event.target.value)} maxLength={1000} />
-        </label>
-        <FormStatus error={error} />
-        <button className="sheet-primary" disabled={busy}>
+    <FormSheet
+      title="Edit wishlist"
+      onDismiss={onClose}
+      busy={busy}
+      primaryAction={
+        <button type="submit" form="wishlist-edit-form" disabled={busy}>
           {busy ? "Saving…" : "Save"}
         </button>
-      </form>
-    </BottomSheet>
+      }
+    >
+      <FormLayout id="wishlist-edit-form" ref={fields.formRef} onSubmit={submit}>
+        {error && <p className="notice error" role="alert">{error}</p>}
+        <WishlistFields
+          values={values}
+          errors={fields.errors}
+          onChange={(patch, field) => {
+            setValues((current) => ({ ...current, ...patch }));
+            fields.clear(field);
+          }}
+        />
+      </FormLayout>
+    </FormSheet>
   );
 }
 
@@ -688,22 +791,13 @@ function AddItemSheet({
   const [quantity, setQuantity] = useState(1);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const { previewState, previewResult, previewLink } = useLinkPreview({
-    homeId,
-    name,
-    setName,
-    imageUrl,
-    setImageUrl,
-    price,
-    setPrice,
-    currency,
-    setCurrency,
-  });
+  const fields = useFormFieldErrors(ITEM_FIELD_MESSAGES);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!name.trim()) {
-      setError("Give this item a name.");
+    if (busy) return;
+    if (!fields.check()) {
+      setError("");
       return;
     }
     setBusy(true);
@@ -728,49 +822,40 @@ function AddItemSheet({
   }
 
   return (
-    <BottomSheet title="Add item" onDismiss={onClose}>
-      <form onSubmit={submit} className="wishlists-item-form">
-        <label>
-          Item name
-          <input value={name} onChange={(event) => setName(event.target.value)} maxLength={200} autoFocus required />
-        </label>
-        <LinkPreviewField
-          url={url}
-          onUrlChange={setUrl}
-          imageUrl={imageUrl}
-          previewState={previewState}
-          previewResult={previewResult}
-          onFindDetails={() => void previewLink(url)}
-        />
-        <div className="meal-time-row">
-          <label>
-            Price (optional)
-            <input value={price} onChange={(event) => setPrice(event.target.value)} placeholder="e.g. 29.99" />
-          </label>
-          <label>
-            Currency
-            <input value={currency} onChange={(event) => setCurrency(event.target.value.toUpperCase())} maxLength={3} placeholder="GBP" />
-          </label>
-          <label>
-            Quantity
-            <input
-              type="number"
-              min={1}
-              value={quantity}
-              onChange={(event) => setQuantity(Math.max(1, Number(event.target.value) || 1))}
-            />
-          </label>
-        </div>
-        <label>
-          Note (optional)
-          <input value={note} onChange={(event) => setNote(event.target.value)} maxLength={500} />
-        </label>
-        <FormStatus error={error} />
-        <button className="sheet-primary" disabled={busy}>
+    <FormSheet
+      title="Add item"
+      onDismiss={onClose}
+      busy={busy}
+      primaryAction={
+        <button type="submit" form="wishlist-item-form" disabled={busy}>
           {busy ? "Adding…" : "Add item"}
         </button>
-      </form>
-    </BottomSheet>
+      }
+    >
+      <FormLayout id="wishlist-item-form" className="wishlists-item-form" ref={fields.formRef} onSubmit={submit}>
+        {error && <p className="notice error" role="alert">{error}</p>}
+        <WishlistItemFields
+          homeId={homeId}
+          name={name}
+          setName={setName}
+          url={url}
+          setUrl={setUrl}
+          price={price}
+          setPrice={setPrice}
+          currency={currency}
+          setCurrency={setCurrency}
+          imageUrl={imageUrl}
+          setImageUrl={setImageUrl}
+          note={note}
+          setNote={setNote}
+          quantity={quantity}
+          setQuantity={setQuantity}
+          errors={fields.errors}
+          onEdit={fields.clear}
+          autoFocusName
+        />
+      </FormLayout>
+    </FormSheet>
   );
 }
 
@@ -798,22 +883,13 @@ function EditItemSheet({
   const [quantity, setQuantity] = useState(item.quantity);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const { previewState, previewResult, previewLink } = useLinkPreview({
-    homeId,
-    name,
-    setName,
-    imageUrl,
-    setImageUrl,
-    price,
-    setPrice,
-    currency,
-    setCurrency,
-  });
+  const fields = useFormFieldErrors(ITEM_FIELD_MESSAGES);
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!name.trim()) {
-      setError("Give this item a name.");
+    if (busy) return;
+    if (!fields.check()) {
+      setError("");
       return;
     }
     setBusy(true);
@@ -847,52 +923,42 @@ function EditItemSheet({
   }
 
   return (
-    <BottomSheet title="Edit item" onDismiss={onClose}>
-      <form onSubmit={submit} className="wishlists-item-form">
-        <label>
-          Item name
-          <input value={name} onChange={(event) => setName(event.target.value)} maxLength={200} required />
-        </label>
-        <LinkPreviewField
-          url={url}
-          onUrlChange={setUrl}
-          imageUrl={imageUrl}
-          previewState={previewState}
-          previewResult={previewResult}
-          onFindDetails={() => void previewLink(url)}
-        />
-        <div className="meal-time-row">
-          <label>
-            Price (optional)
-            <input value={price} onChange={(event) => setPrice(event.target.value)} placeholder="e.g. 29.99" />
-          </label>
-          <label>
-            Currency
-            <input value={currency} onChange={(event) => setCurrency(event.target.value.toUpperCase())} maxLength={3} placeholder="GBP" />
-          </label>
-          <label>
-            Quantity
-            <input
-              type="number"
-              min={1}
-              value={quantity}
-              onChange={(event) => setQuantity(Math.max(1, Number(event.target.value) || 1))}
-            />
-          </label>
-        </div>
-        <label>
-          Note (optional)
-          <input value={note} onChange={(event) => setNote(event.target.value)} maxLength={500} />
-        </label>
-        <FormStatus error={error} />
-        <button className="sheet-primary" disabled={busy}>
+    <FormSheet
+      title="Edit item"
+      onDismiss={onClose}
+      busy={busy}
+      primaryAction={
+        <button type="submit" form="wishlist-item-form" disabled={busy}>
           {busy ? "Saving…" : "Save"}
         </button>
-        <button type="button" className="secondary" onClick={() => void remove()}>
+      }
+    >
+      <FormLayout id="wishlist-item-form" className="wishlists-item-form" ref={fields.formRef} onSubmit={submit}>
+        {error && <p className="notice error" role="alert">{error}</p>}
+        <WishlistItemFields
+          homeId={homeId}
+          name={name}
+          setName={setName}
+          url={url}
+          setUrl={setUrl}
+          price={price}
+          setPrice={setPrice}
+          currency={currency}
+          setCurrency={setCurrency}
+          imageUrl={imageUrl}
+          setImageUrl={setImageUrl}
+          note={note}
+          setNote={setNote}
+          quantity={quantity}
+          setQuantity={setQuantity}
+          errors={fields.errors}
+          onEdit={fields.clear}
+        />
+        <button type="button" className="secondary" disabled={busy} onClick={() => void remove()}>
           <Trash2 size={16} aria-hidden="true" /> Remove item
         </button>
-      </form>
-    </BottomSheet>
+      </FormLayout>
+    </FormSheet>
   );
 }
 
@@ -921,11 +987,15 @@ function ShareWishlistSheet({
   const [copied, setCopied] = useState<"link" | "pin" | null>(null);
   const [homeVisible, setHomeVisible] = useState(detail.home_visible);
   const [visibilityBusy, setVisibilityBusy] = useState(false);
+  const fields = useFormFieldErrors({
+    name: { missing: "Add a name for whoever you're sharing with.", blank: "Add a name for whoever you're sharing with." },
+  });
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!name.trim()) {
-      setError("Add a name for whoever you're sharing with.");
+    if (busy) return;
+    if (!fields.check()) {
+      setError("");
       return;
     }
     setBusy(true);
@@ -1074,7 +1144,16 @@ function ShareWishlistSheet({
   }
 
   return (
-    <BottomSheet title="Share wishlist" onDismiss={onClose}>
+    <FormSheet
+      title="Share wishlist"
+      onDismiss={onClose}
+      busy={busy}
+      primaryAction={
+        <button type="submit" form="wishlist-share-form" disabled={busy}>
+          {busy ? "Sharing…" : "Share wishlist"}
+        </button>
+      }
+    >
       <section className="wishlists-share-section">
         <div className="wishlists-share-toggle-copy">
           <strong>Share with your Home</strong>
@@ -1087,28 +1166,41 @@ function ShareWishlistSheet({
       <button type="button" className="secondary" onClick={onManagePeople}>
         Manage people ({detail.share_count})
       </button>
-      <form onSubmit={submit}>
-        <label>
-          Name
-          <input value={name} onChange={(event) => setName(event.target.value)} maxLength={100} autoFocus required />
-        </label>
-        <label>
-          Email (optional — checks for a MyKhaya account)
-          <input
-            type="email"
-            value={email}
-            onChange={(event) => {
-              setEmail(event.target.value);
-              setCheckedEmail(false);
-            }}
-          />
-        </label>
-        <FormStatus error={error} />
-        <button className="sheet-primary" disabled={busy}>
-          {busy ? "Sharing…" : "Share wishlist"}
-        </button>
-      </form>
-    </BottomSheet>
+      <FormLayout id="wishlist-share-form" className="wishlists-share-form" ref={fields.formRef} onSubmit={submit}>
+        {error && <p className="notice error" role="alert">{error}</p>}
+        <FormField label="Name" error={fields.errors.name}>
+          {(control) => (
+            <input
+              {...control}
+              name="name"
+              value={name}
+              onChange={(event) => {
+                setName(event.target.value);
+                fields.clear("name");
+              }}
+              maxLength={100}
+              autoFocus
+              required
+            />
+          )}
+        </FormField>
+        <FormField label="Email (optional — checks for a MyKhaya account)" error={fields.errors.email}>
+          {(control) => (
+            <input
+              {...control}
+              name="email"
+              type="email"
+              value={email}
+              onChange={(event) => {
+                setEmail(event.target.value);
+                setCheckedEmail(false);
+                fields.clear("email");
+              }}
+            />
+          )}
+        </FormField>
+      </FormLayout>
+    </FormSheet>
   );
 }
 

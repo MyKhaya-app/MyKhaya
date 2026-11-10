@@ -307,9 +307,8 @@ to review; it never commits without your explicit confirmation.
 - Native passkeys, Associated Domains/Universal Links, App Store
   screenshots, TestFlight, and App Store submission are all out of scope
   here — later, separate phases. (APNs push delivery configuration is
-  covered in `apps/ios-shell/README.md`'s "Native push / APNs" section;
-  the `aps-environment=development` entitlement already present in the
-  committed project is what Xcode's Automatic signing produces for a
-  development-team-signed build — a production/Distribution entitlement
-  value is not fabricated here and is Xcode/App Store Connect's own
-  responsibility to manage at archive time, once that's actually attempted.)
+  covered in `apps/ios-shell/README.md`'s "Native push / APNs" section.
+  The committed entitlements set `aps-environment` to
+  `$(MYKHAYA_APNS_BUILD_ENVIRONMENT)`: `development` for `Debug-Dev` and
+  `Debug-Prod`, `production` for `Release-Dev` and `Release-Prod`; see
+  docs/mobile/ios-environments.md.)

@@ -37,6 +37,7 @@ vi.mock("@mykhaya/api-client", async (importOriginal) => {
       me: vi.fn(),
       getSupportTicket: vi.fn(),
       addSupportTicketMessage: vi.fn(),
+      closeSupportTicket: vi.fn(),
     },
   };
 });
@@ -197,5 +198,65 @@ describe("Support request detail", () => {
     );
     await renderPage();
     expect(await screen.findByRole("alert")).toHaveTextContent("That support ticket could not be found.");
+  });
+});
+
+describe("Closing a support ticket", () => {
+  const closeTicket = () => api.closeSupportTicket as unknown as ReturnType<typeof vi.fn>;
+  const getTicket = () => api.getSupportTicket as unknown as ReturnType<typeof vi.fn>;
+
+  it("asks for confirmation, closes the ticket and shows it as closed straight away", async () => {
+    getTicket().mockResolvedValue({ ...baseTicket });
+    closeTicket().mockResolvedValue({ ...baseTicket, status: "closed", resolved_at: "2026-09-02T09:00:00Z" });
+    await renderPage();
+    await userEvent.click(await screen.findByRole("button", { name: "Close ticket" }));
+    const sheet = await screen.findByRole("dialog", { name: "Close this support ticket?" });
+    expect(sheet).toHaveTextContent(
+      "Are you sure you want to close this ticket? You can still view the conversation afterwards.",
+    );
+    const buttons = Array.from(sheet.querySelectorAll(".sheet-actions button")).map((button) => button.textContent);
+    expect(buttons).toEqual(["Cancel", "Close ticket"]);
+    await userEvent.click(sheet.querySelector<HTMLButtonElement>(".sheet-actions button:last-child")!);
+    expect(closeTicket()).toHaveBeenCalledWith("t1");
+    expect(await screen.findByText("Your support ticket has been closed.")).toBeInTheDocument();
+    expect(screen.getByText("This conversation is closed.")).toBeInTheDocument();
+    // No repeat closure and no reply form once closed.
+    expect(screen.queryByRole("button", { name: "Close ticket" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Send reply" })).toBeNull();
+    expect(screen.getByText("Events vanish after saving them.")).toBeInTheDocument();
+  });
+
+  it("cancelling leaves the ticket open", async () => {
+    getTicket().mockResolvedValue({ ...baseTicket });
+    await renderPage();
+    await userEvent.click(await screen.findByRole("button", { name: "Close ticket" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Cancel" }));
+    expect(closeTicket()).not.toHaveBeenCalled();
+    await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
+    expect(screen.getByRole("button", { name: "Send reply" })).toBeInTheDocument();
+  });
+
+  it("offers closing a resolved ticket but not a closed one", async () => {
+    getTicket().mockResolvedValue({ ...baseTicket, status: "resolved" });
+    await renderPage();
+    expect(await screen.findByRole("button", { name: "Close ticket" })).toBeInTheDocument();
+  });
+
+  it("hides Close ticket for an already-closed ticket", async () => {
+    getTicket().mockResolvedValue({ ...baseTicket, status: "closed" });
+    await renderPage();
+    await screen.findByText("This conversation is closed.");
+    expect(screen.queryByRole("button", { name: "Close ticket" })).toBeNull();
+  });
+
+  it("keeps the sheet open with a safe message when closing fails", async () => {
+    getTicket().mockResolvedValue({ ...baseTicket });
+    closeTicket().mockRejectedValue(new ApiError(404, "That support ticket could not be found."));
+    await renderPage();
+    await userEvent.click(await screen.findByRole("button", { name: "Close ticket" }));
+    const sheet = await screen.findByRole("dialog", { name: "Close this support ticket?" });
+    await userEvent.click(sheet.querySelector<HTMLButtonElement>(".sheet-actions button:last-child")!);
+    expect(await screen.findByRole("alert")).toHaveTextContent("That support ticket could not be found.");
+    expect(screen.queryByText("Your support ticket has been closed.")).toBeNull();
   });
 });

@@ -18,6 +18,7 @@ from sqlalchemy.sql.elements import UnaryExpression
 from mykhaya.config import Settings, get_settings
 from mykhaya.db import get_db
 from mykhaya.models import (
+    NativePushDevice,
     NotificationChannel,
     NotificationDelivery,
     NotificationDeliveryStatus,
@@ -44,6 +45,24 @@ router = APIRouter(prefix="/platform/communications", tags=["platform-communicat
 
 STALE_HEARTBEAT_SECONDS = 30
 PAGE_SIZE = 30
+
+
+def _delivery_provider(
+    delivery: NotificationDelivery, native_devices: dict[uuid.UUID, NativePushDevice]
+) -> str | None:
+    """Return provider identity without exposing tokens or credentials."""
+    if delivery.native_push_device_id is not None:
+        device = native_devices.get(delivery.native_push_device_id)
+        if device is None:
+            return "Native push"
+        if device.platform == "android":
+            return "Android · FCM"
+        if device.platform == "ios":
+            return "iOS · APNs"
+        return "Native push"
+    if delivery.push_subscription_id is not None:
+        return "Web Push"
+    return None
 
 
 def _occurred_at_order() -> UnaryExpression[datetime]:
@@ -169,6 +188,18 @@ async def communications_timeline(
         users = (await db.scalars(select(User).where(User.id.in_(recipient_ids)))).all()
         recipients = {user.id: user.display_name for user in users}
 
+    native_device_ids = {
+        row.native_push_device_id for row in rows if row.native_push_device_id is not None
+    }
+    native_devices: dict[uuid.UUID, NativePushDevice] = {}
+    if native_device_ids:
+        devices = (
+            await db.scalars(
+                select(NativePushDevice).where(NativePushDevice.id.in_(native_device_ids))
+            )
+        ).all()
+        native_devices = {device.id: device for device in devices}
+
     outbox_ids = {row.outbox_event_id for row in rows if row.outbox_event_id is not None}
     pending_outbox_ids: set[uuid.UUID] = set()
     if outbox_ids:
@@ -197,6 +228,7 @@ async def communications_timeline(
             recipient_display_name=(
                 recipients.get(row.recipient_user_id) if row.recipient_user_id else None
             ),
+            provider=_delivery_provider(row, native_devices),
             retry_count=row.retry_count,
         )
         for row in rows
@@ -256,6 +288,18 @@ async def communications_diagnostics(
         users = (await db.scalars(select(User).where(User.id.in_(recipient_ids)))).all()
         emails = {user.id: user.email for user in users}
 
+    native_device_ids = {
+        row.native_push_device_id for row in rows if row.native_push_device_id is not None
+    }
+    native_devices: dict[uuid.UUID, NativePushDevice] = {}
+    if native_device_ids:
+        devices = (
+            await db.scalars(
+                select(NativePushDevice).where(NativePushDevice.id.in_(native_device_ids))
+            )
+        ).all()
+        native_devices = {device.id: device for device in devices}
+
     items = [
         DiagnosticsEntryResponse(
             id=row.id,
@@ -265,6 +309,7 @@ async def communications_diagnostics(
             channel=row.channel.value,
             status=row.status.value,
             recipient_email=(emails.get(row.recipient_user_id) if row.recipient_user_id else None),
+            provider=_delivery_provider(row, native_devices),
             sanitised_failure_reason=row.sanitised_failure_reason,
             retry_count=row.retry_count,
             idempotency_key=row.idempotency_key,

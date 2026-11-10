@@ -9,9 +9,10 @@ const apiMock = vi.hoisted(() => ({
 }));
 
 vi.mock("@mykhaya/api-client", () => ({ api: apiMock }));
+// Renders the footer too: FormSheet puts Save and Cancel there.
 vi.mock("@/components/bottom-sheet", () => ({
-  BottomSheet: ({ title, children }: { title: string; children: React.ReactNode }) => (
-    <div role="dialog" aria-label={title}>{children}</div>
+  BottomSheet: ({ title, children, footer }: { title: string; children: React.ReactNode; footer?: React.ReactNode }) => (
+    <div role="dialog" aria-label={title}>{children}{footer}</div>
   ),
 }));
 

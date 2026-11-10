@@ -12,13 +12,15 @@ the dispatch boundary these helpers are meant to shield the caller from.
 """
 
 import uuid
+from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import delete, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from mykhaya import support_notifications
 from mykhaya.config import get_settings
 from mykhaya.db import SessionFactory
 from mykhaya.models import (
@@ -28,6 +30,7 @@ from mykhaya.models import (
     OutboxEvent,
     PlatformAdministrator,
     PlatformRole,
+    PlatformSetting,
     SupportMessageVisibility,
     SupportTicket,
     SupportTicketAttachment,
@@ -40,6 +43,7 @@ from mykhaya.models import (
 )
 from mykhaya.security import password_hash
 from mykhaya.support_notifications import (
+    NEW_TICKET_SETTINGS_KEY,
     ticket_follow_up,
     ticket_received,
     ticket_reply,
@@ -893,3 +897,165 @@ async def test_reply_notice_idempotency_key_is_stable_per_message_id() -> None:
 
     assert len(await _notifications_for(requester.id, REPLY_NOTICE_TYPE)) == 1
     assert len(await _native_push_events_for(device.id)) == 1
+
+
+# --------------------------------------------------------------------------
+# New-ticket emails to selected PCC roles (PCC Support settings)
+# --------------------------------------------------------------------------
+
+
+@pytest.fixture
+async def new_ticket_settings() -> AsyncIterator[Callable[..., Awaitable[None]]]:
+    """Write the PCC new-ticket setting for one test, and always remove it,
+    so every other test here keeps seeing the original (unconfigured)
+    behaviour."""
+
+    async def clear() -> None:
+        async with SessionFactory() as db:
+            await db.execute(
+                delete(PlatformSetting).where(PlatformSetting.key == NEW_TICKET_SETTINGS_KEY)
+            )
+            await db.commit()
+
+    async def configure(**values: object) -> None:
+        await clear()
+        async with SessionFactory() as db:
+            db.add(PlatformSetting(key=NEW_TICKET_SETTINGS_KEY, value={"value": values}))
+            await db.commit()
+
+    await clear()
+    yield configure
+    await clear()
+
+
+async def _admin_with_role(role: PlatformRole, *, active: bool = True) -> PlatformAdministrator:
+    async with SessionFactory() as db:
+        admin = PlatformAdministrator(
+            email=unique_email(f"new-ticket-{role.value}"),
+            display_name="Recipient",
+            password_hash=password_hash.hash("A very secret operator password!"),
+            role=role,
+            mfa_enrolled=True,
+            is_active=active,
+        )
+        db.add(admin)
+        await db.commit()
+        await db.refresh(admin)
+        return admin
+
+
+async def _team_rows(address: str) -> list[OutboxEvent]:
+    async with SessionFactory() as db:
+        rows = (
+            await db.scalars(select(OutboxEvent).where(OutboxEvent.topic == "notification.email"))
+        ).all()
+    return [
+        row
+        for row in rows
+        if str(row.payload.get("recipient_email", "")).casefold() == address.casefold()
+        and row.payload.get("notification_type") == "support.ticket.new_for_team"
+    ]
+
+
+@pytest.mark.asyncio
+async def test_selected_roles_each_get_one_new_ticket_email(
+    new_ticket_settings: Callable[..., Awaitable[None]],
+) -> None:
+    requester = await _create_user()
+    support = await _admin_with_role(PlatformRole.support)
+    administrator = await _admin_with_role(PlatformRole.administrator)
+    unselected = await _admin_with_role(PlatformRole.security)
+    inactive = await _admin_with_role(PlatformRole.support, active=False)
+    await new_ticket_settings(
+        enabled=True,
+        roles=["support_operator", "platform_administrator"],
+        include_support_inbox=True,
+    )
+    # The inbox is the support operator's own address in another case: they
+    # must still receive exactly one email.
+    inbox = support.email.upper()
+    settings = get_settings().model_copy(update={"support_notification_email": inbox})
+    async with SessionFactory() as db:
+        ticket = await _create_ticket(
+            db, requester, subject="Calendar sync stuck", description="Private details here."
+        )
+        await ticket_received(db, settings, ticket, requester)
+        await db.commit()
+        # Repeating the call (a retry) must not send anything twice.
+        await ticket_received(db, settings, ticket, requester)
+        await db.commit()
+
+    assert len(await _team_rows(support.email)) == 1
+    assert len(await _team_rows(administrator.email)) == 1
+    assert await _team_rows(unselected.email) == []
+    assert await _team_rows(inactive.email) == []
+    payload = (await _team_rows(administrator.email))[0].payload
+    assert ticket.reference in payload["subject"]
+    assert "Normal" in payload["subject"]
+    assert "Calendar sync stuck" in payload["body"]
+    assert f"/support/tickets/{ticket.id}" in payload["body"]
+    assert "Private details here." not in payload["body"]
+    assert "Private details here." not in (payload["html_body"] or "")
+    # The requester still gets their own confirmation, and the original
+    # inbox copy is replaced, not sent in addition.
+    assert len(await _outbox_rows_for(requester.email)) == 1
+    legacy = [
+        row
+        for row in await _outbox_rows_for(inbox)
+        if row.payload.get("notification_type") == "support.ticket.received"
+    ]
+    assert legacy == []
+
+
+@pytest.mark.asyncio
+async def test_disabled_or_inbox_excluded_settings_send_no_team_email(
+    new_ticket_settings: Callable[..., Awaitable[None]],
+) -> None:
+    requester = await _create_user()
+    support = await _admin_with_role(PlatformRole.support)
+    inbox = unique_email("support-inbox")
+    settings = get_settings().model_copy(update={"support_notification_email": inbox})
+
+    await new_ticket_settings(enabled=False, roles=["support_operator"], include_support_inbox=True)
+    async with SessionFactory() as db:
+        ticket = await _create_ticket(db, requester)
+        await ticket_received(db, settings, ticket, requester)
+        await db.commit()
+    assert await _team_rows(support.email) == []
+    assert await _outbox_rows_for(inbox) == []
+
+    await new_ticket_settings(enabled=True, roles=[], include_support_inbox=False)
+    async with SessionFactory() as db:
+        ticket = await _create_ticket(db, requester)
+        await ticket_received(db, settings, ticket, requester)
+        await db.commit()
+    assert await _outbox_rows_for(inbox) == []
+    # The requester's own confirmations are unaffected by team settings.
+    assert len(await _outbox_rows_for(requester.email)) == 2
+
+
+@pytest.mark.asyncio
+async def test_a_database_error_in_team_emails_never_loses_the_ticket(
+    new_ticket_settings: Callable[..., Awaitable[None]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The team step runs in a savepoint: even a failed SQL statement there
+    (which would otherwise poison the whole transaction) leaves the ticket
+    and the requester's confirmation to commit normally."""
+    await new_ticket_settings(enabled=True, roles=["support_operator"], include_support_inbox=True)
+
+    async def broken(db: AsyncSession, *_: object) -> list[tuple[str, str]]:
+        await db.execute(text("SELECT * FROM table_that_does_not_exist"))
+        return []
+
+    monkeypatch.setattr(support_notifications, "resolve_new_ticket_recipients", broken)
+    requester = await _create_user()
+    async with SessionFactory() as db:
+        ticket = await _create_ticket(db, requester, subject="Survives a team email failure")
+        await ticket_received(db, get_settings(), ticket, requester)
+        await db.commit()
+        ticket_id = ticket.id
+
+    async with SessionFactory() as db:
+        assert await db.get(SupportTicket, ticket_id) is not None
+    assert len(await _outbox_rows_for(requester.email)) == 1

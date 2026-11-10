@@ -10,7 +10,13 @@ import { FormStatus } from "@/components/form-status";
 import { useAuth } from "@/components/auth-provider";
 
 type Method = "totp" | "email";
-type Options = { methods: Method[]; destination: string | null; onboarding: boolean; preferred_method: Method | null };
+type Options = {
+  methods: Method[];
+  destination: string | null;
+  primary_auth_method?: string | null;
+  onboarding: boolean;
+  preferred_method: Method | null;
+};
 type Start = {
   method: Method;
   destination?: string | null;
@@ -19,10 +25,37 @@ type Start = {
   enrolling: boolean;
 };
 
+function primaryAuthCopy(method: string | null | undefined) {
+  if (method === "apple") {
+    return {
+      title: "One more security check",
+      intro: "You've successfully signed in with Apple. MyKhaya requires an additional security check before you can continue.",
+    };
+  }
+  if (method === "google") {
+    return {
+      title: "One more security check",
+      intro: "You've successfully signed in with Google. MyKhaya requires an additional security check before you can continue.",
+    };
+  }
+  if (method === "passkey") {
+    return {
+      title: "One more security check",
+      intro: "You've successfully signed in with your passkey. MyKhaya requires an additional security check before you can continue.",
+    };
+  }
+  return {
+    title: "Verify it's you",
+    intro: "For your security, we need to verify your identity before continuing.",
+  };
+}
+
 export default function MfaPage() {
   const router = useRouter();
   const params = useSearchParams();
   const transaction = params.get("transaction") ?? "";
+  const appleLinkTransaction = params.get("apple_link_transaction");
+  const googleLinkTransaction = params.get("google_link_transaction");
   const { setAuthenticatedUser } = useAuth();
   const [options, setOptions] = useState<Options | null>(null);
   const [method, setMethod] = useState<Method>("email");
@@ -33,6 +66,7 @@ export default function MfaPage() {
   const [busy, setBusy] = useState(false);
   const [resendCooldown, setResendCooldown] = useState(0);
   const autoStartAttempted = useRef(false);
+  const copy = primaryAuthCopy(options?.primary_auth_method);
 
   const returnToLogin = useCallback(() => {
     router.replace("/login?mfa_error=expired");
@@ -107,6 +141,12 @@ export default function MfaPage() {
         code,
       });
       await setAuthenticatedUser(user);
+      if (appleLinkTransaction) {
+        await api.appleRecoveryLink(appleLinkTransaction);
+      }
+      if (googleLinkTransaction) {
+        await api.googleRecoveryLink(googleLinkTransaction);
+      }
       router.push(options?.onboarding ? "/onboarding" : "/home");
     } catch (reason) {
       if (reason instanceof ApiError && reason.status === 400 && /sign-in attempt has expired/i.test(reason.message)) {
@@ -126,7 +166,7 @@ export default function MfaPage() {
   }
 
   return (
-    <AuthCard title="Verify it’s you" intro="For your security, we need to verify your identity.">
+    <AuthCard title={copy.title} intro={copy.intro}>
       {options && options.methods.length > 1 && (
         <div className="auth-mfa-methods" role="group" aria-label="Use another method">
           {start && <p className="muted">Use another method:</p>}
@@ -151,7 +191,11 @@ export default function MfaPage() {
         </div>
       )}
       {method === "email" && start && (
-        <p>We've sent a verification code to {start.destination ?? options?.destination}.</p>
+        <div>
+          <p><strong>Check your email</strong></p>
+          <p>A verification code has been requested for your registered email address.</p>
+          <p className="muted">Code destination: {start.destination ?? options?.destination}</p>
+        </div>
       )}
       <FormStatus error={error} />
       {start ? (
@@ -164,6 +208,8 @@ export default function MfaPage() {
               onChange={(event) => setCode(event.target.value.replace(/\D/g, "").slice(0, 6))}
               inputMode="numeric"
               autoComplete="one-time-code"
+              name="one-time-code"
+              spellCheck={false}
               pattern="[0-9]{6}"
               required
               autoFocus
@@ -177,7 +223,9 @@ export default function MfaPage() {
               onClick={() => void begin("email")}
               disabled={busy || resendCooldown > 0}
             >
-              {resendCooldown > 0 ? `Resend code in ${resendCooldown}s` : "Resend code"}
+              {resendCooldown > 0
+                ? `Resend verification code in ${resendCooldown}s`
+                : "Resend verification code"}
             </button>
           )}
         </form>

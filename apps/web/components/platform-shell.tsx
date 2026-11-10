@@ -7,6 +7,7 @@ import {
   Archive,
   BarChart3,
   Bell,
+  BookOpen,
   CalendarDays,
   ChevronDown,
   Clock,
@@ -110,6 +111,7 @@ const navGroups: NavGroup[] = [
       { label: "Modules & Features", href: "/modules", icon: ToggleLeft },
       { label: "Security", href: "/security", icon: Shield },
       { label: "Audit", href: "/audit", icon: ScrollText },
+      { label: "Documentation Sync", href: "/docs-sync", icon: BookOpen },
     ],
   },
 ];

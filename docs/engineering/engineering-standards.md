@@ -6,6 +6,8 @@ This document and the linked architecture, security and design standards are the
 
 Where implementation and documentation conflict, stop, identify the correct intended behaviour and update both. Do not allow silent divergence.
 
+Platform-specific standards: [Mobile Standards](mobile-standards.md), [UI Platform Standards](ui-platform-standards.md) and, for the native iOS app, [iOS Engineering Standards](ios-engineering-standards.md).
+
 ## Core rules inherited from Kaya
 
 - Inspect before changing.
@@ -77,6 +79,8 @@ External calendar, wishlist and other sharing features create a separate trust b
 ### Privileged administration and secure defaults
 
 The Platform Control Centre is a separate high-trust management plane. It requires separate privileged authorization, MFA, strong session controls, recent authentication for sensitive actions, audit logging and appropriate host/network restrictions. Consumer sessions must never inherit platform privilege, and missing administrative state must not fail open.
+
+Consumer MFA is one policy for every adult sign-in transport. Native endpoints, `X-MyKhaya-*` headers and user-agent strings are not a trust boundary, so no native path may issue a session that the browser path would hold behind MFA. Any new session-issuing or renewal endpoint must call the shared consumer MFA policy. See [Consumer MFA enforcement](consumer-mfa-enforcement.md).
 
 Shared development, staging and production environments default securely: Secure cookies, HTTPS, strict host validation, security headers, CSRF protection, explicit CORS allow-lists, rate limits, no debug bypasses and no development backdoors. Local-only exceptions must be explicit, isolated, documented and impossible to silently carry into shared environments.
 

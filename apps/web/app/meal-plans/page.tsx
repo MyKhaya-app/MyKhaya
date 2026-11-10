@@ -44,6 +44,8 @@ import { Avatar, AvatarStack } from "@/components/avatar";
 import { BottomSheet } from "@/components/bottom-sheet";
 import { FamilyUpsell } from "@/components/family-upsell";
 import { FormStatus } from "@/components/form-status";
+import { FormField, FormLayout, FormRow, FormSection, FormSheet } from "@/components/form-layout";
+import { useFormFieldErrors } from "@/components/form-field-errors";
 import { useActiveHome } from "@/components/use-active-home";
 import { isNativeShell } from "@/components/native-runtime";
 import { pickAvatarFromGallery } from "@/components/native-avatar-picker";
@@ -885,6 +887,11 @@ function MealEntrySheet({
   );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const fields = useFormFieldErrors({
+    mealId: { missing: "Choose a saved meal, or switch to Quick meal." },
+    quickName: { missing: "Enter a name for this meal.", blank: "Enter a name for this meal." },
+    date: { missing: "Choose a date." },
+  });
 
   useEffect(() => {
     api
@@ -1000,12 +1007,9 @@ function MealEntrySheet({
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (source === "saved" && !mealId) {
-      setError("Choose a saved meal, or switch to Quick meal.");
-      return;
-    }
-    if (source === "quick" && !quickName.trim()) {
-      setError("Enter a name for this meal.");
+    if (busy) return;
+    if (!fields.check()) {
+      setError("");
       return;
     }
     setBusy(true);
@@ -1040,93 +1044,133 @@ function MealEntrySheet({
   }
 
   return (
-    <BottomSheet
+    <FormSheet
       title={state.mode === "edit" ? "Edit meal" : "Add meal"}
       onDismiss={onClose}
+      busy={busy}
+      primaryAction={
+        <button type="submit" form="meal-entry-form" disabled={busy}>
+          {busy ? "Saving…" : "Save"}
+        </button>
+      }
     >
-      <form className="event-form" onSubmit={submit}>
-        <div className="form-wide meal-source-toggle">
+      <FormLayout id="meal-entry-form" ref={fields.formRef} onSubmit={submit}>
+        {error && <p className="notice error" role="alert">{error}</p>}
+        <div className="meal-source-toggle">
           <button
             type="button"
             className={source === "saved" ? "toggle-active" : "secondary"}
-            onClick={() => setSource("saved")}
+            onClick={() => {
+              setSource("saved");
+              fields.clear("quickName");
+            }}
           >
             Saved meal
           </button>
           <button
             type="button"
             className={source === "quick" ? "toggle-active" : "secondary"}
-            onClick={() => setSource("quick")}
+            onClick={() => {
+              setSource("quick");
+              fields.clear("mealId");
+            }}
           >
             Quick meal
           </button>
         </div>
         {source === "saved" ? (
-          <label className="form-wide">
-            Meal
-            <select
-              value={mealId}
-              onChange={(event) => setMealId(event.target.value)}
-            >
-              <option value="">Choose a saved meal…</option>
-              {savedMeals.map((meal) => (
-                <option key={meal.id} value={meal.id}>
-                  {meal.is_favourite ? "★ " : ""}
-                  {meal.name}
-                </option>
-              ))}
-            </select>
-          </label>
+          <FormField label="Meal" error={fields.errors.mealId}>
+            {(control) => (
+              <select
+                {...control}
+                name="mealId"
+                value={mealId}
+                onChange={(event) => {
+                  setMealId(event.target.value);
+                  fields.clear("mealId");
+                }}
+                required
+              >
+                <option value="">Choose a saved meal…</option>
+                {savedMeals.map((meal) => (
+                  <option key={meal.id} value={meal.id}>
+                    {meal.is_favourite ? "★ " : ""}
+                    {meal.name}
+                  </option>
+                ))}
+              </select>
+            )}
+          </FormField>
         ) : (
-          <label className="form-wide">
-            What's for{" "}
-            {SLOTS.find((row) => row.key === slot)?.label.toLowerCase()}?
-            <input
-              value={quickName}
-              onChange={(event) => setQuickName(event.target.value)}
-              placeholder={QUICK_MEAL_PLACEHOLDERS[slot]}
-              maxLength={160}
-            />
-          </label>
+          <FormField
+            label={<>What's for {SLOTS.find((row) => row.key === slot)?.label.toLowerCase()}?</>}
+            error={fields.errors.quickName}
+          >
+            {(control) => (
+              <input
+                {...control}
+                name="quickName"
+                value={quickName}
+                onChange={(event) => {
+                  setQuickName(event.target.value);
+                  fields.clear("quickName");
+                }}
+                placeholder={QUICK_MEAL_PLACEHOLDERS[slot]}
+                maxLength={160}
+                required
+              />
+            )}
+          </FormField>
         )}
 
-        <label className="form-wide">
-          Date
-          <input
-            className="consumer-date-time-control"
-            type="date"
-            value={date}
-            onChange={(event) => setDate(event.target.value)}
-            required
-          />
-        </label>
-        <div className="form-wide meal-time-row">
-          <label>
-            Meal
-            <select
-              value={slot}
-              onChange={(event) => setSlot(event.target.value as MealSlot)}
-            >
-              {SLOTS.map((row) => (
-                <option key={row.key} value={row.key}>
-                  {row.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label>
-            Time (optional)
+        <FormField label="Date" error={fields.errors.date}>
+          {(control) => (
             <input
-              className="consumer-date-time-control"
-              type="time"
-              value={time}
-              onChange={(event) => setTime(event.target.value)}
+              {...control}
+              name="date"
+              type="date"
+              value={date}
+              onChange={(event) => {
+                setDate(event.target.value);
+                fields.clear("date");
+              }}
+              required
             />
-          </label>
-        </div>
+          )}
+        </FormField>
+        <FormRow>
+          <FormField label="Meal">
+            {(control) => (
+              <select
+                {...control}
+                value={slot}
+                onChange={(event) => setSlot(event.target.value as MealSlot)}
+              >
+                {SLOTS.map((row) => (
+                  <option key={row.key} value={row.key}>
+                    {row.label}
+                  </option>
+                ))}
+              </select>
+            )}
+          </FormField>
+          <FormField label="Time (optional)" error={fields.errors.time}>
+            {(control) => (
+              <input
+                {...control}
+                name="time"
+                type="time"
+                value={time}
+                onChange={(event) => {
+                  setTime(event.target.value);
+                  fields.clear("time");
+                }}
+              />
+            )}
+          </FormField>
+        </FormRow>
 
-        <div className="form-wide event-section">
-          <span className="eyebrow">Who's eating</span>
+        <FormSection title="Who's eating">
           <label className="check-row">
             <input
               type="checkbox"
@@ -1167,24 +1211,26 @@ function MealEntrySheet({
               ))}
             </div>
           )}
-        </div>
+        </FormSection>
 
-        <label className="form-wide">
-          Cooking (optional)
-          <select
-            value={cookId}
-            onChange={(event) => setCookId(event.target.value)}
-          >
-            <option value="">No one set</option>
-            {members.map((member) => (
-              <option key={member.user_id} value={member.user_id}>
-                {member.display_name}
-              </option>
-            ))}
-          </select>
-        </label>
+        <FormField label="Cooking (optional)">
+          {(control) => (
+            <select
+              {...control}
+              value={cookId}
+              onChange={(event) => setCookId(event.target.value)}
+            >
+              <option value="">No one set</option>
+              {members.map((member) => (
+                <option key={member.user_id} value={member.user_id}>
+                  {member.display_name}
+                </option>
+              ))}
+            </select>
+          )}
+        </FormField>
 
-        <label className="check-row form-wide">
+        <label className="check-row">
           <input
             type="checkbox"
             checked={leftovers}
@@ -1192,15 +1238,8 @@ function MealEntrySheet({
           />
           Makes leftovers
         </label>
-
-        <div className="form-wide">
-          <FormStatus error={error} />
-        </div>
-        <button className="sheet-primary form-wide" disabled={busy}>
-          {busy ? "Saving…" : "Save"}
-        </button>
-      </form>
-    </BottomSheet>
+      </FormLayout>
+    </FormSheet>
   );
 }
 
@@ -1510,75 +1549,17 @@ function AddIngredientsToListSheet({
     );
   }
 
+  const creatingNew = creatingList || lists.length === 0;
+  // Not a <form>: Enter in the new-list name must not add the ingredients,
+  // so the footer action is a plain button, as it always was.
   return (
-    <BottomSheet title="Add ingredients to list" onDismiss={onClose}>
-      <div className="meal-view-details">
-        <label>
-          Choose list
-          {creatingList || lists.length === 0 ? (
-            <div className="meal-time-row">
-              <input
-                value={newListName}
-                onChange={(event) => setNewListName(event.target.value)}
-                placeholder="e.g. Groceries"
-                maxLength={160}
-              />
-              <button
-                type="button"
-                className="secondary"
-                disabled={busy}
-                onClick={() => void createList()}
-              >
-                Create
-              </button>
-            </div>
-          ) : (
-            <select
-              value={listId}
-              onChange={(event) => {
-                if (event.target.value === "__new__") setCreatingList(true);
-                else setListId(event.target.value);
-              }}
-            >
-              {lists.map((row) => (
-                <option key={row.id} value={row.id}>
-                  {row.name}
-                </option>
-              ))}
-              <option value="__new__">+ New list…</option>
-            </select>
-          )}
-        </label>
-
-        <span className="eyebrow">Ingredients</span>
-        {!meal ? (
-          <p role="status">Loading…</p>
-        ) : (
-          <div className="meal-ingredient-checklist">
-            {meal.ingredients.map((ingredient) => (
-              <label className="check-row" key={ingredient.id}>
-                <input
-                  type="checkbox"
-                  checked={selected.has(ingredient.id)}
-                  onChange={(event) =>
-                    setSelected((current) => {
-                      const next = new Set(current);
-                      if (event.target.checked) next.add(ingredient.id);
-                      else next.delete(ingredient.id);
-                      return next;
-                    })
-                  }
-                />
-                {ingredientLine(ingredient)}
-              </label>
-            ))}
-          </div>
-        )}
-
-        <FormStatus error={error} />
+    <FormSheet
+      title="Add ingredients to list"
+      onDismiss={onClose}
+      busy={busy}
+      primaryAction={
         <button
           type="button"
-          className="sheet-primary"
           disabled={
             busy || selected.size === 0 || !listId || listId === "__new__"
           }
@@ -1588,8 +1569,77 @@ function AddIngredientsToListSheet({
             ? "Adding…"
             : `Add ${selected.size} item${selected.size === 1 ? "" : "s"}`}
         </button>
-      </div>
-    </BottomSheet>
+      }
+    >
+      <FormLayout>
+        {error && <p className="notice error" role="alert">{error}</p>}
+        <FormField label={creatingNew ? "New list name" : "Choose list"}>
+          {(control) =>
+            creatingNew ? (
+              <div className="meal-time-row">
+                <input
+                  {...control}
+                  value={newListName}
+                  onChange={(event) => setNewListName(event.target.value)}
+                  placeholder="e.g. Groceries"
+                  maxLength={160}
+                />
+                <button
+                  type="button"
+                  className="secondary"
+                  disabled={busy}
+                  onClick={() => void createList()}
+                >
+                  Create
+                </button>
+              </div>
+            ) : (
+              <select
+                {...control}
+                value={listId}
+                onChange={(event) => {
+                  if (event.target.value === "__new__") setCreatingList(true);
+                  else setListId(event.target.value);
+                }}
+              >
+                {lists.map((row) => (
+                  <option key={row.id} value={row.id}>
+                    {row.name}
+                  </option>
+                ))}
+                <option value="__new__">+ New list…</option>
+              </select>
+            )
+          }
+        </FormField>
+
+        <FormSection title="Ingredients">
+          {!meal ? (
+            <p role="status">Loading…</p>
+          ) : (
+            <div className="meal-ingredient-checklist">
+              {meal.ingredients.map((ingredient) => (
+                <label className="check-row" key={ingredient.id}>
+                  <input
+                    type="checkbox"
+                    checked={selected.has(ingredient.id)}
+                    onChange={(event) =>
+                      setSelected((current) => {
+                        const next = new Set(current);
+                        if (event.target.checked) next.add(ingredient.id);
+                        else next.delete(ingredient.id);
+                        return next;
+                      })
+                    }
+                  />
+                  {ingredientLine(ingredient)}
+                </label>
+              ))}
+            </div>
+          )}
+        </FormSection>
+      </FormLayout>
+    </FormSheet>
   );
 }
 
@@ -1962,9 +2012,15 @@ function RecipeImportSheet({
   const [url, setUrl] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const fields = useFormFieldErrors({ url: { missing: "Paste a recipe link." } });
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (busy) return;
+    if (!fields.check()) {
+      setError("");
+      return;
+    }
     setBusy(true);
     setError("");
     try {
@@ -1977,20 +2033,40 @@ function RecipeImportSheet({
   }
 
   return (
-    <BottomSheet title="Import recipe" onDismiss={onClose}>
-      <form className="meal-recipe-import-form" onSubmit={submit}>
+    <FormSheet
+      title="Import recipe"
+      onDismiss={onClose}
+      busy={busy}
+      primaryAction={
+        <button type="submit" form="meal-recipe-import-form" disabled={busy}>
+          {busy ? "Importing…" : "Import recipe"}
+        </button>
+      }
+    >
+      <FormLayout id="meal-recipe-import-form" className="meal-recipe-import-form" ref={fields.formRef} onSubmit={submit}>
         <p className="muted">Paste a recipe link and we'll fill in as much as we can.</p>
-        <label>
-          Recipe URL
-          <input type="url" value={url} onChange={(event) => setUrl(event.target.value)} placeholder="https://www.bbcgoodfood.com/recipes/..." required />
-        </label>
-        <FormStatus error={error} />
+        {error && <p className="notice error" role="alert">{error}</p>}
+        <FormField label="Recipe URL" error={fields.errors.url}>
+          {(control) => (
+            <input
+              {...control}
+              name="url"
+              type="url"
+              value={url}
+              onChange={(event) => {
+                setUrl(event.target.value);
+                fields.clear("url");
+              }}
+              placeholder="https://www.bbcgoodfood.com/recipes/..."
+              required
+            />
+          )}
+        </FormField>
         {error && <p className="muted">You can still add it manually.</p>}
         {error && <button type="button" className="secondary" onClick={onManual}>Add manually</button>}
-        <button className="sheet-primary" disabled={busy}>{busy ? "Importing…" : "Import recipe"}</button>
         {error && <button type="button" className="tertiary" onClick={() => setError("")}>Try another link</button>}
-      </form>
-    </BottomSheet>
+      </FormLayout>
+    </FormSheet>
   );
 }
 
@@ -2175,6 +2251,9 @@ function MealFormSheet({
   const [ingredients, setIngredients] = useState<MealIngredientInput[]>([]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const fields = useFormFieldErrors({
+    name: { missing: "Give this meal a name.", blank: "Give this meal a name." },
+  });
 
   useEffect(() => {
     if (!mealId) {
@@ -2271,8 +2350,9 @@ function MealFormSheet({
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!name.trim()) {
-      setError("Give this meal a name.");
+    if (busy) return;
+    if (!fields.check()) {
+      setError("");
       return;
     }
     setBusy(true);
@@ -2327,21 +2407,36 @@ function MealFormSheet({
   }
 
   return (
-    <BottomSheet
+    <FormSheet
       title={meal ? "Edit meal" : "Add meal"}
       onDismiss={onClose}
+      busy={busy}
       fullHeight
+      primaryAction={
+        <button type="submit" form="meal-form" disabled={busy}>
+          {busy ? "Saving…" : "Save meal"}
+        </button>
+      }
     >
-      <form onSubmit={submit}>
-        <label>
-          Name
-          <input
-            value={name}
-            onChange={(event) => setName(event.target.value)}
-            maxLength={160}
-            required
-          />
-        </label>
+      <FormLayout id="meal-form" ref={fields.formRef} onSubmit={submit}>
+        {error && <p className="notice error" role="alert">{error}</p>}
+        <FormField label="Name" error={fields.errors.name}>
+          {(control) => (
+            <input
+              {...control}
+              name="name"
+              value={name}
+              onChange={(event) => {
+                setName(event.target.value);
+                fields.clear("name");
+              }}
+              maxLength={160}
+              required
+            />
+          )}
+        </FormField>
+        {/* The photo picker (preview, native gallery, file input) is this
+            form's own control, kept as it was. */}
         <div className="meal-image-field">
           {imageUrl ? (
             <>
@@ -2362,20 +2457,22 @@ function MealFormSheet({
           )}
           <input ref={imageInputRef} className="visually-hidden" type="file" accept="image/*" onChange={uploadImage} />
         </div>
-        <div className="meal-form-row">
-          <label>
-            Category
-            <select
-              value={mealType}
-              onChange={(event) => setMealType(event.target.value as MealType)}
-            >
-              {MEAL_TYPES.map((row) => (
-                <option key={row.key} value={row.key}>
-                  {row.label}
-                </option>
-              ))}
-            </select>
-          </label>
+        <FormRow>
+          <FormField label="Category">
+            {(control) => (
+              <select
+                {...control}
+                value={mealType}
+                onChange={(event) => setMealType(event.target.value as MealType)}
+              >
+                {MEAL_TYPES.map((row) => (
+                  <option key={row.key} value={row.key}>
+                    {row.label}
+                  </option>
+                ))}
+              </select>
+            )}
+          </FormField>
           <label className="check-row meal-favourite-field">
             <input
               type="checkbox"
@@ -2384,52 +2481,76 @@ function MealFormSheet({
             />
             Favourite
           </label>
-        </div>
-        <label>
-          Description (optional)
-          <input
-            value={description}
-            onChange={(event) => setDescription(event.target.value)}
-            maxLength={2000}
-          />
-        </label>
+        </FormRow>
+        <FormField label="Description (optional)">
+          {(control) => (
+            <input
+              {...control}
+              value={description}
+              onChange={(event) => setDescription(event.target.value)}
+              maxLength={2000}
+            />
+          )}
+        </FormField>
 
         <details className="event-advanced" open>
           <summary>
             <span className="event-advanced-lead">Timing &amp; servings</span>
             <ChevronRight className="chevron" size={18} aria-hidden="true" />
           </summary>
-          <div className="meal-form-row">
-            <label>
-              Prep (minutes)
-              <input
-                type="number"
-                min={0}
-                value={prepMinutes}
-                onChange={(event) => setPrepMinutes(event.target.value)}
-              />
-            </label>
-            <label>
-              Cook (minutes)
-              <input
-                type="number"
-                min={0}
-                value={cookMinutes}
-                onChange={(event) => setCookMinutes(event.target.value)}
-              />
-            </label>
-            <label>
-              Servings
-              <input
-                type="number"
-                min={1}
-                value={servings}
-                onChange={(event) => setServings(event.target.value)}
-              />
-            </label>
-          </div>
+          <FormLayout>
+            <FormRow columns={3}>
+              <FormField label="Prep (minutes)" error={fields.errors.prepMinutes}>
+                {(control) => (
+                  <input
+                    {...control}
+                    name="prepMinutes"
+                    type="number"
+                    min={0}
+                    value={prepMinutes}
+                    onChange={(event) => {
+                      setPrepMinutes(event.target.value);
+                      fields.clear("prepMinutes");
+                    }}
+                  />
+                )}
+              </FormField>
+              <FormField label="Cook (minutes)" error={fields.errors.cookMinutes}>
+                {(control) => (
+                  <input
+                    {...control}
+                    name="cookMinutes"
+                    type="number"
+                    min={0}
+                    value={cookMinutes}
+                    onChange={(event) => {
+                      setCookMinutes(event.target.value);
+                      fields.clear("cookMinutes");
+                    }}
+                  />
+                )}
+              </FormField>
+              <FormField label="Servings" error={fields.errors.servings}>
+                {(control) => (
+                  <input
+                    {...control}
+                    name="servings"
+                    type="number"
+                    min={1}
+                    value={servings}
+                    onChange={(event) => {
+                      setServings(event.target.value);
+                      fields.clear("servings");
+                    }}
+                  />
+                )}
+              </FormField>
+            </FormRow>
+          </FormLayout>
         </details>
 
+        {/* Ingredient cards (quantity, unit and name, each removable) are
+            this form's own repeatable control, kept as they were. */}
         <details className="event-advanced" open>
           <summary>
             <span className="event-advanced-lead">Ingredients</span>
@@ -2506,14 +2627,18 @@ function MealFormSheet({
             <span className="event-advanced-lead">Method</span>
             <ChevronRight className="chevron" size={18} aria-hidden="true" />
           </summary>
-          <label>
-            <span className="hint">Method (optional)</span>
-            <textarea
-              value={instructions}
-              onChange={(event) => setInstructions(event.target.value)}
-              maxLength={8000}
-            />
-          </label>
+          <FormLayout>
+            <FormField label="Method (optional)">
+              {(control) => (
+                <textarea
+                  {...control}
+                  value={instructions}
+                  onChange={(event) => setInstructions(event.target.value)}
+                  maxLength={8000}
+                />
+              )}
+            </FormField>
+          </FormLayout>
         </details>
 
         <details className="event-advanced">
@@ -2521,40 +2646,43 @@ function MealFormSheet({
             <span className="event-advanced-lead">More details</span>
             <ChevronRight className="chevron" size={18} aria-hidden="true" />
           </summary>
-          <label>
-            <span className="hint">Photo URL (optional)</span>
-            <input
-              value={imageUrl}
-              onChange={(event) => setImageUrl(event.target.value)}
-              placeholder="https://…"
-              maxLength={2000}
-            />
-          </label>
-          <label>
-            <span className="hint">Tags (optional, comma separated)</span>
-            <input
-              value={tags}
-              onChange={(event) => setTags(event.target.value)}
-              placeholder="midweek, kids' favourite"
-            />
-          </label>
-          <label>
-            <span className="hint">Source URL (optional)</span>
-            <input
-              value={sourceUrl}
-              onChange={(event) => setSourceUrl(event.target.value)}
-              placeholder="https://…"
-              maxLength={2000}
-            />
-          </label>
+          <FormLayout>
+            <FormField label="Photo URL (optional)">
+              {(control) => (
+                <input
+                  {...control}
+                  value={imageUrl}
+                  onChange={(event) => setImageUrl(event.target.value)}
+                  placeholder="https://…"
+                  maxLength={2000}
+                />
+              )}
+            </FormField>
+            <FormField label="Tags (optional, comma separated)">
+              {(control) => (
+                <input
+                  {...control}
+                  value={tags}
+                  onChange={(event) => setTags(event.target.value)}
+                  placeholder="midweek, kids' favourite"
+                />
+              )}
+            </FormField>
+            <FormField label="Source URL (optional)">
+              {(control) => (
+                <input
+                  {...control}
+                  value={sourceUrl}
+                  onChange={(event) => setSourceUrl(event.target.value)}
+                  placeholder="https://…"
+                  maxLength={2000}
+                />
+              )}
+            </FormField>
+          </FormLayout>
         </details>
-
-        <FormStatus error={error} />
-        <button className="sheet-primary" disabled={busy}>
-          {busy ? "Saving…" : "Save meal"}
-        </button>
-      </form>
-    </BottomSheet>
+      </FormLayout>
+    </FormSheet>
   );
 }
 
@@ -2578,9 +2706,15 @@ function PlanFromMealSheet({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [done, setDone] = useState(false);
+  const fields = useFormFieldErrors({ date: { missing: "Choose a date." } });
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (busy) return;
+    if (!fields.check()) {
+      setError("");
+      return;
+    }
     setBusy(true);
     setError("");
     try {
@@ -2601,17 +2735,34 @@ function PlanFromMealSheet({
     }
   }
 
-  return (
-    <BottomSheet title={`Plan ${meal.name}`} onDismiss={onClose}>
-      {done ? (
+  if (done) {
+    return (
+      <BottomSheet title={`Plan ${meal.name}`} onDismiss={onClose}>
         <p className="notice success" role="status">
           {meal.name} was added to your plan.
         </p>
-      ) : (
-        <form className="plan-meal-form" onSubmit={submit}>
-          <div className="plan-meal-fields">
-            <label>
-              Date
+      </BottomSheet>
+    );
+  }
+
+  // Date and Meal keep their icon-in-field look (.plan-meal-field), inside
+  // the shared fields.
+  return (
+    <FormSheet
+      title={`Plan ${meal.name}`}
+      onDismiss={onClose}
+      busy={busy}
+      primaryAction={
+        <button type="submit" form="plan-meal-form" disabled={busy}>
+          {busy ? "Adding…" : "Add to plan"}
+        </button>
+      }
+    >
+      <FormLayout id="plan-meal-form" className="plan-meal-form" ref={fields.formRef} onSubmit={submit}>
+        {error && <p className="notice error" role="alert">{error}</p>}
+        <FormRow minColumnWidth="10rem">
+          <FormField label="Date" error={fields.errors.date}>
+            {(control) => (
               <span className="plan-meal-field">
                 <CalendarDays
                   className="plan-meal-field-icon"
@@ -2619,18 +2770,25 @@ function PlanFromMealSheet({
                   aria-hidden="true"
                 />
                 <input
+                  {...control}
+                  name="date"
                   className="plan-meal-field-input consumer-date-time-control"
                   type="date"
                   value={date}
-                  onChange={(event) => setDate(event.target.value)}
+                  onChange={(event) => {
+                    setDate(event.target.value);
+                    fields.clear("date");
+                  }}
                   required
                 />
               </span>
-            </label>
-            <label>
-              Meal
+            )}
+          </FormField>
+          <FormField label="Meal">
+            {(control) => (
               <span className="plan-meal-field">
                 <select
+                  {...control}
                   className="plan-meal-field-input"
                   value={slot}
                   onChange={(event) => setSlot(event.target.value as MealSlot)}
@@ -2647,14 +2805,10 @@ function PlanFromMealSheet({
                   aria-hidden="true"
                 />
               </span>
-            </label>
-          </div>
-          {error && <FormStatus error={error} />}
-          <button className="sheet-primary" disabled={busy}>
-            {busy ? "Adding…" : "Add to plan"}
-          </button>
-        </form>
-      )}
-    </BottomSheet>
+            )}
+          </FormField>
+        </FormRow>
+      </FormLayout>
+    </FormSheet>
   );
 }

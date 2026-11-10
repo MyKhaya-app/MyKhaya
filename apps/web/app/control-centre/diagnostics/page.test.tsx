@@ -25,6 +25,7 @@ const entry = {
   channel: "email",
   status: "failed",
   recipient_email: "a@b.com",
+  provider: "Web Push",
   sanitised_failure_reason: "Mailbox full",
   retry_count: 2,
   idempotency_key: "abc",
@@ -68,6 +69,7 @@ describe("Diagnostics", () => {
     await userEvent.click(screen.getByRole("button", { name: "Search" }));
     expect(await screen.findByText("Event reminder")).toBeInTheDocument();
     expect(screen.getByText("Mailbox full")).toBeInTheDocument();
+    expect(screen.getByText("Web Push")).toBeInTheDocument();
   });
 
   it("shows an empty state when nothing matches the filters", async () => {

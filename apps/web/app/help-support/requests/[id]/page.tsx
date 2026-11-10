@@ -4,6 +4,8 @@ import { FormEvent, use, useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { api, ApiError, type SupportTicketResponse } from "@mykhaya/api-client";
 import { SettingsPage } from "@/components/settings-page";
+import { BottomSheet } from "@/components/bottom-sheet";
+import { FormField, FormLayout } from "@/components/form-layout";
 import {
   isActiveTicketStatus,
   ticketStatusConsumerTone,
@@ -23,6 +25,10 @@ export default function SupportRequestDetail({ params }: { params: Promise<{ id:
   const [reply, setReply] = useState("");
   const [sending, setSending] = useState(false);
   const [replyError, setReplyError] = useState<string | null>(null);
+  const [confirmingClose, setConfirmingClose] = useState(false);
+  const [closing, setClosing] = useState(false);
+  const [closeError, setCloseError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   const load = useCallback(() => {
     setError(null);
@@ -63,6 +69,25 @@ export default function SupportRequestDetail({ params }: { params: Promise<{ id:
     }
   }
 
+  async function closeTicket() {
+    if (!ticket || closing) return;
+    setClosing(true);
+    setCloseError(null);
+    try {
+      // The server returns the updated ticket, so the page reflects the
+      // closed state immediately without a second request.
+      setTicket(await api.closeSupportTicket(ticket.id));
+      setConfirmingClose(false);
+      setNotice("Your support ticket has been closed.");
+    } catch (cause) {
+      setCloseError(
+        cause instanceof ApiError ? cause.message : "Couldn’t close this ticket. Please try again.",
+      );
+    } finally {
+      setClosing(false);
+    }
+  }
+
   if (error) {
     return (
       <SettingsPage title="Support request" description="View your conversation with the MyKhaya support team." backLink={{ href: "/help-support", label: "Help & Support" }}>
@@ -82,10 +107,17 @@ export default function SupportRequestDetail({ params }: { params: Promise<{ id:
   }
 
   const active = isActiveTicketStatus(ticket.status);
+  // Resolved tickets can still be closed by their requester; closed is final.
+  const closable = ticket.status !== "closed";
 
   return (
     <SettingsPage title={ticket.reference} description={ticket.subject} backLink={{ href: "/help-support/requests", label: "My support requests" }}>
       <div className="card-stack">
+        {notice && (
+          <p className="notice success" role="status">
+            {notice}
+          </p>
+        )}
         <section className="card details">
           <p
             className={`support-status-pill support-status-${ticketStatusConsumerTone(ticket.status)}`}
@@ -95,6 +127,20 @@ export default function SupportRequestDetail({ params }: { params: Promise<{ id:
           <p className="muted support-request-created">Created {readableDate(ticket.created_at)}</p>
           <h2>Original request</h2>
           <p className="text-wrap-anywhere">{ticket.description}</p>
+          {closable && (
+            <div className="support-request-actions">
+              <button
+                type="button"
+                className="secondary"
+                onClick={() => {
+                  setCloseError(null);
+                  setConfirmingClose(true);
+                }}
+              >
+                Close ticket
+              </button>
+            </div>
+          )}
         </section>
 
         <section className="card details">
@@ -114,25 +160,27 @@ export default function SupportRequestDetail({ params }: { params: Promise<{ id:
           )}
 
           {active ? (
-            <form className="support-reply-form" onSubmit={submitReply}>
+            <FormLayout className="support-reply-form" onSubmit={submitReply}>
+              <FormField label="Add a reply">
+                {(control) => (
+                  <textarea
+                    {...control}
+                    value={reply}
+                    onChange={(event) => setReply(event.target.value)}
+                    maxLength={4000}
+                    rows={4}
+                  />
+                )}
+              </FormField>
               {replyError && (
                 <p className="notice error" role="alert">
                   {replyError}
                 </p>
               )}
-              <label>
-                Add a reply
-                <textarea
-                  value={reply}
-                  onChange={(event) => setReply(event.target.value)}
-                  maxLength={4000}
-                  rows={4}
-                />
-              </label>
               <button className="button" type="submit" disabled={sending || !reply.trim()}>
                 {sending ? "Sending…" : "Send reply"}
               </button>
-            </form>
+            </FormLayout>
           ) : (
             <section className="card details support-conversation-closed" aria-live="polite">
               <p className="muted">
@@ -147,6 +195,26 @@ export default function SupportRequestDetail({ params }: { params: Promise<{ id:
           )}
         </section>
       </div>
+      {confirmingClose && (
+        <BottomSheet title="Close this support ticket?" onDismiss={() => !closing && setConfirmingClose(false)}>
+          <div className="support-close-confirmation">
+            <p>Are you sure you want to close this ticket? You can still view the conversation afterwards.</p>
+            {closeError && (
+              <p className="form-error" role="alert">
+                {closeError}
+              </p>
+            )}
+            <div className="sheet-actions">
+              <button type="button" className="secondary" onClick={() => setConfirmingClose(false)} disabled={closing}>
+                Cancel
+              </button>
+              <button type="button" onClick={() => void closeTicket()} disabled={closing}>
+                {closing ? "Closing…" : "Close ticket"}
+              </button>
+            </div>
+          </div>
+        </BottomSheet>
+      )}
     </SettingsPage>
   );
 }

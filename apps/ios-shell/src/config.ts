@@ -54,11 +54,12 @@ export function iosShellConfiguration(environment: IosShellEnvironment) {
 }
 
 /**
- * Hosts the WebView is permitted to navigate to at the top level, beyond
- * the live frontend origin itself. Deliberately short and explicit — no
- * wildcards. `api.*.mykhaya.app` is included because the live frontend's
- * own JS (packages/api-client's NativeMyKhayaClient) calls it directly
- * with an absolute URL (see ADR 0010); everything else (Stripe Checkout,
+ * Hosts the WebView is permitted to navigate to at the top level: only the
+ * live frontend's own host, with no wildcards. Native API requests use that
+ * same origin's /api/v1 route (nativeApiBaseUrl), so no separate `api.*`
+ * host is needed. The installed apps take this host from the Xcode build
+ * configuration in MainViewController; this list only feeds the generated
+ * capacitor.config.json. Everything else (Stripe Checkout,
  * external wishlist product links, support/legal links) is intentionally
  * NOT here — those must open via the external-browser helper
  * (apps/web/components/open-external-url.ts), never as a top-level

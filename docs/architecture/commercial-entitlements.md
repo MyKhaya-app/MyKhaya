@@ -224,7 +224,32 @@ No production/live Stripe activation. No hard-coded monetary pricing anywhere. N
 
 ## Phase 4: household Plan & Billing
 
-Phase 4 replaces Phase 3's minimal `/settings/billing` test surface with the polished, authenticated household experience — still no public pricing page, still no signup payment step (both remain later phases). It adds no new commercial write path: every state change still flows through Checkout → verified webhook → Family, or the existing Portal/Complimentary flows from Phases 1–3.
+### Self-service changes to existing Stripe subscriptions
+
+The household Plan & Billing surface uses the existing Home billing authority
+and Stripe Customer, rather than creating a second subscription. The API
+resolves the target Price ID server-side and previews the change through
+Stripe's invoice-preview API. Immediate upgrades and billing-interval changes
+use `always_invoice` with `pending_if_incomplete`; a failed or
+authentication-required payment never replaces the existing effective plan.
+
+Paid downgrades are represented by one Stripe Subscription Schedule whose
+current phase ends at the already-paid period boundary. A Free downgrade uses
+Stripe's existing `cancel_at_period_end` lifecycle. An active schedule is
+reused, while an immediate change releases it before modifying the same
+subscription. MyKhaya stores only safe display metadata for the pending change;
+Stripe and the verified webhook remain authoritative.
+
+`POST /groups/{id}/billing/change-preview` and
+`POST /groups/{id}/billing/change` require `billing_manage`, validate the
+transition, verify the Stripe subscription/customer relationship, and serialize
+on the Home billing lock. The Customer Portal remains the payment-method,
+invoice and receipt surface. `customer.subscription.updated` or
+`customer.subscription.deleted` clears the pending display state only after
+the webhook has been signature-verified and applied through
+`apply_stripe_subscription_state`.
+
+Phase 4 replaces Phase 3's minimal `/settings/billing` test surface with the polished, authenticated household experience — still no public pricing page, still no signup payment step (both remain later phases). Existing paid subscribers may now use the guarded self-service change endpoints described above; entitlement state still flows only from verified Stripe state, while the Portal and Complimentary flows remain available.
 
 ### Household Plan & Billing read model
 

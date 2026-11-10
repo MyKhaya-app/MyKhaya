@@ -15,6 +15,7 @@ from mykhaya.billing.state import (
     extract_period,
     extract_price_and_interval,
     map_stripe_subscription_status,
+    select_subscription_item,
 )
 from mykhaya.db import SessionFactory
 from mykhaya.entitlements import get_home_subscription
@@ -55,11 +56,12 @@ def _stripe_subscription(
     period_end: int = 2_000_000_000,
     customer: str | None = None,
 ) -> dict:
+    subscription_id = id_ or f"sub_{uuid.uuid4().hex[:12]}"
     return {
-        "id": id_ or f"sub_{uuid.uuid4().hex[:12]}",
+        "id": subscription_id,
         "status": status,
         "cancel_at_period_end": cancel_at_period_end,
-        "customer": customer or f"cus_{uuid.uuid4().hex[:12]}",
+        "customer": customer or f"cus_{subscription_id}",
         "current_period_start": period_start,
         "current_period_end": period_end,
         "items": {
@@ -155,6 +157,60 @@ def test_extract_period_falls_back_to_item_level_fields() -> None:
     assert end == datetime.fromtimestamp(1_702_592_000, tz=UTC)
 
 
+def test_multiple_items_require_a_unique_known_plan_price() -> None:
+    subscription = {
+        "items": {
+            "data": [
+                {"id": "si_addon", "price": {"id": "price_other"}},
+                {
+                    "id": "si_plan",
+                    "price": {"id": "price_family", "recurring": {"interval": "year"}},
+                    "current_period_start": 1_700_000_000,
+                    "current_period_end": 1_702_592_000,
+                },
+            ]
+        }
+    }
+    assert select_subscription_item(subscription, known_price_ids={"price_family"})["id"] == (
+        "si_plan"
+    )
+    assert select_subscription_item(subscription) is None
+    price_id, interval = extract_price_and_interval(subscription, known_price_ids={"price_family"})
+    assert (price_id, interval) == ("price_family", BillingInterval.year)
+
+
+@pytest.mark.asyncio
+async def test_apply_uses_item_level_periods_and_known_plan_item() -> None:
+    home_id = await _make_home()
+    subscription = _stripe_subscription(
+        id_="sub_item_periods",
+        price_id="price_ultimate",
+        interval="year",
+    )
+    subscription.pop("current_period_start")
+    subscription.pop("current_period_end")
+    plan_item = subscription["items"]["data"][0]
+    plan_item["id"] = "si_ultimate"
+    plan_item["current_period_start"] = 1_700_000_000
+    plan_item["current_period_end"] = 1_702_592_000
+    subscription["items"]["data"].append({"id": "si_addon", "price": {"id": "price_other"}})
+
+    async with SessionFactory() as db:
+        result = await apply_stripe_subscription_state(
+            db,
+            group_id=home_id,
+            stripe_subscription=subscription,
+            actor_administrator_id=None,
+            reason="item-period regression",
+            event_type_hint="stripe_subscription_updated",
+            plan_by_price={"price_ultimate": SubscriptionPlan.ultimate},
+        )
+        await db.commit()
+        assert result is not None
+        assert result.plan == SubscriptionPlan.ultimate
+        assert result.current_period_end == datetime.fromtimestamp(1_702_592_000, tz=UTC)
+
+
 # ---------------------------------------------------------------------------
 # apply_stripe_subscription_state
 # ---------------------------------------------------------------------------
@@ -204,7 +260,8 @@ async def test_apply_with_incomplete_status_makes_no_mutation() -> None:
             event_type_hint="stripe_subscription_activated",
         )
         await db.commit()
-        assert result is None
+        assert result.outcome.value == "invalid_state"
+        assert result.reason == "unrecognised_or_unconfirmed_stripe_status"
 
     async with SessionFactory() as db:
         subscription = await get_home_subscription(db, home_id)
@@ -500,13 +557,17 @@ async def test_out_of_order_event_for_a_different_subscription_id_is_ignored() -
         result = await apply_stripe_subscription_state(
             db,
             group_id=home_id,
-            stripe_subscription=_stripe_subscription(id_=stale_sub_id, status="canceled"),
+            stripe_subscription=_stripe_subscription(
+                id_=stale_sub_id,
+                status="canceled",
+                customer=f"cus_{current_sub_id}",
+            ),
             actor_administrator_id=None,
             reason="stale delete",
             event_type_hint="stripe_subscription_cancelled",
         )
         await db.commit()
-        assert result is None
+        assert result.outcome.value == "stale_event"
     async with SessionFactory() as db:
         subscription = await get_home_subscription(db, home_id)
         assert subscription is not None
@@ -544,7 +605,7 @@ async def test_out_of_order_event_with_older_period_end_is_ignored() -> None:
             event_type_hint="stripe_subscription_updated",
         )
         await db.commit()
-        assert result is None
+        assert result.outcome.value == "stale_event"
     async with SessionFactory() as db:
         subscription = await get_home_subscription(db, home_id)
         assert subscription is not None

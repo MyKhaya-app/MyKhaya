@@ -676,7 +676,8 @@ class PushTestRequest(SensitiveActionRequest):
     recipient: EmailStr
 
 
-# Keep in sync with mykhaya.status_aggregation.PUBLIC_SERVICES's keys —
+# Keep in sync with mykhaya.status_aggregation.PUBLIC_SERVICES and
+# EXTERNAL_SERVICES's keys (tests/test_service_monitoring.py asserts it) —
 # pydantic's Literal needs a statically-known value set, so this can't just
 # import the dict's keys directly.
 PublicServiceKey = Literal[
@@ -687,6 +688,12 @@ PublicServiceKey = Literal[
     "notifications",
     "background_processing",
     "billing",
+    "dvsa_mot_history",
+    "dvla_vehicle_enquiry",
+    "stripe_payments",
+    "stripe_webhooks",
+    "apple_sign_in",
+    "google_sign_in",
 ]
 
 
@@ -852,6 +859,7 @@ class TimelineEntryResponse(BaseModel):
     status: str
     friendly_status: str
     recipient_display_name: str | None
+    provider: str | None
     retry_count: int
 
 
@@ -868,6 +876,7 @@ class DiagnosticsEntryResponse(BaseModel):
     channel: str
     status: str
     recipient_email: str | None
+    provider: str | None
     sanitised_failure_reason: str | None
     retry_count: int
     idempotency_key: str
@@ -1102,6 +1111,26 @@ class StripeWebhookHealthResponse(BaseModel):
     paid_homes: int
 
 
+class StripeWebhookIpSecurityUpdate(SensitiveActionRequest):
+    mode: Literal["monitoring", "enforcement"]
+
+
+class StripeWebhookIpSecurityResponse(BaseModel):
+    mode: Literal["monitoring", "enforcement"]
+    stale: bool
+    trusted_ips: list[str]
+    sync_interval_hours: int
+    stale_after_hours: int
+    last_sync_attempt_at: datetime | None
+    last_successful_sync_at: datetime | None
+    last_sync_error: str | None
+    blocked_request_count: int
+    blocked_requests_24h: int
+    last_blocked_at: datetime | None
+    proxy_trust_configured: bool
+    source_ip_method: str
+
+
 class StripePriceInfo(BaseModel):
     """The actual amount this specific subscription is billed, resolved live
     from Stripe — never a hard-coded figure. None when the Home has no
@@ -1254,6 +1283,34 @@ class PlatformSupportTicketMessageCreate(StrictModel):
     message: str = Field(min_length=1, max_length=4000)
 
 
+PlatformRoleValue = Literal[
+    "platform_owner",
+    "platform_administrator",
+    "support_operator",
+    "security_operator",
+    "read_only_operator",
+]
+
+
+class SupportNewTicketNotificationSettings(BaseModel):
+    """Who is emailed when a new support ticket is created. `configured`
+    is false until an administrator first saves it; until then the original
+    behaviour applies (only the support inbox gets the team copy)."""
+
+    configured: bool
+    enabled: bool
+    roles: list[PlatformRoleValue]
+    include_support_inbox: bool
+    recipient_count: int
+    can_manage: bool
+
+
+class SupportNewTicketNotificationUpdate(SensitiveActionRequest):
+    enabled: bool
+    roles: list[PlatformRoleValue] = Field(max_length=5)
+    include_support_inbox: bool
+
+
 class PlatformSupportSettingsResponse(BaseModel):
     """Read-only support-behaviour summary for PCC's Support Settings page.
     Deliberately does NOT repeat `support_enabled` (see GET /platform/modules
@@ -1261,9 +1318,11 @@ class PlatformSupportSettingsResponse(BaseModel):
     `service_status_url` (see GET /platform/settings — the PlatformSetting
     row is that value's one owner). This exists only for the one value
     neither of those surfaces already exposes: the env-only, non-runtime-
-    editable support-team notification destination."""
+    editable support-team notification destination, and the runtime-editable
+    new-ticket email recipients."""
 
     support_notification_email: str | None
+    new_ticket_notifications: SupportNewTicketNotificationSettings
 
 
 class AcceptanceDocumentSummary(BaseModel):
@@ -1312,6 +1371,12 @@ class AcceptanceHistoryItem(BaseModel):
     guardian_user_id: uuid.UUID | None = None
     child_profile_id: uuid.UUID | None = None
     is_test: bool = False
+    evidence_status: str | None = None
+    email_status: str | None = None
+    evidence_last_error: str | None = None
+    email_sent_at: datetime | None = None
+    pdf_available: bool = False
+    evidence_id: uuid.UUID | None = None
 
 
 class AcceptanceHistoryResponse(BaseModel):

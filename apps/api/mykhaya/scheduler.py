@@ -7,14 +7,17 @@ from redis.asyncio import Redis
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from mykhaya.billing.webhook_ip_security import sync_stripe_webhook_ips
 from mykhaya.calendar_highlights import sync_due_holiday_sources
 from mykhaya.config import Settings, get_settings
 from mykhaya.crypto.config import validate_sensitive_key_configuration
 from mykhaya.db import SessionFactory
+from mykhaya.docs_sync import run_forever as run_docs_sync
 from mykhaya.family_retention import scan_family_retention
 from mykhaya.home_migration_pcc import purge_expired_packages
 from mykhaya.managed_demo_homes import ManagedDemoService
 from mykhaya.models import OperationalHeartbeat, OutboxEvent, PlatformSetting
+from mykhaya.monitoring.engine import run_forever as run_monitoring
 from mykhaya.notifications.birthdays import scan_due_birthdays
 from mykhaya.notifications.briefing import scan_due_briefings
 from mykhaya.notifications.nudges import scan_due_daily_nudge_summary, scan_due_nudges
@@ -76,8 +79,18 @@ async def run() -> None:
     configure_structlog_forwarding(dispatcher)
     await dispatcher.start()
     redis = Redis.from_url(settings.redis_url, decode_responses=True)
+    # Automated service monitoring runs alongside, never inside, the scan
+    # loop: a slow provider check must not delay reminders. Its own failures
+    # are contained in run_monitoring; the worker watchdog notices if it stops.
+    monitoring = asyncio.create_task(run_monitoring(settings), name="monitoring")
+    # BookStack documentation sync: idle unless configured in PCC; failures
+    # are recorded in its own status and never affect the scan loop.
+    docs_sync = asyncio.create_task(run_docs_sync(settings), name="docs-sync")
     try:
         while True:
+            if monitoring.done() and settings.monitoring_enabled:
+                log.error("monitoring.task_stopped_restarting")
+                monitoring = asyncio.create_task(run_monitoring(settings), name="monitoring")
             async with SessionFactory() as db:
                 await ManagedDemoService.expire_due(db)
                 await db.commit()
@@ -91,6 +104,7 @@ async def run() -> None:
                 await scan_due_standalone_reminders(db, settings)
                 await scan_due_nudges(db, settings)
                 await scan_due_daily_nudge_summary(db, settings)
+                await sync_stripe_webhook_ips(db)
                 await scan_family_retention(db)
                 await sync_due_holiday_sources(db)
                 maintenance_date = datetime.now(UTC).date()
@@ -130,6 +144,8 @@ async def run() -> None:
                 await db.commit()
             await asyncio.sleep(2)
     finally:
+        monitoring.cancel()
+        docs_sync.cancel()
         await dispatcher.stop()
         await redis.aclose()
 

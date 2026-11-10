@@ -7,6 +7,7 @@ import { PlatformShell } from "@/components/platform-shell";
 import { readableDate } from "@/components/platform-format";
 import type {
   StripeWebhookHealth,
+  StripeWebhookIpSecurity,
   SubscriptionListResponse,
   SubscriptionSummary,
 } from "@/components/platform-types";
@@ -33,6 +34,7 @@ const PAGE_SIZE = 25;
 export default function SubscriptionsPage() {
   const [summary, setSummary] = useState<SubscriptionSummary | null>(null);
   const [webhookHealth, setWebhookHealth] = useState<StripeWebhookHealth | null>(null);
+  const [webhookSecurity, setWebhookSecurity] = useState<StripeWebhookIpSecurity | null>(null);
   const [listing, setListing] = useState<SubscriptionListResponse | null>(null);
   const [error, setError] = useState("");
   const [q, setQ] = useState("");
@@ -40,6 +42,8 @@ export default function SubscriptionsPage() {
   const [provider, setProvider] = useState("");
   const [statusFilter, setStatusFilter] = useState("");
   const [page, setPage] = useState(1);
+  const [securityBusy, setSecurityBusy] = useState(false);
+  const [securityMessage, setSecurityMessage] = useState("");
 
   const load = useCallback(async () => {
     setError("");
@@ -49,14 +53,16 @@ export default function SubscriptionsPage() {
     if (provider) params.set("provider", provider);
     if (statusFilter) params.set("status", statusFilter);
     try {
-      const [summaryResult, listResult, webhookResult] = await Promise.all([
+      const [summaryResult, listResult, webhookResult, securityResult] = await Promise.all([
         platformApi.get<SubscriptionSummary>("/subscriptions/summary"),
         platformApi.get<SubscriptionListResponse>(`/subscriptions?${params.toString()}`),
         platformApi.get<StripeWebhookHealth>("/subscriptions/webhook-health"),
+        platformApi.get<StripeWebhookIpSecurity>("/subscriptions/webhook-security"),
       ]);
       setSummary(summaryResult);
       setListing(listResult);
       setWebhookHealth(webhookResult);
+      setWebhookSecurity(securityResult);
     } catch (cause) {
       setError(cause instanceof ApiError ? cause.message : "Could not load subscriptions.");
     }
@@ -70,6 +76,48 @@ export default function SubscriptionsPage() {
     event.preventDefault();
     setPage(1);
     void load();
+  }
+
+  async function updateWebhookSecurity(event: React.FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!webhookSecurity || securityBusy) return;
+    setSecurityBusy(true);
+    setError("");
+    setSecurityMessage("");
+    const form = new FormData(event.currentTarget);
+    try {
+      const result = await platformApi.patch<StripeWebhookIpSecurity>("/subscriptions/webhook-security", {
+        mode: form.get("webhook_security_mode"),
+        reason: form.get("webhook_security_reason"),
+        confirmed: true,
+      });
+      setWebhookSecurity(result);
+      setSecurityMessage("Stripe webhook IP security settings saved.");
+      event.currentTarget.reset();
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : "Could not save webhook security settings.");
+    } finally {
+      setSecurityBusy(false);
+    }
+  }
+
+  async function refreshWebhookSecurity() {
+    if (securityBusy) return;
+    setSecurityBusy(true);
+    setError("");
+    setSecurityMessage("");
+    try {
+      const result = await platformApi.post<StripeWebhookIpSecurity>("/subscriptions/webhook-security/refresh", {
+        reason: "Manual Stripe webhook IP feed refresh from PCC.",
+        confirmed: true,
+      });
+      setWebhookSecurity(result);
+      setSecurityMessage("Stripe webhook IP feed refreshed successfully.");
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : "Could not refresh the Stripe webhook IP feed.");
+    } finally {
+      setSecurityBusy(false);
+    }
   }
 
   const totalPages = listing ? Math.max(1, Math.ceil(listing.total / listing.page_size)) : 1;
@@ -254,6 +302,42 @@ export default function SubscriptionsPage() {
                 <dd>{webhookHealth.paid_homes}</dd>
               </div>
             </dl>
+          </CcSection>
+        )}
+
+        {webhookSecurity && (
+          <CcSection title="Stripe Webhook Security" actions={<button type="button" className="secondary" onClick={() => void refreshWebhookSecurity()} disabled={securityBusy}>Refresh IP feed</button>}>
+            {securityMessage && <CcNotice tone="success">{securityMessage}</CcNotice>}
+            {(webhookSecurity.last_sync_error || webhookSecurity.stale || webhookSecurity.blocked_requests_24h >= 3 || !webhookSecurity.proxy_trust_configured || (webhookSecurity.mode === "enforcement" && !webhookSecurity.last_successful_sync_at)) && (
+              <CcNotice tone="warning">
+                {webhookSecurity.last_sync_error ?? (webhookSecurity.stale ? "The Stripe IP list is stale; refresh it before enabling enforcement." : (webhookSecurity.blocked_requests_24h >= 3 ? "Repeated webhook requests were blocked in the last 24 hours; review proxy trust and Stripe delivery logs." : (!webhookSecurity.proxy_trust_configured ? "Trusted proxy CIDRs are not configured; enforcement is not safe." : "The Stripe IP list has not completed a successful sync." )))}
+              </CcNotice>
+            )}
+            <dl className="overview-grid compact-metrics">
+              <div><dt>Mode</dt><dd><CcBadge tone={webhookSecurity.mode === "enforcement" ? "danger" : "info"}>{webhookSecurity.mode === "enforcement" ? "Enforcement" : "Monitoring only"}</CcBadge></dd></div>
+              <div><dt>Trusted IPs</dt><dd>{webhookSecurity.trusted_ips.length}</dd></div>
+              <div><dt>Last successful update</dt><dd>{webhookSecurity.last_successful_sync_at ? readableDate(webhookSecurity.last_successful_sync_at) : "Never"}</dd></div>
+              <div><dt>Blocked requests</dt><dd>{webhookSecurity.blocked_request_count} total / {webhookSecurity.blocked_requests_24h} in 24h</dd></div>
+            </dl>
+            <p><small>{webhookSecurity.source_ip_method}. Stripe signature verification remains mandatory after the IP policy.</small></p>
+            <details>
+              <summary>View trusted Stripe webhook IPs</summary>
+              <p>{webhookSecurity.trusted_ips.length ? webhookSecurity.trusted_ips.join(", ") : "No last-known-good IP list is available."}</p>
+            </details>
+            <form onSubmit={updateWebhookSecurity} className="cc-toolbar">
+              <label>
+                Policy mode
+                <select name="webhook_security_mode" defaultValue={webhookSecurity.mode}>
+                  <option value="monitoring">Monitoring only</option>
+                  <option value="enforcement">Enforcement</option>
+                </select>
+              </label>
+              <label>
+                Reason for change
+                <input name="webhook_security_reason" minLength={10} maxLength={500} required />
+              </label>
+              <button type="submit" disabled={securityBusy}>{securityBusy ? "Saving…" : "Save mode"}</button>
+            </form>
           </CcSection>
         )}
 

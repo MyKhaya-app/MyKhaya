@@ -65,6 +65,7 @@ vi.mock("@mykhaya/api-client", async (importOriginal) => {
       billingStatus: vi.fn(),
       birthdays: vi.fn(),
       sharedCalendars: vi.fn(),
+      eventSuggestions: vi.fn(),
       createEvent: vi.fn(),
       updateEvent: vi.fn(),
       deleteEvent: vi.fn(),
@@ -109,6 +110,7 @@ beforeEach(() => {
   });
   (api.birthdays as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [] });
   (api.sharedCalendars as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [] });
+  (api.eventSuggestions as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [] });
   (api.calendarHighlightDates as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [] });
 });
 
@@ -977,6 +979,53 @@ describe("Calendar — Add/Edit Event: Calendar vs Calendar Tag", () => {
     expect(within(dialog).getByLabelText("Calendar Tag")).toBeInTheDocument();
   });
 
+  it("reuses a matching event's safe fields without submitting until the user saves", async () => {
+    (api.eventSuggestions as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [
+        {
+          source_event_id: "event-history-1",
+          title: "Swimming lesson",
+          start_at: "2026-11-14T18:30:00Z",
+          end_at: "2026-11-14T20:00:00Z",
+          is_all_day: false,
+          timezone: "UTC",
+          description: "Bring goggles",
+          location_text: "Leisure centre",
+          calendar_id: secondaryCalendar.id,
+          label_id: activityTag.id,
+          reminder_minutes: 15,
+        },
+      ],
+    });
+    const dialog = await openAddEventSheet();
+
+    fireEvent.change(within(dialog).getByLabelText("Title"), {
+      target: { value: "Swim" },
+    });
+
+    const suggestion = await within(dialog).findByRole("option", { name: /Swimming lesson/ });
+    expect(api.createEvent).not.toHaveBeenCalled();
+    fireEvent.click(suggestion);
+
+    expect(within(dialog).getByLabelText<HTMLInputElement>("Title").value).toBe(
+      "Swimming lesson",
+    );
+    expect(within(dialog).getByLabelText<HTMLInputElement>("Location").value).toBe(
+      "Leisure centre",
+    );
+    expect(within(dialog).getByLabelText<HTMLSelectElement>("Reminder").value).toBe("15");
+    expect(within(dialog).getByLabelText<HTMLTextAreaElement>("Notes").value).toBe(
+      "Bring goggles",
+    );
+    expect(within(dialog).getByLabelText<HTMLSelectElement>("Calendar").value).toBe(
+      secondaryCalendar.id,
+    );
+    expect(within(dialog).getByLabelText<HTMLSelectElement>("Calendar Tag").value).toBe(
+      activityTag.id,
+    );
+    expect(within(dialog).queryByRole("listbox")).toBeNull();
+  });
+
   it("shows separate Calendar and Calendar Tag fields when editing an event", async () => {
     const dialog = await openEditEventSheet();
     const calendarSelect = within(dialog).getByLabelText<HTMLSelectElement>("Calendar");
@@ -1433,6 +1482,17 @@ describe("Calendar — Recurring event scope chooser", () => {
     (api.listLabels as ReturnType<typeof vi.fn>).mockResolvedValue([]);
     (api.members as ReturnType<typeof vi.fn>).mockResolvedValue([]);
     window.confirm = vi.fn(() => true);
+    // The fixtures below are in September 2026 and each test reaches its
+    // event through the month view, which opens on "today". Pin today inside
+    // the fixtures' month, as the other blocks in this file do, so the tests
+    // do not depend on the real date. Only Date is faked: real timers keep
+    // every async query working.
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-09-14T09:00:00Z"));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   // A moved+overridden occurrence: its canonical identity ("occurrence_start")
@@ -1744,6 +1804,71 @@ describe("Calendar — Recurring event scope chooser", () => {
     resolveDelete();
     await waitFor(() => expect(screen.queryByRole("dialog", { name: "Delete recurring event" })).toBeNull());
   });
+
+  // An occurrence whose canonical identity is the last evening of a month or
+  // a year, moved into the first day of the next. Viewed on that first day,
+  // every scoped action must still name the canonical occurrence_start in
+  // the previous month or year, never the moved start_at.
+  describe.each([
+    { boundary: "month", today: "2026-11-01T09:00:00Z", canonical: "2026-10-31T18:00:00Z", moved: "2026-11-01T19:00:00Z" },
+    { boundary: "year", today: "2027-01-01T09:00:00Z", canonical: "2026-12-31T18:00:00Z", moved: "2027-01-01T19:00:00Z" },
+  ])("across a $boundary boundary", ({ today, canonical, moved }) => {
+    const crossing = () => movedOccurrence({
+      occurrence_id: `occ-${canonical}`,
+      start_at: moved,
+      end_at: moved.replace("T19:", "T20:"),
+      occurrence_start: canonical,
+    });
+
+    beforeEach(() => {
+      vi.setSystemTime(new Date(today));
+    });
+
+    // On the boundary day the event is also listed under "today", so open it
+    // from its month-view chip specifically: Month view → Day List → Event.
+    async function openFromMonthChip() {
+      const event = crossing();
+      (api.listEvents as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [event] });
+      render(<CalendarPage />);
+      await screen.findByRole("heading", { level: 1 });
+      const chip = await waitFor(() => {
+        const found = Array.from(document.querySelectorAll<HTMLElement>(".month-event")).find((element) => element.textContent?.includes(event.title));
+        if (!found) throw new Error("No month-view chip for the event");
+        return found;
+      });
+      fireEvent.click(chip);
+      const daySheet = await screen.findByRole("dialog");
+      fireEvent.click(within(daySheet).getByRole("button", { name: new RegExp(event.title) }));
+      return screen.findByRole("dialog", { name: event.title });
+    }
+
+    it.each([
+      ["This occurrence only", "occurrence"],
+      ["This and future occurrences", "future"],
+    ] as const)("'%s' sends the canonical occurrence_start", async (choice, scope) => {
+      (api.updateEvent as ReturnType<typeof vi.fn>).mockResolvedValue(crossing());
+      const view = await openFromMonthChip();
+      fireEvent.click(within(view).getByRole("button", { name: "Edit" }));
+      const editDialog = await screen.findByRole("dialog", { name: "Edit event" });
+      fireEvent.click(within(editDialog).getByRole("button", { name: /save changes/i }));
+      const chooser = await screen.findByRole("dialog", { name: "Apply changes to" });
+      fireEvent.click(within(chooser).getByRole("button", { name: choice }));
+      await waitFor(() => expect(api.updateEvent).toHaveBeenCalledTimes(1));
+      const [, , payload] = (api.updateEvent as ReturnType<typeof vi.fn>).mock.calls[0]! as [string, string, EventUpdatePayload];
+      expect(payload.scope).toBe(scope);
+      expect(payload.occurrence_start).toBe(canonical);
+      expect(payload.occurrence_start).not.toBe(moved);
+    });
+
+    it("'Delete this occurrence' sends the canonical occurrence_start", async () => {
+      const view = await openFromMonthChip();
+      fireEvent.click(within(view).getByRole("button", { name: /delete event/i }));
+      const chooser = await screen.findByRole("dialog", { name: "Delete recurring event" });
+      fireEvent.click(within(chooser).getByRole("button", { name: "Delete this occurrence" }));
+      await waitFor(() => expect(api.deleteEvent).toHaveBeenCalledTimes(1));
+      expect(api.deleteEvent).toHaveBeenCalledWith("home-1", "event-swim", "occurrence", canonical);
+    });
+  });
 });
 
 describe("Calendar — initial view", () => {
@@ -1800,5 +1925,162 @@ describe("Calendar — initial view", () => {
     window.localStorage.setItem(VIEW_KEY, "timeline");
     render(<CalendarPage />);
     expect(await screen.findByRole("region", { name: "Upcoming events" })).toBeInTheDocument();
+  });
+});
+
+// The event editor on the shared form primitives (components/form-layout.tsx,
+// docs/design/forms.md). Its layout is measured in a real browser by the
+// responsive audit; these cover the structure, the accessible wiring and that
+// the payload it submits is unchanged by the move.
+describe("Calendar — event editor on the shared form layout", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-01-15T10:00:00Z"));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  async function openAddEventSheet() {
+    render(<CalendarPage />);
+    await screen.findByRole("heading", { level: 1 });
+    fireEvent.click(screen.getByRole("button", { name: "Add calendar event" }));
+    return screen.findByRole("dialog", { name: "Add event" });
+  }
+
+  it("labels every field and keeps the browser's own required checks", async () => {
+    const dialog = await openAddEventSheet();
+    for (const label of ["Title", "Date", "Start time", "End time", "Calendar", "Calendar Tag", "Location"]) {
+      expect(within(dialog).getByLabelText(label)).toBeInTheDocument();
+    }
+    const form = dialog.querySelector("form.calendar-event-form")!;
+    expect(form).not.toHaveAttribute("novalidate");
+    expect(within(dialog).getByLabelText("Title")).toBeRequired();
+    expect(within(dialog).getByRole("group", { name: "When" })).toBeInTheDocument();
+    // Start and End share one row, which stacks when the sheet is narrow.
+    expect(within(dialog).getByLabelText("Start time").closest(".form-row")).toBe(
+      within(dialog).getByLabelText("End time").closest(".form-row"),
+    );
+  });
+
+  it("swaps the date and time fields for All day and multi-day events", async () => {
+    const dialog = await openAddEventSheet();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Ends on another day" }));
+    expect(within(dialog).getByLabelText("Starts")).toBeInTheDocument();
+    expect(within(dialog).getByLabelText("Ends")).toBeInTheDocument();
+    expect(within(dialog).queryByLabelText("Date")).toBeNull();
+
+    fireEvent.click(within(dialog).getByRole("switch", { name: "All day" }));
+    expect(within(dialog).queryByLabelText("Start time")).toBeNull();
+    expect(within(dialog).queryByLabelText("End time")).toBeNull();
+
+    fireEvent.click(within(dialog).getByRole("button", { name: "Same day event" }));
+    expect(within(dialog).getByLabelText("Date")).toBeInTheDocument();
+    expect(within(dialog).queryByLabelText("Ends")).toBeNull();
+  });
+
+  it("describes an End time correction on the End time field", async () => {
+    const dialog = await openAddEventSheet();
+    fireEvent.change(within(dialog).getByLabelText("Start time"), { target: { value: "14:00" } });
+    fireEvent.change(within(dialog).getByLabelText("End time"), { target: { value: "13:00" } });
+    const end = within(dialog).getByLabelText<HTMLInputElement>("End time");
+    expect(end.value).toBe("15:00");
+    expect(end).toHaveAccessibleDescription("End adjusted to stay after Start.");
+  });
+
+  it("shows a recurrence end before the start as an error on the End date field", async () => {
+    const dialog = await openAddEventSheet();
+    fireEvent.change(within(dialog).getByLabelText("Title"), { target: { value: "Swimming" } });
+    fireEvent.change(within(dialog).getByLabelText("Date"), { target: { value: "2026-01-20" } });
+    fireEvent.change(within(dialog).getByLabelText("Repeat"), { target: { value: "weekly" } });
+    fireEvent.change(within(dialog).getByLabelText("Ends"), { target: { value: "on_date" } });
+    fireEvent.change(within(dialog).getByLabelText("End date"), { target: { value: "2026-01-10" } });
+    // Submitted directly: the browser's own min check would stop a real
+    // submit first; this is the editor's own guard behind it.
+    fireEvent.submit(dialog.querySelector("form")!);
+
+    const endDate = within(dialog).getByLabelText("End date");
+    expect(endDate).toHaveAttribute("aria-invalid", "true");
+    expect(endDate).toHaveAccessibleDescription("End date must be on or after the event start date.");
+    expect(api.createEvent).not.toHaveBeenCalled();
+  });
+
+  it("submits the same payload as before the move", async () => {
+    (api.createEvent as ReturnType<typeof vi.fn>).mockResolvedValue({});
+    const dialog = await openAddEventSheet();
+    fireEvent.change(within(dialog).getByLabelText("Title"), { target: { value: "Swimming" } });
+    fireEvent.change(within(dialog).getByLabelText("Date"), { target: { value: "2026-01-20" } });
+    fireEvent.change(within(dialog).getByLabelText("Start time"), { target: { value: "09:00" } });
+    fireEvent.change(within(dialog).getByLabelText("End time"), { target: { value: "10:30" } });
+    fireEvent.change(within(dialog).getByLabelText("Location"), { target: { value: "Leisure Centre" } });
+    fireEvent.change(within(dialog).getByLabelText("Reminder"), { target: { value: "15" } });
+    fireEvent.change(within(dialog).getByLabelText("Repeat"), { target: { value: "weekly" } });
+    fireEvent.change(within(dialog).getByLabelText("Ends"), { target: { value: "on_date" } });
+    fireEvent.change(within(dialog).getByLabelText("End date"), { target: { value: "2026-03-01" } });
+    fireEvent.change(within(dialog).getByLabelText("Notes"), { target: { value: "Bring goggles" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save event" }));
+
+    await waitFor(() => expect(api.createEvent).toHaveBeenCalled());
+    const [, payload] = (api.createEvent as ReturnType<typeof vi.fn>).mock.calls[0]! as [string, EventPayload];
+    expect(payload).toEqual({
+      title: "Swimming",
+      start_at: "2026-01-20T09:00:00.000Z",
+      end_at: "2026-01-20T10:30:00.000Z",
+      timezone: "UTC",
+      is_all_day: false,
+      member_ids: [],
+      label_id: null,
+      calendar_id: "cal-1",
+      location_text: "Leisure Centre",
+      reminder_minutes: 15,
+      recurrence: "weekly",
+      recurrence_interval: 1,
+      recurrence_until: null,
+      recurrence_end_date: "2026-03-01",
+      recurrence_count: null,
+      description: "Bring goggles",
+    });
+  });
+
+  it("cancels without saving, and locks every dismissal while a save is in flight", async () => {
+    const dialog = await openAddEventSheet();
+    fireEvent.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    await waitFor(() => expect(screen.queryByRole("dialog", { name: "Add event" })).toBeNull());
+    expect(api.createEvent).not.toHaveBeenCalled();
+
+    (api.createEvent as ReturnType<typeof vi.fn>).mockReturnValue(new Promise(() => {}));
+    fireEvent.click(screen.getByRole("button", { name: "Add calendar event" }));
+    const reopened = await screen.findByRole("dialog", { name: "Add event" });
+    fireEvent.change(within(reopened).getByLabelText("Title"), { target: { value: "Swimming" } });
+    fireEvent.click(within(reopened).getByRole("button", { name: "Save event" }));
+    expect(await within(reopened).findByRole("button", { name: "Saving…" })).toBeDisabled();
+    expect(within(reopened).getByRole("button", { name: "Cancel" })).toBeDisabled();
+  });
+
+  it("keeps the Edit footer: Save changes, and Cancel back to the event", async () => {
+    const start = new Date("2026-01-15T12:00:00Z");
+    (api.listEvents as ReturnType<typeof vi.fn>).mockResolvedValue({
+      items: [{
+        occurrence_id: "occ-1", event_id: "event-1", calendar_id: "cal-1", title: "Football",
+        start_at: start.toISOString(), end_at: new Date(start.getTime() + 3_600_000).toISOString(),
+        is_all_day: false, timezone: "UTC", description: null, location_text: null, label: null,
+        calendar_color: "teal", member_ids: [], recurrence: "none", reminder_minutes: null,
+        created_by: "u1", updated_at: "2026-01-01T00:00:00Z",
+      }],
+    });
+    render(<CalendarPage />);
+    await screen.findByRole("heading", { level: 1 });
+    fireEvent.click(await screen.findByRole("button", { name: /Football/ }));
+    const daySheet = await screen.findByRole("dialog");
+    fireEvent.click(within(daySheet).getByRole("button", { name: /Football/ }));
+    const view = await screen.findByRole("dialog", { name: "Football" });
+    fireEvent.click(within(view).getByRole("button", { name: "Edit" }));
+
+    const edit = await screen.findByRole("dialog", { name: "Edit event" });
+    expect(within(edit).getByLabelText<HTMLInputElement>("Title").value).toBe("Football");
+    expect(within(edit).getByLabelText("Calendar")).toBeDisabled();
+    expect(within(edit).getByRole("button", { name: "Save changes" })).toHaveAttribute("form", "calendar-edit-event-form");
+    fireEvent.click(within(edit).getByRole("button", { name: "Cancel" }));
+    expect(await screen.findByRole("dialog", { name: "Football" })).toBeInTheDocument();
   });
 });

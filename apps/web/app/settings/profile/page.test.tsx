@@ -31,6 +31,7 @@ vi.mock("@mykhaya/api-client", async (importOriginal) => {
     api: {
       ...actual.api,
       me: vi.fn(),
+      externalIdentities: vi.fn(),
       members: vi.fn(),
       uploadAvatar: vi.fn(),
       removeAvatar: vi.fn(),
@@ -90,6 +91,10 @@ beforeEach(() => {
   vi.clearAllMocks();
   nativeShell = false;
   (api.me as ReturnType<typeof vi.fn>).mockResolvedValue({ ...BASE_USER });
+  (api.externalIdentities as ReturnType<typeof vi.fn>).mockResolvedValue({
+    password_available: true,
+    identities: [],
+  });
   (api.members as ReturnType<typeof vi.fn>).mockResolvedValue([
     { user_id: "u1", relationship: "home_admin", colour: "sage" },
   ]);
@@ -332,6 +337,29 @@ describe("Profile — avatar upload", () => {
 // controls and Save/Cancel are only ever present while explicitly editing
 // the birthday, never shown by default.
 describe("Profile — Account details summary", () => {
+  it("shows authenticated sign-in method status and links to Security", async () => {
+    (api.externalIdentities as ReturnType<typeof vi.fn>).mockResolvedValue({
+      password_available: true,
+      identities: [{
+        provider: "apple",
+        provider_email: "relay@privaterelay.appleid.com",
+        provider_email_verified: true,
+        linked_at: "2026-01-01T00:00:00Z",
+        last_used_at: null,
+      }],
+    });
+    render(<Profile />);
+
+    expect(await screen.findByRole("heading", { name: "Sign-in methods" })).toBeInTheDocument();
+    expect(screen.getByText("Apple ID")).toBeInTheDocument();
+    expect(screen.getByText("Connected")).toBeInTheDocument();
+    expect(screen.getByText("Not connected")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /manage sign-in methods/i })).toHaveAttribute(
+      "href",
+      "/settings/security#sign-in-methods-heading",
+    );
+  });
+
   it("shows Name, Email with verified status, Home role and Birthday as plain read-only rows, with no Save/Cancel visible", async () => {
     (api.me as ReturnType<typeof vi.fn>).mockResolvedValue({
       ...BASE_USER,
@@ -385,6 +413,99 @@ describe("Profile — Account details summary", () => {
     expect(screen.getByRole("spinbutton", { name: "Day" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Save" })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+  });
+
+  it("lays Month and Day out as one shared form row and keeps the Day range check", async () => {
+    render(<Profile />);
+    await screen.findByRole("heading", { name: "Account details" });
+    await waitFor(() => expect(screen.getAllByText("Home admin").length).toBeGreaterThan(0));
+
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+
+    const day = screen.getByRole("spinbutton", { name: "Day" });
+    expect(day).toHaveAttribute("min", "1");
+    expect(day).toHaveAttribute("max", "31");
+    expect(day.closest("form")).not.toHaveAttribute("novalidate");
+    expect(screen.getByRole("combobox", { name: "Month" }).closest(".form-row")).toBe(day.closest(".form-row"));
+  });
+
+  async function openBirthdayEditor() {
+    render(<Profile />);
+    await screen.findByRole("heading", { name: "Account details" });
+    await waitFor(() => expect(screen.getAllByText("Home admin").length).toBeGreaterThan(0));
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    return {
+      month: screen.getByRole("combobox", { name: "Month" }),
+      day: screen.getByRole("spinbutton", { name: "Day" }),
+      save: () => fireEvent.click(screen.getByRole("button", { name: "Save" })),
+    };
+  }
+
+  it("shows a day past the end of the month on the Day field, without a request", async () => {
+    const { month, day, save } = await openBirthdayEditor();
+    fireEvent.change(month, { target: { value: "2" } });
+    fireEvent.change(day, { target: { value: "30" } });
+    save();
+
+    expect(day).toHaveAttribute("aria-invalid", "true");
+    expect(day).toHaveAccessibleDescription("February has 29 days.");
+    expect(month).not.toHaveAttribute("aria-invalid");
+    expect(api.updateMyBirthday).not.toHaveBeenCalled();
+    // Editing either field clears the field errors.
+    fireEvent.change(month, { target: { value: "3" } });
+    expect(day).not.toHaveAttribute("aria-invalid");
+  });
+
+  it("asks for the missing half of a birthday on the field that is missing", async () => {
+    const { month, day, save } = await openBirthdayEditor();
+    fireEvent.change(month, { target: { value: "5" } });
+    save();
+    expect(day).toHaveAccessibleDescription("Enter the day as well, or set Month to Not set.");
+
+    fireEvent.change(month, { target: { value: "" } });
+    fireEvent.change(day, { target: { value: "12" } });
+    save();
+    expect(month).toHaveAccessibleDescription("Choose the month as well, or clear Day.");
+    expect(day).not.toHaveAttribute("aria-invalid");
+    expect(api.updateMyBirthday).not.toHaveBeenCalled();
+  });
+
+  it("shows a failed save inside the editor, keeps the values and allows a retry", async () => {
+    (api.updateMyBirthday as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("Something went wrong. Please try again."));
+    const { month, day, save } = await openBirthdayEditor();
+    fireEvent.change(month, { target: { value: "2" } });
+    fireEvent.change(day, { target: { value: "6" } });
+    save();
+
+    const editor = month.closest("form")!;
+    expect(await within(editor as HTMLElement).findByRole("alert")).toHaveTextContent("Something went wrong. Please try again.");
+    expect(screen.getAllByRole("alert")).toHaveLength(1);
+    expect(month).toHaveValue("2");
+    expect(day).toHaveValue(6);
+    expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
+
+    // Cancelling clears it; reopening starts without it.
+    fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("clears the editor's error once a retry succeeds", async () => {
+    (api.updateMyBirthday as ReturnType<typeof vi.fn>)
+      .mockRejectedValueOnce(new Error("Something went wrong. Please try again."))
+      .mockResolvedValueOnce({ ...BASE_USER, birth_month: 2, birth_day: 6 });
+    const { month, day, save } = await openBirthdayEditor();
+    fireEvent.change(month, { target: { value: "2" } });
+    fireEvent.change(day, { target: { value: "6" } });
+    save();
+    await screen.findByRole("alert");
+    save();
+
+    expect(await screen.findByText("6 February")).toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "Edit" }));
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 
   it("Cancel hides the editing controls again without saving", async () => {

@@ -301,6 +301,22 @@ export type StripeWebhookHealth = {
   paid_homes: number;
 };
 
+export type StripeWebhookIpSecurity = {
+  mode: "monitoring" | "enforcement";
+  stale: boolean;
+  trusted_ips: string[];
+  sync_interval_hours: number;
+  stale_after_hours: number;
+  last_sync_attempt_at: string | null;
+  last_successful_sync_at: string | null;
+  last_sync_error: string | null;
+  blocked_request_count: number;
+  blocked_requests_24h: number;
+  last_blocked_at: string | null;
+  proxy_trust_configured: boolean;
+  source_ip_method: string;
+};
+
 // Platform Control Centre "Payments" area — mirrors
 // mykhaya.platform_schemas' StripeConfigurationResponse /
 // StripeModeSettingsResponse / StripeTestConnectionResponse. See
@@ -436,6 +452,14 @@ export type ServiceState =
   | "major_outage"
   | "maintenance";
 
+// A public, computed state: a ServiceState, or "unknown" when automated
+// monitoring has no fresh observation for the service (never stored on an
+// incident). See mykhaya.status_aggregation.
+export type PublicStatusState = ServiceState | "unknown";
+
+// How much the public state is backed by automated monitoring.
+export type StatusConfidence = "verified" | "limited" | "none" | "override";
+
 export type IncidentLifecycleState = "investigating" | "identified" | "monitoring" | "resolved";
 
 export type PublicServiceKey =
@@ -445,7 +469,13 @@ export type PublicServiceKey =
   | "email_delivery"
   | "notifications"
   | "background_processing"
-  | "billing";
+  | "billing"
+  | "dvsa_mot_history"
+  | "dvla_vehicle_enquiry"
+  | "stripe_payments"
+  | "stripe_webhooks"
+  | "apple_sign_in"
+  | "google_sign_in";
 
 export const PUBLIC_SERVICE_OPTIONS: { key: PublicServiceKey; name: string }[] = [
   { key: "web_application", name: "MyKhaya Web Application" },
@@ -455,11 +485,24 @@ export const PUBLIC_SERVICE_OPTIONS: { key: PublicServiceKey; name: string }[] =
   { key: "notifications", name: "Notifications" },
   { key: "background_processing", name: "Background Processing" },
   { key: "billing", name: "Billing & Subscriptions" },
+  // External services (shown publicly in their own section, and only when
+  // the integration is in use in that environment).
+  { key: "dvsa_mot_history", name: "DVSA MOT History" },
+  { key: "dvla_vehicle_enquiry", name: "DVLA Vehicle Enquiry" },
+  { key: "stripe_payments", name: "Stripe Payments" },
+  { key: "stripe_webhooks", name: "Stripe Webhook Processing" },
+  { key: "apple_sign_in", name: "Apple Sign-In" },
+  { key: "google_sign_in", name: "Google Sign-In" },
 ];
 
 export type IncidentServiceImpact = { service: string; impact: ServiceState };
 
-export type StatusServiceState = { key: string; name: string; state: ServiceState };
+export type StatusServiceState = {
+  key: string;
+  name: string;
+  state: PublicStatusState;
+  confidence?: StatusConfidence;
+};
 
 export type StatusIncidentSummary = {
   id: string;
@@ -470,12 +513,15 @@ export type StatusIncidentSummary = {
   resolved_at: string | null;
   latest_update_message: string;
   latest_update_at: string;
+  source?: "manual" | "automated";
 };
 
 export type IncidentsListResponse = {
-  overall: ServiceState;
+  overall: PublicStatusState;
   overall_message: string;
+  monitoring_active?: boolean;
   services: StatusServiceState[];
+  external_services?: StatusServiceState[];
   incidents: StatusIncidentSummary[];
 };
 
@@ -498,4 +544,5 @@ export type StatusIncidentDetail = {
   internal_notes: string | null;
   created_at: string;
   updates: StatusIncidentUpdateEntry[];
+  source?: "manual" | "automated";
 };

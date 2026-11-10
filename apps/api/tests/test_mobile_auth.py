@@ -6,9 +6,10 @@ from typing import Any
 
 import pytest
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import select, update
+from sqlalchemy import delete, select, update
 
 from mykhaya.config import get_settings
+from mykhaya.consumer_mfa_policy import CONSUMER_MFA_POLICY_SETTING_KEY
 from mykhaya.db import SessionFactory
 from mykhaya.entitlements import get_home_subscription
 from mykhaya.main import app
@@ -17,6 +18,7 @@ from mykhaya.models import (
     AuditEvent,
     FeatureKey,
     FeatureOverride,
+    PlatformSetting,
     SubscriptionPlan,
     TokenPurpose,
     TrustedDevice,
@@ -253,7 +255,7 @@ async def test_registration_records_the_browser_reported_authenticator_attachmen
 
     monkeypatch.setattr(
         "mykhaya.routers.auth.verify_family_registration",
-        lambda *_args: WebAuthnRegistrationResult("AQM", "cHVibGlj", 0),
+        lambda *_args: WebAuthnRegistrationResult("AQN", "cHVibGljMg", 0),
     )
     await client.post(
         "/api/v1/auth/passkeys/register/options", headers=csrf_header(client), json={}
@@ -973,3 +975,63 @@ async def test_renew_rejects_a_managed_child_device_after_login_is_disabled(
         "/api/v1/auth/mobile/sessions/renew", json={"device_token": device_token}
     )
     assert renewed.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_passkey_login_honours_required_browser_mfa_policy(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    suffix = datetime.now(UTC).strftime("%H%M%S%f")
+    email = f"passkey-mfa-{suffix}@example.com"
+    await register_and_verify(client, email, "Passkey MFA")
+    password_login = await client.post(
+        "/api/v1/auth/login", json={"email": email, "password": PASSWORD}
+    )
+    assert password_login.status_code == 200
+
+    monkeypatch.setattr(
+        "mykhaya.routers.auth.verify_family_registration",
+        lambda *_args: WebAuthnRegistrationResult("AQM", "cHVibGlj", 0),
+    )
+    options = await client.post(
+        "/api/v1/auth/passkeys/register/options", headers=csrf_header(client), json={}
+    )
+    assert options.status_code == 200, options.text
+    registered = await client.post(
+        "/api/v1/auth/passkeys/register/verify",
+        headers=csrf_header(client),
+        json={"credential_json": '{"id":"AQN","rawId":"AQN"}'},
+    )
+    assert registered.status_code == 200, registered.text
+    await client.post("/api/v1/auth/logout", headers=csrf_header(client))
+
+    settings = get_settings().model_copy(update={"browser_mfa_handoff_enabled": True})
+    app.dependency_overrides[get_settings] = lambda: settings
+    try:
+        async with SessionFactory() as db:
+            db.add(
+                PlatformSetting(
+                    key=CONSUMER_MFA_POLICY_SETTING_KEY,
+                    value={"policy": "required", "allowed_methods": ["email"]},
+                )
+            )
+            await db.commit()
+        monkeypatch.setattr("mykhaya.routers.auth.verify_family_authentication", lambda *_args: 0)
+        options = await client.post("/api/v1/auth/passkeys/login/options", json={})
+        assert options.status_code == 200
+        login = await client.post(
+            "/api/v1/auth/passkeys/login/verify",
+            json={"credential_json": '{"id":"AQN","rawId":"AQN"}'},
+        )
+        assert login.status_code == 200, login.text
+        assert login.json()["authentication_state"] == "additional_auth_required"
+        assert "mk_session" not in client.cookies
+    finally:
+        async with SessionFactory() as db:
+            await db.execute(
+                delete(PlatformSetting).where(
+                    PlatformSetting.key == CONSUMER_MFA_POLICY_SETTING_KEY
+                )
+            )
+            await db.commit()
+        app.dependency_overrides.pop(get_settings, None)

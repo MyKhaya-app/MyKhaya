@@ -2,6 +2,15 @@ import type { Home, Member, User } from "@mykhaya/shared-types";
 import { ApiError } from "./errors";
 export { ApiError } from "./errors";
 
+export type BrowserAuthResult =
+  | User
+  | {
+      authentication_state: "additional_auth_required";
+      transaction_id: string;
+      destination?: string | null;
+      onboarding?: boolean;
+    };
+
 // Mirrors apps/api/mykhaya/legal_schemas.py exactly — see mykhaya.legal for
 // the backend semantics (the backend is always the source of truth for
 // which documents/versions are current; these types only describe its
@@ -548,6 +557,13 @@ export class MyKhayaClient {
       `/support/tickets/${encodeURIComponent(ticketId)}/messages`,
       { method: "POST", body: JSON.stringify(body) },
     );
+  // The requester closes their own ticket; returns the updated ticket.
+  // Closing an already-closed ticket is a no-op on the server.
+  closeSupportTicket = (ticketId: string) =>
+    this.request<SupportTicketResponse>(
+      `/support/tickets/${encodeURIComponent(ticketId)}/close`,
+      { method: "POST", body: "{}" },
+    );
   activityHeartbeat = () =>
     this.request<void>("/activity/heartbeat", { method: "POST", body: "{}" });
   productUsageEvent = (body: {
@@ -566,6 +582,67 @@ export class MyKhayaClient {
     this.request<{ providers: Array<{ provider: string; enabled: boolean }> }>(
       "/auth/providers",
     );
+  appleRecoveryOptions = (transactionId: string) =>
+    this.request<{
+      can_register: boolean;
+      provider_email: string | null;
+      display_name: string;
+    }>(`/auth/apple/recovery/options?transaction_id=${encodeURIComponent(transactionId)}`);
+  appleRecoveryLink = (transactionId: string) =>
+    this.request<{ message: string }>("/auth/apple/recovery/link", {
+      method: "POST",
+      body: JSON.stringify({ transaction_id: transactionId }),
+    });
+  appleRecoveryRegister = (
+    transactionId: string,
+    body: { legal_acceptances: SignupLegalAcceptanceItem[]; platform: LegalPlatform; beta?: boolean; beta_invitation_token?: string | null },
+  ) =>
+    this.request<BrowserAuthResult>("/auth/apple/recovery/register", {
+      method: "POST",
+      body: JSON.stringify({ transaction_id: transactionId, ...body }),
+    });
+  googleRecoveryOptions = (transactionId: string) =>
+    this.request<{
+      can_register: boolean;
+      provider_email: string | null;
+      display_name: string;
+    }>(`/auth/google/recovery/options?transaction_id=${encodeURIComponent(transactionId)}`);
+  googleRecoveryLink = (transactionId: string) =>
+    this.request<{ message: string }>("/auth/google/recovery/link", {
+      method: "POST",
+      body: JSON.stringify({ transaction_id: transactionId }),
+    });
+  googleRecoveryRegister = (
+    transactionId: string,
+    body: { legal_acceptances: SignupLegalAcceptanceItem[]; platform: LegalPlatform; beta?: boolean; beta_invitation_token?: string | null },
+  ) =>
+    this.request<BrowserAuthResult>("/auth/google/recovery/register", {
+      method: "POST",
+      body: JSON.stringify({ transaction_id: transactionId, ...body }),
+    });
+  externalIdentities = () =>
+    this.request<{
+      password_available: boolean;
+      identities: {
+        provider: "apple" | "google";
+        provider_email: string | null;
+        provider_email_verified: boolean;
+        linked_at: string;
+        last_used_at: string | null;
+      }[];
+    }>("/auth/identities");
+  appleLinkStart = () =>
+    this.request<{ authorization_url: string }>("/auth/apple/link/start", {
+      method: "POST",
+      body: "{}",
+    });
+  appleUnlink = () => this.request<void>("/auth/apple/link", { method: "DELETE" });
+  googleLinkStart = () =>
+    this.request<{ authorization_url: string }>("/auth/google/link/start", {
+      method: "POST",
+      body: "{}",
+    });
+  googleUnlink = () => this.request<void>("/auth/google/link", { method: "DELETE" });
   publicLegalDocuments = () =>
     this.request<PublicLegalDocumentSummary[]>("/legal/documents");
   publicLegalDocument = (key: string) =>
@@ -610,7 +687,7 @@ export class MyKhayaClient {
       body: "{}",
     });
   passkeyLoginVerify = (credentialJson: string) =>
-    this.request<User>("/auth/passkeys/login/verify", {
+    this.request<BrowserAuthResult>("/auth/passkeys/login/verify", {
       method: "POST",
       body: JSON.stringify({ credential_json: credentialJson }),
     });
@@ -694,6 +771,12 @@ export class MyKhayaClient {
       { method: "DELETE" },
     );
   homes = () => this.request<Home[]>("/groups");
+  resumeOnboardingHome = () => this.request<Home>("/groups/onboarding/resume");
+  completeOnboarding = (homeId: string) =>
+    this.request<Home>(`/groups/${encodeURIComponent(homeId)}/onboarding/complete`, {
+      method: "POST",
+      body: "{}",
+    });
   members = (homeId: string) =>
     this.request<Member[]>(`/groups/${encodeURIComponent(homeId)}/members`);
   updateMemberColour = (homeId: string, userId: string, colour: string) =>
@@ -1145,12 +1228,27 @@ export class MyKhayaClient {
       `/homes/${encodeURIComponent(homeId)}/events/upcoming?${search.toString()}`,
     );
   };
+  eventSuggestions = (homeId: string, query: string, limit = 5) => {
+    const search = new URLSearchParams({ q: query, limit: String(limit) });
+    return this.request<import("@mykhaya/shared-types").EventReuseSuggestionListResponse>(
+      `/homes/${encodeURIComponent(homeId)}/event-suggestions?${search.toString()}`,
+    );
+  };
   createEvent = (
     homeId: string,
     body: import("@mykhaya/shared-types").EventPayload,
   ) =>
     this.request<import("@mykhaya/shared-types").EventOccurrence>(
       `/homes/${encodeURIComponent(homeId)}/events`,
+      { method: "POST", body: JSON.stringify(body) },
+    );
+  copyEvent = (
+    homeId: string,
+    eventId: string,
+    body: import("@mykhaya/shared-types").EventCopyPayload,
+  ) =>
+    this.request<import("@mykhaya/shared-types").EventCopyResponse>(
+      `/homes/${encodeURIComponent(homeId)}/events/${encodeURIComponent(eventId)}/copy`,
       { method: "POST", body: JSON.stringify(body) },
     );
   updateEvent = (
@@ -2086,6 +2184,30 @@ export class MyKhayaClient {
       `/groups/${encodeURIComponent(homeId)}/billing/portal-session`,
       { method: "POST" },
     );
+  previewSubscriptionChange = (
+    homeId: string,
+    targetPlan: import("@mykhaya/shared-types").SubscriptionPlanValue,
+    targetInterval?: import("@mykhaya/shared-types").BillingInterval,
+  ) =>
+    this.request<import("@mykhaya/shared-types").SubscriptionChangePreview>(
+      `/groups/${encodeURIComponent(homeId)}/billing/change-preview`,
+      {
+        method: "POST",
+        body: JSON.stringify({ target_plan: targetPlan, target_interval: targetInterval ?? null }),
+      },
+    );
+  changeSubscription = (
+    homeId: string,
+    targetPlan: import("@mykhaya/shared-types").SubscriptionPlanValue,
+    targetInterval?: import("@mykhaya/shared-types").BillingInterval,
+  ) =>
+    this.request<{ kind: string; pending_payment: boolean; payment_action_url: string | null }>(
+      `/groups/${encodeURIComponent(homeId)}/billing/change`,
+      {
+        method: "POST",
+        body: JSON.stringify({ target_plan: targetPlan, target_interval: targetInterval ?? null }),
+      },
+    );
   post = <T>(path: string, body: unknown) =>
     this.request<T>(path, { method: "POST", body: JSON.stringify(body) });
   get = <T>(path: string) => this.request<T>(path);
@@ -2104,7 +2226,7 @@ export { platformApi, PlatformClient } from "./platform";
 // rather than folded into MyKhayaClient, so nothing about the browser
 // client's cookie/CSRF/relative-path behaviour above this line is affected
 // by, or has to account for, native transport at all.
-export { NativeMyKhayaClient } from "./native-client";
+export { NativeMyKhayaClient, type NativeMfaContinuation } from "./native-client";
 export type {
   NativeSession,
   NativeSessionStore,

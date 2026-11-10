@@ -1,16 +1,21 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import type { Member, VehicleCreatePayload, VehicleLookupResult } from "@mykhaya/shared-types";
 import { ApiError, api } from "@mykhaya/api-client";
-import { FormStatus } from "@/components/form-status";
+import { FormActions, FormLayout } from "@/components/form-layout";
 import { SettingsPage } from "@/components/settings-page";
 import { useActiveHome } from "@/components/use-active-home";
 import { useAuth } from "@/components/auth-provider";
-import { DRIVEWAY_COUNTRIES } from "../countries";
-
-const FUEL_TYPES = ["Petrol", "Diesel", "Electric", "Hybrid", "Plug-in hybrid", "LPG", "Other"];
+import {
+  dateInputUnreadable,
+  useFocusFirstInvalid,
+  vehicleFieldErrors,
+  VehicleFields,
+  type VehicleFieldErrors,
+  type VehicleFieldValues,
+} from "../vehicle-fields";
 
 // Never falls back to the registration: a nickname is shown and shared far
 // more widely than the registration itself (lists, reminders, notifications),
@@ -25,28 +30,47 @@ function normaliseRegistration(value: string): string {
   return value.trim().toUpperCase().replace(/\s+/g, " ");
 }
 
+const EMPTY_VALUES: VehicleFieldValues = {
+  countryCode: "GB",
+  registration: "",
+  ownerUserId: "",
+  nickname: "",
+  make: "",
+  model: "",
+  year: "",
+  fuelType: "",
+  colour: "",
+  firstRegistrationDate: "",
+  engineSize: "",
+  vin: "",
+};
+
 export default function AddVehiclePage() {
   const router = useRouter();
   const { activeHomeId } = useActiveHome();
   const { user } = useAuth();
-  const [countryCode, setCountryCode] = useState("GB");
+  const [values, setValues] = useState<VehicleFieldValues>({ ...EMPTY_VALUES, ownerUserId: user?.id ?? "" });
   const [members, setMembers] = useState<Member[]>([]);
-  const [ownerUserId, setOwnerUserId] = useState(user?.id ?? "");
-  const [registration, setRegistration] = useState("");
   const [lookup, setLookup] = useState<VehicleLookupResult | null>(null);
   const [lookupBusy, setLookupBusy] = useState(false);
+  const [lookupError, setLookupError] = useState("");
   const [manual, setManual] = useState(false);
-  const [nickname, setNickname] = useState("");
-  const [make, setMake] = useState("");
-  const [model, setModel] = useState("");
-  const [year, setYear] = useState("");
-  const [fuelType, setFuelType] = useState("");
-  const [colour, setColour] = useState("");
-  const [firstRegistrationDate, setFirstRegistrationDate] = useState("");
-  const [engineSize, setEngineSize] = useState("");
-  const [vin, setVin] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const [fieldErrors, setFieldErrors] = useState<VehicleFieldErrors>({});
+  const [failedAttempts, setFailedAttempts] = useState(0);
+  const formRef = useRef<HTMLFormElement>(null);
+  useFocusFirstInvalid(formRef, failedAttempts);
+
+  const { countryCode, registration, ownerUserId, make, model } = values;
+  const update = (patch: Partial<VehicleFieldValues>) => {
+    setValues((current) => ({ ...current, ...patch }));
+    setFieldErrors((current) => {
+      const next = { ...current };
+      for (const key of Object.keys(patch)) delete next[key as keyof VehicleFieldErrors];
+      return next;
+    });
+  };
 
   useEffect(() => {
     if (!activeHomeId) return;
@@ -57,17 +81,20 @@ export default function AddVehiclePage() {
   // ?owner=<user id>; only a real member of this Home is accepted.
   useEffect(() => {
     const requested = new URLSearchParams(window.location.search).get("owner");
-    if (requested && members.some((member) => member.user_id === requested)) setOwnerUserId(requested);
+    if (requested && members.some((member) => member.user_id === requested)) {
+      setValues((current) => ({ ...current, ownerUserId: requested }));
+    }
   }, [members]);
 
   useEffect(() => {
-    if (user?.id && !ownerUserId) setOwnerUserId(user.id);
+    if (user?.id && !ownerUserId) setValues((current) => ({ ...current, ownerUserId: user.id }));
   }, [ownerUserId, user?.id]);
 
   async function findVehicle() {
     const normalizedRegistration = normaliseRegistration(registration);
     if (!activeHomeId || lookupBusy || !normalizedRegistration) return;
     setLookupBusy(true);
+    setLookupError("");
     setError("");
     try {
       const result = await api.lookupVehicle(activeHomeId, {
@@ -76,20 +103,23 @@ export default function AddVehiclePage() {
       });
       setLookup(result);
       if (!result.found) {
-        setError(result.message ?? "We couldn't find that registration.");
+        setLookupError(result.message ?? "We couldn't find that registration.");
         setManual(true);
       } else {
-        setMake(result.make ?? "");
-        setModel(result.model ?? "");
-        setYear(result.year ? String(result.year) : "");
-        setFuelType(result.fuel_type ?? "");
-        setColour(result.colour ?? "");
-        setEngineSize(result.engine_size ?? "");
-        setFirstRegistrationDate(result.first_registration_date ?? "");
-        setRegistration(result.registration ?? normalizedRegistration);
+        setValues((current) => ({
+          ...current,
+          make: result.make ?? "",
+          model: result.model ?? "",
+          year: result.year ? String(result.year) : "",
+          fuelType: result.fuel_type ?? "",
+          colour: result.colour ?? "",
+          engineSize: result.engine_size ?? "",
+          firstRegistrationDate: result.first_registration_date ?? "",
+          registration: result.registration ?? normalizedRegistration,
+        }));
       }
     } catch (cause) {
-      setError(cause instanceof ApiError ? cause.message : "We can't check vehicle details right now.");
+      setLookupError(cause instanceof ApiError ? cause.message : "We can't check vehicle details right now.");
       setManual(true);
     } finally {
       setLookupBusy(false);
@@ -100,25 +130,31 @@ export default function AddVehiclePage() {
     event.preventDefault();
     if (!activeHomeId || busy) return;
     const normalizedRegistration = normaliseRegistration(registration);
-    if (!countryCode || !normalizedRegistration || !ownerUserId) {
-      setError("Add a country and a registration to continue.");
+    const errors = vehicleFieldErrors(
+      { ...values, registration: normalizedRegistration },
+      { requireNickname: false, firstRegistrationDateUnreadable: dateInputUnreadable(event.currentTarget, "first_registration_date") },
+    );
+    setFieldErrors(errors);
+    if (Object.keys(errors).length) {
+      setError("");
+      setFailedAttempts((count) => count + 1);
       return;
     }
     setBusy(true);
     setError("");
     const body: VehicleCreatePayload = {
-      nickname: nickname.trim() || defaultNickname(make, model),
+      nickname: values.nickname.trim() || defaultNickname(make, model),
       owner_user_id: ownerUserId,
       country_code: countryCode,
       registration: normalizedRegistration,
       make: make.trim() || null,
       model: model.trim() || null,
-      colour: colour.trim() || null,
-      year: year ? Number(year) : null,
-      fuel_type: fuelType || null,
-      engine_size: engineSize.trim() || null,
-      first_registration_date: firstRegistrationDate || null,
-      vin: vin.trim() || null,
+      colour: values.colour.trim() || null,
+      year: values.year ? Number(values.year) : null,
+      fuel_type: values.fuelType || null,
+      engine_size: values.engineSize.trim() || null,
+      first_registration_date: values.firstRegistrationDate || null,
+      vin: values.vin.trim() || null,
     };
     try {
       const vehicle = await api.createVehicle(activeHomeId, body);
@@ -130,146 +166,70 @@ export default function AddVehiclePage() {
     }
   }
 
+  const showDetails = manual || Boolean(lookup?.found);
+
   return (
     <SettingsPage
       title="Add vehicle"
       description="Manually add a vehicle to Driveway. You can edit these details later."
       backLink={{ href: "/driveway", label: "Driveway" }}
     >
-      <form className="card details driveway-form" onSubmit={submit} noValidate>
-        <FormStatus error={error} />
-        <label>
-          Country / region
-          <select value={countryCode} onChange={(event) => setCountryCode(event.target.value)} required>
-            {DRIVEWAY_COUNTRIES.map((country) => (
-              <option key={country.code} value={country.code}>
-                {country.name}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        {(countryCode === "GB" || manual || lookup?.found) && (
-          <label>
-            Registration / licence plate
-            <input
-              value={registration}
-              onChange={(event) => setRegistration(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && countryCode === "GB" && !manual && !lookup?.found) {
-                  event.preventDefault();
-                  void findVehicle();
-                }
-              }}
-              maxLength={20}
-              required
-              autoCapitalize="characters"
-            />
-          </label>
-        )}
-
-        {countryCode === "GB" && !manual && !lookup?.found && (
+      <FormLayout className="card details vehicle-form" onSubmit={submit} ref={formRef}>
+        <VehicleFields
+          values={values}
+          onChange={update}
+          errors={fieldErrors}
+          members={members}
+          currentUserId={user?.id}
+          showRegistration={countryCode === "GB" || showDetails}
+          showDetails={showDetails}
+          showVin
+          nicknamePlaceholder={defaultNickname(make, model)}
+          onRegistrationKeyDown={(event) => {
+            if (event.key === "Enter" && countryCode === "GB" && !manual && !lookup?.found) {
+              event.preventDefault();
+              void findVehicle();
+            }
+          }}
+          afterRegistration={
+            <>
+              {lookupError && <p className="notice error" role="alert">{lookupError}</p>}
+              {countryCode === "GB" && !manual && !lookup?.found && (
+                <>
+                  <p className="muted">Pop in the registration and we’ll find the details for you.</p>
+                  <button className="button" type="button" onClick={() => void findVehicle()} disabled={lookupBusy || !registration.trim()}>
+                    {lookupBusy ? "Checking…" : "Find my vehicle"}
+                  </button>
+                  <button className="tertiary" type="button" onClick={() => setManual(true)}>Add manually</button>
+                </>
+              )}
+              {countryCode !== "GB" && !manual && (
+                <>
+                  <p className="muted">Automatic vehicle lookup isn’t available for this country yet, but you can still add it manually.</p>
+                  <button className="tertiary" type="button" onClick={() => setManual(true)}>Add manually</button>
+                </>
+              )}
+              {lookup?.found && <div className="driveway-lookup-result" role="status">
+                <span className="more-icon-tile blue" aria-hidden="true">🚗</span>
+                <strong>{[lookup.make, lookup.model].filter(Boolean).join(" ") || lookup.registration}</strong>
+                <span>{lookup.registration}</span>
+                <span>{[lookup.year, lookup.fuel_type, lookup.colour].filter(Boolean).join(" · ")}</span>
+                {lookup.capabilities.map((capability) => <small key={capability}>{capability === "inspection" ? "MOT information available" : "Tax information available"}</small>)}
+              </div>}
+            </>
+          }
+        />
+        {showDetails && (
           <>
-            <p className="muted">Pop in the registration and we’ll find the details for you.</p>
-            <button className="button" type="button" onClick={() => void findVehicle()} disabled={lookupBusy || !registration.trim()}>
-              {lookupBusy ? "Checking…" : "Find my vehicle"}
-            </button>
-            <button className="tertiary" type="button" onClick={() => setManual(true)}>Add manually</button>
+            {error && <p className="notice error" role="alert">{error}</p>}
+            <FormActions>
+              <button className="button" type="submit" disabled={busy}>
+                {busy ? "Adding…" : "Add vehicle"}
+              </button>
+            </FormActions>
           </>
         )}
-        {countryCode !== "GB" && !manual && (
-          <>
-            <p className="muted">Automatic vehicle lookup isn’t available for this country yet, but you can still add it manually.</p>
-            <button className="tertiary" type="button" onClick={() => setManual(true)}>Add manually</button>
-          </>
-        )}
-
-        {lookup?.found && <div className="driveway-lookup-result" role="status">
-          <span className="more-icon-tile blue" aria-hidden="true">🚗</span>
-          <strong>{[lookup.make, lookup.model].filter(Boolean).join(" ") || lookup.registration}</strong>
-          <span>{lookup.registration}</span>
-          <span>{[lookup.year, lookup.fuel_type, lookup.colour].filter(Boolean).join(" · ")}</span>
-          {lookup.capabilities.map((capability) => <small key={capability}>{capability === "inspection" ? "MOT information available" : "Tax information available"}</small>)}
-        </div>}
-
-        {(manual || lookup?.found) && <>
-        <label>
-          Owner
-          <select value={ownerUserId} onChange={(event) => setOwnerUserId(event.target.value)} required>
-            {(members.length ? members : user ? [{ user_id: user.id, display_name: "You" } as Member] : []).map((member) => (
-              <option key={member.user_id} value={member.user_id}>
-                {member.user_id === user?.id ? "You" : member.display_name}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <label>
-          Nickname
-          <input
-            value={nickname}
-            onChange={(event) => setNickname(event.target.value)}
-            maxLength={120}
-            placeholder={defaultNickname(make, model)}
-          />
-        </label>
-        <label>
-          Make
-          <input value={make} onChange={(event) => setMake(event.target.value)} maxLength={80} />
-        </label>
-        <label>
-          Model
-          <input value={model} onChange={(event) => setModel(event.target.value)} maxLength={80} />
-        </label>
-        <label>
-          Year
-          <input
-            type="number"
-            inputMode="numeric"
-            value={year}
-            onChange={(event) => setYear(event.target.value)}
-            min={1900}
-            max={2200}
-          />
-        </label>
-        <label>
-          Fuel type
-          <select value={fuelType} onChange={(event) => setFuelType(event.target.value)}>
-            <option value="">Not set</option>
-            {FUEL_TYPES.map((option) => (
-              <option key={option} value={option}>
-                {option}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label>
-          Colour
-          <input value={colour} onChange={(event) => setColour(event.target.value)} maxLength={40} />
-        </label>
-        <label>
-          First registration date
-          <input
-            type="date"
-            value={firstRegistrationDate}
-            onChange={(event) => setFirstRegistrationDate(event.target.value)}
-          />
-        </label>
-        <label>
-          Engine size
-          <input value={engineSize} onChange={(event) => setEngineSize(event.target.value)} maxLength={20} />
-        </label>
-        <label>
-          VIN / chassis number
-          <input value={vin} onChange={(event) => setVin(event.target.value)} maxLength={32} />
-        </label>
-        <small>Your VIN is only ever shown to you and your Home Admin.</small>
-
-        <button className="button" type="submit" disabled={busy}>
-          {busy ? "Adding…" : "Add vehicle"}
-        </button>
-        </>}
-      </form>
+      </FormLayout>
     </SettingsPage>
   );
 }

@@ -30,9 +30,21 @@ const PUBLIC_GET_PATH_SHAPES = [
 /** Public previews that take their token as the one and only query value. */
 const PUBLIC_GET_TOKEN_QUERY_PATHS = new Set(["/invitations/preview", "/calendar-shares/preview"]);
 const TOKEN_QUERY = /^token=[A-Za-z0-9_-]{1,500}$/;
+const PUBLIC_GET_TRANSACTION_QUERY_PATHS = new Set(["/auth/mobile/mfa/options"]);
+const TRANSACTION_QUERY = /^transaction_id=[A-Za-z0-9_-]{20,256}&redemption_verifier=[A-Za-z0-9_-]{32,256}$/;
 /** Public POSTs: exact paths, no query. The waitlist is rate-limited per
  * client IP server-side (enforce_rate_limit "beta-waitlist", 10/hour). */
-const PUBLIC_POST_PATHS = new Set(["/public/beta/waitlist"]);
+const PUBLIC_POST_PATHS = new Set([
+  "/public/beta/waitlist",
+  "/auth/mobile/external/start",
+  "/auth/mobile/external/browser/start",
+  "/auth/mobile/external/exchange",
+  "/auth/mobile/external/redeem",
+  "/auth/mobile/external/recovery/register",
+  "/auth/mobile/mfa/options",
+  "/auth/mobile/mfa/start",
+  "/auth/mobile/mfa/verify",
+]);
 
 /** Whether `path` (as passed to `request()`, relative to `/api/v1`) is an
  * allowlisted public endpoint. The path must already be canonical: dot
@@ -51,9 +63,18 @@ export function isPublicNativeEndpoint(path: string, method: string = "GET"): bo
   if (new URL(pathname, "https://canonical.invalid").pathname !== pathname) return false;
   if (verb === "POST") return queryStart === -1 && PUBLIC_POST_PATHS.has(pathname);
   if (PUBLIC_GET_TOKEN_QUERY_PATHS.has(pathname)) return TOKEN_QUERY.test(query);
+  if (PUBLIC_GET_TRANSACTION_QUERY_PATHS.has(pathname)) return TRANSACTION_QUERY.test(query);
   if (queryStart !== -1) return false;
   return PUBLIC_GET_PATHS.has(pathname) || PUBLIC_GET_PATH_SHAPES.some((shape) => shape.test(pathname));
 }
+
+/** Native pre-authentication awaiting the consumer MFA policy. `provider` is
+ * the completed primary factor; no session exists until MFA verification. */
+export type NativeMfaContinuation = {
+  authentication_state: "additional_auth_required";
+  transaction_id: string;
+  provider: "apple" | "google" | "password";
+};
 
 /**
  * The native (bearer-transport, ADR 0010) counterpart to `MyKhayaClient`.
@@ -70,6 +91,7 @@ export function isPublicNativeEndpoint(path: string, method: string = "GET"): bo
  * URL, and this class performs no logging of its own.
  */
 export class NativeMyKhayaClient {
+  private readonly linkTransactions = new Set<string>();
   constructor(
     private readonly baseUrl: string,
     private readonly store: NativeSessionStore,
@@ -229,9 +251,10 @@ export class NativeMyKhayaClient {
     return parseApiResponse<T>(response);
   }
 
-  private async postUnauthenticated<T>(path: string, body: unknown): Promise<T> {
+  private async postUnauthenticated<T>(path: string, body: unknown, requestId?: string): Promise<T> {
     const headers = this.baseHeaders();
     headers.set("Content-Type", "application/json");
+    if (requestId) headers.set("X-Request-ID", requestId);
     let response: Response;
     try {
       response = await this.fetchImpl(`${this.baseUrl}${path}`, {
@@ -263,17 +286,196 @@ export class NativeMyKhayaClient {
     }
   }
 
+  private getUnauthenticated<T>(path: string): Promise<T> {
+    return this.publicRequest<T>(path, { method: "GET" });
+  }
+
   /** Adult sign-in — native equivalent of the browser's POST /auth/login,
    * wired to POST /auth/mobile/login instead. Stores the returned session
    * token (and long-lived device/renewal token — see native-session-store's
    * NativeSession.deviceToken) via the configured NativeSessionStore and
    * returns everything the response carries *except* those tokens, so
    * callers never need to (and cannot accidentally) handle them
-   * themselves. */
-  async login(email: string, password: string): Promise<User> {
+   * themselves.
+   *
+   * When the consumer MFA policy applies, the server issues no session and
+   * returns a native MFA continuation instead; `redemptionVerifier` binds
+   * that continuation to this client (see /auth/mobile/mfa/*). */
+  async login(
+    email: string,
+    password: string,
+    redemptionVerifier?: string,
+  ): Promise<User | NativeMfaContinuation> {
     const result = await this.postUnauthenticated<
-      User & { session_token: string; device_token?: string }
-    >("/auth/mobile/login", { email, password });
+      (User & { session_token: string; device_token?: string }) | NativeMfaContinuation
+    >("/auth/mobile/login", {
+      email,
+      password,
+      ...(redemptionVerifier ? { redemption_verifier: redemptionVerifier } : {}),
+    });
+    if ("authentication_state" in result) return result;
+    const { session_token, device_token, ...user } = result;
+    await this.store.set({ token: session_token, deviceToken: device_token });
+    return user;
+  }
+
+  async startExternal(
+    provider: "apple" | "google",
+    platform: "ios" | "android",
+    redemptionVerifier: string,
+    intent: "login" | "link" = "login",
+    requestId?: string,
+  ): Promise<{ transaction_id: string; nonce: string; provider: "apple" | "google"; client_id: string | null }> {
+    const body = { provider, platform, intent, redemption_verifier: redemptionVerifier };
+    if (intent === "link") {
+      return this.request<{ transaction_id: string; nonce: string; provider: "apple" | "google"; client_id: string | null }>("/auth/mobile/external/start", {
+        method: "POST",
+        body: JSON.stringify(body),
+        ...(requestId ? { headers: { "X-Request-ID": requestId } } : {}),
+      }).then((result) => { this.linkTransactions.add(result.transaction_id); return result; });
+    }
+    return this.postUnauthenticated("/auth/mobile/external/start", body, requestId);
+  }
+
+  externalBrowserStart(provider: "apple" | "google", platform: "ios" | "android", returnUri: string, redemptionVerifier: string, intent: "login" | "link" = "login") {
+    const body = { provider, platform, intent, return_uri: returnUri, redemption_verifier: redemptionVerifier };
+    if (intent === "link") {
+      return this.request<{ authorization_url: string; transaction_id: string }>(
+        "/auth/mobile/external/browser/start",
+        { method: "POST", body: JSON.stringify(body) },
+      ).then((result) => { this.linkTransactions.add(result.transaction_id); return result; });
+    }
+    return this.postUnauthenticated<{ authorization_url: string; transaction_id: string }>(
+      "/auth/mobile/external/browser/start",
+      body,
+    );
+  }
+
+  async externalRedeem(transactionId: string, redemptionVerifier: string) {
+    const body = { transaction_id: transactionId, redemption_verifier: redemptionVerifier };
+    const result = await (this.linkTransactions.has(transactionId)
+      ? this.request<
+          (User & { session_token?: string; device_token?: string })
+          | { authentication_state: "account_choice"; transaction_id: string; provider: "apple" | "google"; provider_email: string | null; display_name: string; can_register: boolean }
+          | { authentication_state: "additional_auth_required"; transaction_id: string; provider: "apple" | "google" }
+          | { message: string }
+        >("/auth/mobile/external/redeem", { method: "POST", body: JSON.stringify(body) })
+      : this.postUnauthenticated<
+      (User & { session_token?: string; device_token?: string })
+      | { authentication_state: "account_choice"; transaction_id: string; provider: "apple" | "google"; provider_email: string | null; display_name: string; can_register: boolean }
+      | { authentication_state: "additional_auth_required"; transaction_id: string; provider: "apple" | "google" }
+      | { message: string }
+    >("/auth/mobile/external/redeem", body));
+    this.linkTransactions.delete(transactionId);
+    if ("session_token" in result && result.session_token) {
+      const { session_token, device_token, ...user } = result;
+      await this.store.set({ token: session_token, deviceToken: device_token });
+      return user;
+    }
+    return result;
+  }
+
+  async exchangeExternal(
+    transactionId: string,
+    identityToken: string,
+    redemptionVerifier: string,
+    requestId?: string,
+  ): Promise<
+    | User
+    | { authentication_state: "account_choice"; transaction_id: string; provider: "apple" | "google"; provider_email: string | null; display_name: string; can_register: boolean }
+    | { authentication_state: "additional_auth_required"; transaction_id: string; provider: "apple" | "google" }
+    | { message: string }
+  > {
+    const body = {
+      transaction_id: transactionId,
+      identity_token: identityToken,
+      redemption_verifier: redemptionVerifier,
+    };
+    const result = await (this.linkTransactions.has(transactionId)
+      ? this.request<{
+          session_token?: string;
+          device_token?: string;
+          authentication_state?: "account_choice";
+          transaction_id?: string;
+          provider?: "apple" | "google";
+          provider_email?: string | null;
+          display_name?: string;
+          can_register?: boolean;
+          message?: string;
+        }>("/auth/mobile/external/exchange", {
+          method: "POST",
+          body: JSON.stringify(body),
+          ...(requestId ? { headers: { "X-Request-ID": requestId } } : {}),
+        })
+      : this.postUnauthenticated<{
+      session_token?: string;
+      device_token?: string;
+      authentication_state?: "account_choice";
+      transaction_id?: string;
+      provider?: "apple" | "google";
+      provider_email?: string | null;
+      display_name?: string;
+      can_register?: boolean;
+      message?: string;
+    }>("/auth/mobile/external/exchange", body, requestId));
+    this.linkTransactions.delete(transactionId);
+    if (result.session_token) {
+      const { session_token, device_token, ...user } = result as User & { session_token: string; device_token?: string };
+      await this.store.set({ token: session_token, deviceToken: device_token });
+      return user;
+    }
+    return result as never;
+  }
+
+  externalRecoveryLink(transactionId: string, redemptionVerifier: string): Promise<{ message: string }> {
+    return this.request("/auth/mobile/external/recovery/link", {
+      method: "POST",
+      body: JSON.stringify({ transaction_id: transactionId, redemption_verifier: redemptionVerifier }),
+    });
+  }
+
+  async externalRecoveryRegister(body: {
+    transaction_id: string;
+    display_name?: string;
+    legal_acceptances: { document_key: string; document_version_id: string }[];
+    platform: "ios" | "android";
+    redemption_verifier: string;
+  }): Promise<User | { authentication_state: "additional_auth_required"; transaction_id: string; provider: "apple" | "google" }> {
+    const result = await this.postUnauthenticated<User & { session_token?: string; device_token?: string; authentication_state?: "additional_auth_required"; transaction_id?: string; provider?: "apple" | "google" }>(
+      "/auth/mobile/external/recovery/register",
+      body,
+    );
+    if (!result.session_token) return result as { authentication_state: "additional_auth_required"; transaction_id: string; provider: "apple" | "google" };
+    const { session_token, device_token, ...user } = result as User & { session_token: string; device_token?: string };
+    await this.store.set({ token: session_token, deviceToken: device_token });
+    return user;
+  }
+
+  nativeMfaOptions(transactionId: string, redemptionVerifier: string) {
+    return this.getUnauthenticated<{
+      methods: ("totp" | "email")[];
+      destination?: string;
+      policy: "optional" | "required";
+      enrolment_required: boolean;
+      preferred_method: "totp" | "email" | null;
+    }>(`/auth/mobile/mfa/options?transaction_id=${encodeURIComponent(transactionId)}&redemption_verifier=${encodeURIComponent(redemptionVerifier)}`);
+  }
+
+  nativeMfaStart(transactionId: string, method: "totp" | "email", redemptionVerifier: string) {
+    return this.postUnauthenticated<{
+      method: "totp" | "email";
+      destination?: string;
+      provisioning_uri?: string;
+      manual_key?: string;
+      enrolling: boolean;
+    }>("/auth/mobile/mfa/start", { transaction_id: transactionId, method, redemption_verifier: redemptionVerifier });
+  }
+
+  async nativeMfaVerify(transactionId: string, method: "totp" | "email", code: string, redemptionVerifier: string): Promise<User> {
+    const result = await this.postUnauthenticated<User & { session_token: string; device_token?: string }>(
+      "/auth/mobile/mfa/verify",
+      { transaction_id: transactionId, method, code, redemption_verifier: redemptionVerifier },
+    );
     const { session_token, device_token, ...user } = result;
     await this.store.set({ token: session_token, deviceToken: device_token });
     return user;

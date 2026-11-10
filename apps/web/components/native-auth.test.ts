@@ -81,7 +81,17 @@ describe("native-auth", () => {
 
     await nativeLogin("a@example.com", "pw");
 
-    expect(login).toHaveBeenCalledWith("a@example.com", "pw");
+    // A fresh per-attempt redemption verifier binds any MFA continuation to
+    // this client (see /auth/mobile/mfa/*).
+    expect(login).toHaveBeenCalledWith("a@example.com", "pw", expect.stringMatching(/^[0-9a-f]{64}$/));
+  });
+
+  it("nativeLogin returns an MFA continuation instead of signing in", async () => {
+    const continuation = { authentication_state: "additional_auth_required", transaction_id: "native-mfa-tx", provider: "password" };
+    login.mockResolvedValue(continuation);
+    const { nativeLogin } = await import("./native-auth");
+
+    await expect(nativeLogin("a@example.com", "pw")).resolves.toEqual(continuation);
   });
 
   it("nativeRegister uses the unauthenticated native registration call", async () => {

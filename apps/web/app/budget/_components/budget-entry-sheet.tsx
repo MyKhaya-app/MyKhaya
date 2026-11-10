@@ -2,7 +2,16 @@
 
 import { FormEvent, useEffect, useState } from "react";
 import { api, type BudgetCategory, type BudgetMonthItem } from "@mykhaya/api-client";
-import { BottomSheet } from "@/components/bottom-sheet";
+import { FormField, FormLayout, FormRow, FormSheet } from "@/components/form-layout";
+import { BudgetAmountField, useBudgetFieldErrors, type BudgetFieldMessages } from "./budget-form-fields";
+
+/** Field wording shared by the Add and Edit spending entry sheets. */
+export const ENTRY_FIELD_MESSAGES: BudgetFieldMessages = {
+  category: { missing: "Choose a category." },
+  description: { missing: "Enter a description." },
+  amount: { missing: "Enter an amount." },
+  spentOn: { missing: "Choose a date." },
+};
 
 function dateForPeriod(period: { year: number; month: number }) {
   return `${period.year}-${String(period.month).padStart(2, "0")}-01`;
@@ -35,6 +44,7 @@ export function BudgetEntrySheet({
   const [fixedItemId, setFixedItemId] = useState(initialFixedItem?.budgetMonthItemId ?? "");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  const fields = useBudgetFieldErrors(ENTRY_FIELD_MESSAGES);
 
   useEffect(() => {
     api.budgetCategories(homeId)
@@ -78,6 +88,11 @@ export function BudgetEntrySheet({
 
   async function save(event: FormEvent) {
     event.preventDefault();
+    if (saving) return;
+    if (!fields.check()) {
+      setError("");
+      return;
+    }
     setSaving(true);
     setError("");
     try {
@@ -99,35 +114,47 @@ export function BudgetEntrySheet({
   }
 
   return (
-    <BottomSheet title="Add spending entry" onDismiss={() => !saving && onClose()}>
-      <form className="budget-sheet-form" onSubmit={save}>
-        <label htmlFor="new-entry-category">Category</label>
-        <select id="new-entry-category" value={category} onChange={(event) => { setCategory(event.target.value); setFixedItemId(""); }} required>
-          {categories.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
-        </select>
-        {fixedItems.length > 0 && <>
-          <label htmlFor="new-entry-fixed-item">Fixed item (optional)</label>
-          <select id="new-entry-fixed-item" value={fixedItemId} onChange={(event) => selectFixedItem(event.target.value)}>
-            <option value="">None</option>
-            {fixedItems.map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.name} · {currency.format(item.planned_amount)} · {item.payment_status === "paid" ? "Paid" : "Not paid"}
-              </option>
-            ))}
-          </select>
-        </>}
-        <label htmlFor="new-entry-description">Description</label>
-        <input id="new-entry-description" value={description} onChange={(event) => setDescription(event.target.value)} required />
-        <label htmlFor="new-entry-amount">Amount</label>
-        <input id="new-entry-amount" type="number" min="0.01" step="0.01" value={amount} onChange={(event) => setAmount(event.target.value)} required />
-        <label htmlFor="new-entry-date">Date</label>
-        <input className="consumer-date-time-control" id="new-entry-date" type="date" value={spentOn} onChange={(event) => setSpentOn(event.target.value)} required />
-        <label htmlFor="new-entry-note">Note (optional)</label>
-        <textarea id="new-entry-note" value={note} onChange={(event) => setNote(event.target.value)} maxLength={1000} rows={3} />
-        {error && <p role="alert">{error}</p>}
-        <button type="submit" disabled={saving}>{saving ? "Adding…" : "Add entry"}</button>
-      </form>
-    </BottomSheet>
+    <FormSheet
+      title="Add spending entry"
+      onDismiss={onClose}
+      busy={saving}
+      primaryAction={<button type="submit" form="budget-entry-form" disabled={saving}>{saving ? "Adding…" : "Add entry"}</button>}
+    >
+      <FormLayout id="budget-entry-form" ref={fields.formRef} onSubmit={save}>
+        {error && <p className="notice error" role="alert">{error}</p>}
+        <FormField label="Category" error={fields.errors.category}>
+          {(control) => (
+            <select {...control} name="category" value={category} onChange={(event) => { setCategory(event.target.value); setFixedItemId(""); fields.clear("category"); }} required>
+              {categories.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}
+            </select>
+          )}
+        </FormField>
+        {fixedItems.length > 0 && <FormField label="Fixed item (optional)">
+          {(control) => (
+            <select {...control} value={fixedItemId} onChange={(event) => selectFixedItem(event.target.value)}>
+              <option value="">None</option>
+              {fixedItems.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.name} · {currency.format(item.planned_amount)} · {item.payment_status === "paid" ? "Paid" : "Not paid"}
+                </option>
+              ))}
+            </select>
+          )}
+        </FormField>}
+        <FormField label="Description" error={fields.errors.description}>
+          {(control) => <input {...control} name="description" value={description} onChange={(event) => { setDescription(event.target.value); fields.clear("description"); }} required />}
+        </FormField>
+        <FormRow minColumnWidth="10rem">
+          <BudgetAmountField label="Amount" name="amount" min="0.01" value={amount} onChange={(value) => { setAmount(value); fields.clear("amount"); }} error={fields.errors.amount} />
+          <FormField label="Date" error={fields.errors.spentOn}>
+            {(control) => <input {...control} name="spentOn" type="date" value={spentOn} onChange={(event) => { setSpentOn(event.target.value); fields.clear("spentOn"); }} required />}
+          </FormField>
+        </FormRow>
+        <FormField label="Note (optional)">
+          {(control) => <textarea {...control} value={note} onChange={(event) => setNote(event.target.value)} maxLength={1000} rows={3} />}
+        </FormField>
+      </FormLayout>
+    </FormSheet>
   );
 }
 

@@ -37,8 +37,19 @@ from mykhaya.billing.client import StripeRequestError, StripeUnavailableError, c
 from mykhaya.billing.config import resolve_stripe_config
 from mykhaya.billing.diagnostics import record_billing_diagnostic
 from mykhaya.billing.pricing import fetch_price_amount
-from mykhaya.billing.reconciliation import NoStripeSubscriptionError, reconcile_home_subscription
+from mykhaya.billing.reconciliation import (
+    NoStripeSubscriptionError,
+    ReconciliationValidationError,
+    reconcile_home_subscription,
+)
 from mykhaya.billing.state import SubscriptionOwnershipMismatchError
+from mykhaya.billing.webhook_ip_security import (
+    STALE_AFTER,
+    SYNC_INTERVAL,
+    get_security_settings,
+    security_stale,
+    sync_stripe_webhook_ips,
+)
 from mykhaya.calendar_highlights import sync_holiday_source
 from mykhaya.calendar_provisioning import ensure_personal_calendar
 from mykhaya.config import Settings, get_settings
@@ -75,6 +86,11 @@ from mykhaya.entitlements import (
     resolve_effective_plan,
     resolve_effective_state,
 )
+from mykhaya.external_identities import (
+    ExternalIdentityNotFound,
+    LastAuthenticationMethodError,
+    unlink_external_identity,
+)
 from mykhaya.founding_beta_schemas import SignupStateResponse
 from mykhaya.home_migration_pcc import (
     PACKAGE_STORE,
@@ -107,6 +123,8 @@ from mykhaya.models import (
     CalendarShare,
     ChildProfile,
     ConsumerMfaPolicy,
+    ExternalIdentity,
+    ExternalIdentityProvider,
     FeatureFlag,
     FeatureKey,
     FeatureOverride,
@@ -125,6 +143,7 @@ from mykhaya.models import (
     Meal,
     MealPlanEntry,
     Membership,
+    MonitorComponent,
     NativePushDevice,
     NativePushDisabledSource,
     NotificationChannel,
@@ -158,6 +177,8 @@ from mykhaya.models import (
     StripeMode,
     StripeWebhookEvent,
     StripeWebhookFailure,
+    StripeWebhookIpSecurityMode,
+    StripeWebhookIpSecuritySettings,
     SubscriptionPlan,
     SubscriptionProvider,
     SubscriptionStatus,
@@ -175,6 +196,8 @@ from mykhaya.module_registry import (
     household_modules,
     module_definition,
 )
+from mykhaya.monitoring.catalogue import BY_KEY as MONITOR_CATALOGUE
+from mykhaya.monitoring.state import effective_state as monitor_effective_state
 from mykhaya.notifications.default_templates import (
     DEFAULT_TEMPLATE_VERSION,
     SAMPLE_VARIABLES,
@@ -293,6 +316,8 @@ from mykhaya.platform_schemas import (
     StripeTestConnectionRequest,
     StripeTestConnectionResponse,
     StripeWebhookHealthResponse,
+    StripeWebhookIpSecurityResponse,
+    StripeWebhookIpSecurityUpdate,
     StripeWebhookSummary,
     SubscriptionDetailResponse,
     SubscriptionEventResponse,
@@ -355,13 +380,7 @@ from mykhaya.security import (
 )
 from mykhaya.showcase.guards import is_showcase_type
 from mykhaya.showcase.registry import modules_for_plan as showcase_modules_for_plan
-from mykhaya.status_aggregation import (
-    PUBLIC_SERVICES,
-    highest_severity,
-    is_incident_active,
-    overall_message,
-    service_states_from_impacts,
-)
+from mykhaya.status_aggregation import compute_status_snapshot, runner_is_fresh
 from mykhaya.syslog_forwarding import (
     SyslogConfig,
     current_dispatcher,
@@ -3057,7 +3076,7 @@ async def users(
 @router.get("/users/{user_id}")
 async def user_detail(
     user_id: uuid.UUID,
-    _: PlatformContext = Depends(require_roles(*SUPPORT)),
+    context: PlatformContext = Depends(require_roles(*SUPPORT)),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
@@ -3154,7 +3173,374 @@ async def user_detail(
                 {"method": method.value, "enabled": enabled} for method, enabled in mfa_methods
             ],
         },
+        # What the signed-in administrator may do here, derived from the same
+        # role tuples the mutation routes enforce. The UI only hides controls
+        # with this; every route still enforces its own role server-side.
+        "viewer_permissions": _user_viewer_permissions(context),
     }
+
+
+def _user_viewer_permissions(context: PlatformContext) -> dict[str, bool]:
+    role = context.administrator.role
+    return {
+        "change_mfa_policy": role in OPERATORS,
+        "disconnect_sign_in_methods": role in OPERATORS,
+        "revoke_sessions": role in SUPPORT,
+    }
+
+
+# Consumer audit actions (written by mykhaya.audit for the user's own
+# authentication ceremonies) shown in the PCC Authentication tab. Only fixed,
+# operator-safe labels are returned; audit metadata is never exposed. The
+# generic external_identity.* actions are omitted because the provider routes
+# also write the provider-specific actions below for the same event.
+_USER_AUTH_EVENT_LABELS: dict[str, tuple[str, str]] = {
+    "session.created": ("Signed in", "success"),
+    "MFA_LOGIN_SUCCEEDED": ("Two-factor verification completed", "success"),
+    "MFA_LOGIN_FAILED": ("Two-factor verification failed", "failure"),
+    "APPLE_LOGIN_SUCCESS": ("Signed in with Apple", "success"),
+    "APPLE_LOGIN_FAILED": ("Apple sign-in failed", "failure"),
+    "GOOGLE_LOGIN_SUCCESS": ("Signed in with Google", "success"),
+    "APPLE_IDENTITY_REGISTERED": ("Registered with Apple", "info"),
+    "GOOGLE_IDENTITY_REGISTERED": ("Registered with Google", "info"),
+    "APPLE_IDENTITY_LINKED": ("Apple connected", "info"),
+    "GOOGLE_IDENTITY_LINKED": ("Google connected", "info"),
+    "APPLE_IDENTITY_UNLINKED": ("Apple disconnected by the user", "info"),
+    "GOOGLE_IDENTITY_UNLINKED": ("Google disconnected by the user", "info"),
+    "session.revoked": ("Signed out of a session", "info"),
+    "trusted_device.others_revoked": ("Signed out of other devices", "info"),
+    "password.reset": ("Password reset", "info"),
+    "MFA_TOTP_ENROLLED": ("Authenticator app enrolled", "info"),
+    "MFA_TOTP_REMOVED": ("Authenticator app removed", "info"),
+    "MFA_TOTP_RESET": ("Authenticator app reset", "info"),
+}
+# Administrative audit actions (target_type="user") relevant to sign-in.
+_ADMIN_AUTH_EVENT_LABELS: dict[str, str] = {
+    "user.sessions_revoked": "All sessions revoked by an administrator",
+    "user.password_reset_sent": "Password-reset email sent by an administrator",
+    "user.suspended": "Suspended by an administrator",
+    "user.reactivated": "Reactivated by an administrator",
+    "user.external_identity_disconnected": "Sign-in provider disconnected by an administrator",
+    "MFA_USER_FORCED": "MFA required by an administrator",
+    "MFA_USER_FORCE_REMOVED": "MFA requirement removed by an administrator",
+    "MFA_USER_POLICY_CHANGED": "MFA policy changed by an administrator",
+}
+_PROVIDER_NAMES = {
+    ExternalIdentityProvider.apple: "Apple",
+    ExternalIdentityProvider.google: "Google",
+}
+RECENT_AUTH_EVENT_LIMIT = 10
+# Notification type sent to the user after an administrative disconnect.
+SIGN_IN_METHOD_DISCONNECTED = "account.sign_in_method_disconnected"
+
+
+@router.get("/users/{user_id}/authentication")
+async def user_authentication_summary(
+    user_id: uuid.UUID,
+    _: PlatformContext = Depends(require_roles(*SUPPORT)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    """Operational sign-in status for support: which methods exist, counts
+    and timestamps only. Never returns provider subjects, provider email,
+    tokens, credential material, push tokens or device identifiers."""
+    user = await db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That user could not be found.")
+    now = datetime.now(UTC)
+    identities = {
+        row.provider: row
+        for row in await db.scalars(
+            select(ExternalIdentity).where(ExternalIdentity.user_id == user_id)
+        )
+    }
+    password = await db.scalar(select(AuthIdentity).where(AuthIdentity.user_id == user_id))
+    passkey_count, passkey_last_used = (
+        await db.execute(
+            select(func.count(UserPasskey.id), func.max(UserPasskey.last_used_at)).where(
+                UserPasskey.user_id == user_id, UserPasskey.revoked_at.is_(None)
+            )
+        )
+    ).one()
+    active_sessions, last_session_seen = (
+        await db.execute(
+            select(func.count(Session.id), func.max(Session.last_seen_at)).where(
+                Session.user_id == user_id,
+                Session.revoked_at.is_(None),
+                Session.expires_at > now,
+            )
+        )
+    ).one()
+    trusted_devices = await db.scalar(
+        select(func.count(TrustedDevice.id)).where(
+            TrustedDevice.user_id == user_id,
+            TrustedDevice.revoked_at.is_(None),
+            TrustedDevice.expires_at > now,
+        )
+    )
+    native_rows = (
+        await db.execute(
+            select(
+                NativePushDevice.platform,
+                NativePushDevice.apns_environment,
+                NativePushDevice.disabled_at,
+                NativePushDevice.last_seen_at,
+            ).where(NativePushDevice.user_id == user_id)
+        )
+    ).all()
+    native_apps = []
+    for platform_key, label in (("ios", "iOS"), ("android", "Android")):
+        rows = [row for row in native_rows if row.platform == platform_key]
+        active = [row for row in rows if row.disabled_at is None]
+        seen = [row.last_seen_at for row in rows if row.last_seen_at is not None]
+        native_apps.append(
+            {
+                "platform": platform_key,
+                "label": label,
+                "active_registrations": len(active),
+                "disabled_registrations": len(rows) - len(active),
+                "push_environments": sorted(
+                    {row.apns_environment for row in active if row.apns_environment}
+                ),
+                "last_seen_at": max(seen) if seen else None,
+            }
+        )
+    web_push_active = await db.scalar(
+        select(func.count(PushSubscription.id)).where(
+            PushSubscription.user_id == user_id, PushSubscription.disabled_at.is_(None)
+        )
+    )
+
+    user_events = (
+        await db.scalars(
+            select(AuditEvent)
+            .where(
+                AuditEvent.actor_user_id == user_id,
+                AuditEvent.action.in_(list(_USER_AUTH_EVENT_LABELS)),
+            )
+            .order_by(AuditEvent.created_at.desc())
+            .limit(RECENT_AUTH_EVENT_LIMIT)
+        )
+    ).all()
+    admin_events = (
+        await db.scalars(
+            select(AdministrativeAuditEvent)
+            .where(
+                AdministrativeAuditEvent.target_type == "user",
+                AdministrativeAuditEvent.target_id == user_id,
+                AdministrativeAuditEvent.action.in_(list(_ADMIN_AUTH_EVENT_LABELS)),
+                # Refused attempts stay in the full PCC audit log.
+                AdministrativeAuditEvent.outcome == "succeeded",
+            )
+            .order_by(AdministrativeAuditEvent.created_at.desc())
+            .limit(RECENT_AUTH_EVENT_LIMIT)
+        )
+    ).all()
+    events: list[dict[str, Any]] = [
+        {
+            "label": _USER_AUTH_EVENT_LABELS[row.action][0],
+            "outcome": _USER_AUTH_EVENT_LABELS[row.action][1],
+            "initiated_by": "user",
+            "occurred_at": row.created_at,
+        }
+        for row in user_events
+    ]
+    for row in admin_events:
+        label = _ADMIN_AUTH_EVENT_LABELS[row.action]
+        provider_value = (row.new_values or {}).get("provider")
+        if row.action == "user.external_identity_disconnected" and provider_value in {
+            item.value for item in _PROVIDER_NAMES
+        }:
+            label = (
+                f"{_PROVIDER_NAMES[ExternalIdentityProvider(provider_value)]} "
+                "disconnected by an administrator"
+            )
+        events.append(
+            {
+                "label": label,
+                "outcome": "success",
+                "initiated_by": "administrator",
+                "occurred_at": row.created_at,
+            }
+        )
+    events.sort(key=lambda item: item["occurred_at"], reverse=True)
+
+    return {
+        "providers": [
+            {
+                "provider": provider.value,
+                "name": name,
+                "connected": provider in identities,
+                "connected_at": identities[provider].linked_at if provider in identities else None,
+                # Set when the identity is linked and on every successful
+                # sign-in with that provider (touch_external_identity).
+                "last_used_at": identities[provider].last_used_at
+                if provider in identities
+                else None,
+                "enabled_in_environment": external_auth_provider_status(
+                    settings, provider.value
+                ).enabled,
+            }
+            for provider, name in _PROVIDER_NAMES.items()
+        ],
+        "password": {
+            "available": password is not None,
+            "changed_at": password.password_changed_at if password else None,
+        },
+        "passkeys": {"count": passkey_count, "last_used_at": passkey_last_used},
+        "sessions": {
+            "active_sessions": active_sessions,
+            "trusted_devices": trusted_devices or 0,
+            "last_session_activity_at": last_session_seen,
+        },
+        "native_apps": native_apps,
+        "web_push_subscriptions": web_push_active or 0,
+        "recent_events": events[:RECENT_AUTH_EVENT_LIMIT],
+    }
+
+
+@router.post("/users/{user_id}/sign-in-methods/{provider}/disconnect")
+async def disconnect_user_sign_in_provider(
+    user_id: uuid.UUID,
+    provider: ExternalIdentityProvider,
+    body: SensitiveActionRequest,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    """Administrative unlink of an Apple/Google identity from a MyKhaya
+    account, through the provider-neutral identity service and its
+    last-usable-sign-in protection. It does not revoke OAuth grants at the
+    provider, change the provider account, end sessions, or touch the
+    user's Homes, data or subscription. Idempotent: an identity that is
+    already disconnected is reported as such, and the user is notified only
+    when something was actually disconnected."""
+    require_recent_auth(context, settings)
+    user = await db.get(User, user_id)
+    if user is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That user could not be found.")
+    first_name = (user.display_name or "there").split(" ", 1)[0]
+    name = _PROVIDER_NAMES[provider]
+    try:
+        removed = await unlink_external_identity(
+            db,
+            request,
+            user_id=user_id,
+            provider=provider,
+            settings=settings,
+            administrator_initiated=True,
+        )
+    except ExternalIdentityNotFound:
+        # Nothing was written; the request session ends without a commit.
+        return {
+            "message": f"{name} sign-in is not connected to this account. Nothing was changed.",
+            "changed": False,
+        }
+    except LastAuthenticationMethodError:
+        # The service raises before deleting anything, so only the refusal
+        # is committed (which also releases the User row lock).
+        platform_audit(
+            db,
+            request,
+            context,
+            "user.external_identity_disconnected",
+            "user",
+            user_id,
+            outcome="failed",
+            reason=body.reason,
+            new={"provider": provider.value},
+            failure_category="last_sign_in_method",
+        )
+        await db.commit()
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            f"{name} is this user's only way to sign in, so it cannot be disconnected. "
+            "The user must add a password, passkey or another provider first.",
+        ) from None
+    platform_audit(
+        db,
+        request,
+        context,
+        "user.external_identity_disconnected",
+        "user",
+        user_id,
+        reason=body.reason,
+        previous={"provider": provider.value, "connected": True},
+        new={"provider": provider.value, "connected": False},
+    )
+    # Unique per linked identity row, so a retry can never notify twice.
+    notification_key = f"{SIGN_IN_METHOD_DISCONNECTED}:{removed.id}"
+    disconnected_at = datetime.now(UTC)
+    await db.commit()
+
+    # The disconnection is committed above and stands on its own. The
+    # security email is queued separately: a failure here is logged and
+    # reported, never allowed to reverse the disconnection. Delivery itself
+    # runs later in the worker via the outbox, with its own retries.
+    notified = await _queue_sign_in_method_disconnected_email(
+        db,
+        settings,
+        user_id=user_id,
+        first_name=first_name,
+        provider_name=name,
+        disconnected_at=disconnected_at,
+        idempotency_key=notification_key,
+    )
+    return {
+        "message": f"{name} sign-in was disconnected from this MyKhaya account. "
+        + (
+            "The user has been sent a security email."
+            if notified
+            else "The security email could not be queued; tell the user directly."
+        ),
+        "changed": True,
+        "user_notified": notified,
+    }
+
+
+async def _queue_sign_in_method_disconnected_email(
+    db: AsyncSession,
+    settings: Settings,
+    *,
+    user_id: uuid.UUID,
+    first_name: str,
+    provider_name: str,
+    disconnected_at: datetime,
+    idempotency_key: str,
+) -> bool:
+    try:
+        subject, message, html = await render_notification_email(
+            db,
+            settings,
+            SIGN_IN_METHOD_DISCONNECTED,
+            {
+                "user_first_name": first_name,
+                "provider_name": provider_name,
+                "disconnected_at": f"{disconnected_at.day} {disconnected_at:%B %Y, %H:%M} UTC",
+                "support_email": settings.smtp_reply_to or settings.email_from,
+            },
+        )
+        await notify(
+            db,
+            settings=settings,
+            recipient_user_id=user_id,
+            notification_type=SIGN_IN_METHOD_DISCONNECTED,
+            title=subject,
+            body=message,
+            html_body=html,
+            idempotency_key=idempotency_key,
+        )
+        await db.commit()
+    except Exception as exc:  # noqa: BLE001 - must never undo the committed unlink
+        await db.rollback()
+        log.warning(
+            "user.sign_in_method_disconnect_notification_failed",
+            user_id=str(user_id),
+            error=type(exc).__name__,
+        )
+        return False
+    return True
 
 
 async def _user_state_action(
@@ -4440,6 +4826,124 @@ async def subscriptions_webhook_health(
     )
 
 
+async def _stripe_webhook_ip_security_response(
+    db: AsyncSession, settings: Settings
+) -> StripeWebhookIpSecurityResponse:
+    row = await get_security_settings(db)
+    now = datetime.now(UTC)
+    blocked_24h = int(
+        await db.scalar(
+            select(func.count(SecurityEvent.id)).where(
+                SecurityEvent.event_type == "stripe_webhook_ip_blocked",
+                SecurityEvent.created_at >= now - timedelta(hours=24),
+            )
+        )
+        or 0
+    )
+    return StripeWebhookIpSecurityResponse(
+        mode=row.mode.value if row else "monitoring",
+        stale=security_stale(row, now),
+        trusted_ips=list(row.trusted_ips) if row else [],
+        sync_interval_hours=int(SYNC_INTERVAL.total_seconds() // 3600),
+        stale_after_hours=int(STALE_AFTER.total_seconds() // 3600),
+        last_sync_attempt_at=row.last_sync_attempt_at if row else None,
+        last_successful_sync_at=row.last_successful_sync_at if row else None,
+        last_sync_error=row.last_sync_error if row else None,
+        blocked_request_count=row.blocked_request_count if row else 0,
+        blocked_requests_24h=blocked_24h,
+        last_blocked_at=row.last_blocked_at if row else None,
+        proxy_trust_configured=bool(settings.trusted_proxy_cidrs),
+        source_ip_method=(
+            "socket peer; X-Forwarded-For is accepted only from configured trusted proxy CIDRs"
+        ),
+    )
+
+
+@router.get("/subscriptions/webhook-security", response_model=StripeWebhookIpSecurityResponse)
+async def subscriptions_webhook_security(
+    _: PlatformContext = Depends(require_roles(*SUPPORT)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> StripeWebhookIpSecurityResponse:
+    return await _stripe_webhook_ip_security_response(db, settings)
+
+
+@router.patch("/subscriptions/webhook-security", response_model=StripeWebhookIpSecurityResponse)
+async def update_subscriptions_webhook_security(
+    body: StripeWebhookIpSecurityUpdate,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS, PlatformRole.security)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> StripeWebhookIpSecurityResponse:
+    require_recent_auth(context, settings)
+    row = await get_security_settings(db)
+    if row is None:
+        row = StripeWebhookIpSecuritySettings()
+        db.add(row)
+        await db.flush()
+    if body.mode == "enforcement":
+        if not settings.trusted_proxy_cidrs:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "Configure trusted proxy CIDRs and verify client-IP resolution "
+                "before enabling enforcement.",
+            )
+        if security_stale(row, datetime.now(UTC)):
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "Refresh the Stripe IP feed successfully before enabling enforcement.",
+            )
+    previous_mode = row.mode.value
+    row.mode = StripeWebhookIpSecurityMode(body.mode)
+    row.updated_by_administrator_id = context.administrator.id
+    platform_audit(
+        db,
+        request,
+        context,
+        "stripe_webhook_ip_security.mode_changed",
+        "stripe_webhook_ip_security",
+        reason=body.reason,
+        previous={"mode": previous_mode},
+        new={"mode": body.mode},
+    )
+    await db.commit()
+    return await _stripe_webhook_ip_security_response(db, settings)
+
+
+@router.post(
+    "/subscriptions/webhook-security/refresh",
+    response_model=StripeWebhookIpSecurityResponse,
+)
+async def refresh_subscriptions_webhook_security(
+    body: SensitiveActionRequest,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS, PlatformRole.security)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> StripeWebhookIpSecurityResponse:
+    require_recent_auth(context, settings)
+    row, updated = await sync_stripe_webhook_ips(db, force=True)
+    platform_audit(
+        db,
+        request,
+        context,
+        "stripe_webhook_ip_security.feed_refreshed",
+        "stripe_webhook_ip_security",
+        reason=body.reason,
+        outcome="succeeded" if updated else "failure",
+        new={"ip_count": len(row.trusted_ips), "updated": updated},
+        failure_category=None if updated else "feed_sync_failed",
+    )
+    await db.commit()
+    if not updated:
+        raise HTTPException(
+            status.HTTP_502_BAD_GATEWAY,
+            "Stripe's IP feed could not be refreshed; the last known-good list was retained.",
+        )
+    return await _stripe_webhook_ip_security_response(db, settings)
+
+
 @router.get("/subscriptions/summary", response_model=SubscriptionSummaryResponse)
 async def subscriptions_summary(
     _: PlatformContext = Depends(require_roles(*SUPPORT)),
@@ -4801,6 +5305,24 @@ async def reconcile_stripe_subscription(
         )
     except NoStripeSubscriptionError as exc:
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    except ReconciliationValidationError as exc:
+        await db.rollback()
+        await log.awarning(
+            "stripe_reconciliation_validation_failed",
+            group_id=str(group_id),
+            reason=str(exc),
+        )
+        await record_billing_diagnostic(
+            db,
+            source="manual_reconciliation",
+            stage="validation",
+            result="failed",
+            stripe_mode=stripe_config.mode,
+            group_id=group_id,
+            safe_error_code="reconciliation_validation_failed",
+            safe_error_message="Stripe state failed reconciliation validation.",
+        )
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     except SubscriptionOwnershipMismatchError as exc:
         # Never silently attach another Home's Stripe object — surface this
         # as a support/security exception for an operator to investigate,
@@ -4808,6 +5330,16 @@ async def reconcile_stripe_subscription(
         await db.rollback()
         await log.aerror(
             "stripe_reconciliation_ownership_mismatch", group_id=str(group_id), detail=str(exc)
+        )
+        await record_billing_diagnostic(
+            db,
+            source="manual_reconciliation",
+            stage="validation",
+            result="failed",
+            stripe_mode=stripe_config.mode,
+            group_id=group_id,
+            safe_error_code="ownership_mismatch",
+            safe_error_message="Stripe ownership did not match the Home.",
         )
         raise HTTPException(
             status.HTTP_409_CONFLICT,
@@ -5464,6 +5996,79 @@ def _probe_file_storage(storage_dir: Path) -> shutil._ntuple_diskusage:
     return shutil.disk_usage(storage_dir)
 
 
+# PCC Health's own vocabulary (it deliberately never shows an "Unknown"
+# placeholder): a component without a fresh observation is "not verified",
+# which makes the card a Warning rather than Healthy.
+_MONITOR_STATE_WORDS = {
+    "healthy": "healthy",
+    "degraded": "degraded",
+    "unavailable": "unavailable",
+    "unknown": "not verified",
+}
+
+
+async def _external_dependencies_card(db: AsyncSession, now: datetime) -> dict[str, Any]:
+    runner_fresh = await runner_is_fresh(db, now)
+    rows = (await db.scalars(select(MonitorComponent))).all()
+    external: list[tuple[str, str, MonitorComponent]] = []
+    for row in rows:
+        definition = MONITOR_CATALOGUE.get(row.key)
+        if definition is None or definition.category != "external":
+            continue
+        state = monitor_effective_state(row, now, runner_fresh=runner_fresh)
+        if state in ("not_applicable", "disabled"):
+            continue
+        external.append((definition.name, state, row))
+    if not rows:
+        return {
+            "state": "Not configured",
+            "explanation": "Automated monitoring has not recorded any observations yet.",
+            "last_success": None,
+            "last_failure": None,
+            "action": "Confirm the scheduler is running; see Automated monitoring below.",
+        }
+    if not external:
+        return {
+            "state": "Not applicable",
+            "explanation": "No external provider integration is enabled in this environment.",
+            "last_success": None,
+            "last_failure": None,
+            "action": None,
+        }
+    states = {state for _, state, _ in external}
+    if "unavailable" in states:
+        worst = "Unavailable"
+    elif "degraded" in states:
+        worst = "Degraded"
+    elif states - {"healthy"}:
+        worst = "Warning"
+    else:
+        worst = "Healthy"
+    problems = [
+        f"{name} ({_MONITOR_STATE_WORDS.get(state, state)})"
+        for name, state, _ in external
+        if state != "healthy"
+    ]
+    return {
+        "state": worst,
+        "explanation": (
+            f"{len(external)} monitored provider checks. "
+            + (
+                "Needing attention: " + ", ".join(problems) + "."
+                if problems
+                else "All are currently healthy."
+            )
+        ),
+        "last_success": max(
+            (row.last_success_at for _, _, row in external if row.last_success_at), default=None
+        ),
+        "last_failure": max(
+            (row.last_failure_at for _, _, row in external if row.last_failure_at), default=None
+        ),
+        "action": "Review Automated monitoring below." if problems else None,
+    }
+
+
 @router.get("/health")
 async def internal_health(
     _: PlatformContext = Depends(require_roles(*ALL_ROLES)),
@@ -5864,19 +6469,18 @@ async def internal_health(
                 ),
             )
 
-    # Deliberately not a live check. Email (SMTP) and Push (VAPID) already own
-    # their own health cards, computed from real delivery data above — probing
-    # SMTP reachability again here would just be Email's health reported a
-    # second time under a different name, and could disagree with it (port
-    # reachable but deliveries failing, or vice versa). MyKhaya has no other
-    # externally-integrated service today (no object storage, no OIDC
-    # provider). This card exists for when one is added, not to manufacture
-    # activity out of the two that already have dedicated cards.
+    # External providers (Stripe, DVSA, DVLA, Apple/Google sign-in, push
+    # gateways) are monitored continuously by mykhaya.monitoring; this card is
+    # a read-only summary of those persisted observations, never a second
+    # live probe. Email (SMTP) keeps its own card above and is not repeated.
+    external_card = await _external_dependencies_card(db, checked)
     observation(
         "External dependencies",
-        "Not applicable",
-        "MyKhaya has no separate external service integrations beyond Email and Push, "
-        "which have their own health cards above.",
+        external_card["state"],
+        external_card["explanation"],
+        last_success=external_card["last_success"],
+        last_failure=external_card["last_failure"],
+        action=external_card["action"],
     )
     observation(
         "Public status service",
@@ -8623,6 +9227,7 @@ def _incident_list_item(
         "resolved_at": row.resolved_at,
         "latest_update_message": latest.message if latest else row.message,
         "latest_update_at": latest.occurred_at if latest else row.starts_at,
+        "source": row.source,
     }
 
 
@@ -8638,23 +9243,20 @@ async def incidents(
     services_by_incident, updates_by_incident = await _incident_services_and_updates(
         db, [row.id for row in rows]
     )
-    now = datetime.now(UTC)
-    active_impacts = [
-        (entry.service, entry.impact)
-        for row in rows
-        if is_incident_active(
-            row.starts_at, row.resolved_at, lifecycle_state=row.lifecycle_state, now=now
-        )
-        for entry in services_by_incident[row.id]
-    ]
-    service_states = service_states_from_impacts(active_impacts)
-    overall = highest_severity(list(service_states.values()))
+    # The exact public view (monitoring + incidents + overrides), so PCC never
+    # disagrees with status.mykhaya.app about what customers are being shown.
+    snapshot = await compute_status_snapshot(db)
     return {
-        "overall": overall,
-        "overall_message": overall_message(overall),
+        "overall": snapshot.overall,
+        "overall_message": snapshot.overall_message,
+        "monitoring_active": snapshot.monitoring_active,
         "services": [
-            {"key": key, "name": label, "state": service_states[key]}
-            for key, label in PUBLIC_SERVICES.items()
+            {"key": item.key, "name": item.name, "state": item.state, "confidence": item.confidence}
+            for item in snapshot.services
+        ],
+        "external_services": [
+            {"key": item.key, "name": item.name, "state": item.state, "confidence": item.confidence}
+            for item in snapshot.external_services
         ],
         "incidents": [
             _incident_list_item(row, services_by_incident[row.id], updates_by_incident[row.id])
@@ -8679,7 +9281,9 @@ async def incident_detail(
             admin.id: admin.display_name
             for admin in await db.scalars(
                 select(PlatformAdministrator).where(
-                    PlatformAdministrator.id.in_({update.created_by for update in updates})
+                    PlatformAdministrator.id.in_(
+                        {update.created_by for update in updates if update.created_by is not None}
+                    )
                 )
             )
         }
@@ -8698,13 +9302,17 @@ async def incident_detail(
         "resolved_at": row.resolved_at,
         "internal_notes": row.internal_notes,
         "created_at": row.created_at,
+        "source": row.source,
         "updates": [
             {
                 "id": update.id,
                 "lifecycle_state": update.lifecycle_state,
                 "message": update.message,
                 "occurred_at": update.occurred_at,
-                "created_by_display_name": authors.get(update.created_by),
+                # None for an update written by automated monitoring.
+                "created_by_display_name": authors.get(update.created_by)
+                if update.created_by is not None
+                else "Automated monitoring",
                 "created_at": update.created_at,
             }
             for update in updates

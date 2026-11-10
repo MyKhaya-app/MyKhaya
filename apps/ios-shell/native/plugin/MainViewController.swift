@@ -44,6 +44,7 @@ public class MainViewController: CAPBridgeViewController {
         bridge?.registerPluginInstance(WidgetBridgePlugin())
         bridge?.registerPluginInstance(SystemSettingsPlugin())
         bridge?.registerPluginInstance(NativePushEnvironmentPlugin())
+        bridge?.registerPluginInstance(NativeExternalAuthPlugin())
 
         // The live WKWebView must always enter the web app through `/` on a
         // native cold document. iOS can recreate a WebView with a previously

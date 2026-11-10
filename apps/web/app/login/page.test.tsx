@@ -10,9 +10,10 @@ import Login from "./page";
 // another way" as the only route back to the plain form.
 
 const push = vi.fn();
+const replace = vi.fn();
 let searchParams = new URLSearchParams();
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ push, replace: vi.fn() }),
+  useRouter: () => ({ push, replace }),
   useSearchParams: () => searchParams,
 }));
 
@@ -31,6 +32,14 @@ vi.mock("@mykhaya/api-client", async (importOriginal) => {
       betaContinuation: vi.fn(),
       joinBeta: vi.fn(),
       publicSignupState: vi.fn(),
+      authProviders: vi.fn(),
+      appleRecoveryOptions: vi.fn(),
+      publicLegalDocuments: vi.fn(),
+      appleRecoveryLink: vi.fn(),
+      appleRecoveryRegister: vi.fn(),
+      googleRecoveryOptions: vi.fn(),
+      googleRecoveryLink: vi.fn(),
+      googleRecoveryRegister: vi.fn(),
     },
   };
 });
@@ -89,12 +98,102 @@ beforeEach(() => {
     reason: null,
   });
   (api.publicSignupState as ReturnType<typeof vi.fn>).mockResolvedValue(signupState(false));
+  (api.authProviders as ReturnType<typeof vi.fn>).mockResolvedValue({ providers: [] });
   // Re-asserted every test (clearAllMocks clears call history but not a
   // previous test's mockResolvedValue/mockRejectedValue implementation) —
   // these are the "everything is fine" defaults each test starts from.
   (passkeyClient.biometricSignInAvailable as ReturnType<typeof vi.fn>).mockResolvedValue(true);
   (passkeyClient.authenticateWithPasskey as ReturnType<typeof vi.fn>).mockResolvedValue({
     id: "assertion",
+  });
+});
+
+describe("Login — Apple recovery choice", () => {
+  it("offers explicit existing-account linking without creating an account", async () => {
+    searchParams = new URLSearchParams("apple=choose&transaction=tx-1");
+    (api.authProviders as ReturnType<typeof vi.fn>).mockResolvedValue({
+      providers: [{ provider: "apple", enabled: true }],
+    });
+    (api.appleRecoveryOptions as ReturnType<typeof vi.fn>).mockResolvedValue({
+      can_register: true,
+      provider_email: "relay@privaterelay.appleid.com",
+      display_name: "Apple User",
+    });
+    (api.publicLegalDocuments as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    (api.post as ReturnType<typeof vi.fn>).mockResolvedValue(user);
+    (api.appleRecoveryLink as ReturnType<typeof vi.fn>).mockResolvedValue({ message: "linked" });
+    const typist = userEvent.setup();
+    render(<Login />);
+
+    await screen.findByRole("heading", { name: "Continue with Apple" });
+    await typist.click(screen.getByRole("button", { name: /link to an existing account/i }));
+    await typist.type(screen.getByLabelText("Email"), "existing@example.com");
+    await typist.type(screen.getByLabelText("Password"), "correct-password");
+    await typist.click(screen.getByRole("button", { name: /^sign in$/i }));
+
+    expect(api.appleRecoveryLink).toHaveBeenCalledWith("tx-1");
+    expect(api.appleRecoveryRegister).not.toHaveBeenCalled();
+  });
+
+  it("requires legal acceptance before explicit new Apple registration", async () => {
+    searchParams = new URLSearchParams("apple=choose&transaction=tx-2");
+    (api.appleRecoveryOptions as ReturnType<typeof vi.fn>).mockResolvedValue({
+      can_register: true,
+      provider_email: "relay@privaterelay.appleid.com",
+      display_name: "Apple User",
+    });
+    (api.publicLegalDocuments as ReturnType<typeof vi.fn>).mockResolvedValue([
+      {
+        key: "terms",
+        display_name: "Terms of Service",
+        audience: "adult",
+        scope: "global",
+        action_verb: "accept",
+        acceptance_required: true,
+        current_version: "1.0",
+        current_version_id: "terms-v1",
+        effective_date: null,
+      },
+    ]);
+    (api.appleRecoveryRegister as ReturnType<typeof vi.fn>).mockResolvedValue(user);
+    const typist = userEvent.setup();
+    render(<Login />);
+
+    await typist.click(await screen.findByRole("button", { name: /create a new account/i }));
+    await typist.click(screen.getByRole("button", { name: /accept and create account/i }));
+    expect(api.appleRecoveryRegister).not.toHaveBeenCalled();
+    await typist.click(screen.getByRole("checkbox"));
+    await typist.click(screen.getByRole("button", { name: /accept and create account/i }));
+
+    expect(api.appleRecoveryRegister).toHaveBeenCalledWith("tx-2", {
+      legal_acceptances: [{ document_key: "terms", document_version_id: "terms-v1" }],
+      platform: "web",
+    });
+  });
+});
+
+describe("Login — Google recovery choice", () => {
+  it("requires an explicit existing-account choice before linking Google", async () => {
+    searchParams = new URLSearchParams("google=choose&transaction=google-tx-1");
+    (api.googleRecoveryOptions as ReturnType<typeof vi.fn>).mockResolvedValue({
+      can_register: true,
+      provider_email: "person@gmail.com",
+      display_name: "Google User",
+    });
+    (api.publicLegalDocuments as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    (api.post as ReturnType<typeof vi.fn>).mockResolvedValue(user);
+    (api.googleRecoveryLink as ReturnType<typeof vi.fn>).mockResolvedValue({ message: "linked" });
+    const typist = userEvent.setup();
+    render(<Login />);
+
+    await screen.findByRole("heading", { name: "Continue with Google" });
+    await typist.click(screen.getByRole("button", { name: /link to an existing account/i }));
+    await typist.type(screen.getByLabelText("Email"), "existing@example.com");
+    await typist.type(screen.getByLabelText("Password"), "correct-password");
+    await typist.click(screen.getByRole("button", { name: /^sign in$/i }));
+
+    expect(api.googleRecoveryLink).toHaveBeenCalledWith("google-tx-1");
+    expect(api.googleRecoveryRegister).not.toHaveBeenCalled();
   });
 });
 
@@ -110,6 +209,24 @@ describe("Login — no prior biometric enrolment on this device", () => {
     expect(screen.getByText(/forgot password/i)).toBeInTheDocument();
     expect(screen.getByText(/create an account/i)).toBeInTheDocument();
     expect(screen.getByText(/child sign in/i)).toBeInTheDocument();
+  });
+
+  it("marks the password visibility button as its field's adornment and renames it as it toggles", async () => {
+    render(<Login />);
+    const password = screen.getByLabelText("Password");
+    const toggle = screen.getByRole("button", { name: "Show password" });
+    // The responsive audit's layout inspector allows this button to overlap
+    // only the field it names here (scripts/layout-inspector.mjs).
+    expect(toggle).toHaveAttribute("data-input-adornment", "password-visibility");
+    expect(toggle).toHaveAttribute("aria-controls", password.id);
+    expect(toggle).toHaveAttribute("type", "button");
+
+    fireEvent.click(toggle);
+    expect(password).toHaveAttribute("type", "text");
+    expect(screen.getByRole("button", { name: "Hide password" })).toBe(toggle);
+    fireEvent.click(toggle);
+    expect(password).toHaveAttribute("type", "password");
+    expect(screen.getByRole("button", { name: "Show password" })).toBe(toggle);
   });
 
   it("password sign-in succeeds and remembers this device for next time", async () => {
@@ -169,6 +286,24 @@ describe("Login — biometric sign-in previously enrolled on this device", () =>
     expect(screen.getByRole("button", { name: /sign in another way/i })).toBeInTheDocument();
     expect(screen.queryByLabelText("Email")).not.toBeInTheDocument();
     expect(screen.queryByLabelText("Password")).not.toBeInTheDocument();
+  });
+
+  it("prioritises social MFA continuation over the remembered biometric screen", async () => {
+    searchParams = new URLSearchParams("auth=additional&transaction=social-mfa");
+    render(<Login />);
+
+    expect(screen.queryByText("Anthony")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Email")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Password")).not.toBeInTheDocument();
+    await waitFor(() => expect(replace).toHaveBeenCalledWith("/mfa?transaction=social-mfa"));
+  });
+
+  it("does not send a native shell into browser MFA continuation", async () => {
+    nativeShell = true;
+    searchParams = new URLSearchParams("auth=additional&transaction=social-mfa");
+    render(<Login />);
+
+    await waitFor(() => expect(replace).toHaveBeenCalledWith("/login?mfa_error=expired"));
   });
 
   it('"Sign in another way" reveals the normal email/password form', async () => {

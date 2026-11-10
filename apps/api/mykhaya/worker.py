@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -13,8 +14,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from mykhaya.config import Settings, get_settings
 from mykhaya.crypto.config import validate_sensitive_key_configuration
 from mykhaya.db import SessionFactory
+from mykhaya.legal_evidence_pdf import build_acceptance_pdf
+from mykhaya.legal_evidence_storage import evidence_filename, get_legal_evidence_storage
 from mykhaya.mailer import EmailPermanentError, EmailTemporaryError, resolve_smtp_config, send_email
 from mykhaya.models import (
+    LegalAcceptanceEvidence,
+    LegalEvidenceStatus,
     NativePushDevice,
     NativePushDisabledSource,
     NotificationDelivery,
@@ -23,12 +28,14 @@ from mykhaya.models import (
     OutboxEvent,
     PlatformSetting,
     PushSubscription,
+    User,
     WorkerJobRecord,
 )
+from mykhaya.monitoring.watchdog import watchdog_tick
 from mykhaya.notifications.birthdays import deliver_birthday_reminder
 from mykhaya.notifications.briefing import deliver_daily_briefing
 from mykhaya.notifications.deep_links import resolve_path
-from mykhaya.notifications.engine import MANDATORY_EMAIL_TYPES
+from mykhaya.notifications.engine import MANDATORY_EMAIL_TYPES, notify
 from mykhaya.notifications.lifecycle import (
     is_home_operationally_active,
     is_user_operationally_active,
@@ -36,7 +43,11 @@ from mykhaya.notifications.lifecycle import (
 from mykhaya.notifications.nudges import deliver_daily_nudge_summary, deliver_nudge_summary
 from mykhaya.notifications.push import (
     ApnsPermanentError,
+    FcmAuthenticationError,
+    FcmConfigurationError,
+    FcmInvalidRequestError,
     FcmPermanentError,
+    FcmTransientError,
     is_subscription_gone,
     resolve_apns_config,
     resolve_fcm_config,
@@ -48,6 +59,7 @@ from mykhaya.notifications.push import (
 from mykhaya.notifications.reminders import deliver_event_reminder
 from mykhaya.notifications.routines import deliver_routine_reminder
 from mykhaya.notifications.standalone_reminders import deliver_standalone_reminder
+from mykhaya.notifications.templates import render_notification_email
 from mykhaya.syslog_forwarding import (
     SyslogConfig,
     SyslogDispatcher,
@@ -69,6 +81,24 @@ MAX_BACKOFF_SECONDS = 3600
 def _backoff_seconds(attempts: int) -> int:
     delay = BASE_BACKOFF_SECONDS * (2 ** max(attempts - 1, 0))
     return int(min(delay, MAX_BACKOFF_SECONDS))
+
+
+async def _mark_evidence_email_failure(
+    db: AsyncSession, event: OutboxEvent, *, terminal: bool
+) -> None:
+    evidence_id = event.payload.get("attachment_evidence_id")
+    if evidence_id:
+        evidence = await db.get(LegalAcceptanceEvidence, uuid.UUID(evidence_id))
+        if evidence is not None:
+            evidence.status = (
+                LegalEvidenceStatus.failed if terminal else LegalEvidenceStatus.retry_pending
+            )
+            evidence.email_status = "failed" if terminal else "retry_pending"
+            evidence.last_error = (
+                "Email delivery failed permanently."
+                if terminal
+                else "Email delivery will be retried."
+            )
 
 
 async def _lifecycle_suppression_reason(db: AsyncSession, payload: dict[str, Any]) -> str | None:
@@ -220,6 +250,24 @@ async def _process_native_push(db: AsyncSession, settings: Settings, event: Outb
         device.disabled_at = datetime.now(UTC)
         device.disabled_reason = "FCM rejected this device registration."
         device.disabled_source = NativePushDisabledSource.provider
+    except FcmConfigurationError:
+        delivery.status = NotificationDeliveryStatus.cancelled
+        delivery.attempted_at = datetime.now(UTC)
+        delivery.sanitised_failure_reason = "FCM service configuration is invalid."
+    except FcmAuthenticationError:
+        delivery.status = NotificationDeliveryStatus.cancelled
+        delivery.attempted_at = datetime.now(UTC)
+        delivery.sanitised_failure_reason = "FCM authentication failed."
+    except FcmInvalidRequestError:
+        delivery.status = NotificationDeliveryStatus.cancelled
+        delivery.attempted_at = datetime.now(UTC)
+        delivery.sanitised_failure_reason = "FCM rejected the notification request."
+    except FcmTransientError:
+        delivery.status = NotificationDeliveryStatus.failed
+        delivery.attempted_at = datetime.now(UTC)
+        delivery.retry_count += 1
+        delivery.sanitised_failure_reason = "Native push service temporarily unavailable."
+        raise
     except _UnsupportedNativePlatform:
         # Not retryable — no code path will ever know how to send to this
         # platform. Cancel rather than fail-and-retry-forever.
@@ -272,23 +320,47 @@ async def _process_email(db: AsyncSession, settings: Settings, event: OutboxEven
         return
 
     smtp_config = await resolve_smtp_config(settings, db)
+    attachment = None
+    if event.payload.get("attachment_storage_key"):
+        data = await get_legal_evidence_storage(settings).load(
+            event.payload["attachment_storage_key"]
+        )
+        if data is None:
+            raise EmailTemporaryError("Legal evidence attachment is not available yet")
+        attachment = (
+            event.payload.get("attachment_filename") or "mykhaya-legal-evidence.pdf",
+            data,
+            "application/pdf",
+        )
     try:
-        await asyncio.to_thread(
+        provider_message_id = await asyncio.to_thread(
             send_email,
             smtp_config,
             event.payload["recipient_email"],
             event.payload["subject"],
             event.payload["body"],
             event.payload.get("html_body"),
+            attachment,
         )
         delivery.status = NotificationDeliveryStatus.sent
+        delivery.provider_message_id = provider_message_id
         delivery.attempted_at = datetime.now(UTC)
+        if event.payload.get("attachment_evidence_id"):
+            evidence = await db.get(
+                LegalAcceptanceEvidence, uuid.UUID(event.payload["attachment_evidence_id"])
+            )
+            if evidence is not None:
+                evidence.status = LegalEvidenceStatus.sent
+                evidence.email_status = "sent"
+                evidence.email_sent_at = datetime.now(UTC)
+                evidence.provider_message_id = provider_message_id
         _redact_sensitive_email_payload(event)
     except EmailPermanentError as exc:
         delivery.attempted_at = datetime.now(UTC)
         delivery.retry_count += 1
         delivery.status = NotificationDeliveryStatus.cancelled
         delivery.sanitised_failure_reason = exc.category
+        await _mark_evidence_email_failure(db, event, terminal=True)
         _redact_sensitive_email_payload(event)
         # Permanent (e.g. recipient/sender rejected) failures are never
         # retried — retrying a 5xx recipient rejection indefinitely wastes
@@ -299,13 +371,86 @@ async def _process_email(db: AsyncSession, settings: Settings, event: OutboxEven
         delivery.retry_count += 1
         delivery.status = NotificationDeliveryStatus.failed
         delivery.sanitised_failure_reason = exc.category
+        await _mark_evidence_email_failure(db, event, terminal=False)
         raise
     except Exception:
         delivery.attempted_at = datetime.now(UTC)
         delivery.retry_count += 1
         delivery.status = NotificationDeliveryStatus.failed
         delivery.sanitised_failure_reason = "Email delivery temporarily unavailable."
+        await _mark_evidence_email_failure(db, event, terminal=False)
         raise
+
+
+async def _process_legal_evidence(db: AsyncSession, settings: Settings, event: OutboxEvent) -> None:
+    evidence = await db.get(LegalAcceptanceEvidence, uuid.UUID(event.payload["evidence_id"]))
+    if evidence is None or evidence.status in {
+        LegalEvidenceStatus.sent,
+        LegalEvidenceStatus.sending,
+    }:
+        return
+    evidence.status = LegalEvidenceStatus.generating
+    pdf = build_acceptance_pdf(
+        document_name=evidence.document_name,
+        document_version=evidence.document_version,
+        content_markdown=evidence.content_markdown,
+        account_name=evidence.account_name,
+        email=evidence.registered_email,
+        action_type=evidence.action_type.value,
+        accepted_at=evidence.accepted_at_utc,
+        timezone=evidence.accepted_timezone,
+        ip_address=evidence.ip_address,
+        platform=evidence.platform.value,
+        acceptance_reference=str(evidence.acceptance_id),
+        content_sha256=evidence.content_sha256,
+    )
+    # The evidence id makes the archive key deterministic. If a worker dies
+    # after writing the PDF but before committing the row, the next attempt
+    # finds the same immutable object instead of orphaning a second copy.
+    key = evidence.pdf_storage_key or evidence_filename(evidence.id)
+    await get_legal_evidence_storage(settings).save_once(key, pdf)
+    evidence.pdf_storage_key = key
+    evidence.pdf_sha256 = hashlib.sha256(pdf).hexdigest()
+    evidence.generated_at = datetime.now(UTC)
+    evidence.status = LegalEvidenceStatus.ready
+    first_name = (evidence.account_name or "there").split(" ", 1)[0]
+    subject, body, html = await render_notification_email(
+        db,
+        settings,
+        "legal_acceptance_confirmation",
+        {
+            "user_first_name": first_name,
+            "document_name": evidence.document_name,
+            "document_version": evidence.document_version,
+            "accepted_at": evidence.accepted_at_utc.isoformat(),
+            "accepted_timezone": evidence.accepted_timezone,
+            "ip_address": evidence.ip_address or "Unavailable",
+            "acceptance_reference": str(evidence.acceptance_id),
+            "support_email": settings.smtp_reply_to or settings.email_from,
+        },
+    )
+    user = await db.get(User, evidence.user_id) if evidence.user_id else None
+    if user is None or user.email_verified_at is None or not evidence.registered_email:
+        evidence.email_status = "not_applicable"
+        evidence.status = LegalEvidenceStatus.ready
+        return
+    await notify(
+        db,
+        settings=settings,
+        recipient_user_id=evidence.user_id,
+        recipient_email=evidence.registered_email,
+        notification_type="legal_acceptance_confirmation",
+        title=subject,
+        body=body,
+        html_body=html,
+        idempotency_key=f"legal_acceptance_confirmation:{evidence.id}",
+        is_critical=True,
+        attachment_storage_key=key,
+        attachment_filename=f"mykhaya-legal-acceptance-{evidence.acceptance_id}.pdf",
+        attachment_evidence_id=str(evidence.id),
+    )
+    evidence.status = LegalEvidenceStatus.sending
+    evidence.email_status = "queued"
 
 
 def _redact_sensitive_email_payload(event: OutboxEvent) -> None:
@@ -348,6 +493,8 @@ async def process(event_id: uuid.UUID) -> None:
         try:
             if event.topic == "notification.email":
                 await _process_email(db, settings, event)
+            elif event.topic == "legal.acceptance_evidence":
+                await _process_legal_evidence(db, settings, event)
             elif event.topic == "notification.push":
                 await _process_push(db, settings, event)
             elif event.topic == "notification.native_push":
@@ -418,6 +565,29 @@ async def process(event_id: uuid.UUID) -> None:
             job.finished_at = datetime.now(UTC)
             event.attempts += 1
             event.last_error = type(exc).__name__[:500]
+            if event.topic == "legal.acceptance_evidence":
+                evidence = await db.get(
+                    LegalAcceptanceEvidence, uuid.UUID(event.payload["evidence_id"])
+                )
+                if evidence is not None:
+                    terminal = event.attempts >= MAX_ATTEMPTS
+                    if evidence.status == LegalEvidenceStatus.generating:
+                        evidence.last_error = (
+                            "PDF generation failed permanently."
+                            if terminal
+                            else "PDF generation will be retried."
+                        )
+                    else:
+                        evidence.last_error = (
+                            "Evidence processing failed permanently."
+                            if terminal
+                            else "Evidence processing will be retried."
+                        )
+                    evidence.status = (
+                        LegalEvidenceStatus.failed
+                        if terminal
+                        else LegalEvidenceStatus.retry_pending
+                    )
             if event.attempts >= MAX_ATTEMPTS:
                 # Give up for good: stop the row being selected again, but
                 # leave the WorkerJobRecord as the permanent diagnostic
@@ -464,6 +634,12 @@ async def run() -> None:
                     )
                 )
                 await db.commit()
+            try:
+                # Throttled to once a minute; checks that the scheduler's
+                # monitoring runner is still alive (monitoring the monitor).
+                await watchdog_tick(settings, redis=redis)
+            except Exception as exc:  # noqa: BLE001 - never let it stop job processing
+                log.error("monitoring.watchdog_failed", error=type(exc).__name__)
             if item:
                 payload = json.loads(item[1])
                 try:

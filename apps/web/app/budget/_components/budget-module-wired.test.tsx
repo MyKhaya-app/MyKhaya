@@ -50,7 +50,8 @@ vi.mock("@/components/use-active-home", () => ({
   useActiveHome: () => ({ activeHomeId: "home-1" }),
 }));
 vi.mock("@/components/app-shell", () => ({ AppShellContent: ({ children }: { children: React.ReactNode }) => <>{children}</> }));
-vi.mock("@/components/bottom-sheet", () => ({ BottomSheet: ({ title, children }: { title: string; children: React.ReactNode }) => <div role="dialog" aria-label={title}>{children}</div> }));
+// Renders the footer too: FormSheet puts Save and Cancel there.
+vi.mock("@/components/bottom-sheet", () => ({ BottomSheet: ({ title, children, footer }: { title: string; children: React.ReactNode; footer?: React.ReactNode }) => <div role="dialog" aria-label={title}>{children}{footer}</div> }));
 vi.mock("@mykhaya/api-client", async (importOriginal) => ({ ...(await importOriginal<typeof import("@mykhaya/api-client")>()), api: apiMock }));
 
 const month = { id: "month-1", year: 2026, month: 9, categories: [{ id: "month-cat-1", category_id: "cat-1", category_name: "Groceries", planned_amount: 600, actual_source: "entries", manual_actual: null, entries_actual: 74.22, actual_amount: 74.22 }], income: [{ id: "income-1", source_id: "source-1", source_name: "Salary", expected_amount: 4850, received_amount: 4200, usual_payday_day: 25, recurring: true, expected_date: "2026-09-25", received_date: null, budget_year: 2026, budget_month: 9 }] };
@@ -96,6 +97,27 @@ describe("Budget consumer API wiring", () => {
     fireEvent.change(screen.getByLabelText("Received amount (per month)"), { target: { value: "4300" } });
     fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
     await waitFor(() => expect(apiMock.updateBudgetMonthIncome).toHaveBeenCalledWith("home-1", 2026, 9, "source-1", { expected_amount: 4900, received_amount: 4300, received_date: null, budget_year: 2026, budget_month: 9 }));
+  });
+
+  it("keeps every income amount and date when only the source name changes", async () => {
+    render(<BudgetModule screen="income" />);
+    fireEvent.click(await screen.findByRole("button", { name: /Salary/ }));
+    fireEvent.change(screen.getByLabelText("Source name"), { target: { value: "Salary (main)" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    await waitFor(() => expect(apiMock.updateBudgetMonthIncome).toHaveBeenCalledWith("home-1", 2026, 9, "source-1", { expected_amount: 4850, received_amount: 4200, received_date: null, budget_year: 2026, budget_month: 9 }));
+    expect(apiMock.updateBudgetIncomeSource).toHaveBeenCalledWith("home-1", "source-1", { name: "Salary (main)", usual_payday_day: 25, recurring: true });
+  });
+
+  it("shows a blank expected amount on its field and sends nothing", async () => {
+    render(<BudgetModule screen="income" />);
+    fireEvent.click(await screen.findByRole("button", { name: /Salary/ }));
+    const expected = screen.getByLabelText("Expected amount (per month)");
+    fireEvent.change(expected, { target: { value: "" } });
+    fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
+    expect(await screen.findByText("Enter the expected amount.")).toBeInTheDocument();
+    expect(expected).toHaveAttribute("aria-invalid", "true");
+    expect(apiMock.updateBudgetIncomeSource).not.toHaveBeenCalled();
+    expect(apiMock.updateBudgetMonthIncome).not.toHaveBeenCalled();
   });
 
   it("opens the add-income BottomSheet and closes after saving", async () => {

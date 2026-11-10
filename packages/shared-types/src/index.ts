@@ -165,6 +165,25 @@ export interface EventPayload {
   recurrence_count?: number | null;
 }
 
+export interface EventCopyDestination {
+  date: string;
+  start_time?: string | null;
+  end_time?: string | null;
+}
+
+export interface EventCopyPayload {
+  /** Preferred row-based payload; each destination can use its own times. */
+  destinations?: EventCopyDestination[];
+  /** Legacy shared-time shape retained for older clients. */
+  destination_dates?: string[];
+  start_time?: string | null;
+  end_time?: string | null;
+}
+
+export interface EventCopyResponse {
+  items: EventOccurrence[];
+}
+
 export type CalendarCommercialAccess = "normal" | "read_only_due_to_plan";
 
 export interface HomeCalendar {
@@ -268,6 +287,24 @@ export interface EventDetailResponse {
 export interface EventListResponse {
   items: EventOccurrence[];
   next_page: number | null;
+}
+
+export interface EventReuseSuggestion {
+  source_event_id: string;
+  title: string;
+  start_at: string;
+  end_at: string;
+  is_all_day: boolean;
+  timezone: string;
+  description: string | null;
+  location_text: string | null;
+  calendar_id: string;
+  label_id: string | null;
+  reminder_minutes: number | null;
+}
+
+export interface EventReuseSuggestionListResponse {
+  items: EventReuseSuggestion[];
 }
 
 export interface InvitationResponse {
@@ -1276,6 +1313,10 @@ export interface BillingStatus {
   price: SubscriptionPrice | null;
   current_period_end: string | null;
   cancel_at_period_end: boolean;
+  pending_plan?: SubscriptionPlanValue | null;
+  pending_billing_interval?: BillingInterval | null;
+  pending_effective_at?: string | null;
+  has_pending_change?: boolean;
   affected_adult_members?: string[];
   retention_state?: "retained_free" | "restored" | "purge_pending" | "purged" | null;
   retention_deadline?: string | null;
@@ -1301,6 +1342,20 @@ export interface BillingStatus {
   nudges_enabled: boolean;
   budget_enabled: boolean;
   driveway_enabled: boolean;
+}
+
+export interface SubscriptionChangePreview {
+  current_plan: SubscriptionPlanValue;
+  target_plan: SubscriptionPlanValue;
+  current_interval: BillingInterval | null;
+  target_interval: BillingInterval | null;
+  amount_due: number;
+  currency: string | null;
+  next_amount: number;
+  next_amount_formatted: string | null;
+  effective_at: string | null;
+  effective_immediately: boolean;
+  requires_payment: boolean;
 }
 
 export interface PricingOption {

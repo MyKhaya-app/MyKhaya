@@ -140,6 +140,43 @@ async def list_groups(
     return [await group_response(db, group, membership) for group, membership in rows]
 
 
+@router.get("/onboarding/resume", response_model=GroupResponse)
+async def resume_onboarding_home(
+    auth: AuthContext = Depends(auth_context), db: AsyncSession = Depends(get_db)
+) -> GroupResponse:
+    """Return the caller's one unfinished, onboarding-created Home.
+
+    A missing candidate is intentionally a 404. More than one is treated as
+    an integrity problem rather than guessed, so a prior bad state cannot
+    silently select the wrong Home.
+    """
+    rows = (
+        await db.execute(
+            select(Group, Membership)
+            .join(Membership, Membership.group_id == Group.id)
+            .where(
+                Group.created_by == auth.user.id,
+                Group.onboarding_key.is_not(None),
+                Group.onboarding_completed_at.is_(None),
+                Membership.user_id == auth.user.id,
+                Membership.removed_at.is_(None),
+                Membership.relationship == HouseholdRelationship.home_admin,
+                Group.is_active.is_(True),
+            )
+            .order_by(Group.created_at)
+        )
+    ).all()
+    if not rows:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "No unfinished Home onboarding was found.")
+    if len(rows) != 1:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "More than one unfinished Home onboarding was found.",
+        )
+    group, membership = rows[0]
+    return await group_response(db, group, membership)
+
+
 @router.post("", response_model=GroupResponse, status_code=status.HTTP_201_CREATED)
 async def create_group(
     body: GroupCreate,
@@ -148,10 +185,40 @@ async def create_group(
     db: AsyncSession = Depends(get_db),
 ) -> GroupResponse:
     require_adult_session(auth)
+    if body.onboarding_key is not None:
+        # Serialise only this onboarding operation. This does not affect the
+        # normal POST /groups path used for intentional additional Homes.
+        await db.execute(
+            text("SELECT pg_advisory_xact_lock(hashtext(:key))"),
+            {"key": f"onboarding-home:{auth.user.id}:{body.onboarding_key}"},
+        )
+        existing = await db.scalar(
+            select(Group)
+            .where(
+                Group.created_by == auth.user.id,
+                Group.onboarding_key == body.onboarding_key,
+                Group.is_active.is_(True),
+            )
+            .with_for_update()
+        )
+        if existing is not None:
+            membership = await db.scalar(
+                select(Membership).where(
+                    Membership.group_id == existing.id,
+                    Membership.user_id == auth.user.id,
+                    Membership.removed_at.is_(None),
+                )
+            )
+            if membership is None:
+                raise HTTPException(
+                    status.HTTP_409_CONFLICT, "This Home could not be resumed safely."
+                )
+            return await group_response(db, existing, membership)
     await require_home_capacity_for_user(db, auth.user.id)
     group = Group(
         name=body.name,
         created_by=auth.user.id,
+        onboarding_key=body.onboarding_key,
         child_login_code=await _unique_home_code(db),
     )
     db.add(group)
@@ -198,6 +265,29 @@ async def create_group(
     await ensure_personal_calendar(db, group.id, auth.user.id)
     audit(db, request, "group.created", auth.user.id, group.id, "group", group.id)
     await db.commit()
+    return await group_response(db, group, membership)
+
+
+@router.post("/{group_id}/onboarding/complete", response_model=GroupResponse)
+async def complete_onboarding(
+    group_id: uuid.UUID,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+) -> GroupResponse:
+    require_adult_session(auth)
+    membership = await membership_for(group_id, auth, db)
+    if membership.relationship != HouseholdRelationship.home_admin:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, "Only the Home Admin can complete onboarding."
+        )
+    group = await db.scalar(select(Group).where(Group.id == group_id).with_for_update())
+    if group is None or group.created_by != auth.user.id:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That Home could not be found.")
+    if group.onboarding_completed_at is None:
+        group.onboarding_completed_at = datetime.now(UTC)
+        audit(db, request, "group.onboarding_completed", auth.user.id, group_id, "group", group_id)
+        await db.commit()
     return await group_response(db, group, membership)
 
 

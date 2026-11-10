@@ -106,6 +106,43 @@ async def test_database_configuration_uses_pcc_acquisition_switch() -> None:
         await db.commit()
 
 
+@pytest.mark.asyncio
+async def test_production_rejects_pcc_test_mode_configuration() -> None:
+    from mykhaya.models import PlatformStripeSettings, StripeMode
+
+    settings = _settings(
+        environment="production",
+        public_web_url="https://mykhaya.example.com",
+        admin_url="https://admin.mykhaya.example.com",
+        status_url="https://status.mykhaya.example.com",
+        native_api_url="https://api.mykhaya.example.com",
+        trusted_hosts=[
+            "mykhaya.example.com",
+            "admin.mykhaya.example.com",
+            "status.mykhaya.example.com",
+            "api.mykhaya.example.com",
+        ],
+        cors_origins=["https://admin.mykhaya.example.com"],
+        cookie_secure=True,
+        cookie_domain=None,
+        admin_allowed_networks=["10.0.0.0/8"],
+        admin_mfa_required=True,
+        fcm_project_id="mykhaya-prod",
+        **_stripe_test_kwargs(stripe_secret_key="sk_live_abc123"),
+    )
+    async with SessionFactory() as db:
+        row = PlatformStripeSettings(enabled=True, mode=StripeMode.test)
+        db.add(row)
+        await db.flush()
+        config = await resolve_stripe_config(settings, db)
+        assert config.configured is False
+        assert config.source == "database"
+        assert config.incomplete_reason is not None
+        assert "require Stripe live mode" in config.incomplete_reason
+        await db.delete(row)
+        await db.commit()
+
+
 @pytest.mark.parametrize(
     "missing_field",
     [
@@ -154,6 +191,7 @@ def test_test_key_in_production_is_rejected() -> None:
             cookie_domain=None,
             admin_allowed_networks=["10.0.0.0/8"],
             admin_mfa_required=True,
+            fcm_project_id="mykhaya-prod",
             **kwargs,
         )
 
@@ -177,6 +215,7 @@ def test_live_key_in_production_is_accepted() -> None:
         cookie_domain=None,
         admin_allowed_networks=["10.0.0.0/8"],
         admin_mfa_required=True,
+        fcm_project_id="mykhaya-prod",
         **kwargs,
     )
     assert settings.stripe_billing_configured is True

@@ -7,6 +7,7 @@ export default [
       "eslint.config.mjs",
       "public/**",
       "scripts/**",
+      "test-results/**",
     ],
   },
   ...base,

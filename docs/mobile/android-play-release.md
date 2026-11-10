@@ -50,10 +50,9 @@ apkanalyzer manifest application-id app\build\outputs\bundle\productionRelease\a
 
 Confirm the package is `app.mykhaya.mobile.prod`, the signing certificate is
 the intended upload certificate, and the version code is unused in the PROD
-Play Console. This repository currently declares `versionCode 30` and
-`versionName 0.1.30`; Play Console is the authority for whether 30 is unused.
-If 30 has already been used, increment `versionCode` only and keep the version
-name aligned with the release decision.
+Play Console. The corrective release currently declares `versionCode 31` and
+`versionName 0.1.31`; Play Console remains the authority for whether 31 is
+unused. Never reuse versionCode 30.
 
 ## Subsequent releases
 

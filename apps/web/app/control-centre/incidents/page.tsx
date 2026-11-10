@@ -88,7 +88,17 @@ export default function IncidentsPage() {
     {
       key: "title",
       header: "Incident",
-      render: (row) => <Link href={`/incidents/${row.id}`}>{row.title}</Link>,
+      render: (row) => (
+        <>
+          <Link href={`/incidents/${row.id}`}>{row.title}</Link>
+          {row.source === "automated" && (
+            <>
+              {" "}
+              <CcBadge tone="info">Automated</CcBadge>
+            </>
+          )}
+        </>
+      ),
     },
     {
       key: "lifecycle",
@@ -140,7 +150,7 @@ export default function IncidentsPage() {
                 <CcBadge tone={serviceStateTone(data.overall)}>{data.overall_message}</CcBadge>
               </p>
               <CcMetadataGrid dense>
-                {data.services.map((service) => (
+                {[...data.services, ...(data.external_services ?? [])].map((service) => (
                   <CcMetadataItem key={service.key} label={service.name}>
                     <CcBadge tone={serviceStateTone(service.state)}>
                       {serviceStateLabel(service.state)}

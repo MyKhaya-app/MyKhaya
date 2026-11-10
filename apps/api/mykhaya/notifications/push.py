@@ -60,8 +60,24 @@ class ApnsPermanentError(Exception):
     pass
 
 
+class FcmConfigurationError(Exception):
+    """The local FCM service-account configuration cannot be used."""
+
+
 class FcmPermanentError(Exception):
     pass
+
+
+class FcmAuthenticationError(Exception):
+    """FCM or Google OAuth rejected the service-account authorization."""
+
+
+class FcmInvalidRequestError(Exception):
+    """FCM rejected the message/request as permanently invalid."""
+
+
+class FcmTransientError(Exception):
+    """FCM or Google OAuth returned a retryable provider/network failure."""
 
 
 APNS_PRODUCTION_ENDPOINT = "https://api.push.apple.com"
@@ -102,6 +118,7 @@ def apns_failure_diagnostics(response: httpx.Response) -> dict[str, object]:
     if isinstance(response_json, dict):
         reason = response_json.get("reason")
     return {
+        "provider": "apns",
         "status": response.status_code,
         "reason": _safe_apns_log_value(reason),
         "request_id": _safe_apns_log_value(response.headers.get("apns-id")),
@@ -142,6 +159,7 @@ def fcm_failure_diagnostics(response: httpx.Response) -> dict[str, object]:
     """Extract only safe metadata from a non-successful FCM response — mirrors
     apns_failure_diagnostics(); the response body is never logged verbatim."""
     return {
+        "provider": "fcm",
         "status": response.status_code,
         "error_code": _safe_apns_log_value(_fcm_error_code(response)),
         "retryable": is_fcm_response_retryable(response.status_code),
@@ -154,6 +172,24 @@ def fcm_failure_diagnostics(response: httpx.Response) -> dict[str, object]:
 # message rather than a bad token) is left as retryable/transient rather than
 # risking disabling a device for a bug on our side.
 _FCM_PERMANENT_ERROR_CODES = frozenset({"UNREGISTERED", "NOT_FOUND"})
+
+_APNS_PERMANENT_ERROR_REASONS = frozenset(
+    {
+        "BadDeviceToken",
+        "BadEnvironmentKeyInToken",
+        "DeviceTokenNotForTopic",
+        "DuplicateHeaders",
+        "ExpiredProviderToken",
+        "IdleTimeout",
+        "InvalidProviderToken",
+        "MissingDeviceToken",
+        "MissingTopic",
+        "PayloadEmpty",
+        "PayloadTooLarge",
+        "TopicDisallowed",
+        "Unregistered",
+    }
+)
 
 
 def _normalise_pem_private_key(private_key: str) -> str:
@@ -307,7 +343,10 @@ def send_apns(config: ApnsConfig, device: NativePushDevice, payload: dict[str, o
             json=request_payload,
         )
     if not 200 <= response.status_code < 300:
-        log.error("apns_delivery_failed", **apns_failure_diagnostics(response))
+        diagnostics = apns_failure_diagnostics(response)
+        log.error("apns_delivery_failed", **diagnostics)
+        if diagnostics["reason"] in _APNS_PERMANENT_ERROR_REASONS:
+            raise ApnsPermanentError("APNs rejected this device registration")
     if response.status_code in (400, 404, 410):
         raise ApnsPermanentError("APNs rejected this device registration")
     response.raise_for_status()
@@ -337,29 +376,43 @@ def _build_fcm_access_token(config: FcmConfig) -> str:
     if not config.client_email or not config.private_key:
         raise RuntimeError("FCM service-account configuration is incomplete")
     issued_at = int(time.time())
-    assertion = apns_jwt.encode(
-        {"alg": "RS256"},
-        {
-            "iss": config.client_email,
-            "scope": FCM_MESSAGING_SCOPE,
-            "aud": FCM_TOKEN_ENDPOINT,
-            "iat": issued_at,
-            "exp": issued_at + 3600,
-        },
-        _normalise_pem_private_key(config.private_key).encode("utf-8"),
-    )
+    try:
+        assertion = apns_jwt.encode(
+            {"alg": "RS256"},
+            {
+                "iss": config.client_email,
+                "scope": FCM_MESSAGING_SCOPE,
+                "aud": FCM_TOKEN_ENDPOINT,
+                "iat": issued_at,
+                "exp": issued_at + 3600,
+            },
+            _normalise_pem_private_key(config.private_key).encode("utf-8"),
+        )
+    except (TypeError, ValueError) as exc:
+        raise FcmConfigurationError("FCM service-account private key is invalid") from exc
     if isinstance(assertion, bytes):
         assertion = assertion.decode("ascii")
-    with httpx.Client(timeout=10) as client:
-        response = client.post(
-            FCM_TOKEN_ENDPOINT,
-            data={
-                "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
-                "assertion": assertion,
-            },
-        )
-    response.raise_for_status()
-    token = response.json().get("access_token")
+    try:
+        with httpx.Client(timeout=10) as client:
+            response = client.post(
+                FCM_TOKEN_ENDPOINT,
+                data={
+                    "grant_type": "urn:ietf:params:oauth:grant-type:jwt-bearer",
+                    "assertion": assertion,
+                },
+            )
+    except httpx.HTTPError as exc:
+        raise FcmTransientError("Google OAuth token exchange failed") from exc
+    if not 200 <= response.status_code < 300:
+        if response.status_code in (401, 403) or response.status_code == 400:
+            raise FcmAuthenticationError("Google OAuth rejected the FCM service account")
+        if is_fcm_response_retryable(response.status_code):
+            raise FcmTransientError("Google OAuth is temporarily unavailable")
+        raise FcmAuthenticationError("Google OAuth rejected the FCM service account")
+    try:
+        token = response.json().get("access_token")
+    except (TypeError, ValueError) as exc:
+        raise FcmTransientError("Google OAuth returned an invalid response") from exc
     if not isinstance(token, str) or not token:
         raise RuntimeError("Google OAuth token exchange returned no access token")
     return token
@@ -438,14 +491,21 @@ def send_fcm(config: FcmConfig, device: NativePushDevice, payload: dict[str, obj
             },
         }
     }
-    with httpx.Client(timeout=10) as client:
-        response = client.post(
-            FCM_SEND_ENDPOINT.format(project_id=config.project_id),
-            headers={"authorization": f"Bearer {access_token}"},
-            json=message,
-        )
+    try:
+        with httpx.Client(timeout=10) as client:
+            response = client.post(
+                FCM_SEND_ENDPOINT.format(project_id=config.project_id),
+                headers={"authorization": f"Bearer {access_token}"},
+                json=message,
+            )
+    except httpx.HTTPError as exc:
+        raise FcmTransientError("FCM request failed") from exc
     if not 200 <= response.status_code < 300:
         log.error("fcm_delivery_failed", **fcm_failure_diagnostics(response))
         if _fcm_error_code(response) in _FCM_PERMANENT_ERROR_CODES:
             raise FcmPermanentError("FCM rejected this device registration")
-    response.raise_for_status()
+        if response.status_code in (401, 403):
+            raise FcmAuthenticationError("FCM rejected the service-account authorization")
+        if response.status_code == 400 or not is_fcm_response_retryable(response.status_code):
+            raise FcmInvalidRequestError("FCM rejected the notification request")
+        raise FcmTransientError("FCM is temporarily unavailable")

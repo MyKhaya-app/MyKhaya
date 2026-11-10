@@ -139,8 +139,13 @@ def _classify_response(code: int, default: type[EmailSendError]) -> EmailSendErr
 
 
 def send_email(
-    config: SmtpConfig, recipient: str, subject: str, text: str, html: str | None = None
-) -> None:
+    config: SmtpConfig,
+    recipient: str,
+    subject: str,
+    text: str,
+    html: str | None = None,
+    attachment: tuple[str, bytes, str] | None = None,
+) -> str:
     """Sends a multipart/alternative message (text/plain + optional text/html) —
     never HTML-only, so the message stays fully readable in a plain-text-only
     client or with remote images/HTML blocked. From/To/Subject/Reply-To are set
@@ -166,6 +171,10 @@ def send_email(
     message.set_content(text)
     if html:
         message.add_alternative(html, subtype="html")
+    if attachment:
+        filename, data, mimetype = attachment
+        maintype, subtype = mimetype.split("/", 1)
+        message.add_attachment(data, maintype=maintype, subtype=subtype, filename=filename)
 
     try:
         client_cm: smtplib.SMTP | smtplib.SMTP_SSL
@@ -185,6 +194,7 @@ def send_email(
                 except smtplib.SMTPAuthenticationError as exc:
                     raise EmailAuthenticationError("SMTP authentication failed") from exc
             client.send_message(message)
+        return message["Message-ID"] or ""
     except EmailSendError:
         raise
     except smtplib.SMTPRecipientsRefused as exc:

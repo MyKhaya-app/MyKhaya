@@ -372,14 +372,12 @@ architecture change.
 
 ## Deployment target
 
-No `ios/` project exists in this repo to read an authoritative minimum iOS
-version from. The widget extension is written against classic
-`TimelineProvider`/`StaticConfiguration` (works from iOS 14) and set to a
-conservative **iOS 16.0** floor in `setup-widget-extension.rb`
-(`WIDGET_DEPLOYMENT_TARGET`). The script prints the *main* app target's
-actual `IPHONEOS_DEPLOYMENT_TARGET` for comparison the first time it runs
-on a Mac — **read that output and adjust `WIDGET_DEPLOYMENT_TARGET` if the
-main target's minimum is different**, then re-run.
+The committed project sets the app target to **iOS 15.0** and the widget
+extension to **iOS 16.0** (`WIDGET_DEPLOYMENT_TARGET` in
+`setup-widget-extension.rb`). The widget is written against classic
+`TimelineProvider`/`StaticConfiguration`, which works from iOS 14. On an
+iOS 15 device the app runs but its widgets are unavailable. Lowering the
+widget floor to 15.0 would need testing on an iOS 15 device first.
 
 ## Mac bootstrap integration
 

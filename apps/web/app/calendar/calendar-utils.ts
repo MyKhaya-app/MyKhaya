@@ -130,9 +130,23 @@ export function eventTime(event: EventOccurrence, timeZone: string) {
 // prev/next preview panels, so the two can never drift into two different
 // ideas of "next month".
 export function addMonths(base: Date, delta: number): Date {
-  const next = new Date(base);
-  next.setUTCMonth(next.getUTCMonth() + delta);
-  return next;
+  const targetMonth = base.getUTCMonth() + delta;
+  const targetYear = base.getUTCFullYear() + Math.floor(targetMonth / 12);
+  const normalizedMonth = ((targetMonth % 12) + 12) % 12;
+  const lastDayOfTargetMonth = new Date(
+    Date.UTC(targetYear, normalizedMonth + 1, 0),
+  ).getUTCDate();
+  return new Date(
+    Date.UTC(
+      targetYear,
+      normalizedMonth,
+      Math.min(base.getUTCDate(), lastDayOfTargetMonth),
+      base.getUTCHours(),
+      base.getUTCMinutes(),
+      base.getUTCSeconds(),
+      base.getUTCMilliseconds(),
+    ),
+  );
 }
 
 export function monthRange(base: Date) {

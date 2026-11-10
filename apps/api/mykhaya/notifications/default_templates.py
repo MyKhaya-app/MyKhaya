@@ -60,6 +60,42 @@ class TemplateDefault:
 
 
 TEMPLATES: dict[str, TemplateDefault] = {
+    "legal_acceptance_confirmation": TemplateDefault(
+        subject="Your MyKhaya {{document_name}} acceptance confirmation",
+        body=(
+            "Hi {{user_first_name}},\n\n"
+            "This email confirms that you accepted or acknowledged the following "
+            "MyKhaya legal document:\n\n"
+            "{{document_name}}\nVersion: {{document_version}}\n\n"
+            "Acceptance details\n\n"
+            "Date and time: {{accepted_at}} {{accepted_timezone}}\n\n"
+            "IP address: {{ip_address}}\n\n"
+            "Reference: {{acceptance_reference}}\n\n"
+            "A PDF copy of the exact legal document version recorded at the time, "
+            "together with your acceptance details, is attached for your records.\n\n"
+            "If you believe this activity was not authorised, please contact "
+            "{{support_email}}.\n\nMyKhaya"
+        ),
+        allowed_variables=frozenset(
+            {
+                "user_first_name",
+                "document_name",
+                "document_version",
+                "accepted_at",
+                "accepted_timezone",
+                "ip_address",
+                "acceptance_reference",
+                "support_email",
+            }
+        ),
+        required_variables=frozenset({"document_name", "document_version", "acceptance_reference"}),
+        description=(
+            "Mandatory confirmation of a user's recorded legal acceptance or acknowledgement."
+        ),
+        module="legal_compliance",
+        disableable=False,
+        security_critical=True,
+    ),
     "mfa_email_code": TemplateDefault(
         subject="Your MyKhaya verification code",
         body=(
@@ -132,6 +168,35 @@ TEMPLATES: dict[str, TemplateDefault] = {
         allowed_variables=frozenset({"link"}),
         required_variables=frozenset({"link"}),
         description="Sent when someone requests a password reset.",
+        module="account_security",
+        disableable=False,
+        security_critical=True,
+    ),
+    # Sent after a PCC Owner/Administrator disconnects an Apple/Google
+    # identity (routers.platform.disconnect_user_sign_in_provider). Names the
+    # provider only: never the provider identifier, provider email or the
+    # administrator.
+    "account.sign_in_method_disconnected": TemplateDefault(
+        subject="{{provider_name}} sign-in was removed from your MyKhaya account",
+        body=(
+            "Hi {{user_first_name}},\n\n"
+            "On {{disconnected_at}}, the MyKhaya support team removed the connection "
+            "between your {{provider_name}} account and your MyKhaya account.\n\n"
+            "You can no longer sign in to MyKhaya with {{provider_name}} until you "
+            "reconnect it. Your {{provider_name}} account itself has not been changed, and "
+            "your Homes, information and subscription are not affected.\n\n"
+            "You can still sign in with your other sign-in methods, and reconnect "
+            "{{provider_name}} at any time from Settings > Security > Sign-in methods.\n\n"
+            "If you did not expect this change, please contact {{support_email}}.\n\n"
+            "MyKhaya"
+        ),
+        allowed_variables=frozenset(
+            {"user_first_name", "provider_name", "disconnected_at", "support_email"}
+        ),
+        required_variables=frozenset({"provider_name"}),
+        description=(
+            "Sent when a Platform administrator disconnects a user's Apple or Google sign-in."
+        ),
         module="account_security",
         disableable=False,
         security_critical=True,
@@ -284,6 +349,61 @@ TEMPLATES: dict[str, TemplateDefault] = {
         required_variables=frozenset({"reference", "reply_text"}),
         description="Sent to the support team when a requester follows up on their own ticket.",
         module="support",
+        disableable=False,
+        security_critical=False,
+    ),
+    # Sent to the PCC roles (and optionally the support inbox) selected in PCC
+    # Support settings when a new ticket is created
+    # (support_notifications._notify_team_of_new_ticket). Operational detail
+    # only: never the description, attachments or diagnostics.
+    "support.ticket.new_for_team": TemplateDefault(
+        subject="[MyKhaya {{environment}}] New {{priority}} support ticket {{reference}}",
+        body=(
+            "A new {{ticket_type}} has been submitted.\n\n"
+            "Reference: {{reference}}\n"
+            "Subject: {{subject}}\n"
+            "Priority: {{priority}}\n"
+            "Submitted: {{submitted_at}}\n\n"
+            "Open it in the Platform Control Centre:\n\n{{link}}"
+        ),
+        allowed_variables=frozenset(
+            {
+                "environment",
+                "reference",
+                "subject",
+                "ticket_type",
+                "priority",
+                "submitted_at",
+                "link",
+            }
+        ),
+        required_variables=frozenset({"reference", "link"}),
+        description=(
+            "Sent to the PCC roles selected in Support settings when a new ticket is created."
+        ),
+        module="support",
+        disableable=False,
+        security_critical=False,
+    ),
+    # --- Platform monitoring ----------------------------------------------------
+    # Sent to Platform Control Centre administrators by mykhaya.monitoring.alerts.
+    # The subject/summary are composed by monitoring itself (service, environment,
+    # status, failure, timings); this template only frames them. Operational, not
+    # account-security mail, and never disableable: an outage alert that can be
+    # switched off from the template page would defeat its purpose (recipients
+    # and on/off live in PCC Health -> Alert recipients, which is audited).
+    "platform.monitoring_alert": TemplateDefault(
+        subject="{{subject}}",
+        body=(
+            "{{summary}}\n\n"
+            "This is an automated MyKhaya monitoring alert sent to Platform Control "
+            "Centre administrators."
+        ),
+        allowed_variables=frozenset({"subject", "summary", "link"}),
+        required_variables=frozenset({"subject", "summary"}),
+        description="Sent to PCC administrators when automated monitoring confirms a "
+        "service failure, recovery, or that monitoring itself has stopped.",
+        module="platform",
         disableable=False,
         security_critical=False,
     ),
@@ -603,6 +723,25 @@ del _template_type, _default, _unknown_required
 # Realistic placeholder values for the Platform Admin preview/test-send actions — never
 # real user data, since a preview must never leak anything from an actual account.
 SAMPLE_VARIABLES: dict[str, dict[str, str]] = {
+    "platform.monitoring_alert": {
+        "subject": "[MyKhaya DEV] Service Degraded: DVSA MOT History",
+        "summary": (
+            "Service: DVSA MOT History\nEnvironment: DEV\nStatus: Degraded\n"
+            "Detected: 09/11/2026 19:25 UTC\nFailure: TLS or certificate failure\n"
+            "Consecutive failures: 3\nLast successful check: 19:21 UTC"
+        ),
+        "link": "https://admin.example.test/health",
+    },
+    "legal_acceptance_confirmation": {
+        "user_first_name": "Jamie",
+        "document_name": "Terms & Conditions",
+        "document_version": "1.0",
+        "accepted_at": "8 November 2026, 12:00",
+        "accepted_timezone": "Europe/London",
+        "ip_address": "203.0.113.10",
+        "acceptance_reference": "00000000-0000-0000-0000-000000000000",
+        "support_email": "support@example.com",
+    },
     "mfa_email_code": {"code": "123456"},
     "daily_nudge_summary": {
         "user_display_name": "Jamie",
@@ -636,6 +775,12 @@ SAMPLE_VARIABLES: dict[str, dict[str, str]] = {
         "link": "https://example.com/home",
     },
     "password_reset": {"link": "https://example.com/reset-password?token=SAMPLE-TOKEN"},
+    "account.sign_in_method_disconnected": {
+        "user_first_name": "Jamie",
+        "provider_name": "Apple",
+        "disconnected_at": "10 November 2026, 09:30 UTC",
+        "support_email": "support@example.com",
+    },
     "household_invitation": {
         "inviter_display_name": "Jamie Example",
         "home_name": "The Example Family",
@@ -745,6 +890,15 @@ SAMPLE_VARIABLES: dict[str, dict[str, str]] = {
         "reference": "MK-1042",
         "ticket_type": "support request",
         "subject": "Account help",
+    },
+    "support.ticket.new_for_team": {
+        "environment": "DEV",
+        "reference": "MK-1042",
+        "subject": "Account help",
+        "ticket_type": "support request",
+        "priority": "Normal",
+        "submitted_at": "10 November 2026, 09:30 UTC",
+        "link": "https://admin.example.test/support/tickets/00000000-0000-0000-0000-000000000000",
     },
     "support.ticket.reply": {
         "reference": "MK-1042",

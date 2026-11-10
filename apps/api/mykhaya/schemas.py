@@ -85,11 +85,46 @@ class LoginRequest(StrictModel):
     password: str = Field(min_length=1, max_length=128)
 
 
+class MobileLoginRequest(LoginRequest):
+    # Binds a native MFA continuation to the client that proved the password.
+    # Required whenever the consumer MFA policy applies; optional so a client
+    # with no MFA requirement still signs in with the same request shape.
+    redemption_verifier: str | None = Field(default=None, min_length=32, max_length=256)
+
+
 class AuthContinuationResponse(BaseModel):
     authentication_state: Literal["additional_auth_required"]
     transaction_id: str
     destination: str | None = None
     onboarding: bool = False
+
+
+class AppleRecoveryRequest(StrictModel):
+    transaction_id: str = Field(min_length=20, max_length=256)
+    legal_acceptances: list[SignupLegalAcceptanceItem] = Field(default_factory=list)
+    platform: LegalPlatform = LegalPlatform.web
+    beta: bool = False
+    beta_invitation_token: str | None = Field(default=None, min_length=32, max_length=500)
+
+
+class AppleRecoveryOptionsResponse(BaseModel):
+    can_register: bool
+    provider_email: str | None = None
+    display_name: str
+
+
+class GoogleRecoveryRequest(StrictModel):
+    transaction_id: str = Field(min_length=20, max_length=256)
+    legal_acceptances: list[SignupLegalAcceptanceItem] = Field(default_factory=list)
+    platform: LegalPlatform = LegalPlatform.web
+    beta: bool = False
+    beta_invitation_token: str | None = Field(default=None, min_length=32, max_length=500)
+
+
+class GoogleRecoveryOptionsResponse(BaseModel):
+    can_register: bool
+    provider_email: EmailStr | None = None
+    display_name: str
 
 
 class MfaStartRequest(StrictModel):
@@ -121,9 +156,18 @@ class MfaVerifyRequest(StrictModel):
         return value
 
 
+class NativeMfaStartRequest(MfaStartRequest):
+    redemption_verifier: str = Field(min_length=32, max_length=256)
+
+
+class NativeMfaVerifyRequest(MfaVerifyRequest):
+    redemption_verifier: str = Field(min_length=32, max_length=256)
+
+
 class MfaOptionsResponse(BaseModel):
     methods: list[Literal["totp", "email"]]
     destination: str | None = None
+    primary_auth_method: str | None = None
     onboarding: bool = False
     policy: Literal["optional", "required"] = "required"
     policy_source: str = "platform"
@@ -156,6 +200,19 @@ class MfaPreferenceRequest(StrictModel):
 
 class ReauthenticateRequest(StrictModel):
     password: str = Field(min_length=1, max_length=128)
+
+
+class ExternalIdentityResponse(BaseModel):
+    provider: Literal["apple", "google"]
+    provider_email: EmailStr | None = None
+    provider_email_verified: bool
+    linked_at: datetime
+    last_used_at: datetime | None = None
+
+
+class SignInMethodsResponse(BaseModel):
+    password_available: bool
+    identities: list[ExternalIdentityResponse]
 
 
 class TokenRequest(StrictModel):
@@ -247,8 +304,71 @@ class MobileDeviceRenewRequest(StrictModel):
     device_token: str = Field(min_length=30, max_length=500)
 
 
+class NativeExternalStartRequest(StrictModel):
+    provider: Literal["apple", "google"]
+    intent: Literal["login", "link"] = "login"
+    platform: Literal["ios", "android"]
+    redemption_verifier: str = Field(min_length=32, max_length=256)
+
+
+class NativeExternalStartResponse(BaseModel):
+    transaction_id: str
+    nonce: str
+    provider: Literal["apple", "google"]
+    client_id: str | None = None
+
+
+class NativeExternalBrowserStartRequest(StrictModel):
+    provider: Literal["apple", "google"]
+    intent: Literal["login", "link"] = "login"
+    platform: Literal["ios", "android"]
+    return_uri: str = Field(min_length=8, max_length=300)
+    redemption_verifier: str = Field(min_length=32, max_length=256)
+
+
+class NativeExternalBrowserStartResponse(BaseModel):
+    authorization_url: str
+    transaction_id: str
+
+
+class NativeExternalExchangeRequest(StrictModel):
+    transaction_id: str = Field(min_length=20, max_length=256)
+    identity_token: str = Field(min_length=20, max_length=20000)
+    redemption_verifier: str = Field(min_length=32, max_length=256)
+
+
+class NativeExternalRecoveryResponse(BaseModel):
+    authentication_state: Literal["account_choice"]
+    transaction_id: str
+    provider: Literal["apple", "google"]
+    provider_email: str | None = None
+    display_name: str
+    can_register: bool
+
+
+class NativeMfaContinuationResponse(BaseModel):
+    authentication_state: Literal["additional_auth_required"]
+    transaction_id: str
+    # The completed primary factor. "password" is native email/password.
+    provider: Literal["apple", "google", "password"]
+
+
+class NativeExternalLinkRequest(StrictModel):
+    transaction_id: str = Field(min_length=20, max_length=256)
+    redemption_verifier: str = Field(min_length=32, max_length=256)
+
+
+class NativeExternalRegisterRequest(StrictModel):
+    transaction_id: str = Field(min_length=20, max_length=256)
+    display_name: str | None = Field(default=None, min_length=1, max_length=100)
+    legal_acceptances: list[SignupLegalAcceptanceItem] = Field(default_factory=list)
+    platform: Literal["ios", "android"]
+    redemption_verifier: str = Field(min_length=32, max_length=256)
+
+
 class GroupCreate(StrictModel):
     name: str = Field(min_length=1, max_length=100)
+    onboarding_key: str | None = Field(default=None, min_length=20, max_length=64)
 
     @field_validator("name")
     @classmethod
@@ -950,6 +1070,61 @@ class EventCreate(StrictModel):
         return _require_tz_aware(value)
 
 
+class EventCopyDestination(StrictModel):
+    """One independent destination row in a copy request."""
+
+    date: date
+    start_time: clock_time | None = None
+    end_time: clock_time | None = None
+
+    @model_validator(mode="after")
+    def validate_times(self) -> "EventCopyDestination":
+        if (self.start_time is None) != (self.end_time is None):
+            raise ValueError("Start and end times must be provided together")
+        if (
+            self.start_time is not None
+            and self.end_time is not None
+            and self.end_time <= self.start_time
+        ):
+            raise ValueError("End time must be after start time")
+        return self
+
+
+class EventCopyRequest(StrictModel):
+    """Dates are local calendar dates in the source event's timezone."""
+
+    destinations: list[EventCopyDestination] | None = Field(
+        default=None, min_length=1, max_length=31
+    )
+    # Kept for clients released before independent destination rows existed.
+    destination_dates: list[date] = Field(default_factory=list, max_length=31)
+    start_time: clock_time | None = None
+    end_time: clock_time | None = None
+
+    @model_validator(mode="after")
+    def validate_dates_and_times(self) -> "EventCopyRequest":
+        if self.destinations is not None:
+            if self.destination_dates or self.start_time is not None or self.end_time is not None:
+                raise ValueError("Use destinations or the legacy shared-time fields, not both")
+            destination_dates = [item.date for item in self.destinations]
+        else:
+            destination_dates = self.destination_dates
+            if not destination_dates:
+                raise ValueError("At least one destination date is required")
+        if len(set(destination_dates)) != len(destination_dates):
+            raise ValueError("Destination dates must be unique")
+        if self.destinations is None:
+            if (self.start_time is None) != (self.end_time is None):
+                raise ValueError("Start and end times must be provided together")
+            if (
+                self.start_time is not None
+                and self.end_time is not None
+                and self.end_time <= self.start_time
+            ):
+                raise ValueError("End time must be after start time")
+        return self
+
+
 # Which recurring occurrences a mutation applies to — "series" (the whole
 # recurring event, or the only sensible value for a non-recurring one) is
 # the default so every existing API caller (native/web builds predating
@@ -1034,6 +1209,10 @@ class EventOccurrence(BaseModel):
     is_overridden: bool = False
 
 
+class EventCopyResponse(BaseModel):
+    items: list[EventOccurrence]
+
+
 class EventActivityResponse(BaseModel):
     id: uuid.UUID
     action: str
@@ -1050,6 +1229,26 @@ class EventDetailResponse(BaseModel):
 class EventListResponse(BaseModel):
     items: list[EventOccurrence]
     next_page: int | None
+
+
+class EventReuseSuggestion(BaseModel):
+    """Safe reusable fields from an event the caller may already view."""
+
+    source_event_id: uuid.UUID
+    title: str
+    start_at: datetime
+    end_at: datetime
+    is_all_day: bool
+    timezone: str
+    description: str | None
+    location_text: str | None
+    calendar_id: uuid.UUID
+    label_id: uuid.UUID | None
+    reminder_minutes: int | None
+
+
+class EventReuseSuggestionListResponse(BaseModel):
+    items: list[EventReuseSuggestion]
 
 
 class HomeSummaryResponse(BaseModel):

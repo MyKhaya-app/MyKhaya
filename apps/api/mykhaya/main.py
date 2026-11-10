@@ -16,6 +16,7 @@ from mykhaya.config import get_settings
 from mykhaya.crypto.config import validate_sensitive_key_configuration
 from mykhaya.db import SessionFactory, get_db
 from mykhaya.models import PlatformSetting
+from mykhaya.monitoring import http_metrics
 from mykhaya.platform_runtime import require_not_in_maintenance
 from mykhaya.routers import (
     activity,
@@ -42,7 +43,9 @@ from mykhaya.routers import (
     notifications,
     platform,
     platform_compliance,
+    platform_docs_sync,
     platform_legal,
+    platform_monitoring,
     platform_support,
     public_config,
     reminders,
@@ -212,6 +215,16 @@ def _is_home_migration_upload(request: Request) -> bool:
     return request.method == "POST" and request.url.path == "/api/v1/platform/home-migration/upload"
 
 
+def _is_apple_form_post_callback(request: Request) -> bool:
+    """Apple submits the provider form without MyKhaya's CSRF cookie/header.
+
+    This is deliberately limited to the exact callback path and POST method.
+    The callback still requires a valid, single-use Redis state before it
+    exchanges the authorization code or changes any account/session state.
+    """
+    return request.method == "POST" and request.url.path == "/api/v1/auth/apple/callback"
+
+
 @app.middleware("http")
 async def security_and_limits(
     request: Request, call_next: Callable[[Request], Awaitable[Response]]
@@ -221,7 +234,11 @@ async def security_and_limits(
     started = time.monotonic()
     if request.method not in {"GET", "HEAD", "OPTIONS"}:
         origin = request.headers.get("origin")
-        if origin and origin not in settings.cors_origins:
+        if (
+            origin
+            and origin not in settings.cors_origins
+            and not _is_apple_form_post_callback(request)
+        ):
             return JSONResponse(
                 {"detail": "Request origin is not allowed"}, status_code=status.HTTP_403_FORBIDDEN
             )
@@ -292,6 +309,11 @@ async def security_and_limits(
         response.headers["Cache-Control"] = (
             "no-store" if request.url.path.startswith("/api/v1/") else "no-cache"
         )
+    duration_ms = round((time.monotonic() - started) * 1000, 2)
+    # In-memory only on the request path; flushed to Redis in the background
+    # for the API/Authentication error-rate monitors (mykhaya.monitoring).
+    http_metrics.record(request.url.path, response.status_code, duration_ms)
+    http_metrics.schedule_flush(settings.redis_url)
     log_request = log.aerror if response.status_code >= 500 else log.ainfo
     await log_request(
         "request",
@@ -299,7 +321,7 @@ async def security_and_limits(
         method=request.method,
         path=request.url.path,
         status=response.status_code,
-        duration_ms=round((time.monotonic() - started) * 1000, 2),
+        duration_ms=duration_ms,
     )
     return response
 
@@ -323,6 +345,8 @@ MAINTENANCE_EXEMPT_ROUTERS = (
     status_router.router,
     platform.router,
     platform_support.router,
+    platform_monitoring.router,
+    platform_docs_sync.router,
     platform_compliance.router,
     platform_legal.router,
     communications_admin.router,
@@ -369,6 +393,8 @@ for router in (
     notifications.router,
     platform.router,
     platform_support.router,
+    platform_monitoring.router,
+    platform_docs_sync.router,
     platform_compliance.router,
     platform_legal.router,
     legal.router,

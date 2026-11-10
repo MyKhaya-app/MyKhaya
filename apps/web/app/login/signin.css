@@ -188,6 +188,21 @@
   height: 52px;
   margin-top: 14px;
 }
+.signin-page .google-sign-in {
+  background: #fff;
+  border: 1px solid #dadce0;
+  border-radius: 999px;
+  color: #202124;
+  font-family: inherit;
+  font-weight: 700;
+  height: 52px;
+  margin-top: 14px;
+  width: 100%;
+}
+.signin-page .google-sign-in:hover {
+  background: #f8faff;
+  box-shadow: 0 1px 3px rgba(60, 64, 67, .24);
+}
 
 /* --- Text links --------------------------------------------------------- */
 .signin-page .signin-link {
@@ -328,4 +343,9 @@
   .signin-child {
     margin-top: 0;
   }
+}
+.signin-recovery-actions {
+  display: grid;
+  gap: 0.6rem;
+  margin-top: 0.9rem;
 }

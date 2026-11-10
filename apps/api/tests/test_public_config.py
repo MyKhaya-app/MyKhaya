@@ -12,6 +12,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from monitoring_support import clear_monitoring, healthy_monitoring
 from sqlalchemy import delete, select
 
 from mykhaya.config import get_settings
@@ -197,13 +198,26 @@ async def test_support_enabled_never_leaks_feature_override_or_admin_metadata(
 
 
 @pytest.mark.asyncio
-async def test_status_overall_is_operational_with_no_active_incidents(
+async def test_status_overall_is_operational_with_healthy_monitoring_and_no_incidents(
     client: AsyncClient,
 ) -> None:
-    response = await client.get("/api/v1/config/public")
+    async with healthy_monitoring():
+        response = await client.get("/api/v1/config/public")
     payload = response.json()
     assert payload["status_overall"] == "operational"
     assert payload["status_overall_message"] == "Operational"
+
+
+@pytest.mark.asyncio
+async def test_status_overall_is_unknown_without_monitoring_observations(
+    client: AsyncClient,
+) -> None:
+    """No incident is not the same as healthy: with no live monitoring the
+    summary must not claim everything is operational."""
+    await clear_monitoring()
+    payload = (await client.get("/api/v1/config/public")).json()
+    assert payload["status_overall"] == "unknown"
+    assert payload["status_overall_message"] == "Live service monitoring is temporarily unavailable"
 
 
 @pytest.mark.asyncio

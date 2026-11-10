@@ -504,15 +504,33 @@ textarea {
   color: var(--colour-slate);
   font: inherit;
   min-height: 47px;
+  /* A control is never allowed to force its container wider than it is:
+     without this, a grid or flex item floors at the control's intrinsic
+     min-content width (large for native date/time controls). */
+  min-width: 0;
   padding: 0.75rem 0.85rem;
   width: 100%;
+}
+/* iOS WebKit draws date/time inputs with its own platform appearance and
+   theme-adjusted intrinsic size, which ignores width: 100% + min-width: 0 and
+   pushes the control past its container (Copy Event on the iPhone Duo).
+   Chromium does not do this, which is why browser audits never saw it.
+   Zero specificity, so any module rule that styles these controls still wins;
+   the native picker itself is unaffected. Consumer surfaces only: the
+   Platform Control Centre (.pcc-root) owns its own control styling. */
+:where(input[type="date"], input[type="time"], input[type="datetime-local"], input[type="month"]):where(:not(.pcc-root *)) {
+  -webkit-appearance: none;
+  appearance: none;
 }
 
 /* Shared native date/time controls. WebKit gives these inputs a larger
    intrinsic line box than ordinary selects, especially inside bottom sheets.
    Keep the native picker and indicator, but give the control the same box
-   model, height, padding and text scale as the rest of consumer forms. */
-.consumer-date-time-control {
+   model, height, padding and text scale as the rest of consumer forms.
+   FormField (components/form-layout.tsx) applies it to every date/time
+   control it hosts. */
+.consumer-date-time-control,
+.form-field > :is(input[type="date"], input[type="time"], input[type="datetime-local"], input[type="month"]) {
   -webkit-appearance: none;
   appearance: none;
   box-sizing: border-box;
@@ -522,7 +540,8 @@ textarea {
   min-height: 47px;
   padding-block: 0.65rem;
 }
-.consumer-date-time-control::-webkit-calendar-picker-indicator {
+.consumer-date-time-control::-webkit-calendar-picker-indicator,
+.form-field > :is(input[type="date"], input[type="time"], input[type="datetime-local"], input[type="month"])::-webkit-calendar-picker-indicator {
   margin-left: 0.35rem;
   opacity: 0.65;
   width: 1rem;
@@ -749,6 +768,36 @@ textarea {
 .apple-sign-in:hover {
   background: #222;
 }
+.auth-social-registration {
+  margin-bottom: 1rem;
+}
+.auth-social-actions {
+  display: grid;
+  gap: 0.65rem;
+}
+.auth-social-actions .apple-sign-in,
+.auth-social-actions .google-sign-in {
+  margin-top: 0;
+}
+.auth-divider {
+  align-items: center;
+  color: var(--colour-ink-muted);
+  display: flex;
+  gap: 0.75rem;
+  margin: 1rem 0;
+  text-align: center;
+}
+.auth-divider::before,
+.auth-divider::after {
+  background: var(--platform-line);
+  content: "";
+  flex: 1;
+  height: 1px;
+}
+.auth-divider span {
+  font-size: 0.82rem;
+  white-space: nowrap;
+}
 .auth-mfa-methods {
   display: flex;
   gap: 0.5rem;
@@ -766,69 +815,299 @@ textarea {
 .auth-mfa-setup {
   margin: 1rem 0;
 }
-.security-mfa-status {
-  align-items: flex-start;
-  border-top: 1px solid var(--platform-line);
-  display: flex;
-  gap: 1rem;
-  justify-content: space-between;
-  padding: 0.85rem 0;
-}
-.security-mfa-status div {
-  display: grid;
-  gap: 0.2rem;
-  min-width: 0;
-}
-.security-mfa-status span {
-  color: var(--cc-neutral);
-  font-size: 0.9rem;
-}
-.security-mfa-detail {
-  display: block;
-}
-.security-mfa-method-actions {
+/* --- Security settings (app/settings/security, components/quick-sign-in) ---
+   Matches the approved Security mockup: four separate cards (sign-in
+   methods, MFA, passkeys, signed-in devices) built from one row shape —
+   icon tile | grouped title/detail/meta | status and actions on the right.
+   Mobile is the base; the only width rules are the narrow-phone fallback
+   (actions move beneath the copy) and roomier card padding on wide
+   screens. Everything is scoped to the page's own classes. */
+.security-status-badge {
   align-items: center;
-  display: flex !important;
-  flex-wrap: wrap;
-  gap: 0.5rem;
-  justify-content: flex-end;
-}
-.security-mfa-preferred {
-  background: var(--platform-soft);
   border-radius: 999px;
-  color: var(--platform-green) !important;
-  font-size: 0.8rem !important;
+  display: inline-flex;
+  font-size: 0.78rem !important;
+  font-weight: 700;
+  gap: 0.3rem;
+  line-height: 1.2;
+  padding: 0.3rem 0.65rem;
+  white-space: nowrap;
+}
+.security-status-badge-success {
+  background: var(--colour-sage-soft);
+  color: var(--colour-forest) !important;
+}
+.security-status-badge-neutral {
+  background: var(--colour-cream-light);
+  color: var(--colour-muted) !important;
+}
+/* Retained consumer selector (see pcc-css-boundary.test.ts). */
+.security-mfa-preferred {
+  background: var(--colour-sage-soft);
+  border-radius: 999px;
+  color: var(--colour-forest);
+  font-size: 0.8rem;
   font-weight: 700;
   padding: 0.3rem 0.65rem;
   white-space: nowrap;
 }
-.security-mfa-prefer {
-  white-space: nowrap;
+.security-stack {
+  display: grid;
+  gap: var(--space-card-stack);
+  min-width: 0;
 }
-.security-mfa-passkeys {
-  border-top: 1px solid var(--platform-line);
-  margin-top: 0.35rem;
-  padding-top: 0.35rem;
+.security-stack > .notice {
+  margin: 0;
 }
-.security-mfa-passkeys > .security-mfa-status {
-  border-top: 0;
-  padding-top: 0.5rem;
+.security-card {
+  min-width: 0;
+  padding: 1.1rem 1rem 0.6rem;
 }
-.security-mfa-passkey-device {
+.security-card h2 {
+  font-size: 1.3rem;
+  letter-spacing: -0.02em;
+  line-height: 1.2;
+  margin: 0;
+}
+.security-card-header {
+  display: grid;
+  gap: 0.3rem;
+  margin-bottom: 0.25rem;
+}
+.security-card-title-row {
   align-items: center;
   display: flex;
-  gap: 1rem;
+  flex-wrap: wrap;
+  gap: 0.4rem 0.75rem;
   justify-content: space-between;
-  padding: 0 0 0.85rem;
 }
-@media (max-width: 600px) {
-  .security-mfa-status,
-  .security-mfa-passkey-device {
-    align-items: stretch;
-    flex-direction: column;
+.security-card-intro {
+  color: var(--colour-muted);
+  font-size: var(--font-body);
+  line-height: 1.45;
+  margin: 0;
+}
+.security-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.security-row {
+  align-items: center;
+  border-top: 1px solid var(--colour-line);
+  column-gap: 0.8rem;
+  display: grid;
+  grid-template-columns: 2.75rem minmax(0, 1fr) auto;
+  min-width: 0;
+  padding: 0.85rem 0;
+}
+.security-row-no-aside {
+  grid-template-columns: 2.75rem minmax(0, 1fr);
+}
+.security-list > .security-row:first-child,
+.security-card-row {
+  border-top: 0;
+}
+.security-row-icon {
+  align-items: center;
+  align-self: start;
+  background: var(--colour-cream);
+  border-radius: 0.8rem;
+  color: var(--colour-slate);
+  display: inline-flex;
+  height: 2.75rem;
+  justify-content: center;
+  width: 2.75rem;
+}
+.security-row-copy {
+  align-content: center;
+  display: grid;
+  gap: 0.15rem;
+  min-width: 0;
+}
+.security-row-title {
+  color: var(--colour-slate);
+  font-size: var(--font-heading);
+  font-weight: 700;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+.security-row-detail {
+  color: var(--colour-slate);
+  font-size: var(--font-body);
+  line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+.security-row-meta {
+  color: var(--colour-muted);
+  column-gap: 0.3rem;
+  display: flex;
+  flex-wrap: wrap;
+  font-size: var(--font-small);
+  line-height: 1.45;
+}
+.security-meta-part {
+  white-space: nowrap;
+}
+.security-row-aside {
+  align-items: flex-end;
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  justify-self: end;
+}
+.security-row-aside-inline {
+  align-items: center;
+  flex-direction: row;
+  gap: 0.35rem;
+}
+.security-action {
+  font-size: var(--font-body);
+  padding: 0.55rem 1rem;
+  white-space: nowrap;
+}
+.security-action.secondary {
+  border-color: var(--colour-line-strong);
+}
+/* "Make preferred" sits under an MFA method's description, so the right
+   column keeps only status and the primary action, as in the mockup. */
+.security-mfa-status .security-inline-action {
+  font-size: var(--font-small);
+  justify-self: start;
+  margin: -0.35rem 0 -0.5rem;
+  min-height: 44px;
+  padding-left: 0;
+}
+.security-disclosure-chevron {
+  color: var(--colour-slate);
+  flex: none;
+  transition: transform 0.15s;
+}
+[aria-expanded="true"] + .security-disclosure-chevron {
+  transform: rotate(90deg);
+}
+@media (prefers-reduced-motion: reduce) {
+  .security-disclosure-chevron {
+    transition: none;
   }
-  .security-mfa-method-actions {
-    justify-content: flex-start;
+}
+.security-card > .notice,
+.security-panel {
+  margin: 0.25rem 0 0.75rem;
+}
+.security-manage-panel {
+  border-top: 1px solid var(--colour-line);
+  display: grid;
+  gap: 0.6rem;
+  padding: 0.85rem 0 0.5rem;
+}
+.security-manage-panel[hidden] {
+  display: none;
+}
+.security-manage-panel > .notice {
+  margin: 0;
+}
+.security-manage-row {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.6rem 1rem;
+  justify-content: space-between;
+}
+.security-manage-row > .security-row-detail {
+  flex: 1 1 12rem;
+  min-width: 0;
+}
+.security-panel-note {
+  color: var(--colour-muted);
+  font-size: var(--font-body);
+  margin: 0;
+}
+.security-panel-heading {
+  color: var(--colour-muted);
+  font-size: var(--font-small);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  margin: 0.4rem 0 0;
+  text-transform: uppercase;
+}
+.security-passkey-item {
+  grid-template-columns: 2.75rem minmax(0, 1fr);
+  row-gap: 0.4rem;
+}
+.security-passkey-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  grid-column: 2;
+}
+.security-count-badge {
+  background: var(--colour-cream-light);
+  border: 1px solid var(--colour-line-strong);
+  border-radius: 0.6rem;
+  color: var(--colour-slate);
+  font-size: var(--font-small);
+  font-weight: 600;
+  padding: 0.3rem 0.65rem;
+  white-space: nowrap;
+}
+.security-device-list > .security-device-current {
+  background: var(--colour-sage-soft);
+  border-radius: 0.9rem;
+  border-top: 0;
+  margin: 0.35rem 0 0.1rem;
+  padding: 0.75rem 0.85rem 0.75rem 0.5rem;
+}
+.security-device-current .security-row-icon {
+  background: transparent;
+}
+.security-device-current + .security-row {
+  border-top: 0;
+}
+.security-current-badge {
+  background: var(--colour-sage-dark);
+  border-radius: 999px;
+  color: var(--colour-white);
+  font-size: var(--font-small);
+  font-weight: 700;
+  padding: 0.25rem 0.75rem;
+  white-space: nowrap;
+}
+.security-wide-action {
+  margin-top: 0.5rem;
+  width: 100%;
+}
+.security-wide-action + .security-wide-action {
+  margin-top: 0.75rem;
+}
+.security-card > .security-wide-action:last-child {
+  margin-bottom: 0.5rem;
+}
+.security-signout-all {
+  background: var(--colour-cream-light);
+}
+/* Narrow phones (e.g. 320px): there is not enough width beside the copy
+   for a status badge and a button, so the actions sit beneath it — still
+   left-aligned with the copy, in one row. */
+@media (max-width: 359px) {
+  .security-row:not(.security-device-current) {
+    grid-template-columns: 2.75rem minmax(0, 1fr);
+    row-gap: 0.55rem;
+  }
+  .security-row:not(.security-device-current) > .security-row-aside {
+    align-items: center;
+    flex-direction: row;
+    flex-wrap: wrap;
+    grid-column: 2;
+    justify-self: start;
+  }
+}
+@media (min-width: 600px) {
+  .security-card {
+    padding: 1.4rem 1.5rem 0.9rem;
+  }
+  .security-row {
+    column-gap: 1rem;
   }
 }
 .auth-biometric .tertiary {
@@ -2088,11 +2367,15 @@ html.native-shell .home-section-overlap {
   display: grid;
   grid-template-columns: 1fr 220px auto;
 }
+/* min-height/min-width 0: a hidden <input> otherwise keeps the global
+   control min-height (47px) as an invisible box a sheet must scroll to. */
 .visually-hidden {
   border: 0;
   clip: rect(0 0 0 0);
   height: 1px;
   margin: -1px;
+  min-height: 0;
+  min-width: 0;
   overflow: hidden;
   padding: 0;
   position: absolute;
@@ -2634,6 +2917,19 @@ html.native-shell .home-section-overlap {
 .support-request-created {
   font-size: 0.85rem;
 }
+/* Requester's Close ticket action and its confirmation sheet body. */
+.support-request-actions {
+  display: flex;
+  justify-content: flex-start;
+  margin-top: 0.75rem;
+}
+.support-close-confirmation {
+  display: grid;
+  gap: 0.85rem;
+}
+.support-close-confirmation p {
+  margin: 0;
+}
 .vehicle-photo-card {
   align-items: center;
   display: grid;
@@ -3019,31 +3315,9 @@ html.native-shell .home-section-overlap {
 .support-reference {
   font-size: 1.05rem;
 }
-.routine-form {
-  display: grid;
-  gap: 1rem;
-}
-.routine-form fieldset {
-  border: 0;
-  border-top: 1px solid #eee8df;
-  display: grid;
-  gap: 0.75rem;
-  margin: 0;
-  padding: 1rem 0 0;
-}
-.routine-form legend {
-  color: var(--colour-muted);
-  font-size: 0.8rem;
-  font-weight: 800;
-  letter-spacing: 0.04em;
-  padding: 0 0.4rem 0 0;
-  text-transform: uppercase;
-}
-.routine-form label {
-  display: grid;
-  gap: 0.35rem;
-}
-.routine-form label small,
+/* Routines & Reminders editors (app/settings/routines-reminders) are built on
+   the shared form primitives; only the Repeat choice and the checkbox
+   settings rows are their own. */
 .routine-setting small {
   color: var(--colour-muted);
   font-size: 0.8rem;
@@ -3061,11 +3335,6 @@ html.native-shell .home-section-overlap {
 .routine-choice button {
   min-height: 44px;
 }
-.routine-date-grid {
-  display: grid;
-  gap: 0.75rem;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
 .routine-setting {
   align-items: center;
   display: flex !important;
@@ -3081,10 +3350,6 @@ html.native-shell .home-section-overlap {
   display: grid;
   gap: 0.1rem;
 }
-.routine-form-actions {
-  display: flex;
-  gap: 0.5rem;
-}
 .sheet-footer {
   background: var(--colour-white);
   border-top: 1px solid #ebe4da;
@@ -3092,11 +3357,9 @@ html.native-shell .home-section-overlap {
   flex: none;
   padding: 0.75rem 1.3125rem calc(0.75rem + var(--safe-bottom));
 }
-.sheet-footer .routine-form-actions,
 .sheet-footer .sheet-actions {
   margin: 0;
 }
-.sheet-footer .routine-form-actions > button,
 .sheet-footer .sheet-actions > button {
   flex: 1 1 0;
   min-width: 0;
@@ -3399,7 +3662,7 @@ html.native-shell .home-section-overlap {
 }
 /* NotificationPermissionPrompt's footer (Enable notifications / Not now,
    Open phone settings / Maybe later): an asymmetric two-button row rather
-   than routine-form-actions' even 50/50 split — the primary action reads as
+   than the sheet footer's even 50/50 split — the primary action reads as
    the clear default, the secondary as a smaller, clearly-secondary escape
    hatch. Both buttons keep the shared button/.secondary styling (colour,
    radius, padding) untouched; only the row's width distribution is scoped
@@ -3520,6 +3783,21 @@ html.native-shell .home-section-overlap {
 }
 .details dd {
   font-weight: 700;
+}
+/* About's Web build and API build rows (development builds only): the label
+   never wraps, and the build time sits under the commit. */
+.about-build-row dt {
+  flex-shrink: 0;
+}
+.about-build-row dd {
+  min-width: 0;
+  text-align: right;
+}
+.about-build-row small {
+  color: var(--colour-muted);
+  display: block;
+  font-weight: 400;
+  margin-top: 0.15rem;
 }
 .session small {
   color: var(--colour-muted);
@@ -3825,10 +4103,48 @@ html.native-shell .home-section-overlap {
     min-width: 40px;
     padding-inline: 0;
   }
+  /* The action group keeps its content width; only the month label gives
+     way (min-width at 380px and below), so a squeeze can never push the
+     last action outside the group. */
   .calendar-page .calendar-month-row-actions {
+    flex: none;
     gap: 0.2rem;
     margin-left: 0;
-    min-width: 0;
+  }
+  .calendar-page .calendar-month-row-actions .icon-button {
+    min-height: 40px;
+    min-width: 36px;
+    padding-inline: 0;
+  }
+  .calendar-page .calendar-month-row-actions .icon-button svg {
+    height: 15px;
+    width: 15px;
+  }
+  .calendar-page .calendar-month-row-actions .calendar-add-desktop {
+    min-height: 40px;
+    padding-inline: 0.4rem;
+  }
+}
+
+/* The same compact controls, chosen by the month row's own width rather
+   than the viewport's. A browser window just wider than 430px, or one
+   narrowed by a large safe-area inset (Safari on the Duo's outer screen,
+   93px on the right), left the row less room than the rules above assume,
+   and the month label was cut off ("Novembe…"). The native shell is
+   excluded: its rail and wide layouts size this row themselves. */
+.app-shell:not(.native-shell-app) .calendar-page .calendar-month-row {
+  container: calendar-month-row / inline-size;
+}
+@container calendar-month-row (max-width: 440px) {
+  .calendar-page .calendar-month-row > .icon-button {
+    min-height: 40px;
+    min-width: 40px;
+    padding-inline: 0;
+  }
+  .calendar-page .calendar-month-row-actions {
+    flex: none;
+    gap: 0.2rem;
+    margin-left: 0;
   }
   .calendar-page .calendar-month-row-actions .icon-button {
     min-height: 40px;
@@ -3846,10 +4162,11 @@ html.native-shell .home-section-overlap {
 }
 
 @media (max-width: 400px) {
-  /* Three pills (Everyone/Month.../Tags) must stay on one row down to a
-     393px iPhone width — tighten the row gap and each pill's own padding
-     rather than shrinking the shared pill height/radius/typography (the
-     Tags selector is required to look identical to Everyone/Month). */
+  /* Tighter gaps and pill padding keep the three pills (Everyone/Month/
+     Tags) on one row for as long as the width allows; below that the row
+     wraps (see the touch-screen pill rule after .calendar-selector svg).
+     Never shrink the shared pill height/radius/typography: the Tags pill
+     must look identical to Everyone/Month, and the text stays 16px. */
   .calendar-page .calendar-selectors-row {
     gap: 0.3rem;
   }
@@ -3903,8 +4220,11 @@ html.native-shell .home-section-overlap {
     height: 14px;
     width: 14px;
   }
+  /* At 320px the row has 99px left for the label: enough for the longest
+     ("September 2026", 97.5px), but not for the 7rem floor above. */
   .calendar-page .calendar-month-label {
     font-size: 0.84rem;
+    min-width: 0;
   }
 }
 .calendar-add-desktop {
@@ -4059,6 +4379,28 @@ html.native-shell .home-section-overlap {
   pointer-events: none;
   position: absolute;
   right: 0.5rem;
+}
+/* Phones and touch screens: iOS zooms the page when a focused control is
+   under 16px, so the Everyone and view pickers (and the Tags pill, which
+   must match them) use 16px text and a 44px touch target. At that size the
+   three pills do not always fit one row, so the row wraps where the space
+   runs out, rather than the text shrinking; each pill keeps its own width
+   and never exceeds the row. A fine, hovering pointer above 800px
+   (desktop) keeps the compact pills above. */
+@media (max-width: 800px), (hover: none) and (pointer: coarse) {
+  .calendar-page .calendar-selectors-row {
+    flex-wrap: wrap;
+  }
+  .calendar-page .calendar-selector {
+    max-width: 100%;
+    min-width: 0;
+  }
+  .calendar-page .calendar-selector select,
+  .calendar-page .calendar-selector-button {
+    font-size: 16px;
+    max-width: 100%;
+    min-height: 44px;
+  }
 }
 .sr-only {
   height: 1px;
@@ -4633,9 +4975,29 @@ body.sheet-open {
   display: flex;
   inset: 0;
   justify-content: center;
-  padding-top: max(1rem, var(--safe-top));
+  /* Side insets keep the sheet, and the close button in its header, out of
+     the left/right safe areas: on the iPhone Duo the status indicator is
+     drawn inside the right inset, and on a notched iPhone in landscape the
+     sensor housing sits inside one side. Both are 0 in portrait and in
+     browsers, so the portrait sheet is unchanged. */
+  padding: max(1rem, var(--safe-top)) var(--safe-right) 0 var(--safe-left);
   position: fixed;
   z-index: 30;
+}
+/* Set by BottomSheet only while the software keyboard reduces the visual
+   viewport (syncSheetToVisualViewport): the backdrop follows the visual
+   viewport, so the sheet and its footer stay above the keyboard. */
+.sheet-backdrop.sheet-follows-visual-viewport {
+  bottom: auto;
+  height: var(--sheet-viewport-height);
+  top: var(--sheet-viewport-top);
+}
+.sheet-backdrop.sheet-follows-visual-viewport > .bottom-sheet {
+  max-height: 100%;
+}
+/* The home indicator is under the keyboard, so the footer needs no inset. */
+.sheet-backdrop.sheet-follows-visual-viewport .sheet-footer {
+  padding-bottom: 0.75rem;
 }
 .bottom-sheet {
   background: var(--colour-white);
@@ -4657,6 +5019,25 @@ body.sheet-open {
 }
 .bottom-sheet.full-height {
   height: min(94dvh, 900px);
+}
+/* Short screens: a phone in landscape (the same 520px boundary as the
+   short-screen shell rules; the Duo, tablets and desktop are taller). The
+   portrait allowances above stacked up there: the 88dvh cap left a gap above
+   even a full-height sheet, and the footer added its own 0.75rem on top of
+   the home-indicator inset. Here the sheet fills the backdrop below its top
+   inset, and the footer pads by the larger of the two, so its buttons sit
+   just clear of the home indicator rather than 0.75rem above it. Portrait,
+   the Duo and desktop are unchanged. */
+@media (max-height: 520px) {
+  .bottom-sheet {
+    max-height: 100%;
+  }
+  .bottom-sheet.full-height {
+    height: 100%;
+  }
+  .sheet-footer {
+    padding-bottom: max(0.75rem, var(--safe-bottom));
+  }
 }
 .bottom-sheet > header {
   align-items: center;
@@ -4687,6 +5068,13 @@ body.sheet-open {
   min-height: 34px;
   min-width: 34px;
   padding: 0;
+  position: relative;
+}
+/* A 44x44 hit area around the 34px visual circle. */
+.bottom-sheet-close::after {
+  content: "";
+  inset: -5px;
+  position: absolute;
 }
 .sheet-handle {
   background: #c9cbc7;
@@ -4714,6 +5102,11 @@ body.sheet-open {
   padding: 0.8rem 1.3125rem calc(1.5rem + var(--safe-bottom));
   width: 100%;
 }
+/* With a footer, the footer is what sits on the home indicator and already
+   pads for it (.sheet-footer), so the body needs no second inset. */
+.bottom-sheet.has-footer > .sheet-content {
+  padding-bottom: 1.5rem;
+}
 .sheet-primary {
   margin-top: 1rem;
   width: 100%;
@@ -4726,207 +5119,6 @@ body.sheet-open {
 .form-wide {
   grid-column: 1 / -1;
 }
-/* A plain content section — no fieldset border/legend chrome. Used for
-   When/People/advanced groupings in the event editor so the form reads as
-   normal content rather than a stack of bordered boxes. */
-.event-section {
-  display: grid;
-  gap: 0.65rem;
-}
-.event-section-heading {
-  align-items: center;
-  display: flex;
-  justify-content: space-between;
-}
-/* Date/Start/End: at most 2 columns, so 3 fields never have to share a row
-   at narrow widths (that was the source of the End field overflowing on
-   mobile) — Start+End sit side by side, Date/Starts/Ends gets its own row. */
-.event-when-grid {
-  display: grid;
-  gap: 0.75rem;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-}
-.event-when-grid .form-wide {
-  grid-column: 1 / -1;
-}
-/* Grid items default to min-width: auto, which floors at the item's
-   min-content size — for a native <input type="time"> (Safari/iOS
-   especially) that intrinsic size can exceed half the row, so the two
-   columns' minmax(0, 1fr) tracks never actually get to shrink the inputs:
-   they overflow their cells and visually collide at the midpoint instead of
-   leaving the gap above. Explicitly zeroing min-width on both the grid item
-   (the <label>) and the input itself is what actually lets each field
-   shrink to its column. Scoped to the event date/time controls only. */
-.event-when-grid > label {
-  min-width: 0;
-}
-.event-when-grid input[type="date"],
-.event-when-grid input[type="time"] {
-  box-sizing: border-box;
-  min-width: 0;
-  width: 100%;
-}
-/* Date "info card": icon circle, stacked caption + native value, decorative
-   chevron — one bordered row, replacing the plain oversized native-looking
-   input. The native <input type="date"> stays fully functional underneath
-   (real semantics, real iOS behaviour); only its chrome is stripped so it
-   reads as the "value" line of the card. */
-.datetime-card {
-  align-items: center;
-  background: #fffefa;
-  border: 1px solid #d9d7d0;
-  border-radius: var(--radius-small);
-  display: flex;
-  gap: 0.6rem;
-  padding: 0.45rem 0.75rem;
-}
-.datetime-card-icon {
-  align-items: center;
-  background: var(--colour-sage-soft);
-  border-radius: 50%;
-  color: var(--colour-sage-dark);
-  display: flex;
-  flex: none;
-  height: 32px;
-  justify-content: center;
-  width: 32px;
-}
-.datetime-card-body {
-  display: grid;
-  flex: 1;
-  gap: 0.05rem;
-  min-width: 0;
-}
-.datetime-card-caption {
-  color: var(--colour-muted);
-  font-size: 0.72rem;
-  font-weight: 700;
-}
-.datetime-card-input {
-  background: none;
-  border: 0;
-  color: var(--colour-slate);
-  font-size: 1rem;
-  font-weight: 700;
-  min-height: auto;
-  padding: 0;
-  width: 100%;
-}
-.datetime-card-chevron {
-  color: var(--colour-muted);
-  flex: none;
-  pointer-events: none;
-}
-/* Chromium/Android renders its own calendar-picker icon inside the input,
-   duplicating our decorative icon/chevron either side of it. Hiding it is
-   visual only — the indicator (and the click-to-open behaviour it drives)
-   stays in place at full size, just invisible, so tapping anywhere on the
-   card still opens the native picker. */
-.datetime-card-input::-webkit-calendar-picker-indicator,
-.time-card-input::-webkit-calendar-picker-indicator {
-  opacity: 0;
-}
-/* Start/End: the caption ("Start"/"End") is the outer <label>'s own text,
-   laid out above via the base `label { display: grid }` rule — this is just
-   the compact icon + value card underneath it. */
-.time-card {
-  align-items: center;
-  background: #fffefa;
-  border: 1px solid #d9d7d0;
-  border-radius: var(--radius-small);
-  display: flex;
-  gap: 0.5rem;
-  min-width: 0;
-  padding: 0.6rem 0.7rem;
-}
-.time-card-icon {
-  color: var(--colour-muted);
-  flex: none;
-}
-.time-card-input {
-  background: none;
-  border: 0;
-  color: var(--colour-slate);
-  font-size: 1rem;
-  font-weight: 700;
-  min-height: auto;
-  min-width: 0;
-  padding: 0;
-  width: 100%;
-}
-/* Calendar/category and Location rows — an icon circle, the real
-   select/input stripped to look like a value, and (for the select) a
-   decorative chevron. Same card language as the date/time controls above. */
-.icon-row {
-  align-items: center;
-  background: #fffefa;
-  border: 1px solid #d9d7d0;
-  border-radius: var(--radius-small);
-  display: flex;
-  gap: 0.6rem;
-  padding: 0.5rem 0.75rem;
-}
-.icon-row-icon {
-  align-items: center;
-  background: var(--colour-sage-soft);
-  border-radius: 50%;
-  color: var(--colour-sage-dark);
-  display: flex;
-  flex: none;
-  height: 30px;
-  justify-content: center;
-  width: 30px;
-}
-.icon-row-control {
-  background: none;
-  border: 0;
-  color: var(--colour-slate);
-  flex: 1;
-  font-size: 0.95rem;
-  font-weight: 700;
-  min-height: auto;
-  min-width: 0;
-  padding: 0;
-}
-.icon-row-control::placeholder {
-  color: var(--colour-muted);
-  font-weight: 500;
-}
-select.icon-row-control {
-  appearance: none;
-}
-.icon-row-chevron {
-  color: var(--colour-muted);
-  flex: none;
-  pointer-events: none;
-}
-/* Subtle pill secondary action, replacing the underlined link-button look
-   for the one control that toggles a real state change (multi-day). */
-.pill-button {
-  background: var(--colour-white);
-  border: 1px solid var(--colour-sage-soft);
-  border-radius: 999px;
-  color: var(--colour-sage-dark);
-  font-size: 0.8rem;
-  font-weight: 700;
-  justify-self: center;
-  min-height: 38px;
-  padding: 0.4rem 1.1rem;
-}
-.pill-button:hover {
-  background: var(--colour-sage-soft);
-  box-shadow: none;
-  transform: none;
-}
-.event-when-toggle {
-  align-items: center;
-  color: var(--colour-slate);
-  display: flex;
-  font-size: 0.85rem;
-  font-weight: 600;
-  gap: 0.5rem;
-  min-height: 44px;
-}
 .check-row {
   align-items: center;
   display: flex;
@@ -4937,6 +5129,19 @@ select.icon-row-control {
 .permission-row input {
   min-height: 24px;
   width: 24px;
+}
+/* A check row with a title and a description under it (<span><strong>
+   <small>). Without this the checkbox shrinks to nothing beside the long
+   text, and the title runs into the description. */
+.check-row-described {
+  align-items: flex-start;
+}
+.check-row-described input {
+  flex: none;
+}
+.check-row-described > span {
+  display: grid;
+  gap: 0.15rem;
 }
 /* Compact tappable member rows, replacing a bordered checkbox grid — the
    whole row is the <label>, so the tap target is the full row, not just the
@@ -5003,9 +5208,9 @@ select.icon-row-control {
 }
 /* Compact switch, styled from a native checkbox so it keeps full checkbox
    semantics/keyboard behaviour for free — no separate ARIA switch role to
-   maintain. Sized to sit quietly next to the "All day" label rather than
-   dominate the When heading; the wrapping .event-when-toggle label keeps a
-   full accessible tap target regardless of this visual size. */
+   maintain. Sized to sit quietly next to its label (Calendar's "All day")
+   rather than dominate it; the wrapping label keeps a full accessible tap
+   target regardless of this visual size. */
 .switch {
   appearance: none;
   background: #d9d7d0;
@@ -5260,9 +5465,6 @@ select.icon-row-control {
     transition: none;
   }
 }
-.advanced-fields {
-  margin-top: 1rem;
-}
 .danger-link {
   background: transparent;
   color: #9d332f;
@@ -5310,6 +5512,213 @@ select.icon-row-control {
   display: grid;
   gap: 0.5rem;
   padding-top: 1rem;
+}
+.event-view-actions button {
+  align-items: center;
+  display: inline-flex;
+  gap: 0.45rem;
+  justify-content: center;
+  min-height: 44px;
+}
+/* Shared form layout: components/form-layout.tsx, docs/design/forms.md.
+   Containment contract: every primitive is border-box (global * rule),
+   min-width: 0, and lays out on minmax(0, 1fr)/min(100%, ...) tracks, so no
+   control can be wider than the container it sits in. Spacing uses one
+   rhythm: 1rem between sections, 0.75rem between fields, 0.4rem between a
+   label and its control. Mobile/base rules only; no breakpoint is needed
+   because FormRow responds to its own container width. */
+.form-layout {
+  display: grid;
+  gap: 1rem;
+  grid-template-columns: minmax(0, 1fr);
+  margin: 0;
+  min-width: 0;
+}
+.form-section {
+  border: 0;
+  margin: 0;
+  /* Fieldsets default to min-inline-size: min-content, which lets the
+     widest control set the fieldset's width. */
+  min-inline-size: 0;
+  min-width: 0;
+  padding: 0;
+}
+.form-section-title {
+  color: var(--colour-forest);
+  font-weight: 700;
+  padding: 0;
+}
+/* A plain section's legend is taken out of the fieldset border so it lays
+   out as an ordinary heading. */
+.form-section:not(.form-section-framed) > .form-section-title {
+  float: left;
+  margin-bottom: 0.6rem;
+  width: 100%;
+}
+.form-section:not(.form-section-framed) > .form-section-title + .form-section-body {
+  clear: both;
+}
+/* On a page, a section's legend can hold the page's own h2 so the heading
+   outline is kept; it keeps the page heading's look, not the legend's. */
+.form-section-title > :is(h2, h3) {
+  margin: 0;
+}
+.form-section-framed {
+  border: 1px solid var(--colour-line);
+  border-radius: 0.85rem;
+  padding: 0.85rem;
+}
+.form-section-framed > .form-section-title {
+  padding: 0 0.35rem;
+}
+.form-section-divider {
+  border-top: 1px solid var(--colour-line);
+  padding-top: 1rem;
+}
+/* The grid lives here rather than on the <fieldset>: WebKit has
+   historically ignored display: grid/flex on fieldsets. */
+.form-section-body {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+}
+.form-section-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+/* Up to --form-row-columns equal columns, each at least --form-row-min wide
+   (never wider than the row). When the row cannot fit that many, auto-fit
+   drops to fewer columns, down to one stacked column. */
+.form-row {
+  --form-row-gap: 0.75rem;
+  display: grid;
+  gap: var(--form-row-gap);
+  grid-template-columns: repeat(
+    auto-fit,
+    minmax(
+      min(100%, max(var(--form-row-min, 8.5rem), (100% - (var(--form-row-columns, 2) - 1) * var(--form-row-gap)) / var(--form-row-columns, 2))),
+      1fr
+    )
+  );
+  min-width: 0;
+}
+.form-row > .form-wide {
+  grid-column: 1 / -1;
+}
+.form-field {
+  align-content: start;
+  display: grid;
+  gap: 0.4rem;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+}
+.form-field > :is(input, select, textarea) {
+  /* Matches the rest of the app, where controls nested in a <label>
+     inherit its 700 weight. */
+  font-weight: 700;
+  max-width: 100%;
+  min-width: 0;
+  width: 100%;
+}
+.form-field-hint {
+  color: var(--colour-muted);
+  font-size: 0.82rem;
+  line-height: 1.45;
+  margin: 0;
+}
+/* Form actions outside a sheet footer sit after the fields. */
+.form-layout > .form-actions {
+  margin-top: 0.25rem;
+}
+
+/* Calendar event editor (EventForm in app/calendar/page.tsx), built on the
+   shared primitives above; only what they do not cover lives here. */
+.calendar-event-all-day {
+  align-items: center;
+  color: var(--colour-slate);
+  display: flex;
+  font-weight: 600;
+  justify-content: space-between;
+  min-height: 44px;
+}
+.calendar-event-advanced-icon {
+  align-items: center;
+  background: var(--colour-sage-soft);
+  border-radius: 50%;
+  color: var(--colour-sage-dark);
+  display: flex;
+  flex: none;
+  height: 30px;
+  justify-content: center;
+  width: 30px;
+}
+.calendar-event-form .event-advanced > .form-layout {
+  padding-top: 0.5rem;
+}
+.calendar-event-suggestions {
+  background: var(--colour-surface, #fffdf8);
+  border: 1px solid var(--colour-border, #d8ded8);
+  border-radius: 0.75rem;
+  box-shadow: 0 8px 24px rgb(36 49 45 / 12%);
+  display: grid;
+  gap: 0.15rem;
+  margin-top: -0.65rem;
+  max-height: 15rem;
+  overflow-y: auto;
+  padding: 0.35rem;
+  position: relative;
+  z-index: 3;
+}
+.calendar-event-suggestion {
+  align-items: flex-start;
+  background: transparent;
+  border: 0;
+  border-radius: 0.55rem;
+  color: inherit;
+  display: grid;
+  gap: 0.15rem;
+  min-height: 3.25rem;
+  padding: 0.55rem 0.7rem;
+  text-align: left;
+  width: 100%;
+}
+.calendar-event-suggestion:hover,
+.calendar-event-suggestion:focus-visible,
+.calendar-event-suggestion.is-active {
+  background: var(--colour-sage-soft);
+  outline: none;
+}
+.calendar-event-suggestion-title {
+  font-weight: 800;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.calendar-event-suggestion-meta {
+  color: var(--colour-muted);
+  font-size: 0.8rem;
+  line-height: 1.35;
+}
+.calendar-event-form .danger-link {
+  justify-self: start;
+}
+
+.copy-event-source {
+
+  background: var(--colour-sage-soft);
+  border-radius: 0.75rem;
+  display: grid;
+  gap: 0.2rem;
+  padding: 0.75rem;
+}
+.copy-event-source .eyebrow {
+  color: var(--colour-muted);
+  font-size: 0.7rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 .control-tabs {
   display: flex;
@@ -5494,6 +5903,18 @@ select.icon-row-control {
   }
 }
 
+/* iOS zooms the page when a focused text control computes under 16px.
+   Phones get 16px from the max-width: 800px rule below; a touch screen wider
+   than that (iPhone landscape, the Duo's inner screen, iPad) would otherwise
+   keep the 15px body size. Same zero-class specificity as that rule, so a
+   module rule that sizes its own controls still wins. A device with a fine,
+   hovering pointer (desktop, laptop) does not match, and the Platform
+   Control Centre keeps its own control styling. */
+@media (hover: none) and (pointer: coarse) {
+  :is(input, select, textarea):where(:not(.pcc-root *)) {
+    font-size: 16px;
+  }
+}
 /* Calendar month view is a dedicated scan surface on small screens: the grid should
    dominate the viewport, chrome above it stays minimal. Keep event strips readable;
    the day sheet carries the full detail. */
@@ -5501,21 +5922,6 @@ select.icon-row-control {
   input,
   select,
   textarea {
-    font-size: 16px;
-  }
-  /* .icon-row-control (below) sets its own 0.95rem font-size with higher
-     specificity (a class selector) than the plain-type-selector rule just
-     above, silently defeating it for the one *text* input that shares that
-     class — Location (app/calendar/page.tsx). Its <select> siblings
-     (Calendar, Calendar Tag) also carry the class but never need this: a
-     <select> opens a native picker, never triggers WebKit's
-     zoom-on-focus-of-a-small-font-input behaviour, so this targets
-     input.icon-row-control specifically rather than widening scope. Below
-     the 16px WebKit threshold, focusing Location auto-zoomed the whole
-     page in, and the zoom was still in effect when the event sheet closed
-     afterwards — the reported "calendar looks zoomed/shifted after saving
-     an event with a Location" bug traced to exactly this. */
-  input.icon-row-control {
     font-size: 16px;
   }
   .event-form label {
@@ -5673,10 +6079,16 @@ select.icon-row-control {
   background: #fff3d8;
   border-color: #e8cf8b;
 }
-.status-banner.major_outage,
-.status-banner.unknown {
+.status-banner.major_outage {
   background: #f7e2df;
   border-color: #dda9a1;
+}
+/* Unknown = "could not be verified": neutral, never alarm-red and never
+   the green of a verified Operational. Also used when the page itself
+   cannot load the status. */
+.status-banner.unknown {
+  background: #eef1ef;
+  border-color: #cdd5d0;
 }
 .status-banner span {
   font-size: 0.76rem;
@@ -5717,6 +6129,21 @@ select.icon-row-control {
 }
 .service-list .major_outage i {
   background: #b34d43;
+}
+.service-list .unknown i {
+  background: #8b9690;
+}
+.service-list article > span {
+  display: grid;
+  gap: 0.15rem;
+}
+.service-list .service-note,
+.status-section-note {
+  color: #64736b;
+  font-size: 0.75rem;
+}
+.status-section-note {
+  margin: -0.4rem 0 0.75rem;
 }
 .status-clear,
 .incident,
@@ -5873,12 +6300,6 @@ button.danger,
 
 
 @media (max-width: 760px) {
-  .routine-form {
-    padding: 1rem;
-  }
-  .routine-date-grid {
-    grid-template-columns: 1fr;
-  }
   .rr-row {
     grid-template-columns: 40px minmax(0, 1fr);
   }
@@ -6023,6 +6444,13 @@ button.danger,
   min-height: 44px;
   padding: 0.5rem 0.7rem;
   width: auto;
+}
+/* The small text above outranks the shared 16px rules for phones and touch
+   screens, and iOS zooms the page when a focused control is under 16px. */
+@media (max-width: 800px), (hover: none) and (pointer: coarse) {
+  .meal-filter-control select {
+    font-size: 16px;
+  }
 }
 .meal-plans-today-button {
   font-size: var(--font-small);
@@ -7710,25 +8138,30 @@ button.danger,
   margin-top: .45rem;
   width: 100%;
 }
-.budget-page .budget-sheet-toggle {
+/* Checkbox rows in Budget's sheets. Not scoped to .budget-page: the + Add
+   sheets on Overview and Income render outside the page's <main>. */
+.budget-sheet-toggle {
   align-items: center;
   display: flex;
   gap: .75rem;
   justify-content: space-between;
   margin-top: .4rem;
 }
-.budget-page .budget-sheet-toggle span {
+.budget-sheet-toggle span {
   display: grid;
   gap: .1rem;
 }
-.budget-page .budget-sheet-toggle small {
+.budget-sheet-toggle small {
   color: var(--colour-muted);
 }
-.budget-page .budget-sheet-toggle input {
+.budget-sheet-toggle input {
   accent-color: var(--colour-forest);
   flex: 0 0 auto;
   height: 1.2rem;
   width: 1.2rem;
+}
+.form-layout > .budget-sheet-toggle {
+  margin-top: 0;
 }
 .budget-page .budget-destructive-link {
   background: transparent;
@@ -7742,11 +8175,6 @@ button.danger,
 }
 .budget-page .budget-delete-confirm button {
   width: 100%;
-}
-.budget-page .budget-field-hint {
-  color: var(--colour-muted);
-  font-size: .78rem;
-  margin: -.25rem 0 0;
 }
 .budget-page .budget-item-detail {
   display: grid;
@@ -8140,9 +8568,9 @@ button.danger,
    min-content size — a native <input type="time"> especially on iOS/Safari
    has a wide intrinsic min-content width that can exceed half of a narrow
    viewport, so the minmax(0, 1fr) tracks above never actually get to shrink
-   below it and the row overflows its container instead of wrapping. Same
-   fix as .event-when-grid in Calendar's event form: zero min-width on both
-   the grid item (the <label>) and the select/input itself. */
+   below it and the row overflows its container instead of wrapping. The fix
+   is zero min-width on both the grid item (the <label>) and the
+   select/input itself, as the shared FormRow/FormField primitives do. */
 .meal-time-row > label {
   min-width: 0;
 }
@@ -8172,29 +8600,14 @@ button.danger,
 .meal-source-toggle button {
   flex: 1;
 }
-.meal-form-row {
-  display: grid;
-  gap: 0.75rem;
-  grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
-}
 /* "Plan meal" sheet (PlanFromMealSheet): Date + Meal as two clearly separate,
-   evenly sized fields — same bordered-row language as Calendar's
-   datetime-card/icon-row controls, just single-line (icon/value on one row,
-   no stacked caption) so the pair reads compactly instead of stretching the
-   sheet tall. Stacks below ~360px so neither field gets cramped. */
+   evenly sized fields in a bordered-row language, single-line (icon/value
+   on one row, no stacked caption) so the pair reads compactly instead of
+   stretching the sheet tall. They sit in a shared FormRow (10rem), which
+   stacks them when the sheet is too narrow. */
 .plan-meal-form {
   gap: 1rem;
   margin-top: 1rem;
-}
-.plan-meal-fields {
-  display: grid;
-  gap: 0.75rem;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-}
-@media (max-width: 360px) {
-  .plan-meal-fields {
-    grid-template-columns: minmax(0, 1fr);
-  }
 }
 .plan-meal-field {
   align-items: center;
@@ -8227,6 +8640,13 @@ button.danger,
 }
 select.plan-meal-field-input {
   appearance: none;
+}
+/* 0.95rem above outranks the 16px rules for phones and touch screens, and
+   iOS zooms the page when a focused control computes under 16px. */
+@media (max-width: 800px), (hover: none) and (pointer: coarse) {
+  .plan-meal-field-input {
+    font-size: 16px;
+  }
 }
 .plan-meal-field-chevron {
   color: var(--colour-muted);
@@ -9198,6 +9618,14 @@ select.plan-meal-field-input {
 .wishlists-item-form {
   gap: 0.75rem;
 }
+/* The link, its Find product details button and the preview result are one
+   group (LinkPreviewField), spaced like the rest of the item form. */
+.wishlists-link-field {
+  display: grid;
+  gap: 0.75rem;
+  grid-template-columns: minmax(0, 1fr);
+  min-width: 0;
+}
 .wishlists-preview-button {
   align-self: flex-start;
   margin: -0.3rem 0 0;
@@ -9412,7 +9840,13 @@ select.plan-meal-field-input {
   margin: 0 0 0.9rem;
 }
 .plan-compare-redesign {
+  container-name: plan-compare;
+  container-type: inline-size;
   padding: 18px;
+}
+.comparison-table-card {
+  container-name: plan-compare;
+  container-type: inline-size;
 }
 .comparison-table-card {
   margin-top: -0.45rem;
@@ -9513,7 +9947,11 @@ select.plan-meal-field-input {
   opacity: 0.72;
 }
 .plan-compare-table-wrap {
+  min-width: 0;
   overflow-x: auto;
+}
+.plan-compare-mobile-label {
+  display: none;
 }
 .plan-value-check {
   align-items: center;
@@ -9578,6 +10016,38 @@ select.plan-meal-field-input {
 .billing-manage-summary strong {
   color: var(--colour-forest-dark);
   font-size: 1.3rem;
+}
+.billing-change-options,
+.billing-change-confirmation {
+  display: grid;
+  gap: 0.65rem;
+  margin-top: 1rem;
+}
+.billing-change-options h3,
+.billing-change-confirmation h3 {
+  margin: 0;
+}
+.billing-change-confirmation dl {
+  background: white;
+  border-radius: var(--radius-card);
+  display: grid;
+  gap: 0.6rem;
+  margin: 0;
+  padding: 1rem;
+}
+.billing-change-confirmation dl div {
+  align-items: baseline;
+  display: flex;
+  gap: 1rem;
+  justify-content: space-between;
+}
+.billing-change-confirmation dt {
+  color: var(--colour-slate);
+}
+.billing-change-confirmation dd {
+  font-weight: 700;
+  margin: 0;
+  text-align: right;
 }
 .billing-manage-summary span,
 .billing-upcoming-card span,
@@ -9725,21 +10195,21 @@ select.plan-meal-field-input {
     width: 1.35rem;
   }
   .plan-option-title h3 {
-    font-size: 0.9rem;
+    font-size: 1rem;
   }
   .plan-option-description {
-    font-size: 0.7rem;
+    font-size: 0.82rem;
     margin-block: 0.55rem 0.8rem;
   }
   .plan-option-price {
-    font-size: 1.25rem;
+    font-size: 1.5rem;
   }
   .plan-option-cadence {
-    font-size: 0.68rem;
+    font-size: 0.78rem;
   }
   .plan-option-action {
-    font-size: 0.72rem;
-    min-height: 2.2rem;
+    font-size: 0.95rem;
+    min-height: 2.75rem;
   }
   .plan-compare-table {
     font-size: 0.75rem;
@@ -9766,10 +10236,10 @@ select.plan-meal-field-input {
     padding: 0.42rem 0.24rem;
   }
   .plan-compare-table thead th {
-    font-size: 0.64rem;
+    font-size: var(--font-small);
   }
   .plan-compare-row-feature {
-    font-size: 0.7rem;
+    font-size: var(--font-small);
     gap: 0.24rem;
   }
   .plan-compare-row-feature svg {
@@ -9787,6 +10257,102 @@ select.plan-meal-field-input {
     height: 1.2rem;
     padding: 0.22rem;
     width: 1.2rem;
+  }
+}
+
+/* Plan & Billing is often rendered inside a much narrower native-shell
+   content column than the viewport suggests (notably the Duo outer screen).
+   These container queries respond to the page's actual available width, not
+   to a device model or the outer viewport. */
+@container plan-compare (max-width: 680px) {
+  .plan-option-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .plan-option-card {
+    align-items: stretch;
+    padding: 1rem;
+    text-align: left;
+  }
+  .plan-option-card.is-current {
+    padding: calc(1rem - 1px);
+  }
+  .plan-option-title {
+    align-self: flex-start;
+  }
+  .plan-option-description {
+    min-height: 0;
+  }
+  .plan-option-price,
+  .plan-option-cadence {
+    align-self: flex-start;
+  }
+  .plan-option-action {
+    margin-top: 1rem;
+    min-height: 44px;
+  }
+}
+
+@container plan-compare (max-width: 600px) {
+  .plan-compare-table-wrap {
+    overflow: visible;
+  }
+  .plan-compare-table {
+    display: block;
+    font-size: var(--font-small);
+  }
+  .plan-compare-table colgroup,
+  .plan-compare-table thead {
+    display: none;
+  }
+  .plan-compare-table tbody,
+  .plan-compare-table tbody tr {
+    display: block;
+  }
+  .plan-compare-table tbody tr {
+    border-bottom: 1px solid var(--border, #e5ded1);
+    padding: 0.8rem 0;
+  }
+  .plan-compare-table tbody tr:first-child {
+    padding-top: 0;
+  }
+  .plan-compare-table tbody tr:last-child {
+    border-bottom: 0;
+    padding-bottom: 0;
+  }
+  .plan-compare-table tbody th {
+    display: block;
+    padding: 0 0 0.45rem;
+  }
+  .plan-compare-table tbody td {
+    align-items: baseline;
+    display: grid;
+    gap: 0.5rem;
+    grid-template-columns: minmax(4.5rem, 34%) minmax(0, 1fr);
+    padding: 0.35rem 0;
+    text-align: left !important;
+  }
+  .plan-compare-mobile-label {
+    color: var(--colour-slate);
+    display: block;
+    font-size: var(--font-micro);
+    font-weight: 700;
+  }
+  .plan-compare-family-value {
+    border-radius: 0.35rem;
+    padding-inline: 0.35rem !important;
+  }
+  .plan-compare-table tbody tr:last-child td.plan-compare-family-value {
+    border-radius: 0.35rem;
+  }
+}
+
+@media (min-width: 801px) {
+  /* Settings keeps a compact reading column by default. Plan comparison is
+     one of the few settings surfaces that benefits from the available
+     browser width; widening only this page preserves the mobile/native shell
+     geometry while allowing the three-card desktop presentation. */
+  .standard-page.plan-billing-page {
+    max-width: 960px;
   }
 }
 
@@ -10653,6 +11219,11 @@ html:has(.drv-page)::-webkit-scrollbar,
 .drv-page .drv-cards {
   display: grid;
   gap: 12px;
+  /* An implicit column is at least as wide as a card's unwrapped content
+     (photo, name, plate and make on one line), which pushed cards past a
+     320px or 375px screen. A shrinkable column lets each card's own
+     truncation apply. Wider screens use the two-column rule below. */
+  grid-template-columns: minmax(0, 1fr);
   list-style: none;
   margin: 0;
   padding: 0;
@@ -11159,22 +11730,10 @@ html:has(.drv-page)::-webkit-scrollbar,
 .drv-page .drv-form-card-tight { gap: 12px; }
 .drv-page .drv-form-heading { font-size: 15px; font-weight: 800; margin: 0; }
 .drv-page .drv-field { display: flex; flex-direction: column; gap: 6px; }
-.drv-page .drv-field label,
+/* The MOT nudge's Reminder and MOT expires fields are shared FormFields
+   (16px on phones, so iOS does not zoom on focus); only the read-only
+   "Linked to" row uses this label. */
 .drv-page .drv-field-label { color: var(--colour-slate); font-size: 13px; font-weight: 700; }
-.drv-page .drv-input {
-  background: var(--colour-white);
-  border: 1px solid var(--colour-line-strong);
-  border-radius: 14px;
-  box-sizing: border-box;
-  color: var(--colour-slate);
-  font: inherit;
-  font-size: 15px;
-  font-weight: 600;
-  height: 48px;
-  min-height: 0;
-  padding: 0 14px;
-  width: 100%;
-}
 .drv-page .drv-linked {
   align-items: center;
   background: var(--colour-cream);
@@ -11272,6 +11831,17 @@ html:has(.drv-page)::-webkit-scrollbar,
 .drv-page .drv-show-more:focus-visible {
   outline: 3px solid var(--colour-mustard);
   outline-offset: 2px;
+}
+
+/* Narrow phones (320–375px): the 76px photo, avatar and chevron left a
+   vehicle's name about 96px, so names broke mid-word. A smaller photo and
+   tighter card spacing give it room. 393px and wider are unchanged. (A
+   container query would suit better, but the iOS app still supports iOS 15.) */
+@media (max-width: 379px) {
+  .drv-page .drv-vehicle-card { gap: 10px; padding: 12px; }
+  .drv-page .drv-vehicle-card .drv-thumb { border-radius: 14px; height: 56px; width: 56px; }
+  .drv-page .drv-vehicle-card .drv-thumb svg { height: 24px; width: 24px; }
+  .drv-page .drv-vehicle-name { font-size: 16px; }
 }
 
 /* Wider screens: use the width instead of a phone column. Phone layout
@@ -11884,7 +12454,8 @@ a.family-feed-row {
 }
 .profile-identity-card,
 .profile-colour-card,
-.profile-info-card {
+.profile-info-card,
+.profile-signin-methods {
   padding: 1rem;
 }
 .profile-identity-card {
@@ -11966,6 +12537,51 @@ a.family-feed-row {
   color: var(--colour-muted);
   margin: 0.2rem 0 0.75rem;
 }
+.profile-signin-methods {
+  display: grid;
+  gap: 0.85rem;
+}
+.profile-section-heading {
+  align-items: flex-start;
+  display: flex;
+  gap: 0.75rem;
+  justify-content: space-between;
+}
+.profile-section-heading h2 {
+  margin: 0;
+}
+.profile-section-heading p {
+  margin: 0.2rem 0 0;
+}
+.profile-section-heading > svg {
+  color: var(--colour-forest);
+  flex: 0 0 auto;
+  margin-top: 0.15rem;
+}
+.profile-signin-summary {
+  border-top: 1px solid var(--colour-border);
+  display: grid;
+  gap: 0.65rem;
+  padding-top: 0.75rem;
+}
+.profile-signin-summary > div {
+  align-items: center;
+  display: flex;
+  gap: 0.6rem;
+  min-width: 0;
+}
+.profile-signin-summary > div > span:nth-child(2) {
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.profile-signin-manage {
+  align-items: center;
+  display: inline-flex;
+  gap: 0.35rem;
+  justify-content: center;
+  width: 100%;
+}
 .profile-settings-links {
   display: grid;
   gap: 0;
@@ -12038,25 +12654,12 @@ a.family-feed-row {
 .profile-birthday-hint {
   margin: 0.6rem 0 0;
 }
-.profile-birthday-edit {
+/* The birthday editor is a shared FormLayout; this only separates it from
+   the summary rows above. */
+.profile-birthday-edit.form-layout {
   border-top: 1px solid var(--colour-border);
-  display: grid;
-  gap: 0.65rem;
   margin-top: 0.85rem;
   padding-top: 0.85rem;
-}
-.profile-birthday-fields {
-  display: grid;
-  gap: 0.65rem;
-  grid-template-columns: 1fr 0.7fr;
-}
-.profile-birthday-fields label {
-  display: grid;
-  gap: 0.3rem;
-}
-.profile-birthday-edit-actions {
-  display: flex;
-  gap: 0.6rem;
 }
 .profile-photo-sheet {
   display: grid;
@@ -12180,8 +12783,11 @@ a.family-feed-row {
   .app-shell:not(.native-shell-app) .bottom-nav {
     display: none;
   }
+  /* Room for the floating Around-the-house dock (measured by
+     around-house-dock.tsx: its height plus its 1rem offset and a 1rem gap)
+     so the end of every page can scroll clear of it. */
   .app-shell:not(.native-shell-app) .app-main {
-    padding-bottom: calc(10rem + var(--safe-bottom));
+    padding-bottom: calc(max(10rem, var(--around-house-dock-height, 0px) + 2rem) + var(--safe-bottom));
   }
   .app-shell:not(.native-shell-app) .app-content-scroll-region {
     min-width: 0;
@@ -12193,10 +12799,13 @@ a.family-feed-row {
     overflow: hidden;
     position: relative;
   }
+  /* Two columns only once each card can be 20rem wide; tablet portrait
+     (768px beside the rail) stacks the cards at full width rather than
+     squeezing the Today and Coming up rows to unreadable widths. */
   .app-shell:not(.native-shell-app) .home-page {
     display: grid;
     gap: 1rem;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(auto-fit, minmax(min(100%, 20rem), 1fr));
     max-width: 1180px;
     padding: 1rem clamp(1.25rem, 4vw, 4rem) 3rem;
   }
@@ -12314,19 +12923,16 @@ a.family-feed-row {
   }
 }
 
-/* Below 1100px the Around-the-house dock's own actions row wraps onto a
-   second (or third) line — see its plain `flex-wrap` further up, only
-   forced to `nowrap` at 1100px+ — making the dock taller than .rr-fab's
-   default bottom offset (tuned for the dock's single-row height) accounts
-   for. Verified by measurement: at 768–1024px with a full 6-action dock,
-   the dock's top edge can sit above .rr-fab's default position, i.e. they
-   visually collide. Nudges-specific (.rr-fab is not shared with Calendar,
-   whose own equivalent FAB is desktop-hidden entirely — see .calendar-fab),
-   so this raises only this module's own floating button, only in the width
-   range where the taller wrapped dock is actually possible. */
-@media (min-width: 760px) and (max-width: 1099px) {
-  .app-shell:not(.native-shell-app) .rr-fab {
-    bottom: calc(var(--safe-bottom) + 13rem);
+/* The Around-the-house dock wraps onto as many rows as its shortcuts need,
+   so the floating Add buttons sit 1rem above its measured top edge
+   (--around-house-dock-height, set by around-house-dock.tsx, plus the dock's
+   1rem bottom offset) rather than at an offset tuned for one dock height.
+   Never lower than their default position when no dock is shown. */
+@media (min-width: 760px) {
+  .app-shell:not(.native-shell-app) :is(.rr-fab, .calendar-fab) {
+    bottom: calc(
+      max(var(--bottom-nav-height) + 0.9rem, var(--around-house-dock-height, 0px) + 2rem) + var(--safe-bottom)
+    );
   }
 }
 
@@ -12457,6 +13063,10 @@ a.family-feed-row {
 }
 
 @media (min-width: 760px) {
+  /* The shortcuts sit beside the heading while they have room for a useful
+     row (30rem), and wrap beneath it at tablet widths instead of being
+     squeezed into a narrow column. The shortcuts themselves wrap at every
+     width, so none can spill out of the dock. */
   .app-shell:not(.native-shell-app) .around-house-dock {
     align-items: center;
     background: var(--colour-white);
@@ -12464,20 +13074,31 @@ a.family-feed-row {
     border-radius: var(--radius-card);
     bottom: 1rem;
     box-shadow: var(--shadow-card);
-    display: grid;
-    gap: 1rem;
-    grid-template-columns: minmax(145px, 0.28fr) minmax(0, 1fr);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.6rem 1rem;
     left: calc(224px + clamp(1rem, 3vw, 4rem));
     padding: 0.7rem 1rem;
     position: fixed;
     right: clamp(1rem, 3vw, 4rem);
     z-index: 20;
   }
+  .app-shell:not(.native-shell-app) .around-house-dock-heading {
+    min-width: 145px;
+  }
+  .app-shell:not(.native-shell-app) .around-house-dock-actions {
+    flex: 1 1 30rem;
+  }
+  /* Content-sized, so a row only wraps when the labels genuinely do not
+     fit (a 100px basis wrapped rows that had room once shrunk). */
+  .app-shell:not(.native-shell-app) .around-house-dock-action {
+    flex-basis: auto;
+  }
 }
 
 @media (min-width: 1100px) {
   .app-shell:not(.native-shell-app) .app-main {
-    padding-bottom: calc(7rem + var(--safe-bottom));
+    padding-bottom: calc(max(7rem, var(--around-house-dock-height, 0px) + 2rem) + var(--safe-bottom));
   }
   .app-shell:not(.native-shell-app) .home-page {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(280px, 1.05fr);
@@ -12507,9 +13128,6 @@ a.family-feed-row {
   .app-shell:not(.native-shell-app) .home-page > .home-around-house-card {
     grid-column: 3;
     grid-row: 3;
-  }
-  .app-shell:not(.native-shell-app) .around-house-dock-actions {
-    flex-wrap: nowrap;
   }
   /* Nudges side-by-side threshold: below this, the 760px block above keeps
      Quick add/Categories/Nudge settings stacked full-width beneath the

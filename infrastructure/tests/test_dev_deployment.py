@@ -57,6 +57,12 @@ class DevelopmentDeploymentTests(unittest.TestCase):
         ):
             self.assertIn(diagnostic, script)
 
+    def test_dev_health_checks_follow_the_dev_compose_default_port(self) -> None:
+        script = (ROOT / "infrastructure/scripts/dev-deploy.sh").read_text(encoding="utf-8")
+        example = (ROOT / ".env.dev.example").read_text(encoding="utf-8")
+        self.assertEqual(script.count("host_port=${host_port:-8089}"), 2)
+        self.assertIn("MYKHAYA_DEV_HOST_PORT=8089", example)
+
     def test_build_and_migration_gate_container_replacement(self) -> None:
         script = (ROOT / "infrastructure/scripts/dev-deploy.sh").read_text(encoding="utf-8")
         build = script.index("compose build")

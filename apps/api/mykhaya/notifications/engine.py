@@ -69,6 +69,8 @@ MANDATORY_EMAIL_TYPES = {
     # a household_invitation — the recipient can't accept/decline without it.
     "calendar_share_invitation",
     "mfa_email_code",
+    # A Platform administrator removed one of the user's sign-in methods.
+    "account.sign_in_method_disconnected",
     # Confirmation of a Founding Beta enrolment the user has just completed.
     "founding_beta_welcome",
     "support.ticket.received",
@@ -78,6 +80,14 @@ MANDATORY_EMAIL_TYPES = {
     # always None — see support_notifications.ticket_follow_up), so it must
     # be mandatory to satisfy notify()'s "no user account yet" exemption.
     "support.ticket.follow_up",
+    # Team-only, like follow_up: sent by address to PCC administrators (and
+    # optionally the support inbox), who have no consumer account.
+    "support.ticket.new_for_team",
+    "legal_acceptance_confirmation",
+    # Platform Control Centre monitoring alerts (mykhaya.monitoring.alerts).
+    # Recipients are PCC administrators, who have no MyKhaya consumer account,
+    # so this is always sent with recipient_email and no recipient_user_id.
+    "platform.monitoring_alert",
 }
 
 # Notification types whose in-app and push/native-push delivery is mandatory
@@ -133,6 +143,9 @@ async def notify(
     html_body: str | None = None,
     allow_email: bool = True,
     sensitive_email_expires_at: datetime | None = None,
+    attachment_storage_key: str | None = None,
+    attachment_filename: str | None = None,
+    attachment_evidence_id: str | None = None,
 ) -> Notification | None:
     """Dispatch a notification to a single recipient across their enabled channels.
 
@@ -179,6 +192,9 @@ async def notify(
             html_body=html_body,
             group_id=group_id,
             sensitive_email_expires_at=sensitive_email_expires_at,
+            attachment_storage_key=attachment_storage_key,
+            attachment_filename=attachment_filename,
+            attachment_evidence_id=attachment_evidence_id,
         )
         return None
 
@@ -264,6 +280,9 @@ async def notify(
                 html_body=html_body,
                 group_id=group_id,
                 sensitive_email_expires_at=sensitive_email_expires_at,
+                attachment_storage_key=attachment_storage_key,
+                attachment_filename=attachment_filename,
+                attachment_evidence_id=attachment_evidence_id,
             )
 
     return notification
@@ -281,6 +300,9 @@ async def _enqueue_email(
     html_body: str | None = None,
     group_id: uuid.UUID | None = None,
     sensitive_email_expires_at: datetime | None = None,
+    attachment_storage_key: str | None = None,
+    attachment_filename: str | None = None,
+    attachment_evidence_id: str | None = None,
 ) -> None:
     email_key = f"{idempotency_key}:email"
     already_queued = await db.scalar(
@@ -308,6 +330,9 @@ async def _enqueue_email(
                 if sensitive_email_expires_at is not None
                 else None
             ),
+            "attachment_storage_key": attachment_storage_key,
+            "attachment_filename": attachment_filename,
+            "attachment_evidence_id": attachment_evidence_id,
         },
     )
     db.add(event)

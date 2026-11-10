@@ -1,0 +1,145 @@
+.register-page {
+  --rg-paper: #f6f4ee;
+  --rg-forest: #3e5343;
+  --rg-surface: #fffefb;
+  --rg-forest-deep: #2e3f33;
+  --rg-line: #e3e0d6;
+  --rg-line-soft: #ece8de;
+  --rg-on-forest: #f3f1ea;
+  --rg-panel-muted: #c9d3c6;
+  --rg-panel-soft: #dfe6dc;
+  --rg-ink: #1e2a23;
+  --rg-muted: #5d6960;
+  --rg-placeholder: #8a948c;
+  --rg-legend: #536855;
+  --rg-mustard: #e9b44c;
+  --rg-beta-bg: #f8e2d8;
+  --rg-beta-line: #efcdbd;
+  --rg-beta-tile: #c9603d;
+  --rg-beta-ink: #9e4426;
+  --rg-beta-body: #4f4038;
+  --rg-beta-dots: #e8cbbd;
+  --rg-disabled: #e3e5dd;
+  min-height: 100svh;
+  display: grid;
+  grid-template-columns: minmax(380px, 560px) minmax(0, 1fr);
+  background: var(--rg-paper);
+  color: var(--rg-ink);
+  font-family: "Figtree", "Helvetica Neue", system-ui, sans-serif;
+}
+
+.register-page *, .register-page *::before, .register-page *::after { box-sizing: border-box; }
+.register-page a { color: var(--rg-forest); text-underline-offset: 3px; }
+.register-page a:hover { color: var(--rg-forest-deep); }
+.register-page input::placeholder { color: var(--rg-placeholder); opacity: 1; }
+.register-page input:focus-visible, .register-page button:focus-visible, .register-page a:focus-visible { outline: 3px solid var(--rg-mustard); outline-offset: 2px; }
+
+@scope (.register-page) {
+.register-brand-panel { display: flex; flex-direction: column; min-height: 100svh; padding: 56px 64px; background: var(--rg-forest); color: var(--rg-on-forest); }
+.register-brand-logo, .register-mobile-logo { display: inline-flex; align-items: center; gap: 12px; color: inherit !important; text-decoration: none; }
+.register-brand-logo img { width: 44px; height: 44px; border-radius: 12px; box-shadow: 0 2px 10px -3px rgba(0,0,0,.35); }
+.register-brand-logo span, .register-mobile-logo span { font-family: "Bricolage Grotesque", system-ui, sans-serif; font-weight: 800; letter-spacing: -.02em; }
+.register-brand-logo span { font-size: 24px; }
+.register-brand-message { display: flex; flex-direction: column; gap: 18px; margin-top: 180px; }
+.register-brand-message h2 { max-width: 410px; margin: 0; font: 800 46px/1.05 "Bricolage Grotesque", system-ui, sans-serif; letter-spacing: -.03em; }
+.register-eyebrow { margin: 0; color: var(--rg-mustard); font-size: 13px; font-weight: 700; letter-spacing: .14em; text-transform: uppercase; }
+.register-brand-message--beta { margin-top: 150px; gap: 18px; }
+.register-brand-message--beta > p { max-width: 440px; margin: 0; color: var(--rg-panel-soft); font-size: 17px; line-height: 1.45; }
+.register-beta-pill { align-self: flex-start; padding: 7px 14px; border-radius: 999px; background: var(--rg-beta-bg); color: var(--rg-beta-ink); font-size: 13px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
+.register-benefits { display: flex; flex-direction: column; gap: 16px; margin: 22px 0 0; padding: 0; list-style: none; }
+.register-benefits li { display: flex; align-items: center; gap: 14px; }
+.register-benefit-tile { display: grid; width: 44px; height: 44px; flex: 0 0 44px; place-items: center; border-radius: 13px; background: #4e6552; }
+.register-benefits li > span:last-child { display: flex; flex-direction: column; gap: 3px; }
+.register-benefits strong { font-size: 16px; }
+.register-benefits small { color: var(--rg-panel-muted); font-size: 14px; }
+.register-brand-steps { margin-top: auto; }
+.register-brand-steps p { margin: 0 0 14px; color: var(--rg-panel-muted); font-size: 14px; font-weight: 600; }
+.register-brand-steps ol { display: flex; flex-direction: column; gap: 12px; margin: 0; padding: 0; list-style: none; }
+.register-brand-steps li { display: flex; align-items: center; gap: 14px; }
+.register-brand-steps li > span { display: grid; width: 30px; height: 30px; flex: 0 0 30px; place-items: center; border: 1.5px solid #8fa08c; border-radius: 50%; color: var(--rg-panel-soft); font-size: 14px; font-weight: 700; }
+.register-brand-steps li.active > span { border-color: var(--rg-on-forest); background: var(--rg-on-forest); color: var(--rg-forest-deep); }
+.register-brand-steps li strong { font-size: 16px; }
+.register-brand-steps li:not(.active) strong { color: var(--rg-panel-soft); font-weight: 500; }
+
+.register-form-area { display: flex; justify-content: center; min-width: 0; padding: 72px 48px; }
+.register-form-column { width: 100%; max-width: 440px; }
+.register-mobile-logo, .register-mobile-steps { display: none; }
+.register-heading h1 { margin: 0 0 6px; font: 800 40px/1.05 "Bricolage Grotesque", system-ui, sans-serif; letter-spacing: -.03em; }
+.register-heading p { margin: 0; color: var(--rg-muted); font-size: 16px; line-height: 1.45; }
+.register-beta-card { display: flex; flex-direction: column; gap: 12px; margin-top: 22px; padding: 16px; border: 1px solid var(--rg-beta-line); border-radius: 20px; background: var(--rg-beta-bg); }
+.register-beta-card-top { display: flex; align-items: flex-start; gap: 12px; }
+.register-beta-icon { display: grid; width: 44px; height: 44px; flex: 0 0 44px; place-items: center; border-radius: 13px; background: var(--rg-beta-tile); color: white; }
+.register-beta-card-top > span:last-child { display: flex; flex-direction: column; gap: 4px; }
+.register-beta-card-top strong { color: var(--rg-beta-ink); font-size: 12px; letter-spacing: .14em; text-transform: uppercase; }
+.register-beta-card-top span span { color: var(--rg-beta-body); font-size: 14.5px; line-height: 1.45; }
+.register-beta-card ul { display: none; margin: 0; padding: 12px 0 0; border-top: 1px solid var(--rg-beta-line); list-style: none; }
+.register-beta-card li { display: flex; align-items: center; gap: 10px; color: var(--rg-beta-body); font-size: 14px; }
+.register-beta-card li svg { color: var(--rg-beta-ink); }
+.register-context-card { margin: 22px 0 0; padding: 15px 16px; border: 1px solid #d6dfd3; border-radius: 18px; background: #e7ebe4; color: var(--rg-muted); font-size: 14px; line-height: 1.45; }
+.register-context-card--success { color: var(--rg-forest-deep); }
+.register-pill-button { display: flex; min-height: 52px; align-items: center; justify-content: center; margin-top: 12px; border-radius: 999px; background: var(--rg-forest); color: var(--rg-on-forest) !important; font-size: 16px; font-weight: 700; text-decoration: none; }
+.register-pill-button--secondary { background: var(--rg-surface); border: 1px solid var(--rg-line); color: var(--rg-forest) !important; }
+.register-social { margin-top: 24px; }
+.register-social-actions { display: flex; flex-direction: column; gap: 12px; }
+.register-page .register-social-button { display: flex; width: 100%; min-height: 52px; align-items: center; justify-content: center; gap: 10px; border-radius: 999px; font: 700 16px "Figtree", sans-serif; }
+.register-social-button--apple { border: 0; background: #000; color: #fff; }
+.register-social-button--google { border: 1px solid #dadce0; background: #fff; color: #202124; }
+.register-divider { display: flex; align-items: center; gap: 12px; margin: 24px 0 20px; color: var(--rg-muted); font-size: 14px; }
+.register-divider span { height: 1px; flex: 1; background: var(--rg-line); }
+.register-form { display: flex; flex-direction: column; gap: 14px; margin: 0; }
+.register-field { display: flex; flex-direction: column; gap: 6px; }
+.register-page .register-field label, .register-label-row label { color: var(--rg-ink); font-size: 14px; font-weight: 600; }
+.register-page .register-field input { width: 100%; height: 50px; border: 1px solid var(--rg-line); border-radius: 14px; background: var(--rg-surface); padding: 0 16px; color: var(--rg-ink); font: 400 16px "Figtree", sans-serif; }
+.register-label-row { display: flex; align-items: baseline; justify-content: space-between; }
+.register-label-row small { color: var(--rg-muted); font-size: 13px; }
+.register-password-wrap { position: relative; }
+.register-password-wrap input { padding-right: 56px !important; }
+.register-page .register-password-toggle { position: absolute; top: 3px; right: 3px; display: grid; width: 44px; height: 44px; place-items: center; border: 0; border-radius: 12px; background: transparent; color: var(--rg-muted); }
+.register-legal { display: flex; flex-direction: column; gap: 12px; margin: 6px 0 0; padding: 14px 16px 16px; border: 1px solid var(--rg-line); border-radius: 18px; background: var(--rg-surface); }
+.register-legal legend { padding: 0 6px; color: var(--rg-legend); font-size: 12px; font-weight: 700; letter-spacing: .12em; text-transform: uppercase; }
+.register-check-row { display: flex; min-height: 44px; align-items: flex-start; gap: 12px; font-size: 15px; line-height: 1.4; }
+.register-check-row input { width: 22px; height: 22px; flex: none; margin: 0; accent-color: var(--rg-forest); }
+.register-check-row small { color: var(--rg-muted); font-size: inherit; }
+.register-legacy-info { display: none; }
+.register-beta-terms-note, .register-info-line { margin: 0; color: var(--rg-muted); font-size: 13px; line-height: 1.5; }
+.register-info-line { padding-top: 12px; border-top: 1px solid var(--rg-line-soft); }
+.register-submit { width: 100%; min-height: 54px; margin-top: 6px; border: 0; border-radius: 999px; background: var(--rg-forest); color: var(--rg-on-forest); box-shadow: 0 12px 26px -16px var(--rg-forest-deep); font: 700 17px "Figtree", sans-serif; }
+.register-submit:disabled { background: var(--rg-disabled); color: var(--rg-muted); cursor: not-allowed; box-shadow: none; }
+.register-legal-hint { margin: -4px 0 0; color: var(--rg-muted); font-size: 13px; text-align: center; }
+.register-closed { margin-top: 24px; padding: 20px; border: 1px solid var(--rg-line); border-radius: 20px; background: var(--rg-surface); }
+.register-closed h2 { margin: 0 0 8px; font: 800 24px/1.1 "Bricolage Grotesque", sans-serif; }
+.register-closed p { margin: 0; color: var(--rg-muted); line-height: 1.5; }
+.register-footer { margin-top: 28px; color: var(--rg-muted); font-size: 15px; text-align: center; }
+.register-footer p { margin: 0; }
+.register-footer p + p { margin-top: 2px; font-size: 14px; }
+.register-footer a { display: inline-block; padding: 12px 0; font-weight: 700; }
+.register-beta-footer-mobile { display: none; }
+
+@media (max-width: 800px) {
+  .register-page { display: block; min-height: 100svh; padding: max(48px, env(safe-area-inset-top)) 24px max(32px, env(safe-area-inset-bottom)); }
+  .register-brand-panel { display: none; }
+  .register-form-area { display: block; padding: 0; }
+  .register-form-column { max-width: 440px; min-height: calc(100svh - max(48px, env(safe-area-inset-top)) - max(32px, env(safe-area-inset-bottom))); margin: 0 auto; display: flex; flex-direction: column; }
+  .register-mobile-logo { display: inline-flex; align-self: flex-start; min-height: 44px; gap: 10px; color: var(--rg-ink) !important; }
+  .register-mobile-logo img { width: 40px; height: 40px; border-radius: 11px; box-shadow: 0 2px 8px -3px rgba(0,0,0,.25); }
+  .register-mobile-logo span { font-size: 22px; }
+  .register-mobile-steps { display: flex; align-items: center; gap: 8px; margin-top: 26px; }
+  .register-mobile-steps > span { width: 6px; height: 6px; border-radius: 999px; background: #cfd5ca; }
+  .register-mobile-steps .register-step-pill { width: 22px; background: var(--rg-forest); }
+  .register-page--beta .register-mobile-steps .register-step-pill { background: var(--rg-beta-tile); }
+  .register-page--beta .register-mobile-steps > span:not(.register-step-pill) { background: var(--rg-beta-dots); }
+  .register-mobile-steps strong { margin-left: 6px; color: var(--rg-legend); font-size: 13px; font-weight: 600; }
+  .register-page--beta .register-mobile-steps strong { color: var(--rg-beta-ink); }
+  .register-heading h1 { margin-top: 14px; font-size: 36px; }
+  .register-beta-card { margin-top: 22px; }
+  .register-beta-card ul { display: flex; flex-direction: column; gap: 8px; }
+  .register-social { margin-top: 22px; }
+  .register-footer { margin-top: auto; padding-top: 28px; }
+  .register-beta-footer-wide { display: none; }
+  .register-beta-footer-mobile { display: inline; }
+}
+
+@media (min-width: 801px) {
+  .register-page--beta .register-form-column { max-width: 440px; }
+}
+}

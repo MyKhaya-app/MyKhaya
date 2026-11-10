@@ -71,6 +71,7 @@ services:
       {
         MYKHAYA_DATABASE_URL: "postgresql+asyncpg://mykhaya_app:${MYKHAYA_DB_PASSWORD}@postgres-test:5432/mykhaya",
         MYKHAYA_REDIS_URL: "redis://redis-test:6379/0",
+        MYKHAYA_LEGAL_EVIDENCE_STORAGE_DIR: "/tmp/legal-evidence",
         MYKHAYA_VERSION: "dev",
         MYKHAYA_COMMIT_SHA: "unknown",
         MYKHAYA_BUILD_TIME: "unknown",

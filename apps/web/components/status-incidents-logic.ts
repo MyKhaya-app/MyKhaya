@@ -8,9 +8,14 @@
 // already-resolved ServiceState/IncidentLifecycleState into something to
 // show a person.
 import type { CcBadgeTone } from "./control-centre/badge";
-import type { IncidentLifecycleState, ServiceState } from "./platform-types";
+import type {
+  IncidentLifecycleState,
+  PublicStatusState,
+  StatusConfidence,
+} from "./platform-types";
 
-const SERVICE_STATE_LABELS: Record<ServiceState, string> = {
+const SERVICE_STATE_LABELS: Record<PublicStatusState, string> = {
+  unknown: "Unknown",
   operational: "Operational",
   degraded_performance: "Degraded Performance",
   partial_outage: "Partial Outage",
@@ -18,12 +23,14 @@ const SERVICE_STATE_LABELS: Record<ServiceState, string> = {
   maintenance: "Maintenance",
 };
 
-export function serviceStateLabel(state: ServiceState): string {
-  return SERVICE_STATE_LABELS[state];
+export function serviceStateLabel(state: PublicStatusState): string {
+  return SERVICE_STATE_LABELS[state] ?? "Unknown";
 }
 
-export function serviceStateTone(state: ServiceState): CcBadgeTone {
+export function serviceStateTone(state: PublicStatusState): CcBadgeTone {
   switch (state) {
+    case "unknown":
+      return "neutral";
     case "operational":
       return "success";
     case "maintenance":
@@ -33,7 +40,21 @@ export function serviceStateTone(state: ServiceState): CcBadgeTone {
     case "partial_outage":
     case "major_outage":
       return "danger";
+    default:
+      return "neutral";
   }
+}
+
+// Short, customer-safe qualifier shown beside a service's state on the
+// public page. Only "limited" and "none" need saying: a verified state, or
+// an administrator override, is presented as the state itself.
+export function confidenceNote(
+  state: PublicStatusState,
+  confidence: StatusConfidence | undefined,
+): string | null {
+  if (state === "unknown") return "Not currently verified";
+  if (confidence === "limited") return "Limited monitoring";
+  return null;
 }
 
 const LIFECYCLE_LABELS: Record<IncidentLifecycleState, string> = {

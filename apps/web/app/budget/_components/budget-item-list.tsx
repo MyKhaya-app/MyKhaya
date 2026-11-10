@@ -4,7 +4,9 @@ import { FormEvent, useEffect, useState } from "react";
 import { ChevronRight, CircleDollarSign } from "lucide-react";
 import { api, type BudgetItem, type BudgetMonthItem } from "@mykhaya/api-client";
 import { BottomSheet } from "@/components/bottom-sheet";
+import { FormField, FormLayout, FormRow, FormSheet } from "@/components/form-layout";
 import { BudgetEntrySheet } from "./budget-entry-sheet";
+import { BudgetAmountField, useBudgetFieldErrors } from "./budget-form-fields";
 
 const currency = new Intl.NumberFormat("en-GB", { style: "currency", currency: "GBP" });
 
@@ -55,6 +57,13 @@ export function BudgetItemList({
   const [notes, setNotes] = useState("");
   const [error, setError] = useState("");
   const [payingItem, setPayingItem] = useState<BudgetMonthItem | null>(null);
+  const [saving, setSaving] = useState(false);
+  const fields = useBudgetFieldErrors({
+    name: { missing: "Enter a name.", blank: "Enter a name." },
+    amount: { missing: "Enter an amount." },
+    startsOn: { missing: "Choose a start month." },
+    endsOn: { range: "Choose an end month on or after the start month." },
+  });
   const load = () => void api.budgetMonth(homeId, year, month).then((data) => {
     const category = data.categories.find((item) => item.category_id === categoryId);
     setItems(category?.items ?? []);
@@ -82,6 +91,7 @@ export function BudgetItemList({
       setEndsOn(toMonthInput(masterItem.ends_on));
       setNotes(masterItem.notes ?? "");
       setError("");
+      fields.clearAll();
     } catch {
       setError("Couldn’t load budget item. Please try again.");
     }
@@ -89,7 +99,13 @@ export function BudgetItemList({
 
   async function save(event: FormEvent) {
     event.preventDefault();
-    if (!editing?.budget_item_id || !master) return;
+    if (!editing?.budget_item_id || !master || saving) return;
+    if (!fields.check()) {
+      setError("");
+      return;
+    }
+    setSaving(true);
+    setError("");
     try {
       await api.updateBudgetItem(homeId, editing.budget_item_id, {
         name: name.trim(),
@@ -107,6 +123,8 @@ export function BudgetItemList({
       load();
     } catch {
       setError("Couldn’t save budget item. Please try again.");
+    } finally {
+      setSaving(false);
     }
   }
 
@@ -176,26 +194,34 @@ export function BudgetItemList({
       </div>
     </BottomSheet>}
 
-    {editing && <BottomSheet title={`Edit ${editing.item_type === "fixed" ? "fixed cost" : "variable budget"}`} onDismiss={() => setEditing(null)}>
-      <form className="budget-sheet-form" onSubmit={save}>
-        <label htmlFor="edit-budget-item-name">Name</label>
-        <input id="edit-budget-item-name" value={name} onChange={(event) => setName(event.target.value)} required />
-        <label htmlFor="edit-budget-item-amount">Planned amount</label>
-        <input id="edit-budget-item-amount" type="number" min="0" step="0.01" value={amount} onChange={(event) => setAmount(event.target.value)} required />
+    {editing && <FormSheet
+      title={`Edit ${editing.item_type === "fixed" ? "fixed cost" : "variable budget"}`}
+      onDismiss={() => setEditing(null)}
+      busy={saving}
+      primaryAction={<button type="submit" form="budget-item-edit-form" disabled={saving}>{saving ? "Saving…" : "Save changes"}</button>}
+    >
+      <FormLayout id="budget-item-edit-form" ref={fields.formRef} onSubmit={save}>
+        {error && <p className="notice error" role="alert">{error}</p>}
+        <FormField label="Name" error={fields.errors.name}>
+          {(control) => <input {...control} name="name" value={name} onChange={(event) => { setName(event.target.value); fields.clear("name"); }} required />}
+        </FormField>
+        <BudgetAmountField label="Planned amount" name="amount" value={amount} onChange={(value) => { setAmount(value); fields.clear("amount"); }} error={fields.errors.amount} />
         {editing.item_type === "fixed" && <>
-          <label htmlFor="edit-budget-item-starts-on">Start month</label>
-          <input id="edit-budget-item-starts-on" type="month" className="consumer-date-time-control" value={startsOn} onChange={(event) => setStartsOn(event.target.value)} required />
-          <label htmlFor="edit-budget-item-ends-on">End month</label>
-          <input id="edit-budget-item-ends-on" type="month" className="consumer-date-time-control" value={endsOn} min={startsOn || undefined} onChange={(event) => setEndsOn(event.target.value)} />
-          <p className="budget-field-hint">Leave empty for no end date</p>
-          <label htmlFor="edit-budget-item-notes">Notes (optional)</label>
-          <textarea id="edit-budget-item-notes" value={notes} onChange={(event) => setNotes(event.target.value)} rows={3} />
+          <FormRow minColumnWidth="10rem">
+            <FormField label="Start month" error={fields.errors.startsOn}>
+              {(control) => <input {...control} name="startsOn" type="month" value={startsOn} onChange={(event) => { setStartsOn(event.target.value); fields.clear("startsOn"); fields.clear("endsOn"); }} required />}
+            </FormField>
+            <FormField label="End month" hint="Leave empty for no end date" error={fields.errors.endsOn}>
+              {(control) => <input {...control} name="endsOn" type="month" value={endsOn} min={startsOn || undefined} onChange={(event) => { setEndsOn(event.target.value); fields.clear("endsOn"); }} />}
+            </FormField>
+          </FormRow>
+          <FormField label="Notes (optional)">
+            {(control) => <textarea {...control} value={notes} onChange={(event) => setNotes(event.target.value)} rows={3} />}
+          </FormField>
         </>}
-        {error && <p role="alert">{error}</p>}
-        <button type="submit">Save changes</button>
-        <button type="button" className="budget-destructive-link" onClick={() => void archive(editing)}>Archive item</button>
-      </form>
-    </BottomSheet>}
+        <button type="button" className="budget-destructive-link" disabled={saving} onClick={() => void archive(editing)}>Archive item</button>
+      </FormLayout>
+    </FormSheet>}
 
     {payingItem && (
       <BudgetEntrySheet

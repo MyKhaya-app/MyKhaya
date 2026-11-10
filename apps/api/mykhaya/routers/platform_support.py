@@ -24,6 +24,8 @@ from mykhaya.db import get_db
 from mykhaya.models import (
     Group,
     PlatformAdministrator,
+    PlatformRole,
+    PlatformSetting,
     SupportMessageVisibility,
     SupportTicket,
     SupportTicketAppArea,
@@ -46,18 +48,28 @@ from mykhaya.platform_schemas import (
     PlatformSupportTicketMessageResponse,
     PlatformSupportTicketSummaryResponse,
     PlatformSupportTicketUpdate,
+    SupportNewTicketNotificationSettings,
+    SupportNewTicketNotificationUpdate,
 )
-from mykhaya.platform_security import PlatformContext, require_roles
-from mykhaya.routers.platform import SUPPORT
-from mykhaya.support_notifications import ticket_reply, ticket_resolved
+from mykhaya.platform_security import PlatformContext, require_recent_auth, require_roles
+from mykhaya.routers.platform import OPERATORS, SUPPORT
+from mykhaya.support_notifications import (
+    NEW_TICKET_SETTINGS_KEY,
+    load_new_ticket_settings,
+    resolve_new_ticket_recipients,
+    ticket_reply,
+    ticket_resolved,
+)
 
 router = APIRouter(prefix="/platform/support", tags=["platform-support"])
 
 PAGE_SIZE = 30
 
 
-async def _load_ticket(db: AsyncSession, ticket_id: uuid.UUID) -> SupportTicket:
-    ticket = await db.scalar(
+async def _load_ticket(
+    db: AsyncSession, ticket_id: uuid.UUID, *, for_update: bool = False
+) -> SupportTicket:
+    query = (
         select(SupportTicket)
         .options(
             selectinload(SupportTicket.messages),
@@ -66,6 +78,12 @@ async def _load_ticket(db: AsyncSession, ticket_id: uuid.UUID) -> SupportTicket:
         )
         .where(SupportTicket.id == ticket_id)
     )
+    if for_update:
+        # Serialises a staff status change with a requester closing the same
+        # ticket (routers.support.close_ticket also locks it), so neither
+        # overwrites the other unseen.
+        query = query.with_for_update()
+    ticket = await db.scalar(query)
     if ticket is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That support ticket could not be found.")
     return ticket
@@ -191,18 +209,85 @@ async def _detail_response(
     )
 
 
+async def _new_ticket_settings_payload(
+    db: AsyncSession, settings: Settings, context: PlatformContext
+) -> SupportNewTicketNotificationSettings:
+    configured, values = await load_new_ticket_settings(db)
+    recipients = await resolve_new_ticket_recipients(db, settings, values) if configured else []
+    return SupportNewTicketNotificationSettings(
+        configured=configured,
+        enabled=bool(values["enabled"]),
+        roles=values["roles"],
+        include_support_inbox=bool(values["include_support_inbox"]),
+        recipient_count=len(recipients) if values["enabled"] else 0,
+        can_manage=context.administrator.role in OPERATORS,
+    )
+
+
 @router.get("/settings", response_model=PlatformSupportSettingsResponse)
 async def get_support_settings(
-    _: PlatformContext = Depends(require_roles(*SUPPORT)),
+    context: PlatformContext = Depends(require_roles(*SUPPORT)),
+    db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> PlatformSupportSettingsResponse:
-    # Deliberately the only value exposed here — support_enabled (GET
-    # /platform/modules) and service_status_url (GET /platform/settings)
-    # already have their own single source of truth; this route must never
-    # duplicate either. See PlatformSupportSettingsResponse's docstring.
+    # support_enabled (GET /platform/modules) and service_status_url (GET
+    # /platform/settings) already have their own single source of truth;
+    # this route must never duplicate either. See
+    # PlatformSupportSettingsResponse's docstring.
     return PlatformSupportSettingsResponse(
-        support_notification_email=settings.support_notification_email
+        support_notification_email=settings.support_notification_email,
+        new_ticket_notifications=await _new_ticket_settings_payload(db, settings, context),
     )
+
+
+@router.put(
+    "/settings/new-ticket-notifications", response_model=SupportNewTicketNotificationSettings
+)
+async def update_new_ticket_notifications(
+    body: SupportNewTicketNotificationUpdate,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> SupportNewTicketNotificationSettings:
+    """Owner/Administrator only, with recent authentication and a reason,
+    the same controls as PCC's monitoring alert recipients. Stored in this
+    environment's own database, so DEV and PROD stay independent."""
+    require_recent_auth(context, settings)
+    row = await db.scalar(
+        select(PlatformSetting)
+        .where(PlatformSetting.key == NEW_TICKET_SETTINGS_KEY)
+        .with_for_update()
+    )
+    _, previous = await load_new_ticket_settings(db)
+    values = {
+        "enabled": body.enabled,
+        "roles": sorted({PlatformRole(role).value for role in body.roles}),
+        "include_support_inbox": body.include_support_inbox,
+    }
+    if row is None:
+        db.add(
+            PlatformSetting(
+                key=NEW_TICKET_SETTINGS_KEY,
+                value={"value": values},
+                updated_by=context.administrator.id,
+            )
+        )
+    else:
+        row.value = {"value": values}
+        row.updated_by = context.administrator.id
+    platform_audit(
+        db,
+        request,
+        context,
+        "support.notification_settings_updated",
+        "setting",
+        reason=body.reason,
+        previous={key: previous.get(key) for key in values} if row is not None else {},
+        new=values,
+    )
+    await db.commit()
+    return await _new_ticket_settings_payload(db, settings, context)
 
 
 @router.get("/tickets", response_model=PlatformSupportTicketListResponse)
@@ -348,7 +433,7 @@ async def update_ticket(
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> PlatformSupportTicketDetailResponse:
-    ticket = await _load_ticket(db, ticket_id)
+    ticket = await _load_ticket(db, ticket_id, for_update=True)
     changes = body.model_dump(exclude_unset=True)
     resolution_key: str | None = None
 

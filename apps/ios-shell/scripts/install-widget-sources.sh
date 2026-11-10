@@ -35,6 +35,7 @@ echo "== 2. Copy main-app plugin sources (WidgetBridgePlugin, SystemSettingsPlug
 cp native/plugin/WidgetBridgePlugin.swift ios/App/App/WidgetBridgePlugin.swift
 cp native/plugin/SystemSettingsPlugin.swift ios/App/App/SystemSettingsPlugin.swift
 cp native/plugin/NativePushEnvironmentPlugin.swift ios/App/App/NativePushEnvironmentPlugin.swift
+cp native/plugin/NativeExternalAuthPlugin.swift ios/App/App/NativeExternalAuthPlugin.swift
 cp native/plugin/MainViewController.swift ios/App/App/MainViewController.swift
 # The shared snapshot model/store used to be copied here as loose files
 # (WidgetSnapshot.swift/WidgetSnapshotStore.swift) because both the App
@@ -96,14 +97,14 @@ ruby scripts/link-widget-core-package.rb
 echo "== 6c. Check the committed DEV/PROD shared schemes =="
 ruby scripts/ensure-widget-schemes.rb
 
-echo "== 7. Post-install entitlement audit (APNs must survive) =="
+echo "== 7. Post-install entitlement audit (APNs and Sign in with Apple must survive) =="
 # The App target uses separate per-configuration entitlements files
 # (AppDebug.entitlements / AppRelease.entitlements) rather than a single
 # App.entitlements — see docs/mobile/ios-shell-mac-checklist.md.
 for ENTITLEMENTS_FILE in ios/App/App/AppDebug.entitlements ios/App/App/AppRelease.entitlements; do
   if [ -f "$ENTITLEMENTS_FILE" ]; then
     echo "-- $ENTITLEMENTS_FILE --"
-    /usr/libexec/PlistBuddy -c "Print" "$ENTITLEMENTS_FILE" | grep -A2 -E 'aps-environment|application-groups' || true
+    /usr/libexec/PlistBuddy -c "Print" "$ENTITLEMENTS_FILE" | grep -A2 -E 'aps-environment|application-groups|applesignin' || true
   else
     echo "WARNING: $ENTITLEMENTS_FILE not found" >&2
   fi

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { NotificationPreferences } from "@mykhaya/shared-types";
 import NotificationSettings from "./page";
@@ -302,5 +302,22 @@ describe("Notification settings — 'This device' reflects live OS permission on
     await screen.findByRole("heading", { name: "This device" });
     expect(screen.queryByText("Enabled ✓")).not.toBeInTheDocument();
     expect(screen.queryByText("Off")).not.toBeInTheDocument();
+  });
+});
+
+// The preferences form on the shared form primitives (docs/design/forms.md).
+describe("Notification settings — shared form layout", () => {
+  it("makes each section a group named by its heading, keeping the page's h2 outline", async () => {
+    render(<NotificationSettings />);
+    await screen.findByRole("heading", { name: "Quiet hours" });
+    for (const name of ["Channels", "What to notify me about", "Nudges", "Daily briefing", "Privacy", "Quiet hours"]) {
+      const group = screen.getByRole("group", { name });
+      expect(within(group).getByRole("heading", { level: 2, name })).toBeInTheDocument();
+    }
+    const quietHours = screen.getByRole("group", { name: "Quiet hours" });
+    // Start and End share one row, which stacks when the card is narrow.
+    expect(within(quietHours).getByLabelText("Start").closest(".form-row")).toBe(
+      within(quietHours).getByLabelText("End").closest(".form-row"),
+    );
   });
 });

@@ -1,7 +1,24 @@
 # MyKhaya contributor and agent rules
 
+## Mandatory for all work
+
+Before any work, read
+[`docs/engineering/engineering-charter.md`](docs/engineering/engineering-charter.md)
+first. This applies to every kind of change: backend, frontend, native
+applications, infrastructure, security, integrations, database changes,
+documentation, testing and deployment. Then read the standards the charter
+names as authoritative for the area you are changing, starting with
+`docs/engineering/engineering-standards.md`.
+
+If the charter, a standard or the implementation conflicts with another
+authoritative project requirement, stop, report the conflict and resolve it
+through the approved workflow. Never silently pick the more convenient
+instruction.
+
+## UI, layout and native-shell work
+
 Before making any UI, layout, navigation, responsive, mobile, tablet, desktop,
-PWA or native-shell change, read the relevant standards and architecture records:
+PWA or native-shell change, also read the relevant standards and architecture records:
 
 1. `docs/engineering/engineering-standards.md`
 2. `docs/engineering/ui-platform-standards.md`
@@ -14,6 +31,10 @@ PWA or native-shell change, read the relevant standards and architecture records
 9. `docs/architecture/adr/0012-capacitor-ios-shell.md`
 10. `docs/architecture/adr/0013-hybrid-web-and-native-presentation.md`
 11. `docs/architecture/adr/0014-capacitor-android-shell.md`
+12. `docs/engineering/ios-engineering-standards.md` (for any change that can
+    affect the iOS app: `apps/ios-shell`, native layout states, Keychain,
+    biometrics, push, widgets or DEV/PROD identity)
+13. `docs/design/forms.md` (for any form, field layout or form sheet)
 
 The current native/mobile UI is the protected baseline. Desktop and tablet work
 must not alter mobile geometry, safe areas, fixed navigation, sheets, viewport

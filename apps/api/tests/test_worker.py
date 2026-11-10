@@ -7,6 +7,7 @@ lost. See docs/design/visual-identity.md context and the fix itself in
 mykhaya/worker.py and mykhaya/scheduler.py.
 """
 
+import uuid
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -187,6 +188,7 @@ async def test_already_processed_event_is_not_reprocessed() -> None:
 async def test_email_worker_uses_enabled_platform_smtp_over_local_environment(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    idempotency_key = f"worker-pcc-smtp-test:{uuid.uuid4().hex}"
     settings = get_settings().model_copy(
         update={
             "environment": "development",
@@ -201,7 +203,7 @@ async def test_email_worker_uses_enabled_platform_smtp_over_local_environment(
             "subject": "Verify your MyKhaya email",
             "body": "Your verification code is 123456.",
             "html_body": "<p>Your verification code is <strong>123456</strong>.</p>",
-            "delivery_idempotency_key": "worker-pcc-smtp-test:email",
+            "delivery_idempotency_key": idempotency_key,
             "sensitive_email_expires_at": (datetime.now(UTC) + timedelta(minutes=10)).isoformat(),
         },
     )
@@ -223,7 +225,7 @@ async def test_email_worker_uses_enabled_platform_smtp_over_local_environment(
         delivery = NotificationDelivery(
             channel=NotificationChannel.email,
             notification_type="email_verification",
-            idempotency_key="worker-pcc-smtp-test:email",
+            idempotency_key=idempotency_key,
             outbox_event_id=event.id,
             status=NotificationDeliveryStatus.queued,
         )
@@ -235,9 +237,16 @@ async def test_email_worker_uses_enabled_platform_smtp_over_local_environment(
     calls: list[tuple[object, str, str, str]] = []
 
     def fake_send(
-        config: object, recipient: str, subject: str, body: str, html: str | None
-    ) -> None:
+        config: object,
+        recipient: str,
+        subject: str,
+        body: str,
+        html: str | None,
+        attachment: tuple[str, bytes, str] | None = None,
+    ) -> str:
         calls.append((config, recipient, subject, body))
+        assert attachment is None
+        return "synthetic-provider-message-id"
 
     monkeypatch.setattr(worker, "get_settings", lambda: settings)
     monkeypatch.setattr(worker, "send_email", fake_send)
@@ -254,7 +263,7 @@ async def test_email_worker_uses_enabled_platform_smtp_over_local_environment(
         async with SessionFactory() as db:
             stored_delivery = await db.scalar(
                 select(NotificationDelivery).where(
-                    NotificationDelivery.idempotency_key == "worker-pcc-smtp-test:email"
+                    NotificationDelivery.idempotency_key == idempotency_key
                 )
             )
             assert stored_delivery is not None

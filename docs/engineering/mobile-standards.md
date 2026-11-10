@@ -19,8 +19,11 @@ No UI change may be merged into MyKhaya unless it has been reviewed on a physica
 
 Screenshots taken via automated tooling (Playwright, etc.) are useful for catching layout regressions and are not a substitute for this review — they confirm the markup renders, not that it meets the quality bar.
 
+Use the [Native UI acceptance checklist](native-ui-acceptance.md) for that review: it lists the presentations, the per-form checks (keyboard, pickers, focus zoom, safe areas, Android back button) and how to record which build was tested.
+
 - Design mobile-first: build and verify the phone layout before widening for tablet/desktop, not the reverse.
-- Store reusable credentials (session tokens) only via secure, HttpOnly cookies for the browser/PWA client — this remains unchanged and is not migrated to any other storage. A future native (Capacitor) shell around this same PWA uses the separate bearer-token mechanism in [ADR 0010](../architecture/adr/0010-mobile-bearer-session-tokens.md) instead, stored via the native-session-store abstraction in `packages/api-client` (in-memory only until an iOS Keychain adapter exists) — this is a second, narrowly-scoped transport for that one future shell, not a general-purpose mobile credential store, and does not change how the browser/PWA client authenticates.
+- Store reusable credentials (session tokens) only via secure, HttpOnly cookies for the browser/PWA client — this remains unchanged and is not migrated to any other storage. The native Capacitor shell uses the separate bearer-token mechanism in [ADR 0010](../architecture/adr/0010-mobile-bearer-session-tokens.md) instead, stored via the native-session-store abstraction in `packages/api-client`; on iOS that is the Keychain-backed `KeychainNativeSessionStore` (`apps/web/components/keychain-native-session-store.ts`, see [iOS Engineering Standards](ios-engineering-standards.md#5-native-security-and-integration)). This is a second, narrowly scoped transport for the native shell, not a general-purpose mobile credential store, and does not change how the browser/PWA client authenticates.
+- The bearer transport is not an authentication exemption. Native sign-in and renewal enforce the same consumer MFA policy as the browser, because nothing in a native request proves it came from the genuine app. See [Consumer MFA enforcement](consumer-mfa-enforcement.md).
 - Request browser permissions (notifications, etc.) only when a feature needs them, with clear just-in-time explanation.
 - Design for intermittent connectivity and PWA offline support via the service worker.
 - Keep bottom navigation purpose-built for touch rather than a shrunk desktop layout.
@@ -41,6 +44,17 @@ Screenshots taken via automated tooling (Playwright, etc.) are useful for catchi
 - Interactive controls must be at least 44 by 44 CSS pixels, keyboard reachable and visibly focused. Bottom sheets trap focus, close with Escape, restore focus and leave room for the on-screen keyboard and device safe areas.
 - Calendar month cells use compact event indicators on narrow phones. Selecting a day opens a readable day sheet; event creation and editing use a full-height sheet rather than a squeezed desktop form.
 - Prefer stacked cards and disclosure panels to wide tables. Text, names and event metadata must wrap without breaking the viewport.
+- Plan & Billing follows the same rule: its plan cards use a container-width
+  query and stack below 680px of available content width, including narrow
+  native-shell columns. The feature comparison becomes a readable stacked
+  feature list below 600px rather than shrinking text or creating document-
+  level horizontal scrolling; the conventional table remains in place on
+  wider content areas. This uses the authoritative comparison data and keeps
+  billing actions and subscription state unchanged. On wider desktop
+  presentation, the page uses a bounded content frame so all three plan cards
+  have room without changing native-shell geometry. Validate the route at
+  280, 320, 360, 375, 390, 430, 600, 768, 1024 and representative desktop
+  widths, including the Duo outer/inner shell presentations.
 - Respect `prefers-reduced-motion`; never make animation necessary to understand state.
 - Follow OWASP Mobile Top 10 2024 as an awareness baseline alongside the main security standards.
 

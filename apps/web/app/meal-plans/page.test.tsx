@@ -619,9 +619,10 @@ describe("Meal Plans — Add meal sheet", () => {
 
     // Date is its own label/input pair, distinct from the Meal-slot and Time
     // controls — never a shared three-column row.
-    const dateLabel = screen.getByText("Date").closest("label");
-    expect(dateLabel?.querySelector('input[type="date"]')).toBeTruthy();
-    expect(dateLabel?.querySelector("select")).toBeNull();
+    const dateInput = screen.getByLabelText("Date");
+    expect(dateInput).toHaveAttribute("type", "date");
+    expect(dateInput.closest(".form-field")?.querySelector("select")).toBeNull();
+    expect(dateInput.closest(".form-row")).toBeNull();
 
     expect(screen.getByLabelText(/time \(optional\)/i)).toHaveAttribute(
       "type",

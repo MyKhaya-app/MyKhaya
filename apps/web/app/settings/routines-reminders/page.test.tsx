@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { Home, Reminder, Routine, Todo, TodoCategory } from "@mykhaya/shared-types";
 import RoutinesRemindersPage from "./page";
@@ -879,5 +879,132 @@ describe("Routines & Reminders — desktop/tablet supporting panels", () => {
     const side = document.querySelector(".rr-side") as HTMLElement;
     const link = within(side).getByRole("link", { name: /Nudge settings/ });
     expect(link).toHaveAttribute("href", "/settings/notifications");
+  });
+});
+
+// The Routine, Reminder and To-do editors on the shared form primitives
+// (components/form-layout.tsx, docs/design/forms.md). Their layout is measured
+// in a real browser by the responsive audit; these cover the structure, the
+// accessible wiring, the failed-save path and that the payloads are unchanged.
+describe("Routines & Reminders — editors on the shared form layout", () => {
+  async function openEditor(kind: "Routine" | "Reminder" | "To-do", title: string) {
+    render(<RoutinesRemindersPage />);
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Add" }));
+    await user.click(screen.getByRole("button", { name: `New ${kind}` }));
+    return { user, dialog: await screen.findByRole("dialog", { name: title }) };
+  }
+
+  it("groups the Routine editor into labelled sections and keeps the browser's required checks", async () => {
+    const { dialog } = await openEditor("Routine", "New routine");
+    for (const group of ["Routine", "Schedule", "Notifications & Home"]) {
+      expect(within(dialog).getByRole("group", { name: group })).toBeInTheDocument();
+    }
+    for (const label of ["Title", "Description (optional)", "Who this is for", "Category (optional)", "Every", "Anchor date", "Remind", "Starts", "Ends (optional)"]) {
+      expect(within(dialog).getByLabelText(label)).toBeInTheDocument();
+    }
+    expect(within(dialog).getByLabelText("Title")).toBeRequired();
+    expect(dialog.querySelector("form.rr-form")).not.toHaveAttribute("novalidate");
+    expect(within(dialog).getByLabelText("Anchor date")).toHaveAccessibleDescription("Choose a date when this routine occurs.");
+    // Starts and Ends share one row, which stacks when the sheet is narrow.
+    expect(within(dialog).getByLabelText("Starts").closest(".form-row")).toBe(
+      within(dialog).getByLabelText("Ends (optional)").closest(".form-row"),
+    );
+  });
+
+  it("submits the same Routine payload as before the move", async () => {
+    const { user, dialog } = await openEditor("Routine", "New routine");
+    await user.type(within(dialog).getByLabelText("Title"), "Put bins out");
+    await user.selectOptions(within(dialog).getByLabelText("Who this is for"), "household");
+    await user.click(within(dialog).getByRole("button", { name: "Weekly" }));
+    await user.selectOptions(within(dialog).getByLabelText("Every"), "2");
+    fireEvent.change(within(dialog).getByLabelText("Anchor date"), { target: { value: "2026-03-02" } });
+    await user.selectOptions(within(dialog).getByLabelText("Remind"), "same_day");
+    fireEvent.change(within(dialog).getByLabelText("Starts"), { target: { value: "2026-03-01" } });
+    fireEvent.change(within(dialog).getByLabelText("Ends (optional)"), { target: { value: "2026-06-01" } });
+    await user.click(within(dialog).getByRole("checkbox", { name: /critical reminder/i }));
+    await user.click(within(dialog).getByRole("button", { name: /^save$/i }));
+
+    expect(api.createRoutine).toHaveBeenCalledWith("home-1", {
+      title: "Put bins out",
+      description: null,
+      scope: "household",
+      interval_weeks: 2,
+      repeat_unit: "weekly",
+      week_anchor_date: "2026-03-02",
+      reminder_timing: "same_day",
+      is_critical: true,
+      pinned: false,
+      start_date: "2026-03-01",
+      end_date: "2026-06-01",
+      category_id: null,
+      member_ids: [],
+    });
+  });
+
+  it("submits the same Reminder payload as before the move", async () => {
+    const { user, dialog } = await openEditor("Reminder", "New reminder");
+    expect(within(dialog).getByLabelText("Due date").closest(".form-row")).toBe(
+      within(dialog).getByLabelText("Due time").closest(".form-row"),
+    );
+    await user.type(within(dialog).getByLabelText("Title"), "Water the plants");
+    await user.type(within(dialog).getByLabelText("Notes (optional)"), "Back garden too");
+    await user.selectOptions(within(dialog).getByLabelText("Scope"), "household");
+    fireEvent.change(within(dialog).getByLabelText("Due date"), { target: { value: "2026-03-01" } });
+    fireEvent.change(within(dialog).getByLabelText("Due time"), { target: { value: "07:45" } });
+    await user.selectOptions(within(dialog).getByLabelText("Repeat"), "weekly");
+    await user.selectOptions(within(dialog).getByLabelText("Remind"), "daily");
+    await user.click(within(dialog).getByRole("button", { name: /^save$/i }));
+
+    expect(api.createReminder).toHaveBeenCalledWith("home-1", {
+      title: "Water the plants",
+      description: "Back garden too",
+      scope: "household",
+      due_date: "2026-03-01",
+      due_time: "07:45:00",
+      repeat: "weekly",
+      cadence: "daily",
+      category_id: null,
+      member_ids: [],
+    });
+  });
+
+  it("labels every To-do field", async () => {
+    const { dialog } = await openEditor("To-do", "New To-do");
+    for (const label of ["Title", "Notes (optional)", "Due date", "Scope", "Category (optional)", "Assign to (household only)"]) {
+      expect(within(dialog).getByLabelText(label)).toBeInTheDocument();
+    }
+    expect(within(dialog).getByRole("group", { name: "When and who" })).toBeInTheDocument();
+  });
+
+  it("shows a failed save inside the sheet and restores its controls", async () => {
+    (api.createReminder as ReturnType<typeof vi.fn>).mockRejectedValue(new Error("Reminder could not be saved."));
+    const { user, dialog } = await openEditor("Reminder", "New reminder");
+    await user.type(within(dialog).getByLabelText("Title"), "Water the plants");
+    await user.click(within(dialog).getByRole("button", { name: /^save$/i }));
+
+    expect(await within(dialog).findByRole("alert")).toHaveTextContent("Reminder could not be saved.");
+    // Shown once, in the sheet, not again on the page behind it.
+    expect(screen.getAllByRole("alert")).toHaveLength(1);
+    expect(within(dialog).getByRole("button", { name: /^save$/i })).toBeEnabled();
+    expect(within(dialog).getByRole("button", { name: "Cancel" })).toBeEnabled();
+    expect(within(dialog).getByLabelText("Title")).toHaveValue("Water the plants");
+
+    // Cancelling discards the draft and its error; it does not resurface on the page.
+    await user.click(within(dialog).getByRole("button", { name: "Cancel" }));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+  });
+
+  it("locks every dismissal while a save is in flight", async () => {
+    (api.createRoutine as ReturnType<typeof vi.fn>).mockReturnValue(new Promise(() => {}));
+    const { user, dialog } = await openEditor("Routine", "New routine");
+    await user.type(within(dialog).getByLabelText("Title"), "Feed the dog");
+    await user.click(within(dialog).getByRole("button", { name: /^save$/i }));
+
+    expect(await within(dialog).findByRole("button", { name: "Saving…" })).toBeDisabled();
+    expect(within(dialog).getByRole("button", { name: "Cancel" })).toBeDisabled();
+    await user.keyboard("{Escape}");
+    expect(screen.getByRole("dialog", { name: "New routine" })).toBeInTheDocument();
   });
 });

@@ -1,4 +1,5 @@
 node_modules/
+.worktrees/
 .next/
 .expo/
 dist/
@@ -8,6 +9,8 @@ coverage/
 !.env.example
 !.env.dev.example
 !.env.production.example
+.env.responsive-audit.local
+!.env.responsive-audit.local.example
 compose.override.yml
 __pycache__/
 *.py[cod]
@@ -16,6 +19,9 @@ __pycache__/
 .mypy_cache/
 .venv/
 htmlcov/
+.coverage
+.coverage.*
+*.tsbuildinfo
 playwright-report/
 test-results/
 backups/

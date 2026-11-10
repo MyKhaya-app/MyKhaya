@@ -4,10 +4,11 @@ import { FormEvent, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { BarChart3, ChevronDown, ChevronLeft, ChevronRight, CircleDollarSign, ShoppingCart, WalletCards } from "lucide-react";
 import { ApiError, api, type BudgetCategory, type BudgetMonth, type BudgetSpendingEntry } from "@mykhaya/api-client";
-import { BottomSheet } from "@/components/bottom-sheet";
+import { FormField, FormLayout, FormSheet } from "@/components/form-layout";
 import { BudgetAddAction } from "./budget-add-action";
 import { BudgetEntrySheet, periodDate } from "./budget-entry-sheet";
 import { BudgetEditEntrySheet } from "./budget-edit-entry-sheet";
+import { BudgetAmountField, useBudgetFieldErrors } from "./budget-form-fields";
 import { BudgetItemList } from "./budget-item-list";
 import { BudgetTabs } from "./budget-tabs";
 
@@ -27,8 +28,109 @@ function Stat({ label, value, icon: Icon }: { label: string; value: string; icon
 function NotesAction({ homeId, categoryId, year, month }: { homeId: string; categoryId: string; year: number; month: number }) {
   const [note, setNote] = useState("");
   const [open, setOpen] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
   useEffect(() => { void api.budgetMonth(homeId, year, month).then((data) => setNote(data.categories.find((item) => item.category_id === categoryId)?.note ?? "")); }, [categoryId, homeId, month, year]);
-  return <><button type="button" className="budget-action-row" onClick={() => setOpen(true)}><span className="budget-icon"><WalletCards size={20} /></span><strong>Budget notes</strong><ChevronRight size={20} /></button>{open && <BottomSheet title="Budget notes" onDismiss={() => setOpen(false)}><form className="budget-sheet-form" onSubmit={async (event) => { event.preventDefault(); await api.updateBudgetCategoryNote(homeId, year, month, categoryId, note); setOpen(false); }}><label htmlFor="budget-category-note">Optional note</label><textarea id="budget-category-note" value={note} onChange={(event) => setNote(event.target.value)} maxLength={1000} rows={5} placeholder="Add a note for this category" /><button type="submit">Save note</button></form></BottomSheet>}</>;
+  async function save(event: FormEvent) {
+    event.preventDefault();
+    if (saving) return;
+    setSaving(true);
+    setError("");
+    try {
+      await api.updateBudgetCategoryNote(homeId, year, month, categoryId, note);
+      setOpen(false);
+    } catch {
+      setError("Couldn’t save note. Please try again.");
+    } finally {
+      setSaving(false);
+    }
+  }
+  return <>
+    <button type="button" className="budget-action-row" onClick={() => { setError(""); setOpen(true); }}><span className="budget-icon"><WalletCards size={20} /></span><strong>Budget notes</strong><ChevronRight size={20} /></button>
+    {open && <FormSheet title="Budget notes" onDismiss={() => setOpen(false)} busy={saving} primaryAction={<button type="submit" form="budget-note-form" disabled={saving}>{saving ? "Saving…" : "Save note"}</button>}>
+      <FormLayout id="budget-note-form" onSubmit={save}>
+        {error && <p className="notice error" role="alert">{error}</p>}
+        <FormField label="Optional note">
+          {(control) => <textarea {...control} value={note} onChange={(event) => setNote(event.target.value)} maxLength={1000} rows={5} placeholder="Add a note for this category" />}
+        </FormField>
+      </FormLayout>
+    </FormSheet>}
+  </>;
+}
+
+/**
+ * Update actual amount: the category's own monthly amount, which the API
+ * adds to its spending entries. The sheet owns one draft, started from the
+ * stored value (fixed_actual, else a legacy row's manual_actual, else 0) and
+ * changed only by typing, so a re-render cannot reset what was typed.
+ * Saving a legacy row's manual_actual unchanged is a no-op in the API; the
+ * entries total is never offered as the starting value, because saving it
+ * would count those entries twice.
+ */
+function ActualSheet({ homeId, categoryId, year, month, initial, additive, onClose, onSaved }: { homeId: string; categoryId: string; year: number; month: number; initial: string; additive: boolean; onClose: () => void; onSaved: () => Promise<void> }) {
+  const [actual, setActual] = useState(initial);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const fields = useBudgetFieldErrors({ actual: { missing: "Enter an amount." } });
+  const label = additive ? "Fixed monthly amount" : "Actual amount";
+  async function save(event: FormEvent) {
+    event.preventDefault();
+    if (saving) return;
+    if (!fields.check()) {
+      setError("");
+      return;
+    }
+    setSaving(true);
+    setError("");
+    try {
+      await api.updateBudgetActual(homeId, year, month, categoryId, { source: "manual", manual_actual: Number(actual) });
+      await onSaved();
+      onClose();
+    } catch {
+      setError("Couldn’t save the amount. Please try again.");
+    } finally {
+      setSaving(false);
+    }
+  }
+  return <FormSheet title={additive ? "Update fixed monthly amount" : "Update actual amount"} onDismiss={onClose} busy={saving} primaryAction={<button type="submit" form="budget-actual-form" disabled={saving}>{saving ? "Saving…" : additive ? "Save fixed amount" : "Save actual"}</button>}>
+    <FormLayout id="budget-actual-form" ref={fields.formRef} onSubmit={save}>
+      {error && <p className="notice error" role="alert">{error}</p>}
+      <BudgetAmountField label={label} name="actual" value={actual} onChange={(value) => { setActual(value); fields.clear("actual"); }} error={fields.errors.actual} />
+    </FormLayout>
+  </FormSheet>;
+}
+
+/** Edit planned amount: the category's plan for the month in view. */
+function PlanSheet({ homeId, categoryId, year, month, initial, onClose, onSaved }: { homeId: string; categoryId: string; year: number; month: number; initial: string; onClose: () => void; onSaved: () => void }) {
+  const [planned, setPlanned] = useState(initial);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+  const fields = useBudgetFieldErrors({ planned: { missing: "Enter the planned amount." } });
+  async function save(event: FormEvent) {
+    event.preventDefault();
+    if (saving) return;
+    if (!fields.check()) {
+      setError("");
+      return;
+    }
+    setSaving(true);
+    setError("");
+    try {
+      await api.updateBudgetPlan(homeId, year, month, categoryId, Number(planned));
+      onSaved();
+      onClose();
+    } catch {
+      setError("Couldn’t save planned amount. Please try again.");
+    } finally {
+      setSaving(false);
+    }
+  }
+  return <FormSheet title="Edit planned amount" onDismiss={onClose} busy={saving} primaryAction={<button type="submit" form="budget-plan-form" disabled={saving}>{saving ? "Saving…" : "Save plan"}</button>}>
+    <FormLayout id="budget-plan-form" ref={fields.formRef} onSubmit={save}>
+      {error && <p className="notice error" role="alert">{error}</p>}
+      <BudgetAmountField label="Planned amount (per month)" name="planned" value={planned} onChange={(value) => { setPlanned(value); fields.clear("planned"); }} error={fields.errors.planned} />
+    </FormLayout>
+  </FormSheet>;
 }
 
 export function BudgetCategoryDetail({ homeId, categoryId }: { homeId: string; categoryId: string }) {
@@ -44,7 +146,6 @@ export function BudgetCategoryDetail({ homeId, categoryId }: { homeId: string; c
   const [sheet, setSheet] = useState<"plan" | "actual" | null>(null);
   const [quickOpen, setQuickOpen] = useState(false);
   const [planned, setPlanned] = useState("0");
-  const [actual, setActual] = useState("0");
   const [entryOpen, setEntryOpen] = useState(false);
   const [selectedEntry, setSelectedEntry] = useState<BudgetSpendingEntry | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
@@ -71,7 +172,7 @@ export function BudgetCategoryDetail({ homeId, categoryId }: { homeId: string; c
       const nextEntries = await api.budgetEntries(homeId, period);
       setEntries(nextEntries.filter((entry) => entry.category_id === categoryId).sort((a, b) => b.spent_on.localeCompare(a.spent_on) || b.id.localeCompare(a.id)));
       const row = nextMonth.categories.find((item) => item.category_id === categoryId);
-      if (row) { setPlanned(String(row.planned_amount)); setActual(String(row.fixed_actual ?? row.manual_actual ?? 0)); }
+      if (row) setPlanned(String(row.planned_amount));
     } catch (cause) {
       setMonth(null);
       setEntries([]);
@@ -107,7 +208,6 @@ export function BudgetCategoryDetail({ homeId, categoryId }: { homeId: string; c
   const remaining = row.planned_amount - row.actual_amount;
   const usage = Math.min((row.actual_amount / Math.max(row.planned_amount, 1)) * 100, 100);
   const isAdditiveActual = row.fixed_actual !== null;
-  const editableActual = isAdditiveActual ? row.fixed_actual ?? 0 : row.manual_actual ?? row.actual_amount;
   return <>
     <section className="budget-hero"><div><p className="budget-eyebrow">Budget</p><h1>{row.category_name}</h1><p>Optional spending detail sits under your plan.</p></div><div className="budget-artwork" aria-hidden="true"><img src="/images/PiggyBank_Budget_Image.png" alt="" /></div></section>
     <BudgetTabs />
@@ -120,8 +220,8 @@ export function BudgetCategoryDetail({ homeId, categoryId }: { homeId: string; c
     <BudgetItemList key={refreshKey} homeId={homeId} categoryId={categoryId} year={period.year} month={period.month} onRefresh={() => setRefreshKey((value) => value + 1)} onViewTransaction={viewTransaction} />
     <BudgetAddAction homeId={homeId} onRefresh={() => setRefreshKey((value) => value + 1)} onSpending={() => setEntryOpen(true)} />
     {entryOpen && <BudgetEntrySheet homeId={homeId} initialCategoryId={categoryId} initialSpentOn={periodDate(period)} onClose={() => setEntryOpen(false)} onSaved={reload} />}
-    {sheet === "plan" && <BottomSheet title="Edit planned amount" onDismiss={() => setSheet(null)}><form className="budget-sheet-form" onSubmit={async (event) => { event.preventDefault(); await api.updateBudgetPlan(homeId, period.year, period.month, categoryId, Number(planned)); reload(); setSheet(null); }}><label htmlFor="planned-amount">Planned amount (per month)</label><input id="planned-amount" type="number" min="0" step="0.01" value={planned} onChange={(event) => setPlanned(event.target.value)} required /><button type="submit">Save plan</button></form></BottomSheet>}
-    {sheet === "actual" && <BottomSheet title={isAdditiveActual ? "Update fixed monthly amount" : "Update actual amount"} onDismiss={() => setSheet(null)}><form className="budget-sheet-form" onSubmit={async (event: FormEvent) => { event.preventDefault(); await Promise.resolve(api.updateBudgetActual(homeId, period.year, period.month, categoryId, { source: "manual", manual_actual: Number(actual) })); await reload(); setSheet(null); }}><label htmlFor="fixed-actual">{isAdditiveActual ? "Fixed monthly amount" : "Actual amount"}</label><input id="fixed-actual" type="number" min="0" step="0.01" value={editableActual} onChange={(event) => setActual(event.target.value)} /><button type="submit">{isAdditiveActual ? "Save fixed amount" : "Save actual"}</button></form></BottomSheet>}
+    {sheet === "plan" && <PlanSheet homeId={homeId} categoryId={categoryId} year={period.year} month={period.month} initial={planned} onClose={() => setSheet(null)} onSaved={() => void reload()} />}
+    {sheet === "actual" && <ActualSheet homeId={homeId} categoryId={categoryId} year={period.year} month={period.month} initial={String(row.fixed_actual ?? row.manual_actual ?? 0)} additive={isAdditiveActual} onClose={() => setSheet(null)} onSaved={reload} />}
     {selectedEntry && <BudgetEditEntrySheet homeId={homeId} entry={selectedEntry} onClose={() => setSelectedEntry(null)} onSaved={reload} />}
   </>;
 }

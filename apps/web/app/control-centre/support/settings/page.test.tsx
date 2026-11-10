@@ -16,15 +16,32 @@ vi.mock("@mykhaya/api-client", async (importOriginal) => {
 });
 const { platformApi, ApiError } = await import("@mykhaya/api-client");
 const get = platformApi.get as unknown as ReturnType<typeof vi.fn>;
+const put = platformApi.put as unknown as ReturnType<typeof vi.fn>;
 
 function mockLoad({
   supportEnabled = true,
   serviceStatusState = "configured",
   supportNotificationEmail = "support-team@example.com" as string | null,
+  newTicket = {
+    configured: false,
+    enabled: true,
+    roles: [] as string[],
+    include_support_inbox: true,
+    recipient_count: 0,
+    can_manage: false,
+  },
 }: {
   supportEnabled?: boolean;
   serviceStatusState?: "configured" | "default" | "unset";
   supportNotificationEmail?: string | null;
+  newTicket?: {
+    configured: boolean;
+    enabled: boolean;
+    roles: string[];
+    include_support_inbox: boolean;
+    recipient_count: number;
+    can_manage: boolean;
+  };
 } = {}) {
   get.mockImplementation((path: string) => {
     if (path === "/modules") {
@@ -36,7 +53,10 @@ function mockLoad({
       });
     }
     if (path === "/support/settings") {
-      return Promise.resolve({ support_notification_email: supportNotificationEmail });
+      return Promise.resolve({
+        support_notification_email: supportNotificationEmail,
+        new_ticket_notifications: newTicket,
+      });
     }
     return Promise.reject(new Error(`unexpected path ${path}`));
   });
@@ -73,7 +93,8 @@ describe("Support settings", () => {
   it("shows Not configured, and no destination row, when no team notification email is set", async () => {
     mockLoad({ supportNotificationEmail: null });
     render(<SupportSettingsPage />);
-    expect(await screen.findByText("Not configured")).toBeInTheDocument();
+    const section = (await screen.findByRole("heading", { name: "Support notification email" })).closest("section")!;
+    expect(await within(section).findByText("Not configured")).toBeInTheDocument();
     expect(screen.queryByText("support-team@example.com")).toBeNull();
   });
 
@@ -87,7 +108,8 @@ describe("Support settings", () => {
   it("shows Service Status as Not configured when the URL is unset", async () => {
     mockLoad({ serviceStatusState: "unset" });
     render(<SupportSettingsPage />);
-    expect(await screen.findByText("Not configured")).toBeInTheDocument();
+    const section = (await screen.findByRole("heading", { name: "Service Status" })).closest("section")!;
+    expect(await within(section).findByText("Not configured")).toBeInTheDocument();
   });
 
   it("shows Knowledge Base as Coming soon", async () => {
@@ -114,5 +136,53 @@ describe("Support settings", () => {
     get.mockRejectedValue(new ApiError(500, "Could not load Support settings."));
     render(<SupportSettingsPage />);
     expect(await screen.findByText("Could not load Support settings.")).toBeInTheDocument();
+  });
+});
+
+describe("Support settings — new ticket email notifications", () => {
+  const configured = {
+    configured: true,
+    enabled: true,
+    roles: ["support_operator", "platform_administrator"],
+    include_support_inbox: false,
+    recipient_count: 3,
+    can_manage: true,
+  };
+
+  it("explains the original behaviour until the setting is saved, read-only for Support", async () => {
+    render(<SupportSettingsPage />);
+    expect(await screen.findByText(/emailed only to the support inbox above, as before/)).toBeInTheDocument();
+    expect(screen.getByText("Only Platform Owners and Administrators can change these settings.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Save notification settings" })).toBeNull();
+  });
+
+  it("shows the selected roles and current recipient count", async () => {
+    mockLoad({ newTicket: { ...configured, can_manage: false } });
+    render(<SupportSettingsPage />);
+    expect(await screen.findByText("Administrators, Support operators")).toBeInTheDocument();
+    expect(screen.getByText("3 people")).toBeInTheDocument();
+    expect(screen.getByText("On")).toBeInTheDocument();
+  });
+
+  it("lets an Owner or Administrator save roles with a reason", async () => {
+    const { default: userEvent } = await import("@testing-library/user-event");
+    mockLoad({ newTicket: configured });
+    put.mockResolvedValue({ ...configured, roles: ["platform_owner", "platform_administrator", "support_operator"], recipient_count: 4 });
+    render(<SupportSettingsPage />);
+    const owners = await screen.findByRole("checkbox", { name: "Owners" });
+    expect(screen.getByRole("checkbox", { name: "Support operators" })).toBeChecked();
+    expect(screen.getByRole("checkbox", { name: /Also send to the support inbox \(support-team@example.com\)/ })).not.toBeChecked();
+    await userEvent.click(owners);
+    await userEvent.type(screen.getByLabelText(/Reason for this change/), "Owners triage weekend tickets");
+    await userEvent.click(screen.getByRole("button", { name: "Save notification settings" }));
+    expect(put).toHaveBeenCalledWith("/support/settings/new-ticket-notifications", {
+      enabled: true,
+      roles: ["platform_owner", "platform_administrator", "support_operator"],
+      include_support_inbox: false,
+      reason: "Owners triage weekend tickets",
+      confirmed: true,
+    });
+    expect(await screen.findByText("New ticket notification settings saved.")).toBeInTheDocument();
+    expect(screen.getByText("4 people")).toBeInTheDocument();
   });
 });

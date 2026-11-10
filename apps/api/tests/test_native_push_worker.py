@@ -9,7 +9,7 @@ versa) for the same delivery.
 import uuid
 
 import pytest
-from sqlalchemy import select
+from sqlalchemy import delete, select
 
 from mykhaya import worker as worker_module
 from mykhaya.db import SessionFactory
@@ -19,8 +19,17 @@ from mykhaya.models import (
     NotificationDeliveryStatus,
     OutboxEvent,
     User,
+    WorkerJobRecord,
 )
-from mykhaya.notifications.push import ApnsConfig, ApnsPermanentError, FcmConfig, FcmPermanentError
+from mykhaya.notifications.push import (
+    ApnsConfig,
+    ApnsPermanentError,
+    FcmAuthenticationError,
+    FcmConfig,
+    FcmConfigurationError,
+    FcmPermanentError,
+    FcmTransientError,
+)
 from mykhaya.worker import process
 
 
@@ -74,6 +83,16 @@ async def _setup_native_delivery(platform: str) -> tuple[uuid.UUID, uuid.UUID, u
         )
         await db.commit()
         return event.id, device.id, user.id
+
+
+async def _cleanup_delivery(event_id: uuid.UUID) -> None:
+    async with SessionFactory() as db:
+        await db.execute(delete(WorkerJobRecord).where(WorkerJobRecord.outbox_event_id == event_id))
+        await db.execute(
+            delete(NotificationDelivery).where(NotificationDelivery.outbox_event_id == event_id)
+        )
+        await db.execute(delete(OutboxEvent).where(OutboxEvent.id == event_id))
+        await db.commit()
 
 
 def _configured_apns_config(_settings: object) -> ApnsConfig:
@@ -201,9 +220,66 @@ async def test_fcm_failure_never_falls_back_to_apns(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(worker_module, "send_fcm", fail)
     monkeypatch.setattr(worker_module, "send_apns", lambda *a, **k: apns_calls.append((a, k)))
 
-    await process(event_id)
+    try:
+        await process(event_id)
+        assert apns_calls == []
+    finally:
+        await _cleanup_delivery(event_id)
 
-    assert apns_calls == []
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("error", "status", "reason"),
+    [
+        (
+            FcmConfigurationError("invalid key"),
+            NotificationDeliveryStatus.cancelled,
+            "FCM service configuration is invalid.",
+        ),
+        (
+            FcmAuthenticationError("auth"),
+            NotificationDeliveryStatus.cancelled,
+            "FCM authentication failed.",
+        ),
+        (
+            FcmTransientError("outage"),
+            NotificationDeliveryStatus.failed,
+            "Native push service temporarily unavailable.",
+        ),
+    ],
+)
+async def test_worker_classifies_fcm_auth_and_transient_failures(
+    monkeypatch: pytest.MonkeyPatch,
+    error: Exception,
+    status: NotificationDeliveryStatus,
+    reason: str,
+) -> None:
+    event_id, device_id, _user_id = await _setup_native_delivery("android")
+
+    def fail(*_a: object, **_k: object) -> None:
+        raise error
+
+    monkeypatch.setattr(worker_module, "resolve_fcm_config", _configured_fcm_config)
+    monkeypatch.setattr(worker_module, "send_fcm", fail)
+
+    try:
+        if status == NotificationDeliveryStatus.failed:
+            with pytest.raises(FcmTransientError):
+                await process(event_id)
+        else:
+            await process(event_id)
+
+        async with SessionFactory() as db:
+            delivery = await db.scalar(
+                select(NotificationDelivery).where(
+                    NotificationDelivery.native_push_device_id == device_id
+                )
+            )
+            assert delivery is not None
+            assert delivery.status == status
+            assert delivery.sanitised_failure_reason == reason
+    finally:
+        await _cleanup_delivery(event_id)
 
 
 @pytest.mark.asyncio

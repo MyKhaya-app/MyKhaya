@@ -10,6 +10,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 from httpx import ASGITransport, AsyncClient
+from monitoring_support import healthy_monitoring
 from sqlalchemy import select
 
 from mykhaya.db import SessionFactory
@@ -197,7 +198,11 @@ async def test_operational_when_no_incidents_affect_a_fresh_service(
     if payload["overall"] == "operational":
         assert payload["overall_message"] == "Operational"
         assert payload["current_incidents"] == []
+    # "unknown": with no fresh automated monitoring observation (as in this
+    # test database) a service is never reported Operational by default —
+    # see mykhaya.status_aggregation and tests/test_service_monitoring.py.
     assert billing["state"] in {
+        "unknown",
         "operational",
         "degraded_performance",
         "partial_outage",
@@ -450,7 +455,10 @@ async def test_resolving_incident_preserves_history_moves_lists_and_returns_serv
     assert resolve.status_code == 201, resolve.text
     assert resolve.json()["resolved_at"] is not None
 
-    after = (await status_client.get("/api/v1/status")).json()
+    # With fresh healthy monitoring, the service returns to Operational once
+    # its only incident resolves (without monitoring it would be Unknown).
+    async with healthy_monitoring():
+        after = (await status_client.get("/api/v1/status")).json()
     assert not any(row["title"] == title for row in after["current_incidents"])
     resolved_entry = next(row for row in after["recent_incidents"] if row["title"] == title)
     assert resolved_entry["resolved_at"] is not None
@@ -559,7 +567,8 @@ async def test_delete_incident_removes_public_history_children_and_recalculates(
     assert (
         await unsafe(admin_client, "GET", f"/api/v1/platform/incidents/{created['id']}")
     ).status_code == 404
-    public = (await status_client.get("/api/v1/status")).json()
+    async with healthy_monitoring():
+        public = (await status_client.get("/api/v1/status")).json()
     assert not any(row["id"] == created["id"] for row in public["current_incidents"])
     assert not any(row["id"] == created["id"] for row in public["recent_incidents"])
     assert next(row for row in public["services"] if row["key"] == "authentication")["state"] == (

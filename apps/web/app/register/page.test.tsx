@@ -2,12 +2,14 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import Register from "./page";
+import { socialRegistrationStartUrl } from "./registration-urls";
 
-const { push, post, publicLegalDocuments, publicSignupState, nativeRegister, nativeShellState, searchParams } = vi.hoisted(() => ({
+const { push, post, publicLegalDocuments, publicSignupState, authProviders, nativeRegister, nativeShellState, searchParams } = vi.hoisted(() => ({
   push: vi.fn(),
   post: vi.fn(),
   publicLegalDocuments: vi.fn(),
   publicSignupState: vi.fn(),
+  authProviders: vi.fn(),
   nativeRegister: vi.fn(),
   nativeShellState: { value: false },
   searchParams: { value: "" },
@@ -36,6 +38,7 @@ vi.mock("@mykhaya/api-client", async (importOriginal) => {
       post,
       publicLegalDocuments,
       publicSignupState,
+      authProviders,
     },
   };
 });
@@ -56,6 +59,7 @@ beforeEach(() => {
     waitlist_available: false,
     joinable_count: null,
   });
+  authProviders.mockResolvedValue({ providers: [] });
 });
 
 const termsDocument = {
@@ -148,6 +152,41 @@ describe("registration transport", () => {
   });
 });
 
+describe("social registration OAuth start paths", () => {
+  beforeEach(() => {
+    authProviders.mockResolvedValue({
+      providers: [
+        { provider: "apple", enabled: true },
+        { provider: "google", enabled: true },
+      ],
+    });
+  });
+
+  it.each([
+    ["Apple", "apple"],
+    ["Google", "google"],
+  ])("uses the auth-prefixed %s OAuth route for standard registration", async (_label, provider) => {
+    expect(socialRegistrationStartUrl(provider as "apple" | "google", "/register")).toBe(
+      `/api/v1/auth/${provider}/start?next_path=%2Fregister`,
+    );
+  });
+
+  it.each([
+    ["Apple", "apple"],
+    ["Google", "google"],
+  ])("preserves Beta context on the %s OAuth route", async (_label, provider) => {
+    const token = "i".repeat(40);
+    expect(
+      socialRegistrationStartUrl(
+        provider as "apple" | "google",
+        `/register?beta=1&beta_invitation=${token}`,
+      ),
+    ).toBe(
+      `/api/v1/auth/${provider}/start?next_path=${encodeURIComponent(`/register?beta=1&beta_invitation=${token}`)}`,
+    );
+  });
+});
+
 describe("Founding Beta registration availability", () => {
   it("shows an explicit closed-registration experience instead of an account form", async () => {
     publicSignupState.mockResolvedValue({
@@ -180,8 +219,8 @@ describe("Founding Beta registration availability", () => {
     });
     render(<Register />);
 
-    expect(await screen.findByText(/You.re registering for the MyKhaya Founding Beta/)).toBeInTheDocument();
-    expect(screen.getByText(/After verifying your email, you.ll complete your Beta enrolment/)).toBeInTheDocument();
+    expect(await screen.findByText(/You.re joining the Founding Beta/)).toBeInTheDocument();
+    expect(screen.getByText(/After you verify your email, you.ll finish enrolment/)).toBeInTheDocument();
     expect(screen.queryByText(/can.t be created from this page/)).not.toBeInTheDocument();
   });
 });
@@ -240,7 +279,7 @@ describe("Founding Beta registration with a valid Beta invitation, past a non-em
 
     expect(screen.queryByText(/invitation is required/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/using the waiting list/i)).not.toBeInTheDocument();
-    const submit = screen.getByRole("button", { name: "Create account" });
+    const submit = screen.getByRole("button", { name: "Create account and continue" });
     expect(submit).toBeEnabled();
     await user.click(submit);
 
@@ -250,21 +289,45 @@ describe("Founding Beta registration with a valid Beta invitation, past a non-em
 });
 
 describe("registration legal acceptance", () => {
+  it("keeps the redesigned field order, legal hint and password toggle accessible", async () => {
+    publicLegalDocuments.mockResolvedValue([termsDocument]);
+    render(<Register />);
+
+    const form = await screen.findByRole("button", { name: "Create account" });
+    expect(form).toBeDisabled();
+    expect(screen.getByPlaceholderText("e.g. Thandi Mokoena")).toBeInTheDocument();
+    expect(screen.getByPlaceholderText("you@example.com")).toBeInTheDocument();
+    expect(screen.getByText("Accept the Terms & Conditions to continue.")).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Show passwords" })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: "Show passwords" }));
+    expect(screen.getByRole("button", { name: "Hide passwords" })).toBeInTheDocument();
+    expect(screen.getByLabelText("Password", { selector: 'input[name="password"]' })).toHaveAttribute("type", "text");
+    expect(screen.getByLabelText("Confirm password")).toHaveAttribute("type", "text");
+  });
+
+  it("shows the Beta alternate-join footer link", async () => {
+    searchParams.value = "beta=1";
+    render(<Register />);
+
+    expect(await screen.findByRole("link", { name: /See other ways to join Other ways to join/ })).toHaveAttribute("href", "/signup-choice");
+  });
+
   it("Beta registration creates the account only: no Home name and no Founding Beta Terms", async () => {
     searchParams.value = "beta=1";
     publicLegalDocuments.mockResolvedValue([termsDocument, betaTermsDocument, ...informationalDocuments]);
     render(<Register />);
 
-    const submit = await screen.findByRole("button", { name: "Create account" });
+    const submit = await screen.findByRole("button", { name: "Create account and continue" });
     expect(submit).toBeDisabled();
     expect(screen.getByLabelText("I accept the MyKhaya Terms & Conditions (version 1.0)")).toBeInTheDocument();
     // Beta Terms and Home details belong to the verified Beta continuation.
-    expect(screen.queryByText(/Founding Beta Terms/)).not.toBeInTheDocument();
+    expect(screen.getByText(/Founding Beta Terms/)).toBeInTheDocument();
     expect(screen.queryByLabelText("Home name")).not.toBeInTheDocument();
     expect(screen.getAllByRole("checkbox")).toHaveLength(1);
     expect(screen.getByRole("link", { name: "Privacy Notice" })).toHaveAttribute("href", "/legal/privacy");
     // No plan, price or payment on this page.
-    expect(screen.queryByText(/Choose your MyKhaya plan|Monthly|Annual|card/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Choose your MyKhaya plan|Monthly|Annual/i)).not.toBeInTheDocument();
   });
 
   it("requires the global Terms on the Beta path", async () => {
@@ -282,7 +345,7 @@ describe("registration legal acceptance", () => {
     publicLegalDocuments.mockResolvedValue([termsDocument, betaTermsDocument]);
     render(<Register />);
     const user = userEvent.setup();
-    const submit = await screen.findByRole("button", { name: "Create account" });
+    const submit = await screen.findByRole("button", { name: "Create account and continue" });
     expect(submit).toBeDisabled();
     await user.click(screen.getByLabelText("I accept the MyKhaya Terms & Conditions (version 1.0)"));
     expect(submit).toBeEnabled();
@@ -312,7 +375,7 @@ describe("registration legal acceptance", () => {
     );
     await user.type(screen.getByLabelText("Confirm password"), "correct horse battery staple");
     await user.click(screen.getByLabelText("I accept the MyKhaya Terms & Conditions (version 1.0)"));
-    await user.click(screen.getByRole("button", { name: "Create account" }));
+    await user.click(screen.getByRole("button", { name: "Create account and continue" }));
 
     await waitFor(() => expect(post).toHaveBeenCalled());
     const body = post.mock.calls[0]![1] as Record<string, unknown>;

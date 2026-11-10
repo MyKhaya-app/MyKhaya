@@ -16,6 +16,12 @@ from httpx import ASGITransport, AsyncClient
 from pydantic import SecretStr
 from sqlalchemy import delete, select
 
+from mykhaya.billing.reconciliation import (
+    ReconciliationValidationError,
+    _invoice_subscription_id,
+    _require_paid_latest_invoice,
+)
+from mykhaya.billing.state import SubscriptionOwnershipMismatchError
 from mykhaya.config import get_settings
 from mykhaya.db import SessionFactory
 from mykhaya.entitlements import ensure_home_subscription
@@ -39,6 +45,206 @@ ADMIN_ORIGIN = "http://admin.localhost:8080"
 ORIGIN = "http://localhost:8080"
 ADMIN_PASSWORD = "A separate operator password!"
 USER_PASSWORD = "Correct horse battery staple!"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("latest_invoice", "retrieved_invoice", "should_pass"),
+    [
+        (
+            "in_paid",
+            {
+                "id": "in_paid",
+                "status": "paid",
+                "paid": True,
+                "customer": "cus_expected",
+                "subscription": "sub_expected",
+            },
+            True,
+        ),
+        (
+            {
+                "id": "in_expanded",
+                "status": "paid",
+                "customer": "cus_expected",
+                "subscription": "sub_expected",
+            },
+            None,
+            True,
+        ),
+        (
+            {
+                "id": "in_no_intent",
+                "status": "paid",
+                "paid": True,
+                "customer": "cus_expected",
+                "subscription": "sub_expected",
+            },
+            None,
+            True,
+        ),
+        (
+            "in_open",
+            {
+                "id": "in_open",
+                "status": "open",
+                "paid": False,
+                "customer": "cus_expected",
+                "subscription": "sub_expected",
+            },
+            False,
+        ),
+        (
+            "in_unpaid",
+            {
+                "id": "in_unpaid",
+                "status": "unpaid",
+                "paid": False,
+                "customer": "cus_expected",
+                "subscription": "sub_expected",
+            },
+            False,
+        ),
+        (
+            "in_void",
+            {
+                "id": "in_void",
+                "status": "void",
+                "paid": False,
+                "customer": "cus_expected",
+                "subscription": "sub_expected",
+            },
+            False,
+        ),
+        (
+            "in_uncollectible",
+            {
+                "id": "in_uncollectible",
+                "status": "uncollectible",
+                "paid": False,
+                "customer": "cus_expected",
+                "subscription": "sub_expected",
+            },
+            False,
+        ),
+        (
+            "in_contradictory",
+            {
+                "id": "in_contradictory",
+                "status": "paid",
+                "paid": False,
+                "customer": "cus_expected",
+                "subscription": "sub_expected",
+            },
+            False,
+        ),
+        (
+            "in_wrong_customer",
+            {
+                "id": "in_wrong_customer",
+                "status": "paid",
+                "paid": True,
+                "customer": "cus_other",
+                "subscription": "sub_expected",
+            },
+            False,
+        ),
+        (
+            "in_wrong_subscription",
+            {
+                "id": "in_wrong_subscription",
+                "status": "paid",
+                "paid": True,
+                "customer": "cus_expected",
+                "subscription": "sub_other",
+            },
+            False,
+        ),
+        (
+            "in_basil_parent",
+            {
+                "id": "in_basil_parent",
+                "status": "paid",
+                "customer": "cus_expected",
+                "parent": {
+                    "type": "subscription_details",
+                    "subscription_details": {"subscription": "sub_expected"},
+                },
+            },
+            True,
+        ),
+        (
+            "in_conflicting_references",
+            {
+                "id": "in_conflicting_references",
+                "status": "paid",
+                "paid": True,
+                "customer": "cus_expected",
+                "subscription": "sub_expected",
+                "parent": {
+                    "type": "subscription_details",
+                    "subscription_details": {"subscription": "sub_other"},
+                },
+            },
+            False,
+        ),
+        (None, None, False),
+    ],
+)
+async def test_latest_invoice_requires_authoritative_paid_state(
+    latest_invoice: object,
+    retrieved_invoice: dict[str, object] | None,
+    should_pass: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_retrieve(invoice_id: str, **kwargs: object) -> dict[str, object]:
+        assert retrieved_invoice is not None
+        assert invoice_id == retrieved_invoice["id"]
+        return retrieved_invoice
+
+    monkeypatch.setattr(stripe.Invoice, "retrieve", fake_retrieve)
+    if should_pass:
+        invoice = await _require_paid_latest_invoice(
+            latest_invoice,
+            secret_key="sk_test_unused",
+            expected_customer_id="cus_expected",
+            expected_subscription_id="sub_expected",
+        )
+        assert invoice["status"] == "paid"
+    else:
+        with pytest.raises((ReconciliationValidationError, SubscriptionOwnershipMismatchError)):
+            await _require_paid_latest_invoice(
+                latest_invoice,
+                secret_key="sk_test_unused",
+                expected_customer_id="cus_expected",
+                expected_subscription_id="sub_expected",
+            )
+
+
+@pytest.mark.asyncio
+async def test_basil_invoice_sdk_object_uses_parent_subscription_reference() -> None:
+    invoice = stripe.Invoice.construct_from(
+        {
+            "id": "in_basil_sdk",
+            "status": "paid",
+            "customer": "cus_expected",
+            "parent": {
+                "type": "subscription_details",
+                "subscription_details": {"subscription": "sub_expected"},
+            },
+        },
+        "sk_test_unused",
+    )
+
+    assert isinstance(invoice, dict)
+    assert _invoice_subscription_id(invoice) == "sub_expected"
+    result = await _require_paid_latest_invoice(
+        invoice,
+        secret_key="sk_test_unused",
+        expected_customer_id="cus_expected",
+        expected_subscription_id="sub_expected",
+    )
+    assert result["status"] == "paid"
 
 
 @pytest.fixture(autouse=True)
@@ -180,8 +386,8 @@ async def _make_stripe_home(
         subscription.plan = SubscriptionPlan.family
         subscription.provider = SubscriptionProvider.stripe
         subscription.status = status
-        subscription.external_customer_id = f"cus_{uuid.uuid4().hex[:12]}"
         subscription.external_subscription_id = subscription_id or f"sub_{uuid.uuid4().hex[:12]}"
+        subscription.external_customer_id = f"cus_{subscription.external_subscription_id}"
         subscription.external_price_id = price_id
         subscription.billing_interval = BillingInterval(interval)
         await db.commit()
@@ -320,13 +526,20 @@ async def test_reconcile_applies_current_stripe_state_and_is_audited(
             "id": sub_id,
             "status": "active",
             "cancel_at_period_end": False,
-            "customer": f"cus_{uuid.uuid4().hex[:12]}",
+            "customer": f"cus_{sub_id}",
             "current_period_start": 1_700_000_000,
             "current_period_end": 1_800_000_000,
             "items": {
                 "data": [
                     {"price": {"id": "price_month_current", "recurring": {"interval": "month"}}}
                 ]
+            },
+            "latest_invoice": {
+                "id": "in_paid",
+                "status": "paid",
+                "paid": True,
+                "customer": f"cus_{sub_id}",
+                "subscription": sub_id,
             },
         }
 
@@ -393,11 +606,18 @@ async def test_reconcile_with_no_named_transition_uses_the_reconciled_label(
             "id": sub_id,
             "status": "active",
             "cancel_at_period_end": False,
-            "customer": f"cus_{uuid.uuid4().hex[:12]}",
+            "customer": f"cus_{sub_id}",
             "current_period_start": 1_700_000_000,
             "current_period_end": 1_900_000_000,
             "items": {
                 "data": [{"price": {"id": "price_year_current", "recurring": {"interval": "year"}}}]
+            },
+            "latest_invoice": {
+                "id": "in_paid",
+                "status": "paid",
+                "paid": True,
+                "customer": f"cus_{sub_id}",
+                "subscription": sub_id,
             },
         }
 

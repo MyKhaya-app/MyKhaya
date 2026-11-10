@@ -75,11 +75,25 @@ const webhookHealth = {
   paid_homes: 0,
 };
 
+const webhookSecurity = {
+  mode: "monitoring" as const,
+  trusted_ips: [],
+  last_successful_sync_at: null,
+  blocked_request_count: 0,
+  blocked_requests_24h: 0,
+  source_ip_method: "proxy_headers",
+  source: "unconfigured",
+  stale: false,
+  last_sync_error: null,
+  proxy_trust_configured: true,
+};
+
 function mockRoutes() {
   get.mockImplementation((path: string) => {
     if (path === "/auth/me") return Promise.resolve(actor);
     if (path === "/subscriptions/summary") return Promise.resolve(summary);
     if (path === "/subscriptions/webhook-health") return Promise.resolve(webhookHealth);
+    if (path === "/subscriptions/webhook-security") return Promise.resolve(webhookSecurity);
     if (path.startsWith("/subscriptions?")) return Promise.resolve(listing);
     return Promise.reject(new Error(`unexpected path ${path}`));
   });
@@ -113,6 +127,7 @@ describe("SubscriptionsPage", () => {
       if (path === "/auth/me") return Promise.resolve(actor);
       if (path === "/subscriptions/summary") return Promise.resolve(summary);
       if (path === "/subscriptions/webhook-health") return Promise.resolve(webhookHealth);
+      if (path === "/subscriptions/webhook-security") return Promise.resolve(webhookSecurity);
       if (path.startsWith("/subscriptions?")) return Promise.resolve({ ...listing, items: [], total: 0 });
       return Promise.reject(new Error(`unexpected path ${path}`));
     });

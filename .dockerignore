@@ -1,0 +1,3 @@
+.env.responsive-audit.local
+apps/web/.env.responsive-audit.local
+**/.env.responsive-audit.local

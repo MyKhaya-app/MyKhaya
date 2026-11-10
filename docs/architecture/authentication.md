@@ -35,27 +35,59 @@ relay addresses are supported without using email for implicit account linking.
 The table is additive. Apple sign-in and authenticated Apple linking use the
 existing browser session issuer; native bearer, managed-child and
 platform-administrator authentication remain separate. Apple identities are
-never linked from an email match alone.
+never linked from an email match alone. An unlinked Apple callback creates a
+short-lived, single-use recovery transaction containing verified provider
+metadata only; the browser must explicitly choose existing-account linking or
+new registration before a `User` row is created.
 
-Phase 2/3 currently exposes only centralized provider configuration health. The
+Database ownership, provider-subject lookup, metadata refresh, linking,
+concurrency conflict handling and safe unlinking live in the provider-neutral
+`mykhaya.external_identities` service. Provider boundaries supply only a
+verified stable subject and provider metadata. Unlinking refuses to remove a
+user's final usable password, passkey or external identity, where an external identity counts only if its provider is enabled in this environment. It locks the user row, so concurrent unlinks for one user cannot both pass that check. PCC Owners and Administrators can disconnect an Apple or Google identity through the same service (see "User Authentication tab" in [Platform Control Centre](platform-control-centre.md)). That is an audited unlink from MyKhaya, not OAuth token revocation at the provider, and the user is sent an account-security email. Apple retains its
+own OAuth state, nonce, code exchange, JWT validation and recovery-transaction
+storage; a future Google ceremony can use the same identity service without
+introducing a second account-linking policy.
+
+Phase 3 exposes Apple web sign-in, explicit recovery choices and authenticated
+Sign-in Methods management. Phase 4 adds Google web sign-in through the same
+provider-neutral identity, recovery, legal-consent, MFA and session-completion
+boundaries. The
 deployment-only `MYKHAYA_APPLE_*` and `MYKHAYA_GOOGLE_*` settings use secret
 typed fields where applicable; no provider secret is stored in
 `platform_settings` or returned by an API. The provider-status routes and PCC
 Authentication & Security view do not expose provider secrets. Apple is enabled
 only when its deployment configuration is complete and the server-side
-ceremony is explicitly enabled; Google remains framework/configuration-only.
+ceremony is explicitly enabled; Google is enabled only when its deployment
+configuration is complete and explicitly enabled.
 The default Apple callback is
 `{MYKHAYA_PUBLIC_WEB_URL}/api/v1/auth/apple/callback`; deployments may set
 `MYKHAYA_APPLE_REDIRECT_URI` when their registered Apple Service ID uses a
 different canonical public origin. That exact URI must be registered in Apple
 Developer.
 
-Consumer browser MFA uses the existing Phase 4.5 pre-auth handoff when
+Consumer MFA uses the existing Phase 4.5 pre-auth handoff when
 `MYKHAYA_BROWSER_MFA_HANDOFF_ENABLED=true`; the setting remains false by
 default. Phase 5A supports only authenticator-app TOTP and verified-account
 email codes. TOTP secrets are encrypted with the application secret using a
 purpose-specific HKDF/Fernet key, while email challenge codes are stored only
 as keyed hashes in short-lived, single-use database records. Both methods
 complete by consuming the pre-auth transaction and issuing the ordinary
-opaque browser session. Native bearer sessions, managed-child authentication,
-and Platform Control Centre MFA are separate flows.
+opaque browser session. Native bearer sign-in (password, Apple, Google) and
+native renewal enforce the same consumer policy through a separate native
+pre-auth transaction bound to a client redemption verifier, completed by
+`/auth/mobile/mfa/*`; a native request carries no app-authenticity proof, so
+it cannot be exempt (see
+[Consumer MFA enforcement](../engineering/consumer-mfa-enforcement.md)).
+Managed-child authentication and Platform Control Centre MFA are separate
+flows. Session rotation never extends a session while
+consumer MFA is required (the rotated session keeps the original expiry), is
+bound to its transport (browser rotation is cookie-only, native rotation is
+bearer-only) and keeps the trusted-device link so device revocation still
+applies (see the session lifecycle section of
+[Consumer MFA enforcement](../engineering/consumer-mfa-enforcement.md)). Browser passkey login uses
+the same completion seam as password and Apple login: when browser MFA is
+required, a passkey establishes pre-authentication but does not silently bypass
+the configured second-factor policy. Browser trusted-device renewal is blocked
+and the device revoked when a required browser MFA policy becomes active, so a
+previously issued renewal credential cannot bypass the new policy.

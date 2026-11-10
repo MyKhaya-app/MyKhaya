@@ -4,6 +4,8 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { AlertCircle, CheckCircle2, ImagePlus, Send } from "lucide-react";
 import { api, type SupportTicketResponse } from "@mykhaya/api-client";
 import { SettingsPage } from "@/components/settings-page";
+import { FormField, FormLayout, FormSection } from "@/components/form-layout";
+import { useFormFieldErrors } from "@/components/form-field-errors";
 import { useActiveHome } from "@/components/use-active-home";
 import { isNativeShell, nativePlatform } from "@/components/native-runtime";
 import { useBuildInfo } from "@/components/app-version";
@@ -43,6 +45,10 @@ export default function ReportBug() {
       .catch(() => setSupportEnabled(false));
   }, []);
 
+  const fields = useFormFieldErrors({
+    subject: { missing: "Add a short summary.", blank: "Add a short summary." },
+    description: { missing: "Tell us what happened.", blank: "Tell us what happened." },
+  });
   const platform = nativePlatform();
   const ticketSource = platform === "ios" || platform === "android" ? platform : "web";
   const diagnostics = useMemo(() => includeDiagnostics ? buildBugReportDiagnostics({
@@ -59,10 +65,7 @@ export default function ReportBug() {
     if (busy || !activeHomeId || supportEnabled !== true) return;
     setError(null);
     setAttachmentWarning(null);
-    if (!subject.trim() || !description.trim()) {
-      setError("Add a short summary and tell us what happened.");
-      return;
-    }
+    if (!fields.check()) return;
     setBusy(true);
     try {
       const ticket = await api.createSupportTicket({ type: "bug", subject: subject.trim(), description: description.trim(), source: ticketSource, app_area: area, priority: SEVERITY_TO_PRIORITY[severity], group_id: activeHomeId, diagnostics });
@@ -81,13 +84,12 @@ export default function ReportBug() {
   if (supportEnabled === false) return <SettingsPage title="Report a bug" description="Help us fix issues faster by sharing what happened." backLink={{ href: "/help-support", label: "Help & Support" }}><section className="card details" aria-live="polite"><h2>Bug reporting unavailable</h2><p className="muted">This service is not available right now. Please check Service Status and try again later.</p></section></SettingsPage>;
   if (success) return <SettingsPage title="Report a bug" description="Thanks for helping us improve MyKhaya." backLink={{ href: "/help-support", label: "Help & Support" }}><section className="card details support-success" aria-live="polite"><CheckCircle2 aria-hidden="true" /><h2>Report sent</h2><p>We&apos;ve received your report and will review it.</p><p className="support-reference" aria-label={`Support reference ${success.reference}`}>Reference: <strong>{success.reference}</strong></p>{attachmentWarning && <p className="field-error">{attachmentWarning}</p>}<a className="button" href="/help-support">Back to Help &amp; Support</a></section></SettingsPage>;
 
-  return <SettingsPage title="Report a bug" description="Help us fix issues faster by sharing what happened." backLink={{ href: "/help-support", label: "Help & Support" }}><form className="card details support-form" onSubmit={submit} noValidate>
-    {error && <p className="notice error" role="alert"><AlertCircle size={16} aria-hidden="true" />{error}</p>}
-    <label>What went wrong?<input value={subject} maxLength={MAX_SUBJECT} onChange={(event) => setSubject(event.target.value)} required aria-describedby="subject-help" /></label>
-    <small id="subject-help">{subject.length}/{MAX_SUBJECT}</small>
-    <label>App area<select value={area} onChange={(event) => setArea(event.target.value)}>{APP_AREA_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select></label>
-    <fieldset><legend>How serious is it?</legend><div className="support-choice-list">{SEVERITY_OPTIONS.map((option) => <label className={`support-choice${severity === option.value ? " selected" : ""}`} key={option.value}><input type="radio" name="severity" value={option.value} checked={severity === option.value} onChange={() => setSeverity(option.value)} /><span><strong>{option.label}</strong><small>{option.description}</small></span></label>)}</div></fieldset>
-    <label>What happened?<textarea value={description} maxLength={4000} onChange={(event) => setDescription(event.target.value)} required rows={6} /></label>
+  return <SettingsPage title="Report a bug" description="Help us fix issues faster by sharing what happened." backLink={{ href: "/help-support", label: "Help & Support" }}><FormLayout className="card details support-form" ref={fields.formRef} onSubmit={submit}>
+    <FormField label="What went wrong?" hint={`${subject.length}/${MAX_SUBJECT}`} error={fields.errors.subject}>{(control) => <input {...control} name="subject" value={subject} maxLength={MAX_SUBJECT} onChange={(event) => { setSubject(event.target.value); fields.clear("subject"); }} required />}</FormField>
+    <FormField label="App area">{(control) => <select {...control} value={area} onChange={(event) => setArea(event.target.value)}>{APP_AREA_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}</select>}</FormField>
+    {/* The severity choices keep their own card-style radio rows. */}
+    <FormSection title="How serious is it?"><div className="support-choice-list">{SEVERITY_OPTIONS.map((option) => <label className={`support-choice${severity === option.value ? " selected" : ""}`} key={option.value}><input type="radio" name="severity" value={option.value} checked={severity === option.value} onChange={() => setSeverity(option.value)} /><span><strong>{option.label}</strong><small>{option.description}</small></span></label>)}</div></FormSection>
+    <FormField label="What happened?" error={fields.errors.description}>{(control) => <textarea {...control} name="description" value={description} maxLength={4000} onChange={(event) => { setDescription(event.target.value); fields.clear("description"); }} required rows={6} />}</FormField>
     <div className="support-file-field">
       <label htmlFor="report-bug-screenshot" className="support-file-button">
         <ImagePlus size={18} aria-hidden="true" />
@@ -119,6 +121,7 @@ export default function ReportBug() {
     </div>
     <small>Your screenshot may include information currently visible on your screen.</small>
     <label className="check-row"><input type="checkbox" checked={includeDiagnostics} onChange={(event) => setIncludeDiagnostics(event.target.checked)} />Include helpful diagnostics</label>
+    {error && <p className="notice error" role="alert"><AlertCircle size={16} aria-hidden="true" />{error}</p>}
     <button className="button" type="submit" disabled={busy || supportEnabled !== true || !activeHomeId}><Send size={16} aria-hidden="true" /> {busy ? "Sending…" : "Send report"}</button>
-  </form></SettingsPage>;
+  </FormLayout></SettingsPage>;
 }

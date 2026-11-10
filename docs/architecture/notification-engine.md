@@ -76,6 +76,9 @@ async def notify(
 invitation to an email address that hasn't registered) — that case passes
 `recipient_email` instead. Every other caller passes `recipient_user_id`; `notify()`
 raises `ValueError` if a non-mandatory type is called without one.
+Monitoring alerts to Platform Control Centre administrators
+(`platform.monitoring_alert`, see `docs/architecture/service-monitoring.md`) use
+the same `recipient_email` path, since PCC administrators have no consumer account.
 
 Returns the created in-app `Notification` row, or `None` if nothing was written to
 in-app (channel disabled, category disabled, or the type is a mandatory
@@ -133,8 +136,13 @@ child's birthday).
 
 ## Mandatory delivery
 
-`MANDATORY_EMAIL_TYPES = {"email_verification", "password_reset", "household_invitation"}`
-in `engine.py`. These are identity/security workflows, not notifications — a user must
+`MANDATORY_EMAIL_TYPES` in `engine.py` is the authoritative list; do not copy it here.
+It covers account-security mail (for example `email_verification`, `password_reset`,
+`mfa_email_code` and `account.sign_in_method_disconnected`, sent when a PCC
+administrator disconnects a user's Apple or Google sign-in), invitations the recipient
+must act on, and a few transactional confirmations. Every entry must have a
+non-disableable template, which `tests/test_notification_templates.py` enforces.
+These are identity/security workflows, not notifications — a user must
 never be able to opt out of receiving them, so `notify()` skips preference/category
 checks entirely for these types and always attempts email (skipping in-app/push, which
 wouldn't make sense pre-account or pre-verification anyway). `docs/architecture/data-model.md`

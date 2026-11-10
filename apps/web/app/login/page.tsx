@@ -3,8 +3,10 @@ export const dynamic = "force-dynamic";
 import { FormEvent, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
+import { App } from "@capacitor/app";
+import { Browser } from "@capacitor/browser";
 import { Eye, EyeOff } from "lucide-react";
-import { api, ApiError } from "@mykhaya/api-client";
+import { api, ApiError, type PublicLegalDocumentSummary } from "@mykhaya/api-client";
 import type { User } from "@mykhaya/shared-types";
 import { Avatar } from "@/components/avatar";
 import { AuthBrandPanel, AuthCard } from "@/components/auth-card";
@@ -19,8 +21,29 @@ import {
   setBiometricHint,
 } from "@/components/passkey-client";
 import { isSafeInternalPath } from "@/components/internal-path";
-import { isNativeShell } from "@/components/native-runtime";
-import { getLastNativeLoginDiagnostic, nativeLogin, runNativeNetworkDiagnostics } from "@/components/native-auth";
+import { isNativeShell, nativePlatform } from "@/components/native-runtime";
+import {
+  cancelNativeMfa,
+  getLastNativeLoginDiagnostic,
+  nativeExternalAssertion,
+  nativeExternalBrowserStart,
+  nativeExternalExchange,
+  nativeExternalRedeem,
+  nativeExternalRecoveryLink,
+  nativeExternalRecoveryRegister,
+  nativeExternalStart,
+  nativeLogin,
+  nativeMfaOptions,
+  nativeMfaStart,
+  nativeMfaVerify,
+  runNativeNetworkDiagnostics,
+} from "@/components/native-auth";
+import {
+  classifyNativeProviderFailure,
+  logNativeProviderFailure,
+  newNativeAuthCorrelationId,
+  type NativeProviderStage,
+} from "@/components/native-provider-errors";
 import { recordLoginFailureDiagnostic } from "@/components/auth-diagnostics";
 import { useAuth } from "@/components/auth-provider";
 import type { SignupStateValue } from "@/components/public-signup";
@@ -42,8 +65,14 @@ export default function Login() {
   const invitation = params.get("invitation");
   const beta = params.get("beta") === "1";
   const betaInvitation = params.get("beta_invitation");
+  const social = params.get("social");
   const calendarShare = params.get("calendar_share");
+  const additionalAuth = params.get("auth") === "additional";
+  const additionalTransaction = additionalAuth ? params.get("transaction") : null;
   const appleResult = params.get("apple");
+  const appleTransaction = params.get("transaction");
+  const googleResult = params.get("google");
+  const googleTransaction = params.get("transaction");
   const mfaExpired = params.get("mfa_error") === "expired";
   const { setAuthenticatedUser } = useAuth();
   // Set by AppShell when it bounces an expired/invalid session to /login —
@@ -69,7 +98,9 @@ export default function Login() {
     // the separate, already-native Settings → Security → Quick Sign-In
     // feature). This screen's biometric-first flow is the browser/PWA
     // WebAuthn passkey path; the native shell must never attempt it.
-    [showBiometric, setShowBiometric] = useState(() => !isNativeShell() && getBiometricHint() !== null),
+    [showBiometric, setShowBiometric] = useState(
+      () => !isNativeShell() && !additionalAuth && !mfaExpired && getBiometricHint() !== null,
+    ),
     [biometricLabelText, setBiometricLabelText] = useState("biometrics"),
     [inviteContext, setInviteContext] = useState<{
       group_name: string;
@@ -81,11 +112,72 @@ export default function Login() {
       source_group_name: string;
     } | null>(null),
     [appleEnabled, setAppleEnabled] = useState(false),
+    [appleRecovery, setAppleRecovery] = useState<{
+      can_register: boolean;
+      provider_email: string | null;
+      display_name: string;
+    } | null>(null),
+    [appleLinking, setAppleLinking] = useState(false),
+    [appleRegistrationRequested, setAppleRegistrationRequested] = useState(false),
+    [appleLegalDocuments, setAppleLegalDocuments] = useState<PublicLegalDocumentSummary[]>([]),
+    [appleLegalChecked, setAppleLegalChecked] = useState<Record<string, boolean>>({}),
+    [appleLegalLoading, setAppleLegalLoading] = useState(false),
+    [appleLegalLoadFailed, setAppleLegalLoadFailed] = useState(false),
+    [googleEnabled, setGoogleEnabled] = useState(false),
+    [googleRecovery, setGoogleRecovery] = useState<{
+      can_register: boolean;
+      provider_email: string | null;
+      display_name: string;
+    } | null>(null),
+    [googleLinking, setGoogleLinking] = useState(false),
+    [googleRegistrationRequested, setGoogleRegistrationRequested] = useState(false),
+    [googleLegalDocuments, setGoogleLegalDocuments] = useState<PublicLegalDocumentSummary[]>([]),
+    [googleLegalChecked, setGoogleLegalChecked] = useState<Record<string, boolean>>({}),
+    [googleLegalLoading, setGoogleLegalLoading] = useState(false),
+    [googleLegalLoadFailed, setGoogleLegalLoadFailed] = useState(false),
+    [nativeRecovery, setNativeRecovery] = useState<{
+      transaction_id: string;
+      provider: "apple" | "google";
+      provider_email: string | null;
+      display_name: string;
+      can_register: boolean;
+    } | null>(null),
+    [nativeLegalDocuments, setNativeLegalDocuments] = useState<PublicLegalDocumentSummary[]>([]),
+    [nativeLegalChecked, setNativeLegalChecked] = useState<Record<string, boolean>>({}),
+    [nativeRegistrationRequested, setNativeRegistrationRequested] = useState(false),
+    [nativeMfaTransaction, setNativeMfaTransaction] = useState<string | null>(null),
+    [nativeMfaMethods, setNativeMfaMethods] = useState<("totp" | "email")[]>([]),
+    [nativeMfaMethod, setNativeMfaMethod] = useState<"totp" | "email">("email"),
+    [nativeMfaCode, setNativeMfaCode] = useState(""),
+    [nativeMfaStarted, setNativeMfaStarted] = useState(false),
+    [nativeMfaEnrolmentKey, setNativeMfaEnrolmentKey] = useState<string | null>(null),
     [passwordVisible, setPasswordVisible] = useState(false),
     // undefined while loading, null if it failed: both show the normal card.
     [signupState, setSignupState] = useState<SignupStateValue>(undefined);
 
   const hint = getBiometricHint();
+  // While a native MFA challenge is open it is the only thing on the card:
+  // the password form, provider buttons and recovery choices are hidden so a
+  // second primary sign-in cannot be started underneath the challenge.
+  const nativeMfaActive = isNativeShell() && nativeMfaTransaction !== null;
+
+  useEffect(() => {
+    if (!isNativeShell() || (social !== "apple" && social !== "google") || appleResult || googleResult) return;
+    void startNativeProvider(social);
+  }, [social, appleResult, googleResult]);
+
+  useEffect(() => {
+    if (!additionalAuth) return;
+    if (isNativeShell()) {
+      router.replace("/login?mfa_error=expired");
+      return;
+    }
+    if (additionalTransaction) {
+      router.replace(`/mfa?transaction=${encodeURIComponent(additionalTransaction)}`);
+    } else {
+      router.replace("/login?mfa_error=expired");
+    }
+  }, [additionalAuth, additionalTransaction, router]);
 
   // Reads the hint itself (rather than closing over the `hint` above) so
   // this effect has no dependency on a value that gets a fresh object
@@ -115,6 +207,36 @@ export default function Login() {
   }, []);
 
   useEffect(() => {
+    if (appleResult !== "choose" || !appleTransaction) return;
+    setAppleLegalLoading(true);
+    Promise.all([api.appleRecoveryOptions(appleTransaction), api.publicLegalDocuments()])
+      .then(([options, documents]) => {
+        setAppleRecovery(options);
+        setAppleLegalDocuments(documents);
+      })
+      .catch(() => {
+        setAppleLegalLoadFailed(true);
+        setError("This Apple sign-in attempt or its legal documents have expired. Please try again.");
+      })
+      .finally(() => setAppleLegalLoading(false));
+  }, [appleResult, appleTransaction]);
+
+  useEffect(() => {
+    if (googleResult !== "choose" || !googleTransaction) return;
+    setGoogleLegalLoading(true);
+    Promise.all([api.googleRecoveryOptions(googleTransaction), api.publicLegalDocuments()])
+      .then(([options, documents]) => {
+        setGoogleRecovery(options);
+        setGoogleLegalDocuments(documents);
+      })
+      .catch(() => {
+        setGoogleLegalLoadFailed(true);
+        setError("This Google sign-in attempt or its legal documents have expired. Please try again.");
+      })
+      .finally(() => setGoogleLegalLoading(false));
+  }, [googleResult, googleTransaction]);
+
+  useEffect(() => {
     if (!invitation) return;
     api
       .previewInvitation(invitation)
@@ -135,11 +257,15 @@ export default function Login() {
     api
       .authProviders()
       .then((result) =>
-        setAppleEnabled(
-          result.providers.some((item) => item.provider === "apple" && item.enabled),
-        ),
+        {
+          setAppleEnabled(result.providers.some((item) => item.provider === "apple" && item.enabled));
+          setGoogleEnabled(result.providers.some((item) => item.provider === "google" && item.enabled));
+        },
       )
-      .catch(() => setAppleEnabled(false));
+      .catch(() => {
+        setAppleEnabled(false);
+        setGoogleEnabled(false);
+      });
   }, []);
 
   useEffect(() => {
@@ -168,9 +294,176 @@ export default function Login() {
       });
   }, [invitation, calendarShare]);
 
+  useEffect(() => {
+    if (!isNativeShell()) return;
+    let disposed = false;
+    const listener = App.addListener("appUrlOpen", (event) => {
+      try {
+        const url = new URL(event.url);
+        const transaction = url.searchParams.get("transaction");
+        const production = window.location.hostname === "mykhaya.app";
+        const expectedScheme = nativePlatform() === "ios"
+          ? `${production ? "mykhaya-prod" : "mykhaya"}:`
+          : `${production ? "app.mykhaya.mobile.prod" : "app.mykhaya.mobile"}:`;
+        if (!transaction || url.protocol !== expectedScheme || url.host !== "auth" || url.pathname !== "/callback") return;
+        void (async () => {
+          setBusy(true);
+          const result = await nativeExternalRedeem(transaction);
+          if (disposed) return;
+          if ("id" in result) await afterSignedIn(result);
+          else if ("message" in result) throw new Error(result.message);
+          else if (result.authentication_state === "account_choice") setNativeRecovery(result);
+          else await enterNativeMfa(result.transaction_id);
+        })().catch((cause) => setError(cause instanceof ApiError ? cause.message : "The provider callback could not be completed.")).finally(() => setBusy(false));
+      } catch {
+        setError("The provider callback was invalid.");
+      }
+    });
+    return () => { disposed = true; void listener.then((handle) => handle.remove()); };
+  }, []);
+
   function startAppleSignIn() {
     const query = next ? `?next_path=${encodeURIComponent(next)}` : "";
     window.location.assign(`/api/v1/auth/apple/start${query}`);
+  }
+
+  function startGoogleSignIn() {
+    const query = next ? `?next_path=${encodeURIComponent(next)}` : "";
+    window.location.assign(`/api/v1/auth/google/start${query}`);
+  }
+
+  async function startNativeProvider(provider: "apple" | "google") {
+    setBusy(true);
+    setError("");
+    // Each stage is recorded so a failure can be traced (stage + category +
+    // correlation id) without exposing tokens or the transaction itself.
+    let stage: NativeProviderStage = "start";
+    const correlationId = newNativeAuthCorrelationId();
+    try {
+      const useBrowser = (provider === "google" && nativePlatform() === "ios") || (provider === "apple" && nativePlatform() === "android");
+      if (useBrowser) {
+        const started = await nativeExternalBrowserStart(provider);
+        await Browser.open({ url: started.authorization_url });
+        return;
+      }
+      const started = await nativeExternalStart(provider, "login", correlationId);
+      stage = "provider";
+      const assertion = await nativeExternalAssertion(provider, started.nonce, started.client_id);
+      stage = "exchange";
+      const result = await nativeExternalExchange(started.transaction_id, assertion.identity_token, correlationId);
+      stage = "follow_up";
+      if ("id" in result) {
+        await afterSignedIn(result);
+      } else if ("authentication_state" in result && result.authentication_state === "additional_auth_required") {
+        await enterNativeMfa(result.transaction_id);
+      } else if ("authentication_state" in result) {
+        setNativeRecovery(result);
+      }
+    } catch (cause) {
+      const failure = classifyNativeProviderFailure(cause, provider, stage);
+      logNativeProviderFailure(provider, stage, correlationId, failure);
+      // Cancelling the Apple/Google sheet is a choice, not an error: return
+      // quietly to the sign-in screen so the person can retry or use a password.
+      if (failure.userMessage) setError(failure.userMessage);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /** Native sign-in reached pre-authentication: the consumer MFA policy must
+   * be satisfied before any session exists. The sign-in form is replaced by
+   * the challenge (never stacked beneath it). */
+  async function enterNativeMfa(transactionId: string) {
+    setError("");
+    setNativeMfaStarted(false);
+    setNativeMfaCode("");
+    setNativeMfaEnrolmentKey(null);
+    setNativeMfaTransaction(transactionId);
+    const options = await nativeMfaOptions(transactionId);
+    setNativeMfaMethods(options.methods);
+    setNativeMfaMethod(options.preferred_method ?? options.methods[0] ?? "email");
+  }
+
+  function leaveNativeMfa() {
+    if (nativeMfaTransaction) cancelNativeMfa(nativeMfaTransaction);
+    setNativeMfaTransaction(null);
+    setNativeMfaStarted(false);
+    setNativeMfaCode("");
+    setNativeMfaEnrolmentKey(null);
+    setError("");
+  }
+
+  async function startNativeMfa() {
+    if (!nativeMfaTransaction) return;
+    setBusy(true);
+    setError("");
+    try {
+      const started = await nativeMfaStart(nativeMfaTransaction, nativeMfaMethod);
+      setNativeMfaEnrolmentKey(started.enrolling && started.manual_key ? started.manual_key : null);
+      setNativeMfaStarted(true);
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : "Could not start verification.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function verifyNativeMfa() {
+    if (!nativeMfaTransaction || nativeMfaCode.length !== 6 || busy) return;
+    setBusy(true);
+    setError("");
+    try {
+      const user = await nativeMfaVerify(nativeMfaTransaction, nativeMfaMethod, nativeMfaCode);
+      // A provider-linking password sign-in links only after MFA completes.
+      if (nativeRecovery) {
+        await nativeExternalRecoveryLink(nativeRecovery.transaction_id);
+        setNativeRecovery(null);
+      }
+      await afterSignedIn(user);
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : "The verification code could not be accepted.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function chooseNativeRegistration() {
+    setNativeRegistrationRequested(true);
+    try {
+      setNativeLegalDocuments(await api.publicLegalDocuments());
+    } catch {
+      setError("The current legal documents could not be loaded.");
+    }
+  }
+
+  async function registerNativeProvider() {
+    if (!nativeRecovery) return;
+    const requiredLegal = nativeLegalDocuments.filter((document) =>
+      document.audience === "adult" && document.acceptance_required && document.action_verb === "accept" && document.scope === "global",
+    );
+    if (requiredLegal.some((document) => !document.current_version_id || !nativeLegalChecked[document.key])) {
+      setError("Please review and accept the required legal documents before continuing.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      const result = await nativeExternalRecoveryRegister({
+        transaction_id: nativeRecovery.transaction_id,
+        display_name: nativeRecovery.display_name,
+        legal_acceptances: requiredLegal.map((document) => ({ document_key: document.key, document_version_id: document.current_version_id! })),
+        platform: nativePlatform() === "android" ? "android" : "ios",
+      });
+      if ("authentication_state" in result) {
+        await enterNativeMfa(result.transaction_id);
+      } else {
+        await afterSignedIn(result);
+      }
+    } catch (cause) {
+      setError(cause instanceof ApiError ? cause.message : "The account could not be created.");
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function afterSignedIn(user: User) {
@@ -233,6 +526,10 @@ export default function Login() {
       const options = await api.passkeyLoginOptions();
       const credential = await authenticateWithPasskey(options.options_json);
       const user = await api.passkeyLoginVerify(JSON.stringify(credential));
+      if ("authentication_state" in user) {
+        router.push(`/mfa?transaction=${encodeURIComponent(user.transaction_id)}`);
+        return;
+      }
       await afterSignedIn(user);
     } catch (err) {
       if (passkeyWasCancelled(err)) {
@@ -273,9 +570,30 @@ export default function Login() {
       const result: BrowserAuthResult = isNativeShell()
         ? await nativeLogin(email, password)
         : await api.post<BrowserAuthResult>("/auth/login", { email, password });
-      if ("authentication_state" in result) {
-        router.push(`/mfa?transaction=${encodeURIComponent(result.transaction_id)}`);
+      if ("authentication_state" in result && isNativeShell()) {
+        // Native MFA stays in-app on the bearer transport; the browser /mfa
+        // page is cookie-based and never used inside the native shell.
+        await enterNativeMfa(result.transaction_id);
         return;
+      }
+      if ("authentication_state" in result) {
+        const linkQuery = appleLinking && appleTransaction
+          ? `&apple_link_transaction=${encodeURIComponent(appleTransaction)}`
+          : googleLinking && googleTransaction
+            ? `&google_link_transaction=${encodeURIComponent(googleTransaction)}`
+            : "";
+        router.push(`/mfa?transaction=${encodeURIComponent(result.transaction_id)}${linkQuery}`);
+        return;
+      }
+      if (appleLinking && appleTransaction) {
+        await api.appleRecoveryLink(appleTransaction);
+      }
+      if (nativeRecovery) {
+        await nativeExternalRecoveryLink(nativeRecovery.transaction_id);
+        setNativeRecovery(null);
+      }
+      if (googleLinking && googleTransaction) {
+        await api.googleRecoveryLink(googleTransaction);
       }
       await afterSignedIn(result);
     } catch (err) {
@@ -308,6 +626,83 @@ export default function Login() {
       signInInFlight.current = false;
       setBusy(false);
     }
+  }
+
+  async function registerWithApple() {
+    if (!appleTransaction) return;
+    const requiredLegal = appleLegalDocuments.filter(
+      (document) =>
+        document.audience === "adult" &&
+        document.acceptance_required &&
+        document.action_verb === "accept" &&
+        document.scope === "global",
+    );
+    if (
+      appleLegalLoading ||
+      appleLegalLoadFailed ||
+      requiredLegal.some((document) => !document.current_version_id || !appleLegalChecked[document.key])
+    ) {
+      setError("Please review and confirm the required legal documents before continuing.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      const result = await api.appleRecoveryRegister(appleTransaction, {
+        legal_acceptances: requiredLegal.map((document) => ({
+          document_key: document.key,
+          document_version_id: document.current_version_id!,
+        })),
+        platform: "web",
+        ...(beta ? { beta: true, beta_invitation_token: betaInvitation } : {}),
+      });
+      if ("authentication_state" in result) {
+        router.push(`/mfa?transaction=${encodeURIComponent(result.transaction_id)}`);
+        return;
+      }
+      await afterSignedIn(result);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "We couldn't create your account with Apple.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function registerWithGoogle() {
+    if (!googleTransaction) return;
+    const requiredLegal = googleLegalDocuments.filter(
+      (document) => document.audience === "adult" && document.acceptance_required && document.action_verb === "accept" && document.scope === "global",
+    );
+    if (googleLegalLoading || googleLegalLoadFailed || requiredLegal.some((document) => !document.current_version_id || !googleLegalChecked[document.key])) {
+      setError("Please review and confirm the required legal documents before continuing.");
+      return;
+    }
+    setBusy(true);
+    setError("");
+    try {
+      const result = await api.googleRecoveryRegister(googleTransaction, {
+        legal_acceptances: requiredLegal.map((document) => ({ document_key: document.key, document_version_id: document.current_version_id! })),
+        platform: "web",
+        ...(beta ? { beta: true, beta_invitation_token: betaInvitation } : {}),
+      });
+      if ("authentication_state" in result) {
+        router.push(`/mfa?transaction=${encodeURIComponent(result.transaction_id)}`);
+        return;
+      }
+      await afterSignedIn(result);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "We couldn't create your account with Google.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  if (additionalAuth) {
+    return (
+      <AuthCard title="Continue signing in" intro="Taking you to the required verification step…">
+        <p className="muted">Please wait while we securely continue your sign-in.</p>
+      </AuthCard>
+    );
   }
 
   if (showBiometric && hint) {
@@ -380,6 +775,76 @@ export default function Login() {
               Sign in with your existing account first. Apple can then be linked from your security settings.
             </p>
           )}
+          {appleResult === "choose" && appleTransaction && (
+            <section className="notice" aria-labelledby="apple-recovery-heading">
+              <h2 id="apple-recovery-heading">Continue with Apple</h2>
+              <p>
+                Apple sign-in is ready. Choose whether to connect it to an existing MyKhaya
+                account or create a new account. We will not merge accounts automatically.
+              </p>
+              <div className="signin-recovery-actions">
+                <button
+                  type="button"
+                  className="secondary"
+                  onClick={() => setAppleLinking(true)}
+                  disabled={busy}
+                >
+                  Link to an existing account
+                </button>
+                {appleRecovery?.can_register && (
+                  <button
+                    type="button"
+                    className="tertiary"
+                    onClick={() => setAppleRegistrationRequested(true)}
+                    disabled={busy}
+                  >
+                    Create a new account
+                  </button>
+                )}
+              </div>
+              {appleRegistrationRequested && appleRecovery?.can_register && (
+                <div className="auth-legal-consent">
+                  <p><strong>Before you create your account</strong></p>
+                  <p className="muted">Please review and accept the current Terms and Privacy documents.</p>
+                  {appleLegalDocuments
+                    .filter(
+                      (document) =>
+                        document.audience === "adult" &&
+                        document.acceptance_required &&
+                        document.action_verb === "accept" &&
+                        document.scope === "global",
+                    )
+                    .map((document) => (
+                      <label className="check-row" key={document.key}>
+                        <input
+                          type="checkbox"
+                          checked={appleLegalChecked[document.key] === true}
+                          onChange={(event) =>
+                            setAppleLegalChecked((current) => ({
+                              ...current,
+                              [document.key]: event.target.checked,
+                            }))
+                          }
+                        />
+                        <span>
+                          I accept the <Link href={`/legal/${document.key}`}>{document.display_name}</Link>{" "}
+                          (version {document.current_version ?? "current"})
+                        </span>
+                      </label>
+                    ))}
+                  <button type="button" onClick={() => void registerWithApple()} disabled={busy || appleLegalLoading}>
+                    {busy ? "Creating account…" : "Accept and create account"}
+                  </button>
+                </div>
+              )}
+              {appleLinking && (
+                <p>
+                  Sign in below with your existing MyKhaya email and password. Apple will be
+                  linked only after that authentication succeeds.
+                </p>
+              )}
+            </section>
+          )}
           {appleResult === "registration_unavailable" && (
             <p className="notice">
               New accounts can’t be created with Apple right now. If you already have a MyKhaya account, sign in with your password.
@@ -388,6 +853,80 @@ export default function Login() {
           {appleResult === "error" && (
             <p className="notice">Apple sign-in could not be completed. Please try again or use your password.</p>
           )}
+          {googleResult === "choose" && googleTransaction && (
+            <section className="notice" aria-labelledby="google-recovery-heading">
+              <h2 id="google-recovery-heading">Continue with Google</h2>
+              <p>Google sign-in is ready. Choose an existing MyKhaya account or create a new one. We will not merge accounts automatically.</p>
+              <div className="signin-recovery-actions">
+                <button type="button" className="secondary" onClick={() => setGoogleLinking(true)} disabled={busy}>Link to an existing account</button>
+                {googleRecovery?.can_register && <button type="button" className="tertiary" onClick={() => setGoogleRegistrationRequested(true)} disabled={busy}>Create a new account</button>}
+              </div>
+              {googleRegistrationRequested && googleRecovery?.can_register && (
+                <div className="auth-legal-consent">
+                  <p><strong>Before you create your account</strong></p>
+                  <p className="muted">Please review and accept the current Terms and Privacy documents.</p>
+                  {googleLegalDocuments.filter((document) => document.audience === "adult" && document.acceptance_required && document.action_verb === "accept" && document.scope === "global").map((document) => (
+                    <label className="check-row" key={document.key}>
+                      <input type="checkbox" checked={googleLegalChecked[document.key] === true} onChange={(event) => setGoogleLegalChecked((current) => ({ ...current, [document.key]: event.target.checked }))} />
+                      <span>I accept the <Link href={`/legal/${document.key}`}>{document.display_name}</Link> (version {document.current_version ?? "current"})</span>
+                    </label>
+                  ))}
+                  <button type="button" onClick={() => void registerWithGoogle()} disabled={busy || googleLegalLoading}>{busy ? "Creating account…" : "Accept and create account"}</button>
+                </div>
+              )}
+              {googleLinking && <p>Sign in below with your existing MyKhaya email and password. Google will be linked only after that authentication succeeds.</p>}
+            </section>
+          )}
+          {googleResult === "error" && <p className="notice">Google sign-in could not be completed. Please try again or use your password.</p>}
+          {isNativeShell() && nativeRecovery && !nativeMfaActive && (
+            <section className="notice" aria-labelledby="native-recovery-heading">
+              <h2 id="native-recovery-heading">Continue with {nativeRecovery.provider === "apple" ? "Apple" : "Google"}</h2>
+              <p>Choose whether to link this provider to an existing MyKhaya account or create a new one. Accounts are never merged automatically.</p>
+              <div className="signin-recovery-actions">
+                <button type="button" className="secondary" onClick={() => setError("Sign in with your existing password below. The provider will be linked after that authentication succeeds.")} disabled={busy}>Link to an existing account</button>
+                {nativeRecovery.can_register && <button type="button" className="tertiary" onClick={() => void chooseNativeRegistration()} disabled={busy}>Create a new account</button>}
+              </div>
+              {nativeRegistrationRequested && nativeRecovery.can_register && (
+                <div className="auth-legal-consent">
+                  <p><strong>Before you create your account</strong></p>
+                  <p className="muted">Please review and accept the current Terms and Privacy documents.</p>
+                  {nativeLegalDocuments.filter((document) => document.audience === "adult" && document.acceptance_required && document.action_verb === "accept" && document.scope === "global").map((document) => (
+                    <label className="check-row" key={document.key}>
+                      <input type="checkbox" checked={nativeLegalChecked[document.key] === true} onChange={(event) => setNativeLegalChecked((current) => ({ ...current, [document.key]: event.target.checked }))} />
+                      <span>I accept the <Link href={`/legal/${document.key}`}>{document.display_name}</Link> (version {document.current_version ?? "current"})</span>
+                    </label>
+                  ))}
+                  <button type="button" onClick={() => void registerNativeProvider()} disabled={busy}>Accept and create account</button>
+                </div>
+              )}
+            </section>
+          )}
+          {nativeMfaActive && (
+            <section className="notice" aria-labelledby="native-mfa-heading" data-testid="native-mfa-challenge">
+              <h2 id="native-mfa-heading">Additional verification required</h2>
+              <p>Your account requires a second verification step before you can continue.</p>
+              <label htmlFor="native-mfa-method">Verification method</label>
+              <select id="native-mfa-method" value={nativeMfaMethod} disabled={nativeMfaStarted} onChange={(event) => setNativeMfaMethod(event.target.value as "totp" | "email")}>
+                {nativeMfaMethods.map((method) => <option key={method} value={method}>{method === "totp" ? "Authenticator app" : "Email code"}</option>)}
+              </select>
+              {nativeMfaEnrolmentKey && (
+                <p>
+                  Add MyKhaya to your authenticator app with this setup key, then enter the 6-digit code:{" "}
+                  <code>{nativeMfaEnrolmentKey}</code>
+                </p>
+              )}
+              {!nativeMfaStarted ? <button type="button" className="secondary" onClick={() => void startNativeMfa()} disabled={busy}>Start verification</button> : (
+                // A form so the keyboard's Go/Enter key submits the code.
+                <form onSubmit={(event) => { event.preventDefault(); void verifyNativeMfa(); }}>
+                  <input aria-label="MFA code" inputMode="numeric" autoComplete="one-time-code" autoFocus maxLength={6} value={nativeMfaCode} onChange={(event) => setNativeMfaCode(event.target.value.replace(/\D/g, ""))} />
+                  <button type="submit" disabled={busy || nativeMfaCode.length !== 6}>Verify and continue</button>
+                </form>
+              )}
+              <FormStatus error={error} />
+              <button type="button" className="tertiary" onClick={leaveNativeMfa} disabled={busy}>Use a different sign-in method</button>
+            </section>
+          )}
+          {!nativeMfaActive && (<>
           <form className="signin-form" onSubmit={submit}>
             <div className="signin-field">
               <label htmlFor="signin-email">Email</label>
@@ -416,6 +955,10 @@ export default function Login() {
                 <button
                   type="button"
                   className="signin-password-toggle"
+                  // Drawn inside the password field by design; the layout
+                  // inspector checks it as that field's adornment.
+                  data-input-adornment="password-visibility"
+                  aria-controls="signin-password"
                   aria-label={passwordVisible ? "Hide password" : "Show password"}
                   onClick={() => setPasswordVisible((visible) => !visible)}
                 >
@@ -433,9 +976,14 @@ export default function Login() {
             )}
             <button className="signin-submit" disabled={busy}>{busy ? "Signing in…" : "Sign in"}</button>
           </form>
-          {appleEnabled && (
-            <button type="button" className="apple-sign-in" onClick={startAppleSignIn} disabled={busy}>
+          {(appleEnabled || isNativeShell()) && !nativeRecovery && (
+            <button type="button" className="apple-sign-in" onClick={() => isNativeShell() ? void startNativeProvider("apple") : startAppleSignIn()} disabled={busy}>
               Continue with Apple
+            </button>
+          )}
+          {(googleEnabled || isNativeShell()) && !nativeRecovery && (
+            <button type="button" className="google-sign-in" onClick={() => isNativeShell() ? void startNativeProvider("google") : startGoogleSignIn()} disabled={busy}>
+              Continue with Google
             </button>
           )}
           <Link href="/forgot-password" className="signin-link signin-forgot">
@@ -447,6 +995,7 @@ export default function Login() {
             Signing in as a child?{" "}
             <Link href="/login/child" className="signin-link">Child sign in</Link>
           </p>
+          </>)}
         </div>
       </div>
     </main>

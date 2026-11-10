@@ -22,6 +22,7 @@ type DeliveryEntry = {
   channel: string;
   status: string;
   recipient_email: string | null;
+  provider: string | null;
   sanitised_failure_reason: string | null;
   retry_count: number;
   idempotency_key: string;
@@ -83,6 +84,7 @@ export default function NotificationDeliveryLogsPage() {
     { key: "when", header: "When", render: (row) => readableDate(row.occurred_at) },
     { key: "type", header: "Type", render: (row) => row.label },
     { key: "channel", header: "Channel", render: (row) => titleCase(row.channel) },
+    { key: "provider", header: "Provider", render: (row) => row.provider ?? "—" },
     { key: "status", header: "Status", render: (row) => titleCase(row.status) },
     { key: "recipient", header: "Recipient", render: (row) => row.recipient_email ?? "—" },
     { key: "retries", header: "Retries", render: (row) => row.retry_count },

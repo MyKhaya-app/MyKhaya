@@ -13,6 +13,7 @@ an adult's own user_acceptance.
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy import exists, or_, select
@@ -32,6 +33,7 @@ from mykhaya.legal import (
     own_child_profile,
     user_document_status,
 )
+from mykhaya.legal_evidence import queue_acceptance_evidence
 from mykhaya.legal_schemas import (
     ChildAcknowledgementCreate,
     ChildLegalStatusResponse,
@@ -291,18 +293,21 @@ async def record_acceptance(
         if document.action_verb == LegalActionVerb.accept
         else LegalRecordType.user_acknowledgement
     )
-    db.add(
-        LegalAcceptance(
-            record_type=record_type,
-            document_version_id=version.id,
-            user_id=auth.user.id,
-            is_test=version.is_test,
-            context=body.context,
-            platform=body.platform,
-            app_version=body.app_version,
-            ip_address=resolve_client_ip(request, settings),
-            user_agent=request.headers.get("user-agent", "")[:300] or None,
-        )
+    acceptance = LegalAcceptance(
+        created_at=datetime.now(UTC),
+        record_type=record_type,
+        document_version_id=version.id,
+        user_id=auth.user.id,
+        is_test=version.is_test,
+        context=body.context,
+        platform=body.platform,
+        app_version=body.app_version,
+        ip_address=resolve_client_ip(request, settings),
+        user_agent=request.headers.get("user-agent", "")[:300] or None,
+    )
+    db.add(acceptance)
+    await queue_acceptance_evidence(
+        db, acceptance=acceptance, document=document, version=version, user=auth.user
     )
     await db.commit()
     return _status_response(
@@ -339,19 +344,22 @@ async def record_guardian_authorisation(
         )
     await _require_test_access(version, auth, db, settings)
 
-    db.add(
-        LegalAcceptance(
-            record_type=LegalRecordType.guardian_authorisation,
-            document_version_id=version.id,
-            user_id=auth.user.id,
-            child_profile_id=profile.id,
-            is_test=version.is_test,
-            context=body.context,
-            platform=body.platform,
-            app_version=body.app_version,
-            ip_address=resolve_client_ip(request, settings),
-            user_agent=request.headers.get("user-agent", "")[:300] or None,
-        )
+    acceptance = LegalAcceptance(
+        created_at=datetime.now(UTC),
+        record_type=LegalRecordType.guardian_authorisation,
+        document_version_id=version.id,
+        user_id=auth.user.id,
+        child_profile_id=profile.id,
+        is_test=version.is_test,
+        context=body.context,
+        platform=body.platform,
+        app_version=body.app_version,
+        ip_address=resolve_client_ip(request, settings),
+        user_agent=request.headers.get("user-agent", "")[:300] or None,
+    )
+    db.add(acceptance)
+    await queue_acceptance_evidence(
+        db, acceptance=acceptance, document=document, version=version, user=auth.user
     )
     await db.commit()
     return _status_response(

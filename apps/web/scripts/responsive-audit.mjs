@@ -1,0 +1,2219 @@
+// Direct Playwright responsive audit. This intentionally uses the browser API
+// rather than @playwright/test because the Windows execution environment can
+// launch Chromium but stalls the Playwright test runner worker.
+//
+// Usage:
+//   E2E_EMAIL=... E2E_PASSWORD=... node scripts/responsive-audit.mjs
+//   node scripts/responsive-audit.mjs http://localhost:8089
+//
+// Modes:
+//   (default)        Full audit: every route, section and viewport. This is
+//                    the release-readiness evidence.
+//   --jobs=N         The full audit split by viewport across N browser
+//                    processes, each signed in separately. Same checks.
+//   --fast           Development feedback only, never release evidence: five
+//                    representative viewports (smallest phone, standard
+//                    iPhone, iPhone landscape, Duo inner screen, desktop).
+//   --changed[=REF]  With --fast: only the sections and routes affected by
+//                    files changed since REF (default HEAD, plus untracked
+//                    files). A change to shared CSS, components, packages or
+//                    the inspector selects everything.
+//   --viewports=a,b  --sections=a,b  --routes=/a,/b   Explicit subsets.
+//
+// The output directory is test-results/responsive-audit/<timestamp>, which is
+// ignored by git. Missing credentials or an MFA hand-off are reported as
+// BLOCKED; this script never bypasses or weakens authentication.
+
+import fs from "node:fs/promises";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+import { createInterface } from "node:readline/promises";
+import { execFileSync, spawn } from "node:child_process";
+import { chromium } from "@playwright/test";
+import { ACCEPTED_CONTAINMENT_EXCEPTIONS, inspectLayoutInPage, INTENDED_HORIZONTAL_SCROLLERS, KNOWN_FOCUS_ZOOM_DEFECTS } from "./layout-inspector.mjs";
+
+const scriptDir = path.dirname(fileURLToPath(import.meta.url));
+const localEnvPath = path.resolve(scriptDir, "..", ".env.responsive-audit.local");
+
+async function loadLocalEnv() {
+  try {
+    const contents = await fs.readFile(localEnvPath, "utf8");
+    return Object.fromEntries(
+      contents
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter((line) => line && !line.startsWith("#") && line.includes("="))
+        .map((line) => {
+          const separator = line.indexOf("=");
+          return [line.slice(0, separator).trim(), line.slice(separator + 1).trim()];
+        })
+        .filter(([key]) => ["E2E_EMAIL", "E2E_PASSWORD", "E2E_MFA_METHOD"].includes(key)),
+    );
+  } catch (error) {
+    if (error?.code === "ENOENT") return {};
+    throw error;
+  }
+}
+
+const localEnv = await loadLocalEnv();
+const auditEnv = { ...localEnv, ...process.env };
+const cliBase = process.argv.slice(2).find((argument) => argument !== "--" && !argument.startsWith("-"));
+const checkConfig = process.argv.includes("--check-config");
+// localhost, not 127.0.0.1: the local API's trusted origins name localhost,
+// and sign-in from any other origin fails with "Request origin is not allowed".
+const BASE = cliBase ?? auditEnv.PLAYWRIGHT_BASE_URL ?? "http://localhost:8089";
+
+if (checkConfig) {
+  const emailConfigured = Boolean(auditEnv.E2E_EMAIL?.trim());
+  const passwordConfigured = Boolean(auditEnv.E2E_PASSWORD);
+  const method = auditEnv.E2E_MFA_METHOD?.trim() || "preferred account method";
+  if (!["preferred account method", "email", "totp"].includes(method)) {
+    console.error("Responsive audit configuration invalid: E2E_MFA_METHOD must be email or totp.");
+    process.exitCode = 1;
+  } else {
+    console.log(`Responsive audit configuration: file=${localEnvPath} email=${emailConfigured ? "SET" : "UNSET"} password=${passwordConfigured ? "SET" : "UNSET"} mfa=${method}`);
+  }
+  process.exit();
+}
+const option = (name) => process.argv.find((argument) => argument.startsWith(`--${name}=`))?.slice(name.length + 3);
+const listOption = (name) => option(name)?.split(",").map((item) => item.trim()).filter(Boolean) ?? null;
+// A child of a --jobs run writes its results into the parent's directory.
+const childDir = option("child-dir");
+const childId = option("child-id");
+const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+const outputDir = childDir ? path.resolve(childDir) : path.resolve(
+  process.env.RESPONSIVE_AUDIT_OUTPUT_DIR ?? path.join("test-results", "responsive-audit"),
+  timestamp,
+);
+const publicRoutes = [
+  "/",
+  "/about",
+  "/login",
+  "/login/child",
+  "/register",
+  "/forgot-password",
+  "/reset-password",
+  "/signup-choice",
+  "/verify-email",
+  "/offline",
+  "/support",
+];
+// Service status is no longer a consumer route: About removed its internal
+// link and Help & Support uses the configured external status URL. The source
+// page remains legacy code, but it is not part of the current route inventory.
+const consumerRoutes = [
+  "/home",
+  "/people",
+  "/calendar",
+  "/calendar/calendars",
+  "/calendar/shared",
+  "/meal-plans",
+  "/lists",
+  "/wish-lists",
+  "/driveway",
+  "/driveway/add",
+  "/budget",
+  "/help-support",
+  "/me/notifications",
+  "/settings",
+  "/settings/profile",
+  "/settings/home",
+  "/settings/members",
+  "/settings/security",
+  "/settings/notifications",
+  "/settings/reminders",
+  "/settings/routines",
+  "/settings/routines-reminders",
+  "/settings/calendar",
+  "/settings/calendar-tags",
+];
+// Safe areas cannot be produced by Chromium (env() is always 0), so each
+// profile sets the shared --safe-* custom properties. The Duo insets and
+// status overlay zone are the physical measurements in
+// docs/engineering/ios-engineering-standards.md section 4; the Duo viewport
+// sizes are representative of its native-layout class ranges, not measured.
+// `touch` profiles (phones, the Duo and iPad) run with touch emulation, so
+// the page sees (hover: none) and (pointer: coarse) as on the device, and
+// their text controls are held to the 16px iOS focus-zoom minimum.
+const ALL_VIEWPORTS = [
+  { name: "320x568", width: 320, height: 568, insets: { top: 20 }, touch: true },
+  { name: "375x667", width: 375, height: 667, insets: { top: 20 }, touch: true },
+  { name: "393x852", width: 393, height: 852, insets: { top: 59, bottom: 34 }, touch: true },
+  { name: "430x932", width: 430, height: 932, insets: { top: 59, bottom: 34 }, touch: true },
+  { name: "852x393-landscape", width: 852, height: 393, insets: { left: 59, right: 59, bottom: 21 }, touch: true },
+  { name: "duo-outer-512x740", width: 512, height: 740, insets: { top: 20, right: 93 }, overlay: { right: 93, top: 165 }, touch: true },
+  { name: "duo-inner-900x740", width: 900, height: 740, insets: { top: 20, right: 93 }, overlay: { right: 93, top: 106 }, touch: true },
+  { name: "768x1024", width: 768, height: 1024, insets: {}, touch: true },
+  { name: "1024x768", width: 1024, height: 768, insets: {}, touch: true },
+  { name: "1280x800", width: 1280, height: 800, insets: {} },
+  { name: "1440x900", width: 1440, height: 900, insets: {} },
+];
+const FAST_VIEWPORTS = ["320x568", "393x852", "852x393-landscape", "duo-inner-900x740", "1280x800"];
+const fast = process.argv.includes("--fast");
+const changedArgument = process.argv.find((argument) => argument === "--changed" || argument.startsWith("--changed="));
+if (changedArgument && !fast) {
+  console.error("--changed is a fast-mode option: the full audit always runs every section.");
+  process.exit(2);
+}
+const requestedViewports = listOption("viewports") ?? (fast ? FAST_VIEWPORTS : null);
+const unknownViewports = (requestedViewports ?? []).filter((name) => !ALL_VIEWPORTS.some((viewport) => viewport.name === name));
+if (unknownViewports.length) {
+  console.error(`Unknown viewports: ${unknownViewports.join(", ")}`);
+  process.exit(2);
+}
+const selectedViewports = requestedViewports ? ALL_VIEWPORTS.filter((viewport) => requestedViewports.includes(viewport.name)) : ALL_VIEWPORTS;
+// Reassigned per touch group below; every section iterates this binding.
+let viewports = selectedViewports;
+
+const results = [];
+const sheetResults = [];
+const screenshots = [];
+
+function safeName(value) {
+  return value.replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "") || "root";
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;");
+}
+
+async function capture(page, route, viewport, label = route) {
+  const filename = `${safeName(label)}-${viewport.name}.png`;
+  const filePath = path.join(outputDir, filename);
+  await page.screenshot({ path: filePath, fullPage: false });
+  screenshots.push({ filename, route: label, viewport: viewport.name });
+  return filename;
+}
+
+async function applyInsets(page, viewport) {
+  const value = (side) => `${viewport.insets?.[side] ?? 0}px`;
+  await page.addStyleTag({ content: `:root{--safe-top:${value("top")} !important;--safe-right:${value("right")} !important;--safe-bottom:${value("bottom")} !important;--safe-left:${value("left")} !important}` });
+}
+
+// Measures real bounding boxes with scripts/layout-inspector.mjs: children
+// against their parents, internal and clipped horizontal overflow, overlap,
+// native date/time appearance and, for an open sheet, scroll-to-reveal
+// reachability of every control and the header close button against the
+// simulated system overlay. Document scroll width alone missed overflow
+// inside the clipped, independently scrolling bottom sheet.
+async function inspectLayout(page, viewport, activeSheetOnly = false) {
+  const report = await page.evaluate(inspectLayoutInPage, {
+    rootSelector: activeSheetOnly ? ".bottom-sheet" : null,
+    checkReachability: activeSheetOnly,
+    overlay: viewport.overlay ?? null,
+    intendedScrollers: INTENDED_HORIZONTAL_SCROLLERS,
+    acceptedOverflow: ACCEPTED_CONTAINMENT_EXCEPTIONS,
+    minimumControlFontSize: viewport.touch ? 16 : null,
+    knownFocusZoom: KNOWN_FOCUS_ZOOM_DEFECTS,
+  });
+  for (const advisory of report.advisories) {
+    if (advisory.kind === "focus-zoom-known") knownDefects.add(`${advisory.element} (${advisory.fontSize}px) at ${viewport.name}`);
+  }
+  return report;
+}
+// Known defects met during the run (reported, never passed silently).
+const knownDefects = new Set();
+
+const issueText = (issue) => `${issue.kind}: ${issue.element} — ${issue.message}`;
+
+async function promptForMfaCode() {
+  if (!process.stdin.isTTY || !process.stdout.isTTY) return null;
+  const prompt = createInterface({ input: process.stdin, output: process.stdout });
+  try {
+    const code = await prompt.question("Enter the current six-digit MFA code (not saved): ");
+    return code.trim();
+  } finally {
+    prompt.close();
+  }
+}
+
+async function authenticate(page) {
+  const email = auditEnv.E2E_EMAIL;
+  const password = auditEnv.E2E_PASSWORD;
+  if (!email || !password) return { ok: false, reason: "E2E_EMAIL and E2E_PASSWORD are not configured" };
+  await page.goto(`${BASE}/login`, { waitUntil: "domcontentloaded", timeout: 30000 });
+  await page.getByLabel("Email").fill(email);
+  await page.getByLabel("Password", { exact: true }).fill(password);
+  await page.getByRole("button", { name: "Sign in" }).click();
+  // Wait for where sign-in lands rather than a fixed delay: with several
+  // browsers running at once, the redirect can take longer than a second.
+  await page.waitForURL(/\/(home|onboarding|mfa)(?:[/?]|$)/, { timeout: 30000 }).catch(() => {});
+  if (page.url().includes("/mfa")) {
+    const mfaCode = process.env.E2E_MFA_CODE ?? await promptForMfaCode();
+    if (!mfaCode) return { ok: false, reason: "MFA challenge required; provide E2E_MFA_CODE or use an interactive terminal" };
+    const requestedMethod = auditEnv.E2E_MFA_METHOD;
+    if (requestedMethod === "email" || requestedMethod === "totp") {
+      const methodName = requestedMethod === "email" ? "Email code" : "Authenticator app";
+      const methodButton = page.getByRole("button", { name: methodName, exact: true });
+      if (await methodButton.count()) await methodButton.click();
+    }
+    await page.getByLabel("Verification code").fill(mfaCode);
+    await page.getByRole("button", { name: "Verify", exact: true }).click();
+    await page.waitForURL(/\/(home|onboarding)(?:$|\?)/, { timeout: 30000 });
+  }
+  if (page.url().includes("/onboarding")) return { ok: false, reason: "Account requires onboarding" };
+  if (!page.url().match(/\/home(?:$|\?)/)) return { ok: false, reason: "Sign-in did not reach /home" };
+  return { ok: true };
+}
+
+async function auditRoute(page, route, viewport, authenticated) {
+  if (authenticated && route.startsWith("/driveway")) {
+    drivewayRouteOwners ??= await drivewayFixtureOwners(page);
+    if (drivewayRouteOwners) {
+      await routeDriveway(page.context(), { enabled: true, ...drivewayRouteOwners });
+      try {
+        return await auditRouteOnce(page, route, viewport, authenticated);
+      } finally {
+        await unrouteDriveway(page.context());
+      }
+    }
+    // Without the fixtures the page shows Driveway's unavailable screen,
+    // which is not coverage of Driveway.
+    results.push({ route, viewport: viewport.name, result: "NOT TESTED", issues: ["Driveway fixtures unavailable: the account's Home could not be read"], details: [], status: null });
+    return;
+  }
+  return auditRouteOnce(page, route, viewport, authenticated);
+}
+
+let drivewayRouteOwners = null;
+
+async function auditRouteOnce(page, route, viewport, authenticated) {
+  await page.setViewportSize({ width: viewport.width, height: viewport.height });
+  const response = await page.goto(`${BASE}${route}`, { waitUntil: "domcontentloaded", timeout: 30000 });
+  await applyInsets(page, viewport);
+  // Let the page finish its first requests (access checks, the Home, its
+  // data) before measuring, so a slow load is not measured as its loading
+  // screen, and a create action that has not rendered yet is not silently
+  // skipped. Capped, because some pages keep polling.
+  await page.waitForLoadState("networkidle", { timeout: 5000 }).catch(() => {});
+  await page.waitForTimeout(500);
+  const screenshot = await capture(page, route, viewport);
+  if (!authenticated && !publicRoutes.includes(route)) {
+    results.push({ route, viewport: viewport.name, result: "BLOCKED", issues: ["Authenticated route not tested"], details: [], screenshot, status: response?.status() ?? null });
+    return;
+  }
+  const layout = await inspectLayout(page, viewport);
+  const status = response?.status() ?? null;
+  const statusIssues = status !== null && status >= 400 ? [`HTTP response ${status}`] : [];
+  results.push({ route, viewport: viewport.name, result: layout.issues.length || statusIssues.length ? "FAIL" : "PASS", issues: [...statusIssues, ...layout.issues.map(issueText)], details: layout.issues.slice(0, 40), screenshot, status });
+
+  // The route's primary create sheet, opened in this viewport and measured in
+  // its interactive state. Nothing is submitted.
+  if (!authenticated || publicRoutes.includes(route)) return;
+  const trigger = page.locator("button.rr-fab, button.calendar-fab").first();
+  if (!(await trigger.count()) || !(await trigger.isVisible())) return;
+  await trigger.click({ timeout: 3000 }).catch(() => {});
+  await page.waitForTimeout(350);
+  const sheet = page.locator(".bottom-sheet").last();
+  if (!(await sheet.count()) || !(await sheet.isVisible())) {
+    sheetResults.push({ route, viewport: viewport.name, result: "NOT TESTED", issues: ["Create action did not open a sheet"] });
+    return;
+  }
+  const sheetLayout = await inspectLayout(page, viewport, true);
+  const sheetScreenshot = await capture(page, route, viewport, `${route}-create-sheet`);
+  const title = (await sheet.locator("#sheet-title").textContent().catch(() => "")) ?? "";
+  sheetResults.push({ route, viewport: viewport.name, title, result: sheetLayout.issues.length ? "FAIL" : "PASS", issues: sheetLayout.issues.map(issueText), details: sheetLayout.issues.slice(0, 40), screenshot: sheetScreenshot });
+  await page.keyboard.press("Escape").catch(() => {});
+  await page.waitForTimeout(150);
+}
+
+// Opens existing calendar events in turn until one's sheet offers an enabled
+// `action` button (Copy event, Edit). Recurring or shared events may not, so
+// a first row without it is not missing coverage. In the wide layout a
+// month-grid event focuses its day, and the day's events are then opened
+// from the day sheet or side pane. Returns the button, null when no event
+// offers it, or undefined when the calendar has no events at all.
+async function openEventWithAction(page, action) {
+  const events = page.locator(".month-event, .event-row");
+  // Events load after the page; a fixed pause alone can miss them on a busy
+  // machine and misreport an empty calendar.
+  await events.first().waitFor({ state: "attached", timeout: 5000 }).catch(() => {});
+  if (!(await events.count())) return undefined;
+  const actionButton = () => page.locator(".bottom-sheet").last().getByRole("button", { name: action, exact: true });
+  const closeSheets = async () => {
+    for (let attempt = 0; attempt < 3 && await page.locator(".bottom-sheet").count(); attempt += 1) {
+      await page.keyboard.press("Escape").catch(() => {});
+      await page.waitForTimeout(100);
+    }
+  };
+  const tryOpen = async (target, nested = false) => {
+    if (!(await target.isVisible())) return false;
+    await target.click({ timeout: 3000 }).catch(() => {});
+    await page.waitForTimeout(250);
+    if (await actionButton().count() && !(await actionButton().isDisabled())) return true;
+    if (!nested) {
+      const dayRows = page.locator(".bottom-sheet .event-row, .calendar-expanded-agenda-section .event-row");
+      const rowCount = await dayRows.count();
+      for (let rowIndex = 0; rowIndex < rowCount; rowIndex += 1) {
+        if (await tryOpen(dayRows.nth(rowIndex), true)) return true;
+      }
+    }
+    if (!nested) await closeSheets();
+    return false;
+  };
+  for (let eventIndex = 0; eventIndex < await events.count(); eventIndex += 1) {
+    if (await tryOpen(events.nth(eventIndex))) return actionButton();
+  }
+  return null;
+}
+
+// The Calendar event editor in its longest states, measured with
+// scroll-to-reveal reachability: Add event with multi-day, the advanced
+// disclosure open and a recurrence ending on a date; then Edit on an existing
+// event. Nothing is submitted: Add is dismissed and Edit is cancelled.
+async function auditEventEditor(page) {
+  const editorResults = [];
+  for (const viewport of viewports) {
+    for (const state of ["add", "edit"]) {
+      await page.setViewportSize({ width: viewport.width, height: viewport.height });
+      await page.goto(`${BASE}/calendar`, { waitUntil: "domcontentloaded", timeout: 30000 });
+      await applyInsets(page, viewport);
+      await page.waitForTimeout(700);
+      const issues = [];
+      if (state === "add") {
+        const add = page.locator("button.calendar-fab:visible, button.calendar-add-desktop:visible").first();
+        if (!(await add.count())) {
+          editorResults.push({ viewport: viewport.name, state, result: "NOT TESTED", issues: ["No visible Add event action"] });
+          continue;
+        }
+        await add.click({ timeout: 3000 }).catch(() => {});
+      } else {
+        const edit = await openEventWithAction(page, "Edit");
+        if (!edit) {
+          editorResults.push({ viewport: viewport.name, state, result: "NOT TESTED", issues: ["No existing event offered Edit"] });
+          continue;
+        }
+        await edit.click();
+      }
+      await page.waitForTimeout(350);
+      const sheet = page.locator(".bottom-sheet").last();
+      const form = sheet.locator("form.calendar-event-form");
+      if (!(await form.count())) {
+        editorResults.push({ viewport: viewport.name, state, result: "FAIL", issues: ["The event editor did not open on the shared form layout"] });
+        await page.keyboard.press("Escape").catch(() => {});
+        continue;
+      }
+      await sheet.locator(".event-advanced summary").click();
+      if (state === "add") {
+        await sheet.getByRole("button", { name: "Ends on another day" }).click();
+        await sheet.getByLabel("Repeat", { exact: true }).selectOption("weekly");
+        await sheet.locator("select[name=recurrence_end_mode]").selectOption("on_date");
+        for (const label of ["Title", "Starts", "Ends", "Start time", "End time", "Calendar", "Location", "Reminder", "End date", "Notes"]) {
+          if (!(await sheet.getByLabel(label, { exact: true }).count())) issues.push(`No field labelled "${label}"`);
+        }
+      }
+      await page.waitForTimeout(150);
+      const layout = await inspectLayout(page, viewport, true);
+      issues.push(...layout.issues.map(issueText));
+      const screenshot = await capture(page, `calendar-event-editor-${state}-${viewport.name}`, viewport, `calendar-event-editor-${state}`);
+      editorResults.push({ viewport: viewport.name, state, result: issues.length ? "FAIL" : "PASS", issues, screenshot, details: layout.issues.slice(0, 40) });
+      const cancel = sheet.getByRole("button", { name: "Cancel", exact: true });
+      if (await cancel.count()) await cancel.click().catch(() => {});
+      await page.keyboard.press("Escape").catch(() => {});
+      await page.waitForTimeout(150);
+    }
+  }
+  return editorResults;
+}
+
+const LONG_TEXT = "Bring the green recycling box and the garden waste bin to the kerb, then check the side gate is latched so the collection crew can get through without ringing the bell.";
+
+// The Routines & Reminders editors and the Settings forms on the shared form
+// primitives, each in a meaningful filled state, plus a failed save. The
+// failed save is answered by an intercepted request, so it never reaches the
+// API; every other editor is cancelled, so nothing is saved.
+async function auditNudgeForms(page) {
+  const nudgeResults = [];
+  const openEditor = async (kind) => {
+    await page.locator("button.rr-fab").click({ timeout: 3000 });
+    await page.getByRole("button", { name: `New ${kind}`, exact: true }).click({ timeout: 3000 });
+    await page.waitForTimeout(350);
+  };
+  const requireLabels = async (scope, labels, issues) => {
+    for (const label of labels) {
+      if (!(await scope.getByLabel(label, { exact: true }).count())) issues.push(`No field labelled "${label}"`);
+    }
+  };
+  const states = [
+    ["routine", async (sheet, issues) => {
+      await openEditor("Routine");
+      await sheet().getByLabel("Description (optional)", { exact: true }).fill(LONG_TEXT);
+      await sheet().getByRole("button", { name: "Weekly", exact: true }).click();
+      await sheet().getByLabel("Every", { exact: true }).selectOption("2");
+      await requireLabels(sheet(), ["Title", "Who this is for", "Category (optional)", "Every", "Anchor date", "Remind", "Starts", "Ends (optional)"], issues);
+      return true;
+    }],
+    ["reminder", async (sheet, issues) => {
+      await openEditor("Reminder");
+      await sheet().getByLabel("Notes (optional)", { exact: true }).fill(LONG_TEXT);
+      await sheet().getByLabel("Scope", { exact: true }).selectOption("household");
+      await sheet().getByLabel("Repeat", { exact: true }).selectOption("weekly");
+      await sheet().getByLabel("Remind", { exact: true }).selectOption("hourly");
+      await requireLabels(sheet(), ["Title", "Scope", "Assign to (household only)", "Category (optional)", "Due date", "Due time", "Repeat", "Remind"], issues);
+      return true;
+    }],
+    ["to-do", async (sheet, issues) => {
+      await openEditor("To-do");
+      await sheet().getByLabel("Notes (optional)", { exact: true }).fill(LONG_TEXT);
+      await sheet().getByLabel("Scope", { exact: true }).selectOption("household");
+      await requireLabels(sheet(), ["Title", "Due date", "Scope", "Category (optional)", "Assign to (household only)"], issues);
+      return true;
+    }],
+    ["reminder save error", async (sheet, issues) => {
+      await page.route("**/api/v1/homes/*/reminders", (route) => route.request().method() === "POST"
+        ? route.fulfill({ status: 422, contentType: "application/json", body: JSON.stringify({ detail: `The audit rejected this save on purpose. ${LONG_TEXT}` }) })
+        : route.continue());
+      await openEditor("Reminder");
+      await sheet().getByLabel("Title", { exact: true }).fill("Responsive audit reminder");
+      await sheet().getByRole("button", { name: "Save", exact: true }).click();
+      const error = sheet().locator(".notice.error");
+      await error.waitFor({ state: "visible", timeout: 5000 }).catch(() => issues.push("The failed save did not show its error inside the sheet"));
+      if (await sheet().getByRole("button", { name: "Save", exact: true }).isDisabled()) issues.push("Save stayed disabled after the failed save");
+      if (await sheet().getByRole("button", { name: "Cancel", exact: true }).isDisabled()) issues.push("Cancel stayed disabled after the failed save");
+      await error.scrollIntoViewIfNeeded().catch(() => {});
+      return true;
+    }],
+    ["edit", async (sheet, issues) => {
+      const edit = page.locator("button.rr-card-action:visible", { hasText: "Edit" }).first();
+      if (!(await edit.count())) return false;
+      await edit.click({ timeout: 3000 });
+      await page.waitForTimeout(350);
+      if (!/^Edit /.test((await sheet().locator("#sheet-title").textContent().catch(() => "")) ?? "")) issues.push("Edit did not open an edit sheet");
+      return true;
+    }],
+  ];
+  for (const viewport of viewports) {
+    for (const [state, prepare] of states) {
+      await page.setViewportSize({ width: viewport.width, height: viewport.height });
+      await page.goto(`${BASE}/settings/routines-reminders`, { waitUntil: "domcontentloaded", timeout: 30000 });
+      await applyInsets(page, viewport);
+      await page.locator("button.rr-fab").waitFor({ state: "visible", timeout: 5000 }).catch(() => {});
+      await page.waitForTimeout(500);
+      const issues = [];
+      const sheet = () => page.locator(".bottom-sheet").last();
+      let opened = false;
+      try {
+        opened = await prepare(sheet, issues);
+      } catch (error) {
+        issues.push(`Could not prepare the state: ${error.message.split("\n")[0]}`);
+      }
+      if (!opened) {
+        nudgeResults.push({ form: "Routines & Reminders", viewport: viewport.name, state, result: "NOT TESTED", issues: ["No existing item offered Edit"] });
+        continue;
+      }
+      if (!(await sheet().locator("form.rr-form").count())) issues.push("The editor did not open on the shared form layout");
+      await page.waitForTimeout(150);
+      const layout = await inspectLayout(page, viewport, true);
+      issues.push(...layout.issues.map(issueText));
+      const screenshot = await capture(page, `nudges-${state}`, viewport, `nudges-${state}`);
+      nudgeResults.push({ form: "Routines & Reminders", viewport: viewport.name, state, result: issues.length ? "FAIL" : "PASS", issues, screenshot, details: layout.issues.slice(0, 40) });
+      const cancel = sheet().getByRole("button", { name: "Cancel", exact: true });
+      if (await cancel.count()) await cancel.click().catch(() => {});
+      await page.unrouteAll({ behavior: "ignoreErrors" });
+      await page.waitForTimeout(150);
+    }
+
+    // Settings pages: measured as pages, in their expanded states.
+    const pageStates = [
+      ["/settings/notifications", "notification preferences (custom times)", async (issues) => {
+        await page.getByRole("checkbox", { name: "Send me a daily Nudge summary" }).waitFor({ timeout: 5000 });
+        if (!(await page.getByRole("checkbox", { name: "Send me a daily Nudge summary" }).isChecked())) await page.getByRole("checkbox", { name: "Send me a daily Nudge summary" }).check();
+        for (const select of await page.getByRole("combobox", { name: "Delivery time", exact: true }).all()) await select.selectOption("custom");
+        await requireLabels(page, ["Evening Clean-up time", "Days", "Lock-screen preview", "Start", "End"], issues);
+        if ((await page.getByLabel("Custom time", { exact: true }).count()) !== 2) issues.push("Both Custom time fields should be shown");
+      }],
+      ["/settings/profile", "profile birthday editor", async (issues) => {
+        await page.locator(".profile-detail-value").getByRole("button", { name: "Edit" }).click({ timeout: 5000 });
+        await page.getByLabel("Month", { exact: true }).waitFor({ timeout: 5000 }).catch(() => {});
+        await requireLabels(page, ["Month", "Day"], issues);
+      }],
+    ];
+    for (const [route, state, prepare] of pageStates) {
+      await page.setViewportSize({ width: viewport.width, height: viewport.height });
+      await page.goto(`${BASE}${route}`, { waitUntil: "domcontentloaded", timeout: 30000 });
+      await applyInsets(page, viewport);
+      // As for route checks: let the page hydrate and load before acting, or
+      // a click on a not-yet-interactive control does nothing.
+      await page.waitForLoadState("networkidle", { timeout: 5000 }).catch(() => {});
+      const issues = [];
+      try {
+        await prepare(issues);
+      } catch (error) {
+        issues.push(`Could not prepare the state: ${error.message.split("\n")[0]}`);
+      }
+      if (!(await page.locator("form.form-layout").count())) issues.push("The form is not on the shared form layout");
+      await page.waitForTimeout(150);
+      const layout = await inspectLayout(page, viewport);
+      issues.push(...layout.issues.map(issueText));
+      const screenshot = await capture(page, `${route}-${state}`, viewport, `${route}-${state}`);
+      nudgeResults.push({ form: route, viewport: viewport.name, state, result: issues.length ? "FAIL" : "PASS", issues, screenshot, details: layout.issues.slice(0, 40) });
+    }
+  }
+  return nudgeResults;
+}
+
+// Same-origin API call from the signed-in page, with the CSRF header the API
+// requires for writes. Used only to create and remove the audit's own
+// disposable fixtures.
+function apiCall(page, method, apiPath, body) {
+  return page.evaluate(async ({ method, apiPath, body }) => {
+    const csrf = document.cookie.split("; ").find((cookie) => cookie.startsWith("mk_csrf="))?.slice(8);
+    const headers = { "Content-Type": "application/json", ...(csrf ? { "X-CSRF-Token": decodeURIComponent(csrf) } : {}) };
+    const response = await fetch(`/api/v1${apiPath}`, { method, credentials: "include", headers, body: body === undefined ? undefined : JSON.stringify(body) });
+    let json = null;
+    try { json = await response.json(); } catch { json = null; }
+    return { status: response.status, body: json };
+  }, { method, apiPath, body });
+}
+
+// Driveway is measured against fixtures served in the audit's own browser
+// context, so the result does not depend on how the account's Home or the
+// platform feature flag is configured, and nothing is written to the API or
+// its database. routeDriveway answers the feature matrix's Driveway row, the
+// billing entitlement and every /homes/{id}/vehicles request; everything else
+// still goes to the real API. With enabled: false it serves Driveway exactly
+// as the API does when the feature is off (a 404 for every vehicle request).
+const DRIVEWAY_ROUTES = {
+  features: /\/api\/v1\/features\/[^/?]+(\?.*)?$/,
+  billing: /\/api\/v1\/groups\/[^/]+\/billing(\?.*)?$/,
+  vehicles: /\/api\/v1\/homes\/[^/]+\/vehicles(\/[^?]*)?(\?.*)?$/,
+};
+const AUDIT_VEHICLE_ID = "0aa0d17e-0000-4000-8000-000000000001";
+
+function drivewayFixtureVehicles(homeId, ownerId, otherOwnerId) {
+  const vehicle = (overrides) => ({
+    group_id: homeId, owner_user_id: ownerId, colour: null, year: null, fuel_type: null, engine_size: null,
+    first_registration_date: null, vin: null, lookup_provider: null, lookup_status: null, last_successful_lookup: null,
+    tax_status: null, tax_due_date: null, inspection_status: null, inspection_due_date: null, photo_version: null,
+    archived: false, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", ...overrides,
+  });
+  return [
+    vehicle({
+      id: AUDIT_VEHICLE_ID, nickname: "Responsive audit vehicle", make: "Volkswagen", model: "Golf Estate R-Line Edition",
+      colour: "Silver", year: 2019, fuel_type: "Plug-in hybrid", engine_size: "1.4 TSI", country_code: "GB", registration: "AU19 DVW",
+      first_registration_date: "2019-03-01", inspection_status: "valid", inspection_due_date: "2026-11-20",
+    }),
+    // A long make and model, owned by another member when the Home has one.
+    vehicle({
+      id: "0aa0d17e-0000-4000-8000-000000000002", owner_user_id: otherOwnerId ?? ownerId, nickname: "Family estate",
+      make: "Mercedes-Benz", model: "GLE 350 de 4MATIC AMG Line Premium Plus", colour: "Obsidian Black", year: 2021,
+      fuel_type: "Plug-in hybrid", country_code: "GB", registration: "LN71 XYZ", inspection_status: "expired", inspection_due_date: "2026-09-01",
+    }),
+    vehicle({
+      id: "0aa0d17e-0000-4000-8000-000000000003", nickname: "Holiday car", make: "Toyota", model: "Yaris", year: 2015,
+      fuel_type: "Hybrid", country_code: "IE", registration: "191-D-12345",
+    }),
+  ];
+}
+
+function drivewayFixtureMot(vehicle) {
+  const eligible = vehicle.country_code === "GB";
+  return {
+    eligible, provider_available: false, has_registration: Boolean(vehicle.registration),
+    summary: {
+      status: eligible ? vehicle.inspection_status : null, due_date: eligible ? vehicle.inspection_due_date : null,
+      expiry_date: eligible ? vehicle.inspection_due_date : null, first_mot_due_date: null, last_test_date: null, last_result: null,
+      source: null, refreshed_at: null, stale: false, last_attempt_at: null, last_attempt_outcome: null,
+    },
+    tests: [],
+  };
+}
+
+async function routeDriveway(context, { enabled, homeId, ownerId, otherOwnerId }) {
+  const vehicles = drivewayFixtureVehicles(homeId, ownerId, otherOwnerId);
+  const plans = new Map();
+  const json = (route, status, body) => route.fulfill({ status, contentType: "application/json", body: body === undefined ? "" : JSON.stringify(body) });
+  await context.route(DRIVEWAY_ROUTES.features, async (route) => {
+    const response = await route.fetch();
+    const matrix = await response.json();
+    const existing = matrix.features?.find((row) => row.feature === "driveway") ?? { feature: "driveway" };
+    matrix.features = [...(matrix.features ?? []).filter((row) => row.feature !== "driveway"), { ...existing, enabled }];
+    await route.fulfill({ response, json: matrix });
+  });
+  await context.route(DRIVEWAY_ROUTES.billing, async (route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    const response = await route.fetch();
+    const billing = await response.json();
+    await route.fulfill({ response, json: { ...billing, driveway_enabled: true } });
+  });
+  await context.route(DRIVEWAY_ROUTES.vehicles, async (route) => {
+    if (!enabled) return json(route, 404, { detail: "Not found" });
+    const request = route.request();
+    const method = request.method();
+    const [, rest = ""] = new URL(request.url()).pathname.match(/\/vehicles(\/.*)?$/) ?? [];
+    const [vehicleId, ...tail] = rest.split("/").filter(Boolean);
+    const sub = tail.join("/");
+    if (!vehicleId) return method === "GET" ? json(route, 200, { items: vehicles }) : json(route, 201, { ...vehicles[0], ...JSON.parse(request.postData() ?? "{}") });
+    if (vehicleId === "lookup") return json(route, 200, { found: false, manual_entry_required: true, provider: null, registration: null, make: null, model: null, colour: null, year: null, fuel_type: null, engine_size: null, first_registration_date: null, tax_status: null, tax_due_date: null, inspection_status: null, inspection_due_date: null, capabilities: [], message: "Lookups are not available in the responsive audit." });
+    const vehicle = vehicles.find((item) => item.id === vehicleId);
+    if (!vehicle) return json(route, 404, { detail: "That vehicle could not be found" });
+    if (!sub) {
+      if (method === "GET") return json(route, 200, vehicle);
+      if (method === "PATCH") return json(route, 200, { ...vehicle, ...JSON.parse(request.postData() ?? "{}") });
+      return json(route, 204);
+    }
+    if (sub === "mot" || sub === "mot/refresh") return json(route, 200, drivewayFixtureMot(vehicle));
+    if (sub === "mot/nudges") {
+      if (method === "PUT") {
+        const plan = { ...JSON.parse(request.postData() ?? "{}"), scheduled: [] };
+        plans.set(vehicleId, plan);
+        return json(route, 200, { plan });
+      }
+      if (method === "DELETE") {
+        plans.delete(vehicleId);
+        return json(route, 204);
+      }
+      return json(route, 200, { plan: plans.get(vehicleId) ?? null });
+    }
+    if (sub === "reminders") return method === "GET" ? json(route, 200, { items: [] }) : json(route, 422, { detail: "Reminders are not created in the responsive audit." });
+    return json(route, 404, { detail: "Not found" });
+  });
+}
+
+async function unrouteDriveway(context) {
+  for (const pattern of Object.values(DRIVEWAY_ROUTES)) await context.unroute(pattern);
+}
+
+// The account's Home and people, for the fixtures' owners.
+async function drivewayFixtureOwners(page) {
+  await page.waitForFunction(() => localStorage.getItem("mykhaya.activeHomeId"), null, { timeout: 10000 }).catch(() => {});
+  const homeId = await page.evaluate(() => localStorage.getItem("mykhaya.activeHomeId"));
+  const me = (await apiCall(page, "GET", "/users/me")).body;
+  const members = homeId ? (await apiCall(page, "GET", `/groups/${homeId}/members`)).body : null;
+  const otherOwnerId = Array.isArray(members) ? members.find((member) => member.user_id !== me?.id)?.user_id ?? null : null;
+  return homeId && me?.id ? { homeId, ownerId: me.id, otherOwnerId } : null;
+}
+
+// Driveway's vehicle forms on the shared form primitives, in filled,
+// validation-error and failed-save states, on the fixture vehicle. Failed
+// saves are answered by intercepted requests; nothing is saved.
+async function auditDrivewayForms(page) {
+  const drivewayResults = [];
+  const states = [
+    "vehicle detail page",
+    "edit details",
+    "edit details validation",
+    "edit details failed save",
+    "add vehicle validation",
+    "MOT nudge validation",
+    "MOT nudge failed save",
+    "add reminder sheet validation",
+    "add reminder sheet failed save",
+  ];
+  await page.goto(`${BASE}/driveway`, { waitUntil: "domcontentloaded", timeout: 30000 });
+  const owners = await drivewayFixtureOwners(page);
+  if (!owners) {
+    for (const viewport of viewports) for (const state of states) drivewayResults.push({ viewport: viewport.name, state, result: "NOT TESTED", issues: ["The account's Home could not be read for the fixtures"] });
+    return drivewayResults;
+  }
+  await routeDriveway(page.context(), { enabled: true, ...owners });
+  const vehicleId = AUDIT_VEHICLE_ID;
+  const registration = "AU19 DVW";
+  // Page-level routes run before the fixtures; fallback() hands every other
+  // request on to them.
+  const rejectWith = (method, pattern, message) => page.route(pattern, (route) => route.request().method() === method
+    ? route.fulfill({ status: 422, contentType: "application/json", body: JSON.stringify({ detail: message }) })
+    : route.fallback());
+  const requireLabels = async (scope, labels, issues) => {
+    for (const label of labels) {
+      if (!(await scope.getByLabel(label, { exact: true }).count())) issues.push(`No field labelled "${label}"`);
+    }
+  };
+  const requireInvalid = async (scope, labels, issues) => {
+    for (const label of labels) {
+      const field = scope.getByLabel(label, { exact: true });
+      if ((await field.getAttribute("aria-invalid").catch(() => null)) !== "true") issues.push(`"${label}" is not marked invalid`);
+    }
+  };
+  const failedSaveMessage = `The audit rejected this save on purpose. ${LONG_TEXT}`;
+  const prepare = {
+    "vehicle detail page": async () => ({ url: `/driveway/${vehicleId}`, sheet: false, run: async (issues) => {
+      // The detail page names the vehicle by make and model, with its plate.
+      await page.getByText(registration, { exact: true }).first().waitFor({ timeout: 8000 }).catch(() => issues.push("The vehicle did not load"));
+    } }),
+    "edit details": async () => ({ url: `/driveway/${vehicleId}/details`, sheet: false, run: async (issues) => {
+      await page.getByRole("button", { name: "Save changes" }).waitFor({ timeout: 8000 });
+      await page.getByLabel("Nickname", { exact: true }).fill(`Responsive audit vehicle with a much longer nickname than usual`);
+      await requireLabels(page, ["Country / region", "Registration / licence plate", "Owner", "Nickname", "Make", "Model", "Year", "Fuel type", "Colour", "Engine size", "First registration date", "VIN / chassis number"], issues);
+    } }),
+    "edit details validation": async () => ({ url: `/driveway/${vehicleId}/details`, sheet: false, run: async (issues) => {
+      await page.getByRole("button", { name: "Save changes" }).waitFor({ timeout: 8000 });
+      await page.getByLabel("Nickname", { exact: true }).fill("");
+      await page.getByLabel("Registration / licence plate", { exact: true }).fill("");
+      await page.getByLabel("Year", { exact: true }).fill("1800");
+      await page.getByRole("button", { name: "Save changes" }).click();
+      await requireInvalid(page, ["Registration / licence plate", "Nickname", "Year"], issues);
+    } }),
+    "edit details failed save": async () => ({ url: `/driveway/${vehicleId}/details`, sheet: false, run: async (issues) => {
+      await rejectWith("PATCH", "**/api/v1/homes/*/vehicles/*", failedSaveMessage);
+      await page.getByRole("button", { name: "Save changes" }).waitFor({ timeout: 8000 });
+      await page.getByRole("button", { name: "Save changes" }).click();
+      const alert = page.locator(".notice.error", { hasText: "The audit rejected this save on purpose." });
+      await alert.waitFor({ timeout: 5000 }).catch(() => issues.push("The failed save was not shown"));
+      if (await page.getByRole("button", { name: "Save changes" }).isDisabled()) issues.push("Save changes stayed disabled");
+      await alert.scrollIntoViewIfNeeded().catch(() => {});
+    } }),
+    "add vehicle validation": async () => ({ url: "/driveway/add", sheet: false, run: async (issues) => {
+      await page.getByRole("button", { name: "Add manually" }).click({ timeout: 8000 });
+      await page.getByLabel("Year", { exact: true }).fill("1800");
+      await page.getByRole("button", { name: "Add vehicle" }).click();
+      await requireInvalid(page, ["Registration / licence plate", "Year"], issues);
+    } }),
+    "MOT nudge validation": async () => ({ url: `/driveway/${vehicleId}/mot/reminder`, sheet: false, run: async (issues) => {
+      await page.getByRole("button", { name: "Save nudge" }).waitFor({ timeout: 8000 });
+      await page.getByLabel("Reminder", { exact: true }).fill("");
+      await page.getByLabel("MOT expires", { exact: true }).fill("");
+      for (const name of ["30 days before", "7 days before"]) {
+        const chip = page.getByRole("button", { name, exact: true });
+        if ((await chip.getAttribute("aria-pressed")) === "true") await chip.click();
+      }
+      await page.getByRole("button", { name: "Save nudge" }).click();
+      await requireInvalid(page, ["Reminder", "MOT expires"], issues);
+      if (!(await page.getByText("Choose at least one time to be nudged.").count())) issues.push("No error for the Nudge me times");
+    } }),
+    "MOT nudge failed save": async () => ({ url: `/driveway/${vehicleId}/mot/reminder`, sheet: false, run: async (issues) => {
+      await rejectWith("PUT", "**/api/v1/homes/*/vehicles/*/mot/nudges", failedSaveMessage);
+      await page.getByRole("button", { name: "Save nudge" }).waitFor({ timeout: 8000 });
+      await page.getByLabel("MOT expires", { exact: true }).fill("2027-08-25");
+      await page.getByRole("button", { name: "Save nudge" }).click();
+      const alert = page.locator(".notice.error", { hasText: "The audit rejected this save on purpose." });
+      await alert.waitFor({ timeout: 5000 }).catch(() => issues.push("The failed save was not shown"));
+      await alert.scrollIntoViewIfNeeded().catch(() => {});
+    } }),
+    "add reminder sheet validation": async () => ({ url: `/driveway/${vehicleId}/reminders`, sheet: true, run: async (issues) => {
+      await page.getByRole("button", { name: /add reminder/i }).first().click({ timeout: 8000 });
+      await page.waitForTimeout(350);
+      const sheet = page.locator(".bottom-sheet").last();
+      await sheet.getByRole("button", { name: "Add reminder", exact: true }).click();
+      await requireInvalid(sheet, ["Title", "Due date"], issues);
+    } }),
+    "add reminder sheet failed save": async () => ({ url: `/driveway/${vehicleId}/reminders`, sheet: true, run: async (issues) => {
+      await rejectWith("POST", "**/api/v1/homes/*/vehicles/*/reminders", failedSaveMessage);
+      await page.getByRole("button", { name: /add reminder/i }).first().click({ timeout: 8000 });
+      await page.waitForTimeout(350);
+      const sheet = page.locator(".bottom-sheet").last();
+      await sheet.getByLabel("Title", { exact: true }).fill("Responsive audit reminder");
+      await sheet.getByLabel("Due date", { exact: true }).fill("2027-01-15");
+      await sheet.getByRole("button", { name: "Add reminder", exact: true }).click();
+      await sheet.locator(".notice.error").waitFor({ timeout: 5000 }).catch(() => issues.push("The failed save was not shown inside the sheet"));
+      if (await sheet.getByRole("button", { name: "Cancel", exact: true }).isDisabled()) issues.push("Cancel stayed disabled after the failed save");
+      if ((await sheet.getByLabel("Title", { exact: true }).inputValue()) !== "Responsive audit reminder") issues.push("The draft was not kept");
+    } }),
+  };
+  try {
+    for (const viewport of viewports) {
+      for (const state of states) {
+        await page.setViewportSize({ width: viewport.width, height: viewport.height });
+        const { url, sheet, run } = await prepare[state]();
+        await page.goto(`${BASE}${url}`, { waitUntil: "domcontentloaded", timeout: 30000 });
+        await applyInsets(page, viewport);
+        await page.waitForTimeout(500);
+        const issues = [];
+        try {
+          await run(issues);
+        } catch (error) {
+          issues.push(`Could not prepare the state: ${error.message.split("\n")[0]}`);
+        }
+        await page.waitForTimeout(200);
+        const layout = await inspectLayout(page, viewport, sheet);
+        issues.push(...layout.issues.map(issueText));
+        const screenshot = await capture(page, `driveway-${state}`, viewport, `driveway-${state}`);
+        drivewayResults.push({ viewport: viewport.name, state, result: issues.length ? "FAIL" : "PASS", issues, screenshot, details: layout.issues.slice(0, 40) });
+        await page.unrouteAll({ behavior: "ignoreErrors" });
+        if (sheet) {
+          const cancel = page.locator(".bottom-sheet").last().getByRole("button", { name: "Cancel", exact: true });
+          if (await cancel.count()) await cancel.click().catch(() => {});
+        }
+      }
+    }
+  } finally {
+    await page.unrouteAll({ behavior: "ignoreErrors" });
+    await unrouteDriveway(page.context());
+  }
+  return drivewayResults;
+}
+
+// Budget is measured against fixtures served in the audit's own browser
+// context, like Driveway: every /homes/{id}/budget request is answered here,
+// with long names and pence amounts, so the result does not depend on the
+// account's own Budget. Every write (POST, PUT, PATCH, DELETE) is rejected
+// in the browser, so no financial record is created, changed or deleted.
+const BUDGET_ROUTE = /\/api\/v1\/homes\/[^/]+\/budget(\/[^?]*)?(\?.*)?$/;
+const BUDGET_CATEGORY_ID = "0aa0b0d9-0000-4000-8000-000000000001";
+const BUDGET_ITEM_ID = "0aa0b0d9-0000-4000-8000-000000000011";
+const BUDGET_MONTH_ITEM_ID = "0aa0b0d9-0000-4000-8000-000000000021";
+const BUDGET_ENTRY_ID = "0aa0b0d9-0000-4000-8000-000000000031";
+const BUDGET_REJECTION = `The audit rejected this save on purpose. ${LONG_TEXT}`;
+
+function budgetFixtures(year, month) {
+  const categoryName = "Household bills, utilities and the shared car";
+  const fixedItem = {
+    id: BUDGET_MONTH_ITEM_ID, budget_item_id: BUDGET_ITEM_ID, category_id: BUDGET_CATEGORY_ID,
+    name: "Mortgage — Nationwide 25-year fixed rate (joint account)", item_type: "fixed", planned_amount: 1234.56,
+    note: LONG_TEXT, starts_on: "2026-01-01", ends_on: "2030-12-01", payment_status: "not_paid", paid_entry: null,
+  };
+  const variableItem = {
+    id: "0aa0b0d9-0000-4000-8000-000000000022", budget_item_id: "0aa0b0d9-0000-4000-8000-000000000012", category_id: BUDGET_CATEGORY_ID,
+    name: "Electricity and gas (variable tariff)", item_type: "variable", planned_amount: 187.4, note: null, starts_on: "2026-01-01", ends_on: null, payment_status: null, paid_entry: null,
+  };
+  return {
+    profile: { id: "0aa0b0d9-0000-4000-8000-000000000041", owner_user_id: "0aa0b0d9-0000-4000-8000-000000000042", currency: "GBP", month_start_day: 1, default_view: "personal", archived: false },
+    categories: [
+      { id: BUDGET_CATEGORY_ID, name: categoryName, sort_order: 0, archived: false },
+      { id: "0aa0b0d9-0000-4000-8000-000000000002", name: "Groceries", sort_order: 1, archived: false },
+    ],
+    items: [
+      { id: BUDGET_ITEM_ID, category_id: BUDGET_CATEGORY_ID, name: fixedItem.name, item_type: "fixed", default_amount: 1234.56, recurring: true, starts_on: "2026-01-01", ends_on: "2030-12-01", notes: LONG_TEXT, archived: false },
+      { id: variableItem.budget_item_id, category_id: BUDGET_CATEGORY_ID, name: variableItem.name, item_type: "variable", default_amount: 187.4, recurring: true, starts_on: "2026-01-01", ends_on: null, notes: null, archived: false },
+    ],
+    entry: {
+      id: BUDGET_ENTRY_ID, category_id: BUDGET_CATEGORY_ID, description: "Annual boiler service and replacement thermostatic radiator valves",
+      amount: 249.99, spent_on: `${year}-${String(month).padStart(2, "0")}-14`, note: LONG_TEXT, budget_month_item_id: null,
+    },
+    month: {
+      configured: true, id: "0aa0b0d9-0000-4000-8000-000000000051", year, month,
+      categories: [
+        { id: "0aa0b0d9-0000-4000-8000-000000000061", category_id: BUDGET_CATEGORY_ID, category_name: categoryName, planned_amount: 1421.96, actual_source: "entries", manual_actual: null, entries_actual: 249.99, fixed_actual: 312.45, actual_amount: 562.44, note: null, fixed_planned_amount: 1234.56, variable_planned_amount: 187.4, items: [fixedItem, variableItem] },
+        { id: "0aa0b0d9-0000-4000-8000-000000000062", category_id: "0aa0b0d9-0000-4000-8000-000000000002", category_name: "Groceries", planned_amount: 600, actual_source: "entries", manual_actual: null, entries_actual: 0, fixed_actual: null, actual_amount: 0, note: null, fixed_planned_amount: 0, variable_planned_amount: 600, items: [] },
+      ],
+      income: [{
+        id: "0aa0b0d9-0000-4000-8000-000000000071", source_id: "0aa0b0d9-0000-4000-8000-000000000072", source_name: "Salary — Norfolk and Norwich University Hospitals",
+        expected_amount: 4850.75, received_amount: 4200.5, usual_payday_day: 25, recurring: true, expected_date: `${year}-${String(month).padStart(2, "0")}-25`, received_date: null, budget_year: year, budget_month: month,
+      }],
+    },
+  };
+}
+
+async function routeBudget(context) {
+  const now = new Date();
+  const json = (route, status, body) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
+  await context.route(BUDGET_ROUTE, async (route) => {
+    const request = route.request();
+    if (request.method() !== "GET") return json(route, 422, { detail: BUDGET_REJECTION });
+    const url = new URL(request.url());
+    const rest = url.pathname.replace(/^.*\/budget/, "");
+    const [, yearPart, monthPart] = rest.match(/^\/months\/(\d+)\/(\d+)/) ?? [];
+    const fixtures = budgetFixtures(Number(yearPart ?? url.searchParams.get("year")) || now.getFullYear(), Number(monthPart ?? url.searchParams.get("month")) || now.getMonth() + 1);
+    if (rest === "" || rest === "/settings") return json(route, 200, fixtures.profile);
+    if (rest === "/categories") return json(route, 200, fixtures.categories);
+    if (rest === "/items") return json(route, 200, fixtures.items.filter((item) => !url.searchParams.get("category_id") || item.category_id === url.searchParams.get("category_id")));
+    if (rest === "/entries") return json(route, 200, [fixtures.entry]);
+    if (rest === `/entries/${BUDGET_ENTRY_ID}`) return json(route, 200, fixtures.entry);
+    if (yearPart && rest === `/months/${yearPart}/${monthPart}`) return json(route, 200, fixtures.month);
+    if (rest === "/shares" || rest === "/shared-with-me" || rest === "/income-sources") return json(route, 200, []);
+    return json(route, 404, { detail: "Not found" });
+  });
+}
+
+// Budget's forms on the shared form primitives: empty Add forms, filled Edit
+// forms with long values, validation errors, failed saves, the paid-item
+// payment sheet, the month copy confirmation and the planned amount sheet.
+// Every state is a sheet, measured with scroll-to-reveal reachability.
+async function auditBudgetForms(page) {
+  const budgetResults = [];
+  const states = [
+    "income add empty",
+    "income edit filled",
+    "income validation",
+    "income failed save",
+    "fixed cost add validation",
+    "fixed cost add failed save",
+    "spending entry add validation",
+    "spending entry edit failed save",
+    "planned item edit validation",
+    "mark as paid sheet",
+    "planned amount failed save",
+    "actual amount filled",
+    "actual amount validation",
+    "actual amount failed save",
+    "month copy failed save",
+    "add category validation",
+  ];
+  const categoryUrl = `/budget/categories/${BUDGET_CATEGORY_ID}`;
+  const sheet = () => page.locator(".bottom-sheet").last();
+  const requireInvalid = async (labels, issues) => {
+    for (const label of labels) {
+      const field = sheet().getByLabel(label, { exact: true });
+      if ((await field.getAttribute("aria-invalid").catch(() => null)) !== "true") issues.push(`"${label}" is not marked invalid`);
+    }
+  };
+  const requireFailedSave = async (primary, issues) => {
+    await sheet().locator(".notice.error", { hasText: "The audit rejected" }).or(sheet().locator(".notice.error", { hasText: "Couldn’t" })).first()
+      .waitFor({ timeout: 5000 }).catch(() => issues.push("The failed save was not shown inside the sheet"));
+    if (await sheet().getByRole("button", { name: primary, exact: true }).isDisabled().catch(() => true)) issues.push(`${primary} stayed disabled after the failed save`);
+    if (await sheet().getByRole("button", { name: "Cancel", exact: true }).isDisabled().catch(() => true)) issues.push("Cancel stayed disabled after the failed save");
+  };
+  const openIncome = async (name) => {
+    await page.getByRole("button", { name }).first().click({ timeout: 8000 });
+    await page.waitForTimeout(300);
+  };
+  const openAddMenu = async (choice) => {
+    await page.getByRole("button", { name: "Add Budget item" }).click({ timeout: 8000 });
+    await page.getByRole("button", { name: choice }).click({ timeout: 3000 });
+    await page.waitForTimeout(300);
+  };
+  const openActual = async () => {
+    await page.getByRole("button", { name: "Quick actions" }).click({ timeout: 8000 });
+    await page.getByRole("button", { name: "Update actual amount" }).click({ timeout: 3000 });
+    await page.waitForTimeout(300);
+  };
+  const openPlannedItem = async () => {
+    await page.getByRole("button", { name: /Mortgage — Nationwide/ }).first().click({ timeout: 8000 });
+    await page.waitForTimeout(250);
+  };
+  const prepare = {
+    "income add empty": ["/budget/income", async () => openIncome(/Add income source/)],
+    "income edit filled": ["/budget/income", async (issues) => {
+      await openIncome(/Salary — Norfolk/);
+      await sheet().getByLabel("Received date", { exact: true }).fill("2026-02-28");
+      if ((await sheet().getByLabel("Expected amount (per month)", { exact: true }).inputValue()) !== "4850.75") issues.push("The expected amount was not shown as saved");
+    }],
+    "income validation": ["/budget/income", async (issues) => {
+      await openIncome(/Salary — Norfolk/);
+      await sheet().getByLabel("Source name", { exact: true }).fill("   ");
+      await sheet().getByLabel("Expected amount (per month)", { exact: true }).fill("");
+      await sheet().getByLabel("Received amount (per month)", { exact: true }).fill("12.345");
+      await sheet().getByRole("button", { name: "Save changes", exact: true }).click();
+      await requireInvalid(["Source name", "Expected amount (per month)", "Received amount (per month)"], issues);
+    }],
+    "income failed save": ["/budget/income", async (issues) => {
+      await openIncome(/Salary — Norfolk/);
+      await sheet().getByRole("button", { name: "Save changes", exact: true }).click();
+      await requireFailedSave("Save changes", issues);
+      if ((await sheet().getByLabel("Received amount (per month)", { exact: true }).inputValue()) !== "4200.5") issues.push("The draft was not kept");
+    }],
+    "fixed cost add validation": ["/budget", async (issues) => {
+      await openAddMenu(/Fixed monthly cost/);
+      await sheet().getByLabel("Start month", { exact: true }).fill("2026-11");
+      await sheet().getByLabel("End month", { exact: true }).fill("2026-10");
+      await sheet().getByRole("button", { name: "Add fixed cost", exact: true }).click();
+      await requireInvalid(["Monthly amount", "End month"], issues);
+    }],
+    "fixed cost add failed save": ["/budget", async (issues) => {
+      await openAddMenu(/Fixed monthly cost/);
+      await sheet().getByLabel("Name", { exact: true }).fill("Broadband, landline and streaming bundle (24 months)");
+      await sheet().getByLabel("Monthly amount", { exact: true }).fill("64.99");
+      await sheet().getByLabel("Notes (optional)", { exact: true }).fill(LONG_TEXT);
+      await sheet().getByRole("button", { name: "Add fixed cost", exact: true }).click();
+      await requireFailedSave("Add fixed cost", issues);
+    }],
+    "spending entry add validation": ["/budget/spending", async (issues) => {
+      await page.getByRole("button", { name: /Add spending entry/ }).first().click({ timeout: 8000 });
+      await page.waitForTimeout(300);
+      await sheet().getByLabel("Date", { exact: true }).fill("");
+      await sheet().getByRole("button", { name: "Add entry", exact: true }).click();
+      await requireInvalid(["Description", "Amount", "Date"], issues);
+    }],
+    "spending entry edit failed save": ["/budget/spending", async (issues) => {
+      await page.getByRole("button", { name: /Annual boiler service/ }).first().click({ timeout: 8000 });
+      await page.waitForTimeout(300);
+      await sheet().getByRole("button", { name: "Save changes", exact: true }).click();
+      await requireFailedSave("Save changes", issues);
+    }],
+    "planned item edit validation": [categoryUrl, async (issues) => {
+      await openPlannedItem();
+      await sheet().getByRole("button", { name: "Edit item", exact: true }).click({ timeout: 3000 });
+      await page.waitForTimeout(300);
+      await sheet().getByLabel("Planned amount", { exact: true }).fill("");
+      await sheet().getByRole("button", { name: "Save changes", exact: true }).click();
+      await requireInvalid(["Planned amount"], issues);
+    }],
+    "mark as paid sheet": [categoryUrl, async (issues) => {
+      await openPlannedItem();
+      await sheet().getByRole("button", { name: "Mark as paid", exact: true }).click({ timeout: 3000 });
+      await sheet().getByLabel("Fixed item (optional)", { exact: true }).waitFor({ timeout: 5000 }).catch(() => issues.push("The fixed item was not offered"));
+      if ((await sheet().getByLabel("Amount", { exact: true }).inputValue()) !== "1234.56") issues.push("The payment did not start from the planned amount");
+    }],
+    "planned amount failed save": [categoryUrl, async (issues) => {
+      await page.getByRole("button", { name: "Quick actions" }).click({ timeout: 8000 });
+      await page.getByRole("button", { name: "Edit planned amount" }).click({ timeout: 3000 });
+      await page.waitForTimeout(300);
+      await sheet().getByRole("button", { name: "Save plan", exact: true }).click();
+      await requireFailedSave("Save plan", issues);
+    }],
+    "actual amount filled": [categoryUrl, async (issues) => {
+      await openActual();
+      const field = sheet().getByLabel("Fixed monthly amount", { exact: true });
+      if ((await field.inputValue()) !== "312.45") issues.push(`Opened on ${await field.inputValue()}, not the stored 312.45`);
+      await field.fill("1234.5");
+      if ((await field.inputValue()) !== "1234.5") issues.push("Typing did not change the amount");
+    }],
+    "actual amount validation": [categoryUrl, async (issues) => {
+      await openActual();
+      await sheet().getByLabel("Fixed monthly amount", { exact: true }).fill("12.345");
+      await sheet().getByRole("button", { name: "Save fixed amount", exact: true }).click();
+      await requireInvalid(["Fixed monthly amount"], issues);
+    }],
+    "actual amount failed save": [categoryUrl, async (issues) => {
+      await openActual();
+      await sheet().getByLabel("Fixed monthly amount", { exact: true }).fill("400.01");
+      await sheet().getByRole("button", { name: "Save fixed amount", exact: true }).click();
+      await requireFailedSave("Save fixed amount", issues);
+      if ((await sheet().getByLabel("Fixed monthly amount", { exact: true }).inputValue()) !== "400.01") issues.push("The draft was not kept");
+    }],
+    "month copy failed save": ["/budget/categories", async (issues) => {
+      await page.getByRole("button", { name: /Set up next month/ }).click({ timeout: 8000 });
+      await page.waitForTimeout(300);
+      const create = sheet().getByRole("button", { name: /^Create .* plan$/ });
+      const label = (await create.textContent()) ?? "";
+      await create.click();
+      await requireFailedSave(label.trim(), issues);
+    }],
+    "add category validation": ["/budget/categories", async (issues) => {
+      await page.getByRole("button", { name: /Add category/ }).first().click({ timeout: 8000 });
+      await page.waitForTimeout(300);
+      // Creating a category takes no planned amount, so none is offered.
+      if (await sheet().getByLabel(/Planned amount/).count()) issues.push("Add category offers a planned amount it does not save");
+      await sheet().getByRole("button", { name: "Create category", exact: true }).click();
+      await requireInvalid(["Category name"], issues);
+    }],
+  };
+  await routeBudget(page.context());
+  try {
+    for (const viewport of viewports) {
+      for (const state of states) {
+        await page.setViewportSize({ width: viewport.width, height: viewport.height });
+        const [url, run] = prepare[state];
+        await page.goto(`${BASE}${url}`, { waitUntil: "domcontentloaded", timeout: 30000 });
+        await applyInsets(page, viewport);
+        await page.waitForTimeout(500);
+        const issues = [];
+        try {
+          await run(issues);
+        } catch (error) {
+          issues.push(`Could not prepare the state: ${error.message.split("\n")[0]}`);
+        }
+        await page.waitForTimeout(200);
+        if (!(await sheet().locator("form.form-layout").count())) issues.push("The sheet's form is not on the shared form layout");
+        const layout = await inspectLayout(page, viewport, true);
+        issues.push(...layout.issues.map(issueText));
+        const screenshot = await capture(page, `budget-${state}`, viewport, `budget-${state}`);
+        budgetResults.push({ viewport: viewport.name, state, result: issues.length ? "FAIL" : "PASS", issues, screenshot, details: layout.issues.slice(0, 40) });
+        for (let attempt = 0; attempt < 3 && await page.locator(".bottom-sheet").count(); attempt += 1) {
+          await page.keyboard.press("Escape").catch(() => {});
+          await page.waitForTimeout(100);
+        }
+      }
+    }
+  } finally {
+    await page.context().unroute(BUDGET_ROUTE);
+  }
+  return budgetResults;
+}
+
+// Meal Plans, Lists and Wishlists are measured against fixtures served in the
+// audit's own browser, like Budget and Driveway: every request these pages
+// make for their own data is answered here, with long names and full forms,
+// so the result does not depend on the account's own meals, lists or
+// wishlists, or on its plan. Every write (POST, PUT, PATCH, DELETE) is
+// rejected in the browser, so nothing is created, changed or deleted. The
+// wishlist is the signed-in member's own, so only the owner view (which has
+// no reservation fields at all) is ever served.
+const HOME_MODULE_ROUTES = {
+  homeModules: /\/api\/v1\/homes\/[^/]+\/(meal-plan|meals|lists|list-templates|wishlists)(\/[^?]*)?(\?.*)?$/,
+  topWishlists: /\/api\/v1\/wishlists(\/[^?]*)?(\?.*)?$/,
+  billing: /\/api\/v1\/groups\/[^/]+\/billing(\?.*)?$/,
+};
+const P2E_REJECTION = `The audit rejected this save on purpose. ${LONG_TEXT}`;
+const P2E_IDS = {
+  meal: "0aa0e2e0-0000-4000-8000-000000000001",
+  entry: "0aa0e2e0-0000-4000-8000-000000000002",
+  list: "0aa0e2e0-0000-4000-8000-000000000003",
+  section: "0aa0e2e0-0000-4000-8000-000000000004",
+  item: "0aa0e2e0-0000-4000-8000-000000000005",
+  template: "0aa0e2e0-0000-4000-8000-000000000006",
+  wishlist: "0aa0e2e0-0000-4000-8000-000000000007",
+  wishItem: "0aa0e2e0-0000-4000-8000-000000000008",
+};
+const P2E_NAMES = {
+  entry: "Audit fixture — slow-cooked lamb shoulder with rosemary roasties",
+  meal: "Audit fixture — Grandma's Sunday roast chicken with all the trimmings",
+  list: "Audit fixture — Big weekly shop for the whole household",
+  item: "Audit fixture — Free-range eggs, the large box for weekend baking",
+  wishlist: "Audit fixture — Birthday wishlist for the big four-oh celebration",
+  wishItem: "Audit fixture — Noise-cancelling over-ear headphones in midnight blue",
+};
+
+function homeModuleFixtures({ ownerId }) {
+  const stamp = "2026-01-01T00:00:00Z";
+  // Only the signed-in member eats, so in a Home with more members the
+  // member list is shown open on Edit.
+  const members = [ownerId];
+  const ingredients = Array.from({ length: 9 }, (_, index) => ({
+    id: `0aa0e2e0-0000-4000-8001-${String(index).padStart(12, "0")}`, position: index,
+    text: ["Whole free-range chicken", "Maris Piper potatoes", "Carrots", "Parsnips", "Fresh rosemary and thyme", "Garlic bulb", "Unsalted butter", "Chicken stock", "Plain flour for the gravy"][index],
+    quantity: ["1.8", "1", "4", "4", "1", "1", "50", "500", "2"][index], unit: ["kg", "kg", null, null, "bunch", null, "g", "ml", "tbsp"][index],
+  }));
+  const meal = {
+    id: P2E_IDS.meal, name: P2E_NAMES.meal, description: LONG_TEXT, image_url: null, meal_type: "dinner",
+    prep_minutes: 25, cook_minutes: 95, servings: 6, instructions: `${LONG_TEXT}\n\n${LONG_TEXT}`, is_favourite: true,
+    tags: ["sunday", "family favourite", "make ahead"], source_url: "https://www.example.com/recipes/sunday-roast-chicken-with-all-the-trimmings",
+    ingredients, created_by: ownerId, created_at: stamp, updated_at: stamp,
+  };
+  const mealSummary = {
+    id: meal.id, name: meal.name, description: meal.description, image_url: null, meal_type: meal.meal_type,
+    prep_minutes: meal.prep_minutes, cook_minutes: meal.cook_minutes, servings: meal.servings, is_favourite: true,
+    tags: meal.tags, ingredient_count: ingredients.length, created_at: stamp, updated_at: stamp,
+  };
+  const entry = (date) => ({
+    id: P2E_IDS.entry, meal_id: null, meal_name: null, quick_meal_name: P2E_NAMES.entry, meal_image_url: null,
+    is_favourite: false, date, meal_slot: "dinner", time: "18:30", member_ids: members, cook_member_id: ownerId,
+    makes_leftovers: true, created_by: ownerId, updated_at: stamp,
+  });
+  const list = {
+    id: P2E_IDS.list, name: P2E_NAMES.list, icon: null, item_count: 1, remaining_count: 1, created_by: ownerId,
+    scope: "household", created_at: stamp, updated_at: stamp, commercial_access: "normal",
+  };
+  const listDetail = {
+    ...list,
+    items: [{ id: P2E_IDS.item, position: 0, section_id: P2E_IDS.section, text: P2E_NAMES.item, quantity: "2 dozen", note: LONG_TEXT, assigned_member_id: ownerId, is_checked: false, completed_at: null, completed_by: null }],
+    sections: [{ id: P2E_IDS.section, name: "Dairy, eggs and chilled", position: 0, updated_at: stamp, items: [] }],
+    source_template_id: null, source_template_name: null,
+  };
+  const template = {
+    id: P2E_IDS.template, name: "Audit fixture — Weekly shop template", description: LONG_TEXT, scope: "household",
+    owner_user_id: ownerId, group_id: "", archived: false, created_at: stamp, updated_at: stamp,
+    sections: [{ id: P2E_IDS.section, name: "Fruit and vegetables", position: 0, items: [{ id: "0aa0e2e0-0000-4000-8002-000000000001", text: "Bananas", position: 0 }] }],
+  };
+  const wishItem = {
+    id: P2E_IDS.wishItem, name: P2E_NAMES.wishItem, url: "https://www.example.com/products/noise-cancelling-over-ear-headphones-midnight-blue",
+    price: "279.99", currency: "GBP", note: LONG_TEXT, image_url: null, quantity: 1, sort_order: 0, created_at: stamp, updated_at: stamp,
+  };
+  const wishlistBase = {
+    id: P2E_IDS.wishlist, title: P2E_NAMES.wishlist, occasion: "birthday", occasion_date: "2027-03-14", description: LONG_TEXT,
+    owner_user_id: ownerId, home_visible: true, share_count: 2, created_at: stamp, updated_at: stamp,
+  };
+  return { meal, mealSummary, entry, list, listDetail, template, wishItem, wishlistBase };
+}
+
+async function routeHomeModules(context, owners) {
+  const fixtures = homeModuleFixtures(owners);
+  const json = (route, status, body) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
+  const addDays = (date, days) => { const next = new Date(`${date}T00:00:00Z`); next.setUTCDate(next.getUTCDate() + days); return next.toISOString().slice(0, 10); };
+  await context.route(HOME_MODULE_ROUTES.billing, async (route) => {
+    if (route.request().method() !== "GET") return route.fallback();
+    const response = await route.fetch();
+    const billing = await response.json();
+    await route.fulfill({ response, json: { ...billing, meals_enabled: true, lists_enabled: true, wishlists_enabled: true, list_usage: { count: 1, limit: null, over_limit: false } } });
+  });
+  await context.route(HOME_MODULE_ROUTES.homeModules, async (route) => {
+    const request = route.request();
+    if (request.method() !== "GET") return json(route, 422, { detail: P2E_REJECTION });
+    const url = new URL(request.url());
+    const [, homeId, module, rest = ""] = url.pathname.match(/\/homes\/([^/]+)\/(meal-plan|meals|lists|list-templates|wishlists)(\/[^?]*)?$/) ?? [];
+    if (module === "meal-plan" && rest === "/day") { const date = url.searchParams.get("date"); return json(route, 200, { date, entries: [fixtures.entry(date)] }); }
+    if (module === "meal-plan" && rest === "/week") { const start = url.searchParams.get("start_date"); return json(route, 200, { start_date: start, days: Array.from({ length: 7 }, (_, index) => ({ date: addDays(start, index), entries: [fixtures.entry(addDays(start, index))] })) }); }
+    if (module === "meals" && rest === "") return json(route, 200, { items: [fixtures.mealSummary] });
+    if (module === "meals" && rest === "/recent") return json(route, 200, { items: [] });
+    if (module === "meals" && rest === `/${P2E_IDS.meal}`) return json(route, 200, fixtures.meal);
+    if (module === "lists" && rest === "") return json(route, 200, { items: [fixtures.list] });
+    if (module === "lists" && rest === `/${P2E_IDS.list}`) return json(route, 200, fixtures.listDetail);
+    if (module === "list-templates" && rest === "") return json(route, 200, { items: [{ ...fixtures.template, group_id: homeId }] });
+    if (module === "wishlists" && rest === "") return json(route, 200, { items: [{ ...fixtures.wishlistBase, home_id: homeId, owner_display_name: "You", item_count: 1, is_owner: true }] });
+    return json(route, 404, { detail: "Not found" });
+  });
+  await context.route(HOME_MODULE_ROUTES.topWishlists, async (route) => {
+    const request = route.request();
+    if (request.method() !== "GET") return json(route, 422, { detail: P2E_REJECTION });
+    const rest = new URL(request.url()).pathname.replace(/^.*\/api\/v1\/wishlists/, "");
+    if (rest === "/shared-with-me") return json(route, 200, { items: [] });
+    if (rest === `/${P2E_IDS.wishlist}`) return json(route, 200, { ...fixtures.wishlistBase, home_id: owners.homeId, items: [fixtures.wishItem] });
+    return json(route, 404, { detail: "Not found" });
+  });
+}
+
+async function unrouteHomeModules(context) {
+  for (const pattern of Object.values(HOME_MODULE_ROUTES)) await context.unroute(pattern);
+}
+
+// The Meal Plans, Lists and Wishlists forms on the shared form primitives:
+// empty create forms, filled edit forms with long values, validation errors,
+// failed saves, opened disclosures, long ingredient lists and the share form.
+// Every state is a sheet, measured with scroll-to-reveal reachability.
+async function auditHomeModuleForms(page) {
+  const moduleResults = [];
+  const sheet = () => page.locator(".bottom-sheet").last();
+  const requireInvalid = async (selectors, issues) => {
+    for (const [label, selector] of selectors) {
+      const field = typeof selector === "string" ? sheet().locator(selector) : selector;
+      if ((await field.first().getAttribute("aria-invalid").catch(() => null)) !== "true") issues.push(`"${label}" is not marked invalid`);
+    }
+  };
+  const requireFailedSave = async (primary, issues) => {
+    await sheet().locator(".notice.error", { hasText: "The audit rejected" }).first()
+      .waitFor({ timeout: 5000 }).catch(() => issues.push("The failed save was not shown inside the sheet"));
+    if (await sheet().getByRole("button", { name: primary, exact: true }).isDisabled().catch(() => true)) issues.push(`${primary} stayed disabled after the failed save`);
+    if (await sheet().getByRole("button", { name: "Cancel", exact: true }).isDisabled().catch(() => true)) issues.push("Cancel stayed disabled after the failed save");
+  };
+  const settle = (ms = 300) => page.waitForTimeout(ms);
+  const openEntryEdit = async () => {
+    await page.getByRole("button", { name: new RegExp(P2E_NAMES.entry.slice(0, 30)) }).first().click({ timeout: 8000 });
+    await settle();
+    await sheet().getByRole("button", { name: "Edit meal" }).click({ timeout: 3000 });
+    await settle();
+  };
+  const openAddPlannedMeal = async () => {
+    const slotAdd = page.locator(".mealplan-slot-add:visible").first();
+    if (await slotAdd.count()) await slotAdd.click({ timeout: 8000 });
+    else await page.getByRole("button", { name: "Add meal" }).first().click({ timeout: 8000 });
+    await settle();
+  };
+  const openMealsTab = async () => {
+    await page.getByRole("tab", { name: "Meals" }).click({ timeout: 8000 });
+    await settle(500);
+  };
+  const openMealDetail = async () => {
+    await openMealsTab();
+    await page.getByRole("button", { name: new RegExp(`^${P2E_NAMES.meal.slice(0, 30)}`) }).first().click({ timeout: 8000 });
+    await sheet().getByRole("button", { name: "Plan this meal" }).waitFor({ timeout: 8000 });
+  };
+  const openMealChoice = async (choice) => {
+    await openMealsTab();
+    await page.locator("button.rr-fab").click({ timeout: 8000 });
+    await settle();
+    await sheet().getByRole("button", { name: choice }).click({ timeout: 3000 });
+    await settle();
+  };
+  const openAllDisclosures = async () => {
+    for (const summary of await sheet().locator("details:not([open]) > summary").all()) await summary.click().catch(() => {});
+  };
+  const wishlistUrl = `/wish-lists/${P2E_IDS.wishlist}`;
+  const listUrl = `/lists/${P2E_IDS.list}`;
+  const prepare = {
+    "planned meal add empty": ["/meal-plans", async () => { await openAddPlannedMeal(); }],
+    "planned meal add validation": ["/meal-plans", async (issues) => {
+      await openAddPlannedMeal();
+      await sheet().getByRole("button", { name: "Quick meal" }).click();
+      await sheet().locator('input[type="date"]').fill("");
+      await sheet().getByRole("button", { name: "Save", exact: true }).click();
+      await requireInvalid([["Quick meal name", 'input[name="quickName"]'], ["Date", 'input[name="date"]']], issues);
+    }],
+    "planned meal edit filled": ["/meal-plans", async (issues) => {
+      await openEntryEdit();
+      if ((await sheet().locator('input[name="quickName"]').inputValue().catch(() => "")) !== P2E_NAMES.entry) issues.push("The planned meal was not shown as saved");
+    }],
+    "planned meal failed save": ["/meal-plans", async (issues) => {
+      await openEntryEdit();
+      await sheet().getByRole("button", { name: "Save", exact: true }).click();
+      await requireFailedSave("Save", issues);
+    }],
+    "saved meal add empty": ["/meal-plans", async () => { await openMealChoice(/Create a meal/); }],
+    "saved meal validation": ["/meal-plans", async (issues) => {
+      await openMealChoice(/Create a meal/);
+      await sheet().getByLabel("Name", { exact: true }).fill("   ");
+      await sheet().getByLabel("Prep (minutes)", { exact: true }).fill("-5");
+      await sheet().getByLabel("Servings", { exact: true }).fill("0");
+      await sheet().getByRole("button", { name: "Save meal", exact: true }).click();
+      await requireInvalid([["Name", sheet().getByLabel("Name", { exact: true })], ["Prep (minutes)", sheet().getByLabel("Prep (minutes)", { exact: true })], ["Servings", sheet().getByLabel("Servings", { exact: true })]], issues);
+    }],
+    "saved meal edit long form": ["/meal-plans", async (issues) => {
+      await openMealDetail();
+      await sheet().getByRole("button", { name: "Edit meal" }).click({ timeout: 3000 });
+      await sheet().getByLabel("Name", { exact: true }).waitFor({ timeout: 8000 });
+      await openAllDisclosures();
+      if ((await sheet().locator(".meal-ingredient-card").count()) !== 9) issues.push("Not every ingredient was shown");
+    }],
+    "saved meal failed save": ["/meal-plans", async (issues) => {
+      await openMealDetail();
+      await sheet().getByRole("button", { name: "Edit meal" }).click({ timeout: 3000 });
+      await sheet().getByLabel("Name", { exact: true }).waitFor({ timeout: 8000 });
+      await sheet().getByRole("button", { name: "Save meal", exact: true }).click();
+      await requireFailedSave("Save meal", issues);
+    }],
+    "import recipe validation": ["/meal-plans", async (issues) => {
+      await openMealChoice(/Import from a recipe/);
+      await sheet().getByLabel("Recipe URL", { exact: true }).fill("not a link");
+      await sheet().getByRole("button", { name: "Import recipe", exact: true }).click();
+      await requireInvalid([["Recipe URL", sheet().getByLabel("Recipe URL", { exact: true })]], issues);
+    }],
+    "import recipe failed": ["/meal-plans", async (issues) => {
+      await openMealChoice(/Import from a recipe/);
+      await sheet().getByLabel("Recipe URL", { exact: true }).fill("https://www.example.com/recipes/a-recipe-the-audit-will-not-import");
+      await sheet().getByRole("button", { name: "Import recipe", exact: true }).click();
+      await requireFailedSave("Import recipe", issues);
+      if (!(await sheet().getByRole("button", { name: "Add manually" }).count())) issues.push("Add manually was not offered after the failure");
+    }],
+    "plan this meal validation": ["/meal-plans", async (issues) => {
+      await openMealDetail();
+      await sheet().getByRole("button", { name: "Plan this meal" }).click();
+      await settle();
+      await sheet().getByLabel("Date", { exact: true }).fill("");
+      await sheet().getByRole("button", { name: "Add to plan", exact: true }).click();
+      await requireInvalid([["Date", sheet().getByLabel("Date", { exact: true })]], issues);
+    }],
+    "add ingredients to list": ["/meal-plans", async (issues) => {
+      await openMealDetail();
+      await sheet().getByRole("button", { name: /Add ingredients to list/ }).click();
+      await sheet().locator(".meal-ingredient-checklist .check-row").first().waitFor({ timeout: 8000 }).catch(() => issues.push("The ingredients were not listed"));
+      if (!(await sheet().getByRole("button", { name: /^Add \d+ items?$/ }).count())) issues.push("The add action is not in the sheet");
+    }],
+    "new wishlist validation": ["/wish-lists", async (issues) => {
+      await page.getByRole("button", { name: "New wishlist" }).first().click({ timeout: 8000 });
+      await settle();
+      await sheet().getByRole("button", { name: "Create wishlist", exact: true }).click();
+      await requireInvalid([["Title", sheet().getByLabel("Title", { exact: true })]], issues);
+    }],
+    "edit wishlist filled": [wishlistUrl, async (issues) => {
+      await page.getByRole("button", { name: "Wishlist actions" }).click({ timeout: 8000 });
+      await sheet().getByRole("button", { name: "Edit wishlist" }).click({ timeout: 3000 });
+      await settle();
+      if ((await sheet().getByLabel("Title", { exact: true }).inputValue()) !== P2E_NAMES.wishlist) issues.push("The wishlist was not shown as saved");
+    }],
+    "add item filled": [wishlistUrl, async () => {
+      await page.getByRole("button", { name: "Add item" }).first().click({ timeout: 8000 });
+      await settle();
+      await sheet().getByLabel("Item name", { exact: true }).fill(P2E_NAMES.wishItem);
+      await sheet().getByLabel("Link (optional)", { exact: true }).fill("https://www.example.com/products/a-very-long-product-link-that-keeps-going-and-going");
+      await sheet().getByLabel("Price (optional)", { exact: true }).fill("1249.99");
+      await sheet().getByLabel("Currency", { exact: true }).fill("GBP");
+      await sheet().getByLabel("Note (optional)", { exact: true }).fill(LONG_TEXT);
+    }],
+    "edit item failed save": [wishlistUrl, async (issues) => {
+      await page.getByRole("button", { name: `Edit ${P2E_NAMES.wishItem}` }).click({ timeout: 8000 });
+      await settle();
+      await sheet().getByRole("button", { name: "Save", exact: true }).click();
+      await requireFailedSave("Save", issues);
+    }],
+    "share wishlist validation": [wishlistUrl, async (issues) => {
+      await page.getByRole("button", { name: "Share wishlist" }).first().click({ timeout: 8000 });
+      await settle();
+      await sheet().getByLabel(/^Email/).fill("not-an-email");
+      await sheet().getByRole("button", { name: "Share wishlist", exact: true }).click();
+      await requireInvalid([["Name", sheet().getByLabel("Name", { exact: true })], ["Email", sheet().getByLabel(/^Email/)]], issues);
+    }],
+    "new list validation": ["/lists", async (issues) => {
+      await page.locator("button.rr-fab").click({ timeout: 8000 });
+      await settle();
+      await sheet().getByRole("button", { name: "Create list", exact: true }).click();
+      await requireInvalid([["List name", sheet().getByLabel("List name", { exact: true })]], issues);
+    }],
+    "new template sections": ["/lists", async (issues) => {
+      await page.getByRole("button", { name: "Templates" }).first().click({ timeout: 8000 });
+      await settle();
+      await page.locator("button.rr-fab").click({ timeout: 8000 });
+      await settle();
+      await sheet().getByLabel("Template name", { exact: true }).fill("Audit fixture — Template with several long section names");
+      for (let index = 0; index < 2; index += 1) await sheet().getByRole("button", { name: "Add section" }).click();
+      await sheet().getByLabel("Section 1 name").fill("Fruit, vegetables and fresh herbs from the market");
+      await sheet().getByRole("button", { name: "Add default item" }).first().click();
+      if ((await sheet().getByLabel(/^Section \d+ name$/).count()) !== 3) issues.push("Sections were not added");
+    }],
+    "rename list failed save": ["/lists", async (issues) => {
+      await page.getByRole("button", { name: `More actions for ${P2E_NAMES.list}` }).click({ timeout: 8000 });
+      await sheet().getByRole("button", { name: "Rename list" }).click({ timeout: 3000 });
+      await settle();
+      await sheet().getByRole("button", { name: "Save", exact: true }).click();
+      await requireFailedSave("Save", issues);
+    }],
+    "edit list item filled": [listUrl, async (issues) => {
+      await page.getByRole("button", { name: new RegExp(P2E_NAMES.item.slice(0, 30)) }).first().click({ timeout: 8000 });
+      await settle();
+      if ((await sheet().getByLabel("Item", { exact: true }).inputValue()) !== P2E_NAMES.item) issues.push("The item was not shown as saved");
+    }],
+    "edit list item validation": [listUrl, async (issues) => {
+      await page.getByRole("button", { name: new RegExp(P2E_NAMES.item.slice(0, 30)) }).first().click({ timeout: 8000 });
+      await settle();
+      await sheet().getByLabel("Item", { exact: true }).fill("   ");
+      await sheet().getByRole("button", { name: "Save", exact: true }).click();
+      await requireInvalid([["Item", sheet().getByLabel("Item", { exact: true })]], issues);
+    }],
+  };
+  const states = Object.keys(prepare);
+  await page.goto(`${BASE}/meal-plans`, { waitUntil: "domcontentloaded", timeout: 30000 });
+  const owners = await drivewayFixtureOwners(page);
+  if (!owners) {
+    for (const viewport of viewports) for (const state of states) moduleResults.push({ viewport: viewport.name, state, result: "NOT TESTED", issues: ["The account's Home could not be read for the fixtures"] });
+    return moduleResults;
+  }
+  await routeHomeModules(page.context(), owners);
+  try {
+    for (const viewport of viewports) {
+      for (const state of states) {
+        await page.setViewportSize({ width: viewport.width, height: viewport.height });
+        const [url, run] = prepare[state];
+        await page.goto(`${BASE}${url}`, { waitUntil: "domcontentloaded", timeout: 30000 });
+        await applyInsets(page, viewport);
+        await page.waitForTimeout(600);
+        const issues = [];
+        try {
+          await run(issues);
+        } catch (error) {
+          issues.push(`Could not prepare the state: ${error.message.split("\n")[0]}`);
+        }
+        await page.waitForTimeout(200);
+        if (!(await sheet().locator(".form-layout").count())) issues.push("The sheet's form is not on the shared form layout");
+        const layout = await inspectLayout(page, viewport, true);
+        issues.push(...layout.issues.map(issueText));
+        const screenshot = await capture(page, `p2e-${state}`, viewport, `p2e-${state}`);
+        moduleResults.push({ viewport: viewport.name, state, result: issues.length ? "FAIL" : "PASS", issues, screenshot, details: layout.issues.slice(0, 40) });
+        for (let attempt = 0; attempt < 4 && await page.locator(".bottom-sheet").count(); attempt += 1) {
+          await page.keyboard.press("Escape").catch(() => {});
+          await page.waitForTimeout(100);
+        }
+      }
+    }
+  } finally {
+    await unrouteHomeModules(page.context());
+  }
+  return moduleResults;
+}
+
+// The Calendar toolbar (Phase 3): month navigation on one row, then the
+// Everyone and view pickers with the Tags pill on a row that wraps where the
+// space runs out. Two states per viewport: Month, and Schedule, the widest
+// view label. Choosing a view only changes this browser's local preference,
+// and it is set back to Month afterwards.
+// 0.78rem on the 15px root: the desktop pills must stay exactly as they were.
+const DESKTOP_PILL_FONT_SIZE = 11.7;
+
+function measureCalendarToolbar({ touch, desktopSize }) {
+  const issues = [];
+  const header = document.querySelector(".calendar-toolbar-compact");
+  if (!header) return ["The Calendar toolbar was not rendered"];
+  // Measured where a person reaches it, at the top of the page: Calendar
+  // scrolls itself to today, which can leave the toolbar above the viewport.
+  const scrollers = [document.scrollingElement, document.querySelector(".app-content-scroll-region")].filter(Boolean);
+  const positions = scrollers.map((element) => element.scrollTop);
+  scrollers.forEach((element) => { element.scrollTop = 0; });
+  const shown = (element) => {
+    const rect = element.getBoundingClientRect();
+    const style = getComputedStyle(element);
+    return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+  };
+  const round = (value) => Math.round(value * 10) / 10;
+  const toolbar = header.getBoundingClientRect();
+  const viewportWidth = document.documentElement.clientWidth;
+  const pickers = [["Everyone", 'select[aria-label="Filter by household member"]'], ["view", 'select[aria-label="Calendar view"]']]
+    .map(([name, selector]) => [name, header.querySelector(selector)]);
+  const tags = header.querySelector('button[aria-label="Filter by Calendar Tags"]');
+  const canvas = document.createElement("canvas").getContext("2d");
+  for (const [name, picker] of pickers) {
+    if (!picker || !shown(picker)) {
+      issues.push(`The ${name} picker is not shown`);
+      continue;
+    }
+    const style = getComputedStyle(picker);
+    const size = parseFloat(style.fontSize);
+    const rect = picker.getBoundingClientRect();
+    if (touch) {
+      if (size < 16 - 0.01) issues.push(`The ${name} picker's text is ${size}px on a touch profile (minimum 16px: iOS focus zoom)`);
+      if (rect.height < 44 - 0.5) issues.push(`The ${name} picker is ${round(rect.height)}px tall on a touch profile (minimum 44px)`);
+    } else if (Math.abs(size - desktopSize) > 0.05) {
+      issues.push(`The ${name} picker's text is ${size}px on desktop (expected the unchanged ${desktopSize}px)`);
+    }
+    // The chosen option's text must fit between the pill's padding (the
+    // chevron sits in the right padding), so nothing is cut off.
+    canvas.font = `${style.fontWeight} ${style.fontSize} ${style.fontFamily}`;
+    const text = picker.options[picker.selectedIndex]?.text ?? "";
+    const room = rect.width - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight) - parseFloat(style.borderLeftWidth) - parseFloat(style.borderRightWidth);
+    if (canvas.measureText(text).width > room + 1) issues.push(`The ${name} picker cuts off "${text}" (${round(canvas.measureText(text).width)}px of text in ${round(room)}px)`);
+  }
+  if (tags && pickers[0][1] && getComputedStyle(tags).fontSize !== getComputedStyle(pickers[0][1]).fontSize) {
+    issues.push(`The Tags pill's text (${getComputedStyle(tags).fontSize}) no longer matches the pickers' (${getComputedStyle(pickers[0][1]).fontSize})`);
+  }
+  // Every control inside the toolbar and the viewport, and none overlapping.
+  const controls = [...header.querySelectorAll("button, a[href], select, input")].filter(shown);
+  for (const control of controls) {
+    const rect = control.getBoundingClientRect();
+    const name = control.getAttribute("aria-label") || control.textContent.trim() || control.tagName.toLowerCase();
+    if (rect.left < toolbar.left - 0.5 || rect.right > toolbar.right + 0.5) issues.push(`"${name}" extends outside the toolbar`);
+    if (rect.left < -0.5 || rect.right > viewportWidth + 0.5) issues.push(`"${name}" extends outside the viewport`);
+  }
+  for (let index = 0; index < controls.length; index += 1) {
+    for (let other = index + 1; other < controls.length; other += 1) {
+      if (controls[index].contains(controls[other]) || controls[other].contains(controls[index])) continue;
+      const a = controls[index].getBoundingClientRect();
+      const b = controls[other].getBoundingClientRect();
+      if (a.left < b.right - 1 && a.right > b.left + 1 && a.top < b.bottom - 1 && a.bottom > b.top + 1) {
+        issues.push(`"${controls[index].getAttribute("aria-label") || controls[index].textContent.trim()}" overlaps "${controls[other].getAttribute("aria-label") || controls[other].textContent.trim()}"`);
+      }
+    }
+  }
+  // Month navigation: Previous, the month and Next on one line, reachable.
+  const previous = header.querySelector('button[aria-label="Previous period"]');
+  const next = header.querySelector('button[aria-label="Next period"]');
+  const label = header.querySelector(".calendar-month-label");
+  for (const [name, element] of [["Previous period", previous], ["Next period", next], ["month label", label]]) {
+    if (!element || !shown(element)) {
+      issues.push(`Month navigation: ${name} is not shown`);
+      continue;
+    }
+    if (element === label) continue;
+    const rect = element.getBoundingClientRect();
+    const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+    if (!hit || (hit !== element && !element.contains(hit))) issues.push(`Month navigation: ${name} is covered by another element`);
+  }
+  const monthRow = header.querySelector(".calendar-month-row");
+  if (monthRow) {
+    const centres = [...monthRow.children].filter(shown).map((child) => { const rect = child.getBoundingClientRect(); return (rect.top + rect.bottom) / 2; });
+    if (centres.length && Math.max(...centres) - Math.min(...centres) > 4) issues.push("Month navigation wrapped onto more than one line");
+  }
+  if (label && label.scrollWidth > label.clientWidth + 1) issues.push(`The month label "${label.textContent.trim()}" is cut off`);
+  scrollers.forEach((element, index) => { element.scrollTop = positions[index]; });
+  return issues;
+}
+
+async function auditCalendarToolbar(page) {
+  const toolbarResults = [];
+  for (const viewport of viewports) {
+    for (const state of ["month", "schedule"]) {
+      await page.setViewportSize({ width: viewport.width, height: viewport.height });
+      await page.goto(`${BASE}/calendar`, { waitUntil: "domcontentloaded", timeout: 30000 });
+      await applyInsets(page, viewport);
+      await page.waitForLoadState("networkidle", { timeout: 5000 }).catch(() => {});
+      const issues = [];
+      const view = page.getByLabel("Calendar view", { exact: true });
+      try {
+        // The view picker stays hidden until the saved view is restored.
+        await view.waitFor({ state: "visible", timeout: 8000 });
+        await view.selectOption(state === "schedule" ? "agenda" : "month");
+        await page.locator(state === "schedule" ? ".agenda-view" : ".calendar-month-swipe, .calendar-month").first().waitFor({ timeout: 8000 })
+          .catch(() => issues.push(`Choosing ${state === "schedule" ? "Schedule" : "Month"} did not show that view`));
+      } catch (error) {
+        issues.push(`Could not prepare the state: ${error.message.split("\n")[0]}`);
+      }
+      await page.waitForTimeout(200);
+      issues.push(...await page.evaluate(measureCalendarToolbar, { touch: Boolean(viewport.touch), desktopSize: DESKTOP_PILL_FONT_SIZE }));
+      const layout = await inspectLayout(page, viewport);
+      issues.push(...layout.issues.map(issueText));
+      const filename = `calendar-toolbar-${state}-${viewport.name}.png`;
+      // Captured at the top of the page, as measured, not under the fixed header.
+      await page.evaluate(() => [document.scrollingElement, document.querySelector(".app-content-scroll-region")].forEach((element) => { if (element) element.scrollTop = 0; }));
+      await page.locator(".calendar-toolbar-compact").screenshot({ path: path.join(outputDir, filename) }).catch(() => issues.push("Could not capture the toolbar"));
+      screenshots.push({ filename, route: "/calendar", viewport: viewport.name });
+      toolbarResults.push({ viewport: viewport.name, state, result: issues.length ? "FAIL" : "PASS", issues, screenshot: filename, details: layout.issues.slice(0, 40) });
+      if (state === "schedule") await view.selectOption("month").catch(() => {});
+    }
+  }
+  return toolbarResults;
+}
+
+// The remaining consumer forms on the shared form primitives (Phase 2F):
+// Help & Support, Calendar's calendars and sharing, Calendar Tags and the
+// Members invitation. They are measured on the account's own pages, but
+// every API write (any non-GET request) is rejected in the audit's browser
+// for the whole section, so no ticket, calendar, share, tag or invitation
+// is created and no email is sent. Support is served as enabled so its forms
+// are always reachable.
+const REMAINING_FORM_ROUTES = {
+  writes: /\/api\/v1\//,
+  publicConfig: /\/api\/v1\/config\/public(\?.*)?$/,
+};
+const REMAINING_REJECTION = `The audit rejected this save on purpose. ${LONG_TEXT}`;
+
+async function routeRemainingForms(context) {
+  await context.route(REMAINING_FORM_ROUTES.publicConfig, async (route) => {
+    const response = await route.fetch();
+    const config = await response.json().catch(() => ({}));
+    await route.fulfill({ response, json: { ...config, support_enabled: true } });
+  });
+  await context.route(REMAINING_FORM_ROUTES.writes, (route) => route.request().method() === "GET"
+    ? route.fallback()
+    : route.fulfill({ status: 422, contentType: "application/json", body: JSON.stringify({ detail: REMAINING_REJECTION }) }));
+}
+
+async function auditRemainingForms(page) {
+  const remainingResults = [];
+  const scope = async () => (await page.locator(".bottom-sheet").count()) ? page.locator(".bottom-sheet").last() : page.locator("main").first();
+  const requireInvalid = async (labels, issues) => {
+    const root = await scope();
+    for (const label of labels) {
+      const field = root.getByLabel(label, { exact: true });
+      if ((await field.first().getAttribute("aria-invalid").catch(() => null)) !== "true") issues.push(`"${label}" is not marked invalid`);
+    }
+  };
+  const requireFailedSend = async (button, issues) => {
+    const root = await scope();
+    await root.locator(".notice.error", { hasText: "The audit rejected" }).first().waitFor({ timeout: 5000 }).catch(() => issues.push("The failed send was not shown in the form"));
+    if (await root.getByRole("button", { name: button }).isDisabled().catch(() => true)) issues.push(`${button} stayed disabled after the failure`);
+  };
+  const settle = (ms = 400) => page.waitForTimeout(ms);
+  const prepare = {
+    "contact support validation": ["/help-support/contact-support", async (issues) => {
+      await page.getByRole("button", { name: /Send request/ }).click({ timeout: 8000 });
+      await requireInvalid(["Subject", "Message"], issues);
+    }],
+    "contact support failed send": ["/help-support/contact-support", async (issues) => {
+      await page.getByLabel("Subject", { exact: true }).fill("The calendar shows the wrong week after changing the start day in settings");
+      await page.getByLabel("Message", { exact: true }).fill(`${LONG_TEXT} ${LONG_TEXT}`);
+      await page.getByRole("button", { name: /Send request/ }).click({ timeout: 8000 });
+      await requireFailedSend(/Send request/, issues);
+    }],
+    "report bug validation": ["/help-support/report-bug", async (issues) => {
+      await page.getByRole("button", { name: /Send report/ }).click({ timeout: 8000 });
+      await requireInvalid(["What went wrong?", "What happened?"], issues);
+    }],
+    "report bug failed send": ["/help-support/report-bug", async (issues) => {
+      await page.getByLabel("What went wrong?", { exact: true }).fill("Meal plan week view jumps back to today after saving");
+      await page.getByLabel("What happened?", { exact: true }).fill(`${LONG_TEXT} ${LONG_TEXT}`);
+      await page.getByRole("button", { name: /Send report/ }).click({ timeout: 8000 });
+      await requireFailedSend(/Send report/, issues);
+    }],
+    "add calendar validation": ["/calendar/calendars", async (issues) => {
+      await page.getByLabel("Calendar name", { exact: true }).fill("   ", { timeout: 8000 });
+      await page.getByRole("button", { name: "Add calendar" }).click();
+      await requireInvalid(["Calendar name"], issues);
+    }],
+    "calendar share invite validation": ["/calendar/calendars", async (issues) => {
+      await page.getByRole("button", { name: /Manage sharing/ }).first().click({ timeout: 8000 });
+      await settle();
+      const sheet = page.locator(".bottom-sheet").last();
+      await sheet.getByLabel("Email address", { exact: true }).fill("not-an-email");
+      await sheet.getByRole("button", { name: "Send invitation" }).click();
+      await requireInvalid(["Email address"], issues);
+    }],
+    "calendar tag create filled": ["/settings/calendar-tags", async () => {
+      await page.getByLabel("New Calendar Tag", { exact: true }).fill("Grandparents visiting", { timeout: 8000 });
+      await page.getByRole("button", { name: "Change new Calendar Tag colour" }).click();
+      await settle(200);
+    }],
+    "member invite validation": ["/settings/members", async (issues) => {
+      await page.getByRole("button", { name: /Add member/ }).first().click({ timeout: 8000 });
+      await settle();
+      await page.getByRole("button", { name: /Yes, they live here/ }).click({ timeout: 5000 });
+      await settle();
+      const root = await scope();
+      await root.getByLabel("Relationship", { exact: true }).selectOption("adult");
+      await root.getByLabel("Email", { exact: true }).fill("not-an-email");
+      await root.getByRole("button", { name: "Send invitation" }).click();
+      await requireInvalid(["Email"], issues);
+      // The layout inspector cannot see a checkbox squeezed by long text.
+      const sponsorship = root.locator('input[name="family_sponsorship"]');
+      if (await sponsorship.count()) {
+        const box = await sponsorship.boundingBox();
+        if (!box || box.width < 20) issues.push(`The Family access checkbox is ${box ? Math.round(box.width) : 0}px wide`);
+      }
+    }],
+  };
+  const states = Object.keys(prepare);
+  await routeRemainingForms(page.context());
+  try {
+    for (const viewport of viewports) {
+      for (const state of states) {
+        await page.setViewportSize({ width: viewport.width, height: viewport.height });
+        const [url, run] = prepare[state];
+        await page.goto(`${BASE}${url}`, { waitUntil: "domcontentloaded", timeout: 30000 });
+        await applyInsets(page, viewport);
+        await page.waitForLoadState("networkidle", { timeout: 5000 }).catch(() => {});
+        await page.waitForTimeout(300);
+        const issues = [];
+        try {
+          await run(issues);
+        } catch (error) {
+          issues.push(`Could not prepare the state: ${error.message.split("\n")[0]}`);
+        }
+        await page.waitForTimeout(200);
+        const inSheet = (await page.locator(".bottom-sheet").count()) > 0;
+        if (!(await (await scope()).locator(".form-layout").count())) issues.push("The form is not on the shared form layout");
+        const layout = await inspectLayout(page, viewport, inSheet);
+        issues.push(...layout.issues.map(issueText));
+        const screenshot = await capture(page, `p2f-${state}`, viewport, `p2f-${state}`);
+        remainingResults.push({ viewport: viewport.name, state, result: issues.length ? "FAIL" : "PASS", issues, screenshot, details: layout.issues.slice(0, 40) });
+        for (let attempt = 0; attempt < 3 && await page.locator(".bottom-sheet").count(); attempt += 1) {
+          await page.keyboard.press("Escape").catch(() => {});
+          await page.waitForTimeout(100);
+        }
+      }
+    }
+  } finally {
+    for (const pattern of Object.values(REMAINING_FORM_ROUTES)) await page.context().unroute(pattern);
+  }
+  return remainingResults;
+}
+
+// Driveway turned off for the Home: the overview shows that it is not
+// available, and a vehicle's pages offer no form. These states pass only when
+// the unavailable screen is what renders; they are never counted as coverage
+// of the forms above.
+async function auditDrivewayDisabled(page) {
+  const disabledResults = [];
+  await page.goto(`${BASE}/driveway`, { waitUntil: "domcontentloaded", timeout: 30000 });
+  const owners = await drivewayFixtureOwners(page);
+  const states = ["overview unavailable", "vehicle details unavailable"];
+  if (!owners) {
+    for (const viewport of viewports) for (const state of states) disabledResults.push({ viewport: viewport.name, state, result: "NOT TESTED", issues: ["The account's Home could not be read for the fixtures"] });
+    return disabledResults;
+  }
+  await routeDriveway(page.context(), { enabled: false, ...owners });
+  try {
+    for (const viewport of viewports) {
+      for (const state of states) {
+        await page.setViewportSize({ width: viewport.width, height: viewport.height });
+        const url = state === "overview unavailable" ? "/driveway" : `/driveway/${AUDIT_VEHICLE_ID}/details`;
+        await page.goto(`${BASE}${url}`, { waitUntil: "domcontentloaded", timeout: 30000 });
+        await applyInsets(page, viewport);
+        const issues = [];
+        const expected = state === "overview unavailable" ? /Driveway isn.t available for this Home/ : /That vehicle could not be found/;
+        await page.getByText(expected).first().waitFor({ timeout: 8000 }).catch(() => issues.push("The unavailable message was not shown"));
+        if (await page.locator(".drv-cards, form.vehicle-form").count()) issues.push("Vehicles or a form were shown while Driveway is off");
+        await page.waitForTimeout(150);
+        const layout = await inspectLayout(page, viewport);
+        issues.push(...layout.issues.map(issueText));
+        const screenshot = await capture(page, `driveway-disabled-${state}`, viewport, `driveway-disabled-${state}`);
+        disabledResults.push({ viewport: viewport.name, state, result: issues.length ? "FAIL" : "PASS", issues, screenshot, details: layout.issues.slice(0, 40) });
+      }
+    }
+  } finally {
+    await unrouteDriveway(page.context());
+  }
+  return disabledResults;
+}
+
+// The sign-in screen's states, each in a fresh signed-out browser context so
+// the state is set up deliberately rather than inherited from the host:
+// whether /login shows the remembered-account screen depends on a local
+// sign-in hint and on the browser reporting a platform authenticator, which
+// headless Chromium does or does not depending on the machine. The
+// remembered-account state uses a mocked hint and a virtual WebAuthn
+// authenticator; no real account, passkey or credential is involved.
+async function auditSignInStates(browser) {
+  const signInResults = [];
+  const states = ["password sign-in", "password shown", "remembered account"];
+  for (const viewport of viewports) {
+    for (const state of states) {
+      const context = await browser.newContext({ viewport: { width: viewport.width, height: viewport.height }, hasTouch: Boolean(viewport.touch) });
+      const page = await context.newPage();
+      const issues = [];
+      try {
+        if (state === "remembered account") {
+          try {
+            const cdp = await context.newCDPSession(page);
+            await cdp.send("WebAuthn.enable");
+            await cdp.send("WebAuthn.addVirtualAuthenticator", {
+              options: { protocol: "ctap2", transport: "internal", hasResidentKey: true, hasUserVerification: true, isUserVerified: true },
+            });
+          } catch (error) {
+            // The state cannot be set up in this browser: not tested, not passed.
+            signInResults.push({ viewport: viewport.name, state, result: "NOT TESTED", issues: [`No virtual authenticator: ${error.message.split("\n")[0]}`] });
+            continue;
+          }
+          await context.addInitScript(() => {
+            window.localStorage.setItem("mk_biometric_hint", JSON.stringify({ userId: "00000000-0000-0000-0000-000000000000", displayName: "Audit Example", avatarVersion: null }));
+          });
+        }
+        await page.goto(`${BASE}/login`, { waitUntil: "domcontentloaded", timeout: 30000 });
+        await applyInsets(page, viewport);
+        if (state === "remembered account") {
+          await page.getByRole("button", { name: "Sign in another way" }).waitFor({ timeout: 8000 });
+          if (!(await page.getByText("Audit Example").count())) issues.push("The remembered account was not shown");
+          if (await page.locator("#signin-password").count()) issues.push("The password form showed instead of the remembered account");
+        } else {
+          const password = page.locator("#signin-password");
+          await password.waitFor({ timeout: 8000 });
+          const toggle = page.getByRole("button", { name: "Show password" });
+          if (!(await toggle.count())) issues.push('No "Show password" control');
+          if (state === "password shown") {
+            await password.fill("not-a-real-password");
+            await toggle.click();
+            if ((await password.getAttribute("type")) !== "text") issues.push("Show password did not reveal the password");
+            if (!(await page.getByRole("button", { name: "Hide password" }).count())) issues.push('The control was not renamed "Hide password"');
+          }
+        }
+        await page.waitForTimeout(150);
+        const layout = await inspectLayout(page, viewport);
+        issues.push(...layout.issues.map(issueText));
+        const screenshot = await capture(page, `signin-${state}`, viewport, `signin-${state}`);
+        signInResults.push({ viewport: viewport.name, state, result: issues.length ? "FAIL" : "PASS", issues, screenshot, details: layout.issues.slice(0, 40) });
+      } catch (error) {
+        // Set up deliberately, so a state that does not appear is a failure.
+        signInResults.push({ viewport: viewport.name, state, result: "FAIL", issues: [`The state did not appear: ${error.message.split("\n")[0]}`] });
+      } finally {
+        await context.close();
+      }
+    }
+  }
+  return signInResults;
+}
+
+// Copy Event is measured on one fixture event served in the audit's own
+// browser, so every viewport has a copyable event whatever today's date is
+// and whatever events the account holds. The event is a one-off, owned by
+// the signed-in user, on the Home's primary calendar: the conditions under
+// which the event sheet offers Copy event. It is placed inside whichever
+// window the calendar asks for (the current hour of today when the window
+// includes now, so the month grid and the day agenda both show it). Every
+// event write is rejected in the browser, so nothing is created or changed.
+const COPY_EVENT_ROUTE = /\/api\/v1\/homes\/[^/]+\/events(\/[^?]*)?(\?.*)?$/;
+const COPY_EVENT_ID = "0aa0ce7e-0000-4000-8000-000000000001";
+
+function copyFixtureStart(url) {
+  const params = new URL(url).searchParams;
+  const hour = 3600000;
+  const now = Date.now();
+  const after = Date.parse(params.get("after") ?? "");
+  if (Number.isFinite(after)) return Math.ceil(after / hour) * hour + hour;
+  const from = Date.parse(params.get("start_at") ?? "");
+  const to = Date.parse(params.get("end_at") ?? "");
+  if (Number.isFinite(from) && Number.isFinite(to) && (now < from || now >= to)) return Math.floor((from + (to - from) / 2) / hour) * hour;
+  return Math.floor(now / hour) * hour;
+}
+
+function copyFixtureEvent(start, { ownerId, calendarId }) {
+  const startAt = new Date(start).toISOString();
+  return {
+    occurrence_id: `${COPY_EVENT_ID}:${startAt}`, event_id: COPY_EVENT_ID, calendar_id: calendarId,
+    title: "Responsive audit — Copy Event fixture", start_at: startAt, end_at: new Date(start + 3600000).toISOString(),
+    is_all_day: false, timezone: "Europe/London", description: LONG_TEXT, location_text: "Village hall, Church Lane",
+    label: null, calendar_color: "#2f6f5e", member_ids: [], recurrence: "none", recurrence_end_date: null,
+    reminder_minutes: 30, created_by: ownerId, updated_at: "2026-01-01T00:00:00Z", occurrence_start: startAt, is_overridden: false,
+  };
+}
+
+async function routeCopyEvent(context, owners) {
+  let last = copyFixtureEvent(copyFixtureStart(`${BASE}/`), owners);
+  const json = (route, status, body) => route.fulfill({ status, contentType: "application/json", body: JSON.stringify(body) });
+  await context.route(COPY_EVENT_ROUTE, async (route) => {
+    const request = route.request();
+    if (request.method() !== "GET") return json(route, 422, { detail: "Events are not written in the responsive audit." });
+    const rest = new URL(request.url()).pathname.replace(/^.*\/events/, "");
+    if (rest === "" || rest === "/upcoming") {
+      last = copyFixtureEvent(copyFixtureStart(request.url()), owners);
+      return json(route, 200, { items: [last], next_page: null });
+    }
+    if (rest === `/${COPY_EVENT_ID}`) return json(route, 200, { event: last, activity: [] });
+    return json(route, 404, { detail: "Not found" });
+  });
+}
+
+async function copyEventOwners(page) {
+  const owners = await drivewayFixtureOwners(page);
+  if (!owners) return null;
+  const calendars = (await apiCall(page, "GET", `/homes/${owners.homeId}/calendars`)).body;
+  const calendar = calendars?.items?.find((item) => item.is_primary && item.commercial_access === "normal") ?? calendars?.items?.find((item) => item.commercial_access === "normal");
+  return calendar ? { ownerId: owners.ownerId, calendarId: calendar.id } : null;
+}
+
+async function auditCopyEvent(page) {
+  const copyResults = [];
+  await page.goto(`${BASE}/calendar`, { waitUntil: "domcontentloaded", timeout: 30000 });
+  const owners = await copyEventOwners(page);
+  if (!owners) {
+    for (const viewport of viewports) copyResults.push({ viewport: viewport.name, result: "NOT TESTED", issues: ["The account's Home calendar could not be read for the fixture event"] });
+    return copyResults;
+  }
+  await routeCopyEvent(page.context(), owners);
+  try {
+    for (const viewport of viewports) await auditCopyEventAt(page, viewport, copyResults);
+  } finally {
+    await page.context().unroute(COPY_EVENT_ROUTE);
+  }
+  return copyResults;
+}
+
+async function auditCopyEventAt(page, viewport, copyResults) {
+  await page.setViewportSize({ width: viewport.width, height: viewport.height });
+  await page.goto(`${BASE}/calendar`, { waitUntil: "domcontentloaded", timeout: 30000 });
+  await applyInsets(page, viewport);
+  await page.waitForTimeout(700);
+  const copyButton = await openEventWithAction(page, "Copy event");
+  if (copyButton === undefined) {
+    copyResults.push({ viewport: viewport.name, result: "NOT TESTED", issues: ["The fixture event was not shown"] });
+    return;
+  }
+  if (!copyButton) {
+    copyResults.push({ viewport: viewport.name, result: "NOT TESTED", issues: ["The fixture event did not offer Copy event"] });
+    return;
+  }
+  await copyButton.click();
+  await page.waitForTimeout(250);
+  const copySheet = page.locator(".bottom-sheet").last();
+  const dateInputs = copySheet.locator('input[type="date"]');
+  const addDate = copySheet.getByRole("button", { name: /Add another date/i });
+  const issues = [];
+  if (await dateInputs.count() !== 1) issues.push("Expected one empty initial destination row");
+  if (await dateInputs.count() && await dateInputs.nth(0).inputValue()) issues.push("Initial destination date was preselected");
+  const initialCopyButton = copySheet.getByRole("button", { name: "Copy event", exact: true });
+  if (await initialCopyButton.count() && !(await initialCopyButton.isDisabled())) issues.push("Copy action was enabled before a destination date was selected");
+  if (await dateInputs.count() && await addDate.count()) {
+    await dateInputs.nth(0).fill("2030-11-07");
+    if (await dateInputs.nth(0).inputValue() !== "2030-11-07") issues.push("Changing the primary destination date did not replace its value");
+    await dateInputs.nth(0).fill("2030-11-05");
+    const firstTimes = copySheet.locator('input[type="time"]');
+    if (await firstTimes.count() === 2) {
+      await firstTimes.nth(0).fill("15:00");
+      await firstTimes.nth(1).fill("23:00");
+    }
+    await addDate.click();
+    await page.waitForTimeout(100);
+    const rowsAfterAdd = copySheet.locator('input[type="date"]');
+    if (await rowsAfterAdd.count() !== 2) issues.push("Add another date did not create an independent row");
+    if (await rowsAfterAdd.count() >= 2) await rowsAfterAdd.nth(1).fill("2030-11-07");
+    const secondTimes = copySheet.locator('input[type="time"]');
+    if (await secondTimes.count() === 4) {
+      await secondTimes.nth(2).fill("16:00");
+      await secondTimes.nth(3).fill("22:00");
+    }
+    const remove = copySheet.getByRole("button", { name: /Remove destination/i });
+    if (await remove.count()) {
+      await remove.last().click();
+      await page.waitForTimeout(100);
+      if (await copySheet.locator('input[type="date"]').count() !== 1) issues.push("Removing a destination did not preserve the primary row");
+      await addDate.click();
+      await copySheet.locator('input[type="date"]').nth(1).fill("2030-11-07");
+      const restoredTimes = copySheet.locator('input[type="time"]');
+      if (await restoredTimes.count() === 4) {
+        await restoredTimes.nth(2).fill("16:00");
+        await restoredTimes.nth(3).fill("22:00");
+      }
+    }
+  }
+  const timeInputs = copySheet.locator('input[type="time"]');
+  if (await timeInputs.count() !== 4) issues.push("Expected independent start/end inputs for both destination rows");
+  if (!(await copySheet.getByRole("button", { name: /Copy event \(2\)/i }).count())) issues.push("Multiple destination action was not enabled");
+  // A third row exercises sheet scrolling and footer clearance.
+  if (await addDate.count()) await addDate.click();
+  const layout = await inspectLayout(page, viewport, true);
+  issues.push(...layout.issues.map(issueText));
+  const screenshot = await capture(page, `calendar-copy-event-${viewport.name}`, viewport, "calendar-copy-event");
+  copyResults.push({ viewport: viewport.name, result: issues.length ? "FAIL" : "PASS", issues, screenshot, details: layout.issues.slice(0, 40) });
+  await page.keyboard.press("Escape").catch(() => {});
+}
+
+async function writeReport(auth, { copyResults, editorResults, nudgeResults, drivewayResults, drivewayDisabledResults, budgetResults, moduleResults, remainingResults, toolbarResults, signInResults }, run) {
+  for (const entry of results) {
+    if (entry.details?.length) entry.issues.push(`DOM details: ${JSON.stringify(entry.details)}`);
+  }
+  for (const entry of [...copyResults, ...editorResults, ...nudgeResults, ...drivewayResults, ...drivewayDisabledResults, ...budgetResults, ...moduleResults, ...remainingResults, ...toolbarResults, ...signInResults, ...sheetResults]) {
+    if (entry.details?.length) entry.issues.push(`DOM details: ${JSON.stringify(entry.details)}`);
+  }
+  const rows = results.map((entry) => `<tr class="${entry.result.toLowerCase()}"><td>${escapeHtml(entry.route)}</td><td>${escapeHtml(entry.viewport)}</td><td>${entry.status ?? ""}</td><td>${escapeHtml(entry.result)}</td><td>${entry.issues.map(escapeHtml).join("<br>") || "—"}</td><td>${entry.screenshot ? `<img src="${escapeHtml(entry.screenshot)}" loading="lazy" alt="${escapeHtml(entry.route)} ${escapeHtml(entry.viewport)}">` : ""}</td></tr>`).join("\n");
+  const copyRows = copyResults.map((entry) => `<tr class="${entry.result.toLowerCase().replaceAll(" ", "-")}"><td>${escapeHtml(entry.viewport)}</td><td>${escapeHtml(entry.result)}</td><td>${entry.issues.map(escapeHtml).join("<br>") || "—"}</td><td>${entry.screenshot ? `<img src="${escapeHtml(entry.screenshot)}" loading="lazy" alt="Copy Event ${escapeHtml(entry.viewport)}">` : ""}</td></tr>`).join("\n");
+  const editorRows = editorResults.map((entry) => `<tr class="${entry.result.toLowerCase().replaceAll(" ", "-")}"><td>${escapeHtml(entry.viewport)}</td><td>${escapeHtml(entry.state)}</td><td>${escapeHtml(entry.result)}</td><td>${entry.issues.map(escapeHtml).join("<br>") || "—"}</td><td>${entry.screenshot ? `<img src="${escapeHtml(entry.screenshot)}" loading="lazy" alt="Event editor ${escapeHtml(entry.state)} ${escapeHtml(entry.viewport)}">` : ""}</td></tr>`).join("\n");
+  const nudgeRows = nudgeResults.map((entry) => `<tr class="${entry.result.toLowerCase().replaceAll(" ", "-")}"><td>${escapeHtml(entry.form)}</td><td>${escapeHtml(entry.state)}</td><td>${escapeHtml(entry.viewport)}</td><td>${escapeHtml(entry.result)}</td><td>${entry.issues.map(escapeHtml).join("<br>") || "—"}</td><td>${entry.screenshot ? `<img src="${escapeHtml(entry.screenshot)}" loading="lazy" alt="${escapeHtml(entry.state)} ${escapeHtml(entry.viewport)}">` : ""}</td></tr>`).join("\n");
+  const drivewayRows = drivewayResults.map((entry) => `<tr class="${entry.result.toLowerCase().replaceAll(" ", "-")}"><td>${escapeHtml(entry.state)}</td><td>${escapeHtml(entry.viewport)}</td><td>${escapeHtml(entry.result)}</td><td>${entry.issues.map(escapeHtml).join("<br>") || "—"}</td><td>${entry.screenshot ? `<img src="${escapeHtml(entry.screenshot)}" loading="lazy" alt="${escapeHtml(entry.state)} ${escapeHtml(entry.viewport)}">` : ""}</td></tr>`).join("\n");
+  const drivewayDisabledRows = drivewayDisabledResults.map((entry) => `<tr class="${entry.result.toLowerCase().replaceAll(" ", "-")}"><td>${escapeHtml(entry.state)}</td><td>${escapeHtml(entry.viewport)}</td><td>${escapeHtml(entry.result)}</td><td>${entry.issues.map(escapeHtml).join("<br>") || "—"}</td><td>${entry.screenshot ? `<img src="${escapeHtml(entry.screenshot)}" loading="lazy" alt="${escapeHtml(entry.state)} ${escapeHtml(entry.viewport)}">` : ""}</td></tr>`).join("\n");
+  const budgetRows = budgetResults.map((entry) => `<tr class="${entry.result.toLowerCase().replaceAll(" ", "-")}"><td>${escapeHtml(entry.state)}</td><td>${escapeHtml(entry.viewport)}</td><td>${escapeHtml(entry.result)}</td><td>${entry.issues.map(escapeHtml).join("<br>") || "—"}</td><td>${entry.screenshot ? `<img src="${escapeHtml(entry.screenshot)}" loading="lazy" alt="${escapeHtml(entry.state)} ${escapeHtml(entry.viewport)}">` : ""}</td></tr>`).join("\n");
+  const moduleRows = moduleResults.map((entry) => `<tr class="${entry.result.toLowerCase().replaceAll(" ", "-")}"><td>${escapeHtml(entry.state)}</td><td>${escapeHtml(entry.viewport)}</td><td>${escapeHtml(entry.result)}</td><td>${entry.issues.map(escapeHtml).join("<br>") || "—"}</td><td>${entry.screenshot ? `<img src="${escapeHtml(entry.screenshot)}" loading="lazy" alt="${escapeHtml(entry.state)} ${escapeHtml(entry.viewport)}">` : ""}</td></tr>`).join("\n");
+  const remainingRows = remainingResults.map((entry) => `<tr class="${entry.result.toLowerCase().replaceAll(" ", "-")}"><td>${escapeHtml(entry.state)}</td><td>${escapeHtml(entry.viewport)}</td><td>${escapeHtml(entry.result)}</td><td>${entry.issues.map(escapeHtml).join("<br>") || "—"}</td><td>${entry.screenshot ? `<img src="${escapeHtml(entry.screenshot)}" loading="lazy" alt="${escapeHtml(entry.state)} ${escapeHtml(entry.viewport)}">` : ""}</td></tr>`).join("\n");
+  const toolbarRows = toolbarResults.map((entry) => `<tr class="${entry.result.toLowerCase().replaceAll(" ", "-")}"><td>${escapeHtml(entry.state)}</td><td>${escapeHtml(entry.viewport)}</td><td>${escapeHtml(entry.result)}</td><td>${entry.issues.map(escapeHtml).join("<br>") || "—"}</td><td>${entry.screenshot ? `<img src="${escapeHtml(entry.screenshot)}" loading="lazy" alt="Calendar toolbar ${escapeHtml(entry.state)} ${escapeHtml(entry.viewport)}">` : ""}</td></tr>`).join("\n");
+  const signInRows = signInResults.map((entry) => `<tr class="${entry.result.toLowerCase().replaceAll(" ", "-")}"><td>${escapeHtml(entry.state)}</td><td>${escapeHtml(entry.viewport)}</td><td>${escapeHtml(entry.result)}</td><td>${entry.issues.map(escapeHtml).join("<br>") || "—"}</td><td>${entry.screenshot ? `<img src="${escapeHtml(entry.screenshot)}" loading="lazy" alt="${escapeHtml(entry.state)} ${escapeHtml(entry.viewport)}">` : ""}</td></tr>`).join("\n");
+  const sheetRows = sheetResults.map((entry) => `<tr class="${entry.result.toLowerCase().replaceAll(" ", "-")}"><td>${escapeHtml(entry.route)}</td><td>${escapeHtml(entry.title ?? "")}</td><td>${escapeHtml(entry.viewport)}</td><td>${escapeHtml(entry.result)}</td><td>${entry.issues.map(escapeHtml).join("<br>") || "—"}</td><td>${entry.screenshot ? `<img src="${escapeHtml(entry.screenshot)}" loading="lazy" alt="">` : ""}</td></tr>`).join("\n");
+  const html = `<!doctype html><meta charset="utf-8"><title>MyKhaya Responsive Audit</title><style>body{font:14px system-ui;margin:24px;color:#24312d}table{border-collapse:collapse;width:100%;margin:16px 0}th,td{border:1px solid #d8ded8;padding:8px;vertical-align:top;text-align:left}.pass{background:#edf7ed}.fail{background:#fff0ed}.blocked,.not-tested{background:#fff8df}img{display:block;max-width:320px;max-height:420px;border:1px solid #d8ded8}code{background:#f3f4f1;padding:2px 4px}summary{cursor:pointer}</style><h1>MyKhaya Responsive Audit</h1><p>Mode: <strong>${run.modeName === "FULL" ? "FULL — release evidence" : `${run.modeName} — development feedback, not release evidence`}</strong>${run.jobs > 1 ? ` (${run.jobs} parallel jobs)` : ""}. Viewports: ${escapeHtml(run.viewports.join(", "))}. Sections: ${escapeHtml(run.sections.join(", "))}.${run.routeCount !== null ? ` Routes: ${run.routeCount}.` : ""} Duration: ${escapeHtml(run.duration)}.</p><p>Base URL: <code>${escapeHtml(BASE)}</code></p><p>Authentication: <strong>${auth.ok ? "PASS" : `BLOCKED — ${escapeHtml(auth.reason)}`}</strong></p>${run.blockedSections.length ? `<p><strong>Sections not run (BLOCKED):</strong></p><ul>${run.blockedSections.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>` : ""}<h2>Routes</h2><table><thead><tr><th>Route</th><th>Viewport</th><th>Status</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${rows}</tbody></table><h2>Create sheets</h2><table><thead><tr><th>Route</th><th>Sheet</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${sheetRows || `<tr><td colspan="6">No create sheets opened</td></tr>`}</tbody></table><h2>Calendar Copy Event</h2><table><thead><tr><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${copyRows || `<tr><td colspan="4">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Calendar event editor</h2><table><thead><tr><th>Viewport</th><th>State</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${editorRows || `<tr><td colspan="5">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Routines, Reminders and Settings forms</h2><table><thead><tr><th>Form</th><th>State</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${nudgeRows || `<tr><td colspan="6">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Driveway forms</h2><table><thead><tr><th>State</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${drivewayRows || `<tr><td colspan="5">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Driveway turned off</h2><table><thead><tr><th>State</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${drivewayDisabledRows || `<tr><td colspan="5">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Budget forms</h2><table><thead><tr><th>State</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${budgetRows || `<tr><td colspan="5">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Meal Plans, Lists and Wishlists forms</h2><table><thead><tr><th>State</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${moduleRows || `<tr><td colspan="5">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Help &amp; Support, Calendar sharing, Calendar Tags and Members forms</h2><table><thead><tr><th>State</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${remainingRows || `<tr><td colspan="5">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Calendar toolbar</h2><table><thead><tr><th>State</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Toolbar</th></tr></thead><tbody>${toolbarRows || `<tr><td colspan="5">${auth.ok ? "No results" : "BLOCKED — authentication unavailable"}</td></tr>`}</tbody></table><h2>Sign-in states</h2><table><thead><tr><th>State</th><th>Viewport</th><th>Result</th><th>Issues</th><th>Screenshot</th></tr></thead><tbody>${signInRows || `<tr><td colspan="5">No results</td></tr>`}</tbody></table><h2>Known defects (advisories)</h2>${run.knownDefects.length ? `<ul>${run.knownDefects.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>` : "<p>None met.</p>"}<h2>Notes</h2><p>Chromium only. Touch profiles use Chromium touch emulation, not a device. Safe areas are simulated through the --safe-* properties; this is not native WKWebView or physical-device evidence.</p><p>BLOCKED means authentication or required data was unavailable. NOT TESTED means the route rendered but the requested interactive component could not be opened. Screenshots are local artifacts under this audit directory.</p>`;
+  await fs.writeFile(path.join(outputDir, "index.html"), html, "utf8");
+}
+
+// ------------------------------------------------------------------ Run plan
+const ALL_ROUTES = [...publicRoutes, ...consumerRoutes.filter((route) => !publicRoutes.includes(route))];
+const SIGNED_IN_SECTIONS = {
+  copy: auditCopyEvent,
+  editor: auditEventEditor,
+  nudge: auditNudgeForms,
+  driveway: auditDrivewayForms,
+  "driveway-off": auditDrivewayDisabled,
+  budget: auditBudgetForms,
+  modules: auditHomeModuleForms,
+  remaining: auditRemainingForms,
+  toolbar: auditCalendarToolbar,
+};
+const ALL_SECTIONS = ["routes", ...Object.keys(SIGNED_IN_SECTIONS), "signin"];
+const RESULT_KEYS = { copy: "copyResults", editor: "editorResults", nudge: "nudgeResults", driveway: "drivewayResults", "driveway-off": "drivewayDisabledResults", budget: "budgetResults", modules: "moduleResults", remaining: "remainingResults", toolbar: "toolbarResults", signin: "signInResults" };
+
+// Which sections and routes a changed file affects (fast mode, --changed).
+// Anything shared, or not listed, selects everything: a missed dependency
+// must cost time, never coverage.
+const CHANGE_MAP = [
+  [/^apps\/web\/app\/budget\//, ["budget"], ["/budget"]],
+  [/^apps\/web\/app\/(meal-plans|lists|wish-lists)\//, ["modules"], ["/meal-plans", "/lists", "/wish-lists"]],
+  [/^apps\/web\/app\/driveway\//, ["driveway", "driveway-off"], ["/driveway", "/driveway/add"]],
+  [/^apps\/web\/app\/calendar\/calendars\//, ["remaining"], ["/calendar/calendars"]],
+  [/^apps\/web\/app\/calendar\//, ["copy", "editor", "toolbar"], ["/calendar", "/calendar/calendars", "/calendar/shared"]],
+  [/^apps\/web\/app\/settings\/(routines|reminders|routines-reminders|notifications|profile)\//, ["nudge"], ["/settings/routines", "/settings/reminders", "/settings/routines-reminders", "/settings/notifications", "/settings/profile"]],
+  [/^apps\/web\/app\/(help-support|settings\/members|settings\/calendar-tags)\//, ["remaining"], ["/help-support", "/settings/members", "/settings/calendar-tags"]],
+  [/^apps\/web\/app\/(login|register|forgot-password|reset-password)\//, ["signin"], ["/login", "/login/child", "/register", "/forgot-password", "/reset-password"]],
+];
+function changedSelection(reference) {
+  const git = (...args) => execFileSync("git", args, { cwd: scriptDir, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).split(/\r?\n/).filter(Boolean);
+  const files = [...new Set([...git("diff", "--name-only", reference), ...git("ls-files", "--others", "--exclude-standard", "--full-name")])];
+  const sections = new Set();
+  const routeSet = new Set();
+  for (const file of files) {
+    if (!file.startsWith("apps/web/") || /\.test\.[jt]sx?$/.test(file) || /^apps\/web\/(e2e|test-results)\//.test(file)) continue;
+    const match = CHANGE_MAP.find(([pattern]) => pattern.test(file));
+    if (match) {
+      match[1].forEach((section) => sections.add(section));
+      match[2].forEach((route) => routeSet.add(route));
+      continue;
+    }
+    const page = file.match(/^apps\/web\/app\/(.+)\/[^/]+\.tsx?$/);
+    const prefix = page ? `/${page[1].replace(/\/_[^/]+.*$/, "")}` : null;
+    const owned = prefix ? ALL_ROUTES.filter((route) => route === prefix || route.startsWith(`${prefix}/`)) : [];
+    if (owned.length) {
+      owned.forEach((route) => routeSet.add(route));
+      continue;
+    }
+    return { files, sections: ALL_SECTIONS, routes: ALL_ROUTES, everything: file };
+  }
+  if (routeSet.size) sections.add("routes");
+  return { files, sections: ALL_SECTIONS.filter((section) => sections.has(section)), routes: ALL_ROUTES.filter((route) => routeSet.has(route)), everything: null };
+}
+
+const changed = changedArgument ? changedSelection(changedArgument.includes("=") ? changedArgument.split("=")[1] : "HEAD") : null;
+const requestedSections = listOption("sections") ?? changed?.sections ?? ALL_SECTIONS;
+const unknownSections = requestedSections.filter((section) => !ALL_SECTIONS.includes(section));
+if (unknownSections.length) {
+  console.error(`Unknown sections: ${unknownSections.join(", ")} (choose from ${ALL_SECTIONS.join(", ")})`);
+  process.exit(2);
+}
+const selectedSections = ALL_SECTIONS.filter((section) => requestedSections.includes(section));
+const selectedRoutes = listOption("routes") ?? changed?.routes ?? ALL_ROUTES;
+const unknownRoutes = selectedRoutes.filter((route) => !ALL_ROUTES.includes(route));
+if (unknownRoutes.length) {
+  // Git Bash rewrites a leading "/" into a Windows path: pass --routes=//budget there, or use PowerShell.
+  console.error(`Unknown routes: ${unknownRoutes.join(", ")} (choose from ${ALL_ROUTES.join(", ")})`);
+  process.exit(2);
+}
+// Release evidence only when nothing was left out.
+const complete = !fast && selectedViewports.length === ALL_VIEWPORTS.length && selectedSections.length === ALL_SECTIONS.length && selectedRoutes.length === ALL_ROUTES.length;
+const modeName = fast ? "FAST" : complete ? "FULL" : "PARTIAL";
+const jobs = Math.max(1, Math.min(Number(option("jobs") ?? 1) || 1, selectedViewports.length));
+const startedAt = Date.now();
+const elapsed = () => {
+  const seconds = Math.round((Date.now() - startedAt) / 1000);
+  return `${Math.floor(seconds / 60)}m ${seconds % 60}s`;
+};
+if (changed) {
+  console.log(`Changed files since ${changedArgument.includes("=") ? changedArgument.split("=")[1] : "HEAD"}: ${changed.files.length}${changed.everything ? ` (shared change ${changed.everything}: every section)` : ""}`);
+  if (!selectedSections.length) {
+    console.log("No consumer UI change found: nothing to audit.");
+    process.exit(0);
+  }
+}
+
+// Sections a failed sign-in kept from running, with their viewports.
+const blockedSections = [];
+
+// --------------------------------------------------------- One process's run
+// Touch profiles and desktop profiles need separate browser contexts (touch
+// emulation is a context option), each signed in once.
+async function runViewports(browser) {
+  const sectionResults = Object.fromEntries(Object.values(RESULT_KEYS).map((key) => [key, []]));
+  let auth = { ok: true };
+  const groups = [selectedViewports.filter((viewport) => viewport.touch), selectedViewports.filter((viewport) => !viewport.touch)].filter((group) => group.length);
+  const needsSignIn = selectedSections.some((section) => section !== "signin");
+  for (const group of groups) {
+    viewports = group;
+    const context = await browser.newContext({ hasTouch: Boolean(group[0].touch) });
+    const page = await context.newPage();
+    const groupAuth = needsSignIn ? await authenticate(page).catch((error) => ({ ok: false, reason: `Authentication error: ${error.message}` })) : { ok: true };
+    if (!groupAuth.ok) {
+      auth = groupAuth;
+      // Signed-in sections cannot run without a session: listed, never
+      // passed or silently dropped from the totals.
+      const skipped = Object.keys(SIGNED_IN_SECTIONS).filter((section) => selectedSections.includes(section));
+      if (skipped.length) blockedSections.push(`${skipped.join(", ")} at ${group.map((viewport) => viewport.name).join(", ")}: ${groupAuth.reason}`);
+    }
+    if (selectedSections.includes("routes")) {
+      for (const viewport of group) {
+        for (const route of selectedRoutes) await auditRoute(page, route, viewport, groupAuth.ok);
+        // Kept current after every viewport, so an interrupted run still
+        // leaves its measurements behind.
+        await fs.writeFile(path.join(outputDir, `results${childId ? `.${childId}` : ""}.partial.json`), JSON.stringify({ results, sheetResults }, null, 2));
+      }
+    }
+    for (const [section, audit] of Object.entries(SIGNED_IN_SECTIONS)) {
+      if (selectedSections.includes(section) && groupAuth.ok) sectionResults[RESULT_KEYS[section]].push(...await audit(page));
+    }
+    if (selectedSections.includes("signin")) sectionResults.signInResults.push(...await auditSignInStates(browser));
+    await context.close();
+  }
+  viewports = selectedViewports;
+  return { auth, sectionResults };
+}
+
+// ------------------------------------------------------------ Parallel jobs
+// Each job is this script on a share of the viewports, writing its results
+// into this run's directory; this process merges them into one report.
+async function runJobs() {
+  const shares = Array.from({ length: jobs }, () => []);
+  selectedViewports.forEach((viewport, index) => shares[index % jobs].push(viewport.name));
+  const forwarded = [BASE, `--sections=${selectedSections.join(",")}`, `--routes=${selectedRoutes.join(",")}`];
+  const exits = await Promise.all(shares.map((share, index) => new Promise((resolve) => {
+    const child = spawn(process.execPath, [fileURLToPath(import.meta.url), ...forwarded, `--viewports=${share.join(",")}`, `--child-dir=${outputDir}`, `--child-id=${index + 1}`], { cwd: process.cwd(), env: process.env, stdio: ["ignore", "pipe", "pipe"] });
+    const prefix = (chunk) => chunk.toString().split(/\r?\n/).filter(Boolean).map((line) => `[job ${index + 1}] ${line}`).join("\n");
+    child.stdout.on("data", (chunk) => console.log(prefix(chunk)));
+    child.stderr.on("data", (chunk) => console.error(prefix(chunk)));
+    child.on("exit", (code) => resolve(code));
+  })));
+  let auth = { ok: true };
+  const sectionResults = Object.fromEntries(Object.values(RESULT_KEYS).map((key) => [key, []]));
+  for (let index = 0; index < jobs; index += 1) {
+    const file = path.join(outputDir, `child-${index + 1}.json`);
+    const child = JSON.parse(await fs.readFile(file, "utf8").catch(() => "null"));
+    if (!child) {
+      // A job that left no results is a failure of every check it owned.
+      auth = { ok: false, reason: `Job ${index + 1} (${shares[index].join(", ")}) exited ${exits[index]} without results` };
+      continue;
+    }
+    if (!child.auth.ok) auth = child.auth;
+    results.push(...child.results);
+    sheetResults.push(...child.sheetResults);
+    screenshots.push(...child.screenshots);
+    child.knownDefects.forEach((item) => knownDefects.add(item));
+    blockedSections.push(...child.blockedSections);
+    for (const key of Object.values(RESULT_KEYS)) sectionResults[key].push(...child.sectionResults[key]);
+    await fs.rm(file);
+  }
+  // One report order regardless of which job finished first.
+  const order = (entry) => selectedViewports.findIndex((viewport) => viewport.name === entry.viewport);
+  for (const list of [results, sheetResults, ...Object.values(sectionResults)]) list.sort((a, b) => order(a) - order(b));
+  return { auth, sectionResults };
+}
+
+await fs.mkdir(outputDir, { recursive: true });
+let run;
+if (jobs > 1 && !childDir) {
+  console.log(`${modeName} audit in ${jobs} parallel jobs: ${selectedViewports.length} viewports, sections ${selectedSections.join(", ")}`);
+  run = await runJobs();
+} else {
+  const browser = await chromium.launch();
+  run = await runViewports(browser);
+  await browser.close();
+}
+if (childDir) {
+  await fs.writeFile(path.join(outputDir, `child-${childId}.json`), JSON.stringify({ auth: run.auth, results, sheetResults, screenshots, knownDefects: [...knownDefects], blockedSections, sectionResults: run.sectionResults }));
+  process.exit(0);
+}
+const { auth, sectionResults } = run;
+await writeReport(auth, sectionResults, {
+  modeName,
+  jobs,
+  viewports: selectedViewports.map((viewport) => viewport.name),
+  sections: selectedSections,
+  routeCount: selectedSections.includes("routes") ? selectedRoutes.length : null,
+  duration: elapsed(),
+  knownDefects: [...knownDefects].sort(),
+  blockedSections,
+});
+const tally = (entries) => entries.reduce((counts, entry) => ({ ...counts, [entry.result]: (counts[entry.result] ?? 0) + 1 }), {});
+const everything = [...results, ...sheetResults, ...Object.values(sectionResults).flat()];
+console.log(JSON.stringify({
+  baseUrl: BASE,
+  outputDir,
+  mode: complete ? "full (release evidence)" : `${modeName.toLowerCase()} (development feedback, not release evidence)`,
+  jobs,
+  duration: elapsed(),
+  viewports: selectedViewports.length,
+  sections: selectedSections,
+  authenticated: auth.ok,
+  authReason: auth.reason ?? null,
+  total: tally(everything),
+  routes: tally(results),
+  createSheets: tally(sheetResults),
+  copyEvent: tally(sectionResults.copyResults),
+  eventEditor: tally(sectionResults.editorResults),
+  nudgeForms: tally(sectionResults.nudgeResults),
+  drivewayForms: tally(sectionResults.drivewayResults),
+  drivewayDisabled: tally(sectionResults.drivewayDisabledResults),
+  budgetForms: tally(sectionResults.budgetResults),
+  moduleForms: tally(sectionResults.moduleResults),
+  remainingForms: tally(sectionResults.remainingResults),
+  calendarToolbar: tally(sectionResults.toolbarResults),
+  signIn: tally(sectionResults.signInResults),
+  knownDefects: knownDefects.size,
+  blockedSections,
+}, null, 2));
+process.exitCode = everything.some((entry) => entry.result === "FAIL") || !auth.ok ? 1 : 0;

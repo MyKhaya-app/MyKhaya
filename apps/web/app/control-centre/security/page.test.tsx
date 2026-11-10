@@ -101,9 +101,9 @@ describe("Global Security", () => {
   it("submits Browser MFA changes to the consumer policy endpoint", async () => {
     put.mockResolvedValue({ ...optionalBrowserPolicy, configured: "required", effective: "required", enforcement_enabled: true });
     render(<GlobalSecurityPage />);
-    await userEvent.click(await screen.findByRole("button", { name: "Require browser MFA" }));
+    await userEvent.click(await screen.findByRole("button", { name: "Require consumer MFA" }));
     await userEvent.type(screen.getByLabelText("Reason for this change"), "Require consumer browser MFA");
-    await userEvent.click(screen.getByRole("button", { name: "Confirm browser MFA policy" }));
+    await userEvent.click(screen.getByRole("button", { name: "Confirm consumer MFA policy" }));
     await waitFor(() => expect(put).toHaveBeenCalledWith("/auth/mfa/browser-policy", {
       policy: "required",
       allowed_methods: ["totp", "email"],
@@ -121,7 +121,7 @@ describe("Global Security", () => {
       return Promise.reject(new Error(`unexpected path ${path}`));
     });
     render(<GlobalSecurityPage />);
-    expect(await screen.findByText("Consumer Browser MFA")).toBeInTheDocument();
+    expect(await screen.findByText("Consumer MFA")).toBeInTheDocument();
     expect(screen.getByText("Administrator policy access denied.")).toBeInTheDocument();
   });
 
@@ -149,8 +149,17 @@ describe("Global Security", () => {
       enforcement_enabled: true,
     });
     render(<GlobalSecurityPage />);
-    expect(await screen.findByText(/actively enforced for users/i)).toBeInTheDocument();
+    expect(await screen.findByText(/actively enforced on web and native app sign-in/i)).toBeInTheDocument();
     expect(screen.getByText("MYKHAYA_BROWSER_MFA_HANDOFF_ENABLED=true")).toBeInTheDocument();
+  });
+
+  it("describes the policy as applying to native app sign-in, not exempting it", async () => {
+    mockLoad();
+    render(<GlobalSecurityPage />);
+    const description = await screen.findByText(/in the iOS and Android apps/i);
+    expect(description).toHaveTextContent(/cannot prove a request comes from the genuine app/i);
+    expect(description).toHaveTextContent(/Managed-child sign-in and PCC administrator authentication are separate/i);
+    expect(screen.queryByText(/does not affect .*native app sign-in/i)).not.toBeInTheDocument();
   });
 
   it("opens the reauth modal on a 403 and retries the same change once verified", async () => {

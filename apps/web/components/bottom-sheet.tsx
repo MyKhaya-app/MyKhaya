@@ -4,6 +4,30 @@ import { useEffect, useLayoutEffect, useRef } from "react";
 import { X } from "lucide-react";
 import { isNativeShell } from "./native-runtime";
 import { registerDismissible } from "./dismissal-stack";
+import { KEYBOARD_THRESHOLD } from "./use-native-keyboard";
+
+/**
+ * While the software keyboard shrinks the visual viewport, pin the backdrop
+ * to the visual viewport so the sheet (and its footer) sits above the
+ * keyboard instead of behind it. dvh does not shrink for the iOS keyboard,
+ * and WKWebView does not resize the layout viewport for it either. At rest,
+ * or while pinch-zoomed, nothing is set and the ordinary inset: 0 backdrop
+ * applies unchanged.
+ */
+export function syncSheetToVisualViewport(backdrop: HTMLElement, viewport: VisualViewport | null | undefined) {
+  const reduced = viewport
+    && Math.abs(viewport.scale - 1) < 0.01
+    && window.innerHeight - viewport.height > KEYBOARD_THRESHOLD;
+  if (reduced) {
+    backdrop.style.setProperty("--sheet-viewport-height", `${viewport.height}px`);
+    backdrop.style.setProperty("--sheet-viewport-top", `${viewport.offsetTop}px`);
+    backdrop.classList.add("sheet-follows-visual-viewport");
+  } else {
+    backdrop.style.removeProperty("--sheet-viewport-height");
+    backdrop.style.removeProperty("--sheet-viewport-top");
+    backdrop.classList.remove("sheet-follows-visual-viewport");
+  }
+}
 
 export function BottomSheet({
   title,
@@ -27,6 +51,7 @@ export function BottomSheet({
   /** Actions rendered outside the scrollable body, attached to the sheet footer. */
   footer?: React.ReactNode;
 }) {
+  const backdrop = useRef<HTMLDivElement>(null);
   const dialog = useRef<HTMLDivElement>(null);
   const restoreFocus = useRef<HTMLElement | null>(null);
   const dismiss = useRef(onDismiss);
@@ -34,6 +59,20 @@ export function BottomSheet({
   useEffect(() => {
     dismiss.current = onDismiss;
   }, [onDismiss]);
+
+  useEffect(() => {
+    const element = backdrop.current;
+    const viewport = window.visualViewport;
+    if (!element || !viewport) return;
+    const sync = () => syncSheetToVisualViewport(element, viewport);
+    sync();
+    viewport.addEventListener("resize", sync);
+    viewport.addEventListener("scroll", sync);
+    return () => {
+      viewport.removeEventListener("resize", sync);
+      viewport.removeEventListener("scroll", sync);
+    };
+  }, []);
 
   useLayoutEffect(() => {
     restoreFocus.current = document.activeElement as HTMLElement | null;
@@ -127,6 +166,7 @@ export function BottomSheet({
   return (
     <div
       className="sheet-backdrop"
+      ref={backdrop}
       // Dismiss from a genuine backdrop interaction only.  Using click here
       // is intentional: on iOS a state change caused by a button's click can
       // replace the sheet contents before the synthetic mouse sequence has
@@ -139,7 +179,7 @@ export function BottomSheet({
       }
     >
       <div
-        className={`bottom-sheet ${fullHeight ? "full-height" : ""}`}
+        className={`bottom-sheet${fullHeight ? " full-height" : ""}${footer ? " has-footer" : ""}`}
         role="dialog"
         aria-modal="true"
         aria-labelledby="sheet-title"

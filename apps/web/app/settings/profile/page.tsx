@@ -3,10 +3,11 @@ import { ChangeEvent, FormEvent, useCallback, useEffect, useRef, useState } from
 import type { Member, User } from "@mykhaya/shared-types";
 import type { ColourKey } from "@mykhaya/design-tokens";
 import { api, ApiError } from "@mykhaya/api-client";
-import { Bell, Camera, ChevronRight, Home, Shield, Trash2, UserRound } from "lucide-react";
+import { Apple, Bell, Camera, ChevronRight, Globe, Home, KeyRound, Mail, Shield, Trash2, UserRound } from "lucide-react";
 import Link from "next/link";
 import { Avatar } from "@/components/avatar";
 import { ColourSwatchPicker } from "@/components/colour-swatch-picker";
+import { FormActions, FormField, FormLayout, FormRow } from "@/components/form-layout";
 import { BottomSheet } from "@/components/bottom-sheet";
 import { SettingsPage } from "@/components/settings-page";
 import { Toast } from "@/components/toast";
@@ -25,6 +26,29 @@ import {
   pickAvatarFromCamera,
   pickAvatarFromGallery,
 } from "@/components/native-avatar-picker";
+
+// The API's birthday rules (_validate_birthday in apps/api/mykhaya/schemas.py),
+// checked here too so each problem can be shown on the field it concerns.
+// The API stays the authority; February allows 29 because there is no year.
+const DAYS_IN_MONTH = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+
+type BirthdayErrors = { month?: string; day?: string; form?: string };
+type SignInIdentity = {
+  provider: "apple" | "google";
+  provider_email: string | null;
+  provider_email_verified: boolean;
+  linked_at: string;
+  last_used_at: string | null;
+};
+
+function birthdayFieldErrors(month: number | null, day: number | null, monthName: (month: number) => string): BirthdayErrors {
+  if (month === null && day === null) return {};
+  if (month === null) return { month: "Choose the month as well, or clear Day." };
+  if (day === null) return { day: "Enter the day as well, or set Month to Not set." };
+  const days = DAYS_IN_MONTH[month - 1]!;
+  if (day > days) return { day: `${monthName(month)} has ${days} days.` };
+  return {};
+}
 
 const MONTHS = [
   "January", "February", "March", "April", "May", "June",
@@ -56,6 +80,10 @@ function birthdayLabel(user: User | null) {
 export default function Profile() {
   const { activeHomeId, activeHome } = useActiveHome();
   const [user, setUser] = useState<User | null>(null);
+  const [signInMethods, setSignInMethods] = useState<{
+    password_available: boolean;
+    identities: SignInIdentity[];
+  } | null>(null);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
@@ -66,11 +94,13 @@ export default function Profile() {
   const [colourError, setColourError] = useState("");
   const [photoSheetOpen, setPhotoSheetOpen] = useState(false);
   const [editingBirthday, setEditingBirthday] = useState(false);
+  const [birthdayErrors, setBirthdayErrors] = useState<BirthdayErrors>({});
   const libraryInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     api.me().then(setUser);
+    api.externalIdentities().then(setSignInMethods).catch(() => setSignInMethods(null));
   }, []);
 
   useEffect(() => {
@@ -97,24 +127,33 @@ export default function Profile() {
     }
   }
 
+  // Month and Day are checked together, so editing either clears both
+  // field errors. A failed save's message stays until the next attempt.
+  function clearBirthdayFieldErrors() {
+    setBirthdayErrors(({ form }) => (form ? { form } : {}));
+  }
+
   async function saveBirthday(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    setSaving(true);
-    setError("");
     setMessage("");
     const form = new FormData(event.currentTarget);
     const month = form.get("birth_month");
     const day = form.get("birth_day");
+    const payload = {
+      birth_month: month ? Number(month) : null,
+      birth_day: day ? Number(day) : null,
+    };
+    const fieldErrors = birthdayFieldErrors(payload.birth_month, payload.birth_day, (value) => MONTHS[value - 1]!);
+    setBirthdayErrors(fieldErrors);
+    if (fieldErrors.month || fieldErrors.day) return;
+    setSaving(true);
     try {
-      const updated = await api.updateMyBirthday({
-        birth_month: month ? Number(month) : null,
-        birth_day: day ? Number(day) : null,
-      });
+      const updated = await api.updateMyBirthday(payload);
       setUser(updated);
       setMessage("Your birthday was saved.");
       setEditingBirthday(false);
     } catch (cause) {
-      setError((cause as Error).message);
+      setBirthdayErrors({ form: (cause as Error).message });
     } finally {
       setSaving(false);
     }
@@ -383,6 +422,29 @@ export default function Profile() {
         </section>
       )}
 
+      {user && signInMethods && (
+        <section className="card profile-signin-methods" aria-labelledby="profile-signin-methods-heading">
+          <div className="profile-section-heading">
+            <div>
+              <h2 id="profile-signin-methods-heading">Sign-in methods</h2>
+              <p className="muted">Manage how you sign in to MyKhaya.</p>
+            </div>
+            <KeyRound size={22} aria-hidden="true" />
+          </div>
+          <div className="profile-signin-summary" aria-label="Sign-in method status">
+            <div><Mail size={18} aria-hidden="true" /><span>Email and password</span><span className={`security-status-badge security-status-badge-${signInMethods.password_available ? "success" : "neutral"}`}>{signInMethods.password_available ? "Enabled" : "Not enabled"}</span></div>
+            {(["apple", "google"] as const).map((provider) => {
+              const identity = signInMethods.identities.find((item) => item.provider === provider);
+              const Icon = provider === "apple" ? Apple : Globe;
+              return <div key={provider}><Icon size={18} aria-hidden="true" /><span>{provider === "apple" ? "Apple ID" : "Google"}</span><span className={`security-status-badge security-status-badge-${identity ? "success" : "neutral"}`}>{identity ? "Connected" : "Not connected"}</span></div>;
+            })}
+          </div>
+          <Link className="button secondary profile-signin-manage" href="/settings/security#sign-in-methods-heading">
+            Manage sign-in methods <ChevronRight size={17} aria-hidden="true" />
+          </Link>
+        </section>
+      )}
+
       <section className="card details profile-info-card">
         <h2>Account details</h2>
         <dl>
@@ -410,7 +472,7 @@ export default function Profile() {
             <dd className="profile-detail-value">
               <span>{birthdayLabel(user)}</span>
               {!editingBirthday && (
-                <button type="button" className="tertiary" onClick={() => setEditingBirthday(true)}>
+                <button type="button" className="tertiary" onClick={() => { setBirthdayErrors({}); setEditingBirthday(true); }}>
                   Edit
                 </button>
               )}
@@ -421,23 +483,39 @@ export default function Profile() {
           Shared with your household so they can wish you well.
         </p>
         {editingBirthday && user && (
-          <form className="profile-birthday-edit" onSubmit={saveBirthday}>
-            <div className="profile-birthday-fields">
-              <label>
-                Month
-                <select name="birth_month" defaultValue={user.birth_month ?? ""}>
-                  <option value="">Not set</option>
-                  {MONTHS.map((name, index) => (
-                    <option key={name} value={index + 1}>{name}</option>
-                  ))}
-                </select>
-              </label>
-              <label>
-                Day
-                <input type="number" name="birth_day" min={1} max={31} defaultValue={user.birth_day ?? ""} />
-              </label>
-            </div>
-            <div className="profile-birthday-edit-actions">
+          <FormLayout className="profile-birthday-edit" onSubmit={saveBirthday} noValidate={false}>
+            {birthdayErrors.form && <p className="notice error" role="alert">{birthdayErrors.form}</p>}
+            <FormRow minColumnWidth="7rem">
+              <FormField label="Month" error={birthdayErrors.month}>
+                {(control) => (
+                  <select
+                    {...control}
+                    name="birth_month"
+                    defaultValue={user.birth_month ?? ""}
+                    onChange={clearBirthdayFieldErrors}
+                  >
+                    <option value="">Not set</option>
+                    {MONTHS.map((name, index) => (
+                      <option key={name} value={index + 1}>{name}</option>
+                    ))}
+                  </select>
+                )}
+              </FormField>
+              <FormField label="Day" error={birthdayErrors.day}>
+                {(control) => (
+                  <input
+                    {...control}
+                    type="number"
+                    name="birth_day"
+                    min={1}
+                    max={31}
+                    defaultValue={user.birth_day ?? ""}
+                    onChange={clearBirthdayFieldErrors}
+                  />
+                )}
+              </FormField>
+            </FormRow>
+            <FormActions>
               <button type="submit" disabled={saving}>
                 {saving ? "Saving…" : "Save"}
               </button>
@@ -446,13 +524,14 @@ export default function Profile() {
                 className="tertiary"
                 onClick={() => {
                   setEditingBirthday(false);
+                  setBirthdayErrors({});
                   setError("");
                 }}
               >
                 Cancel
               </button>
-            </div>
-          </form>
+            </FormActions>
+          </FormLayout>
         )}
       </section>
 

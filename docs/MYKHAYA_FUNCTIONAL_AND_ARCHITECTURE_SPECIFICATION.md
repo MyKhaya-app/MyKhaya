@@ -95,6 +95,16 @@ External provider failures are represented as controlled lookup/provider errors,
 
 Support includes Contact Support, Report a Bug, diagnostics and support tickets. `SupportTicket`, `SupportTicketMessage`, `SupportTicketAttachment` and `SupportTicketDiagnostic` model the workflow. Messages distinguish requester replies, staff public replies and internal notes. Support notifications use the central notification engine. Diagnostics must be privacy-minimized and access-controlled; the PCC support workflow is separate from household content browsing. Tests: `test_support_tickets.py`, `test_support_notifications.py`.
 
+**Closing a ticket (requester).** On the Help & Support ticket detail page, the requester can close their own ticket from `open`, `in_progress`, `waiting_for_user` or `resolved`, after a confirmation sheet. `POST /support/tickets/{id}/close` only finds tickets whose requester is the signed-in user, so another user (including a same-Home Owner) gets 404. It locks the ticket row, as the PCC status update also does, so a simultaneous staff change cannot silently overwrite the closure or the reverse. It sets `closed`, keeps any resolution time the team recorded, and keeps the conversation and attachments. It writes the user audit event `support.ticket.closed_by_requester` (who, when, previous status). Closing an already-closed ticket changes nothing and is not re-audited. There is no reopening; the requester can contact support again. Limitation: the PCC ticket page shows the closed status but not who closed it; that is in the audit events.
+
+**New ticket emails to the team.** PCC → Support → Support settings → *New ticket email notifications* controls who is emailed when a ticket is created. The setting is the `support_ticket_notifications` platform setting, stored in each environment's own database, so DEV and PROD are configured independently. It contains:
+
+- *enabled*;
+- the selected existing PCC roles;
+- whether to also email the deployment's support inbox (`MYKHAYA_SUPPORT_NOTIFICATION_EMAIL`).
+
+Only Platform Owners and Administrators can change it, with recent authentication and a reason. Changes are audited as `support.notification_settings_updated`; every Support-capable role can view it. Recipients are resolved when each ticket is created: active administrators in the selected roles with an email address, plus the inbox if included. Each address gets one `support.ticket.new_for_team` email, deduplicated case-insensitively and idempotent per ticket and recipient. The email carries the reference, subject, priority, submission time and a PCC link, never the description, attachments or diagnostics, and the template is editable in PCC. Until the setting is first saved, the original behaviour is unchanged: only the support inbox receives its existing copy. Requester follow-up emails still go only to the support inbox. The requester's confirmation and the team emails are each queued in their own database savepoint, so a notification failure (including a database error) never prevents the ticket from being created; delivery then follows the outbox's normal retries.
+
 ### 2.10 Notifications
 
 The consumer notification centre is exposed through notification routes and preferences. It is distinct from the notification engine: the centre reads user-visible `Notification` rows, while the engine performs recipient calculation, preference/quiet-hour decisions, channel selection, outbox enqueueing, delivery and audit logging. Native devices, Web Push subscriptions, email, in-app and native push are separate delivery registrations.
@@ -187,7 +197,13 @@ Native authentication uses bearer session tokens and secure storage/Keychain/Key
 
 Security controls include secure cookie configuration, CSRF, explicit CORS, trusted-proxy-aware client IP resolution, rate limiting, security headers/CSP, bounded request/file/image resources, password hashing, encrypted stored integration secrets, webhook signature validation, audit logging, tenant isolation and structured non-sensitive errors. Platform administration has separate network/host gates and role checks. The stated assurance target is OWASP ASVS Level 2 and relevant NCSC guidance; this is not a certification claim.
 
-Known security concerns are tracked rather than hidden: PCC production administration still requires completion of the approved MFA/WebAuthn ceremony; some generic PCC settings are explicitly marked `not_enforced`; the public status service initially shares the application stack; and dependency, deployment and real-device verification remain environment-dependent. A complete compliance certification is not determinable from repository evidence.
+Known security concerns are tracked rather than hidden: PCC has implemented mandatory
+MFA policy enforcement plus TOTP/WebAuthn and recovery flows, but production still
+requires the approved administrator enrolment and live-origin ceremony; some generic
+PCC settings are explicitly marked `not_enforced`; the public status service initially
+shares the application stack; and dependency, deployment and real-device verification
+remain environment-dependent. Password-only production administration is not approved.
+A complete compliance certification is not determinable from repository evidence.
 
 ## 7. Data architecture and migrations
 
@@ -299,7 +315,10 @@ The repository’s definition of done requires work to be secure, tested, docume
 
 ### Security gaps
 
-- Production PCC WebAuthn/passkey/MFA ceremony is documented as incomplete; password-only production administration is not approved.
+- Production PCC MFA enforcement and TOTP/WebAuthn code paths are implemented. The
+  remaining release gate is operational: every production administrator must enrol
+  and verify a factor against the configured admin origin, with recovery codes tested;
+  password-only production administration is not approved.
 - External provider and notification delivery security depends on deployment secrets, host restrictions and operational configuration that cannot be proven from source alone.
 - Certification/compliance status is not determinable from repository evidence.
 
@@ -359,11 +378,16 @@ The repository has explicit Home tenancy concepts, central entitlement resolutio
 
 ### Important architectural debt
 
-The largest risks are phase/document drift, incomplete PCC MFA ceremony, partial native platform maturity, future-scale work not yet deployed, schema duplication and uneven concentration of business logic across routers and services.
+The largest risks are phase/document drift, incomplete PCC MFA operational ceremony,
+partial native platform maturity, future-scale work not yet deployed, schema duplication
+and uneven concentration of business logic across routers and services.
 
 ### Security posture
 
-There are meaningful layered controls for authentication, authorization, tenancy, CSRF/CORS, rate limiting, secrets and audit. Remaining risks include deployment configuration, incomplete privileged MFA, provider availability and the inability to infer production operational correctness solely from source.
+There are meaningful layered controls for authentication, authorization, tenancy,
+CSRF/CORS, rate limiting, secrets and audit. Remaining risks include deployment
+configuration, incomplete privileged-MFA enrolment evidence, provider availability and
+the inability to infer production operational correctness solely from source.
 
 ### Scalability posture
 

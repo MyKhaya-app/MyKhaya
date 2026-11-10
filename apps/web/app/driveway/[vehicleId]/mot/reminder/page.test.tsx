@@ -152,3 +152,43 @@ describe("New MOT reminder", () => {
     expect(screen.queryByRole("button", { name: "Save nudge" })).not.toBeInTheDocument();
   });
 });
+
+// The Reminder and MOT expires fields are shared FormFields inside the MOT
+// nudge's own cards; each check is shown on the field or group it concerns.
+describe("New MOT reminder — field-level validation", () => {
+  it("shows a missing name and date on their fields, and focuses the first", async () => {
+    (api.vehicleMot as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+    renderPage();
+    const user = userEvent.setup();
+    const reminder = await screen.findByLabelText("Reminder");
+    await user.clear(reminder);
+    await user.click(screen.getByRole("button", { name: "Save nudge" }));
+
+    expect(reminder).toHaveAccessibleDescription("Give the reminder a name.");
+    expect(screen.getByLabelText("MOT expires")).toHaveAccessibleDescription("Add the date this MOT expires.");
+    await waitFor(() => expect(reminder).toHaveFocus());
+    expect(api.saveVehicleMotNudges).not.toHaveBeenCalled();
+  });
+
+  it("describes the Nudge me group when no time is chosen, until one is", async () => {
+    renderPage();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "30 days before" }));
+    await user.click(screen.getByRole("button", { name: "7 days before" }));
+    await user.click(screen.getByRole("button", { name: "Save nudge" }));
+
+    const when = screen.getByRole("group", { name: "Nudge me" });
+    expect(when).toHaveAccessibleDescription("Choose at least one time to be nudged.");
+    await waitFor(() => expect(within(when).getByRole("button", { name: "30 days before" })).toHaveFocus());
+    await user.click(within(when).getByRole("button", { name: "On the day" }));
+    expect(when).not.toHaveAccessibleDescription();
+  });
+
+  it("uses the shared 16px field styling rather than the old 15px Driveway input", async () => {
+    renderPage();
+    const reminder = await screen.findByLabelText("Reminder");
+    expect(reminder).not.toHaveClass("drv-input");
+    expect(reminder.closest(".form-field")).not.toBeNull();
+    expect(screen.getByLabelText("MOT expires").closest(".form-field")).not.toBeNull();
+  });
+});
