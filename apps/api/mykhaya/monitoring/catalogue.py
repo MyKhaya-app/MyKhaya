@@ -99,8 +99,9 @@ CATALOGUE: tuple[ComponentDefinition, ...] = (
         name="API error rate and latency",
         service_keys=("api",),
         check_type="metrics",
-        verifies="Share of real customer API requests failing with a server error, "
-        "and their average latency, over the last 5 minutes.",
+        verifies="Aggregate share of real customer API requests failing with a server error, "
+        "and their average latency, over the last 5 minutes; recovery describes this "
+        "aggregate condition and does not prove every endpoint is healthy.",
         customer_impact="Some actions in the apps may fail or be slow.",
         run=checks.check_api_error_rate,
         severity="warning",

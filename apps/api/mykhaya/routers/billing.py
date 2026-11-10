@@ -125,8 +125,23 @@ async def pricing(
     # costs; only actually starting Checkout is blocked (see
     # checkout_session below). The frontend uses acquisition_enabled to
     # decide whether to show "Choose Family" or a "temporarily paused"
-    # notice, never by treating a pricing-fetch failure as the signal.
-    acquisition_enabled = (await resolve_stripe_config(settings, db)).acquisition_enabled
+    # notice, never by treating the acquisition kill switch as a fetch failure.
+    stripe_config = await resolve_stripe_config(settings, db)
+    acquisition_enabled = stripe_config.acquisition_enabled
+    if stripe_config.source == "unconfigured":
+        return FamilyPricingResponse(
+            available=False,
+            unavailable_reason="not_configured",
+            plan="family",
+            options=[],
+            annual_saving_formatted=None,
+            annual_is_best_value=False,
+            acquisition_enabled=False,
+            ultimate_options=None,
+            ultimate_annual_saving_formatted=None,
+            ultimate_annual_is_best_value=False,
+            ultimate_acquisition_enabled=False,
+        )
     try:
         family_pricing = await get_family_pricing(settings, db)
     except StripeNotConfiguredError as exc:
@@ -169,6 +184,8 @@ async def pricing(
         else None
     )
     return FamilyPricingResponse(
+        available=True,
+        unavailable_reason=None,
         plan=family_pricing.plan,
         options=[
             PricingOptionResponse(

@@ -1367,6 +1367,10 @@ export interface PricingOption {
 }
 
 export interface FamilyPricing {
+  // False means billing is intentionally unavailable in this environment;
+  // it is not an API failure and must not be treated as a provider outage.
+  available?: boolean;
+  unavailable_reason?: "not_configured" | null;
   plan: string;
   options: PricingOption[];
   annual_saving_formatted: string | null;

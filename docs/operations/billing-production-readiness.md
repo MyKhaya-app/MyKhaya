@@ -22,6 +22,13 @@ cancellations, the Customer Portal, and reconciliation are **never** gated by
 acquisition — only a brand-new Checkout Session is. See "Billing disable / rollback"
 below for the operational implication.
 
+When Stripe is intentionally unconfigured, `GET /billing/pricing` returns an
+explicit `available: false` / `unavailable_reason: "not_configured"` response
+with no invented prices. This is not an API outage and is not counted as a
+Stripe or API availability failure. If Stripe is enabled but incomplete, or an
+enabled provider cannot be reached, pricing remains an error and the existing
+monitoring and checkout restrictions apply.
+
 ## Readiness command
 
 ```sh

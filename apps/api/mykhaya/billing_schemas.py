@@ -22,6 +22,10 @@ class PricingOptionResponse(BaseModel):
 
 
 class FamilyPricingResponse(BaseModel):
+    # An intentionally disabled billing integration is an informational state,
+    # not an API failure.
+    available: bool = True
+    unavailable_reason: str | None = None
     plan: str
     options: list[PricingOptionResponse]
     annual_saving_formatted: str | None
