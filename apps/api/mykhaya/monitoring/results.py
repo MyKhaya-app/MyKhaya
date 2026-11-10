@@ -15,6 +15,9 @@ UNKNOWN = "unknown"
 NOT_APPLICABLE = "not_applicable"
 COMPONENT_STATES = (HEALTHY, DEGRADED, UNAVAILABLE, UNKNOWN, NOT_APPLICABLE)
 
+# The failure category of DEV fault injection (never produced in production).
+SIMULATED = "simulated"
+
 Outcome = Literal["success", "failure", "inconclusive", "monitor_error", "not_applicable"]
 FailureSeverity = Literal["degraded", "unavailable"]
 Confidence = Literal["verified", "limited"]
@@ -45,7 +48,7 @@ FAILURE_CATEGORIES: dict[str, str] = {
     "not_configured": "Not configured",
     "monitor_error": "Monitoring check failed to run",
     "stale": "Monitoring observations are stale",
-    "simulated": "Simulated failure (DEV fault injection)",
+    SIMULATED: "Simulated failure (DEV fault injection)",
 }
 
 # Categories that describe a network path problem rather than a provider

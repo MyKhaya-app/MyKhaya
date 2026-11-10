@@ -175,10 +175,15 @@ disrupt a real provider or account.
    (`background.outbox`, Background Processing, critical, 60 s). Choose
    **Simulate failure** for 15 minutes, severity Unavailable, with a reason.
    Fault injection replaces only that check's *result*; the real queue is
-   untouched. Within about 3 minutes (or press **Run now** three times, at
-   least 30 s apart):
+   untouched. The simulated failure is applied **immediately** as an
+   already-confirmed failure. There is no wait for the failure threshold,
+   and the threshold itself is not changed. If PCC answers "A monitoring
+   cycle is in progress", nothing was applied; try again a few seconds
+   later. Straight away:
    - the component shows Unavailable in PCC, with category "Simulated failure
-     (DEV fault injection)";
+     (DEV fault injection)" and *DEV fault injection active until …*;
+     *History* shows one transition whose detail says it was confirmed
+     immediately by DEV fault injection;
    - `status.dev.mykhaya.app` shows Background Processing as **Major
      Outage**, an automated incident "Background Processing: outage" with the
      generic message, and the overall banner "Major service disruption";
@@ -190,16 +195,33 @@ disrupt a real provider or account.
    capped at "Partial service disruption", and core services unchanged.
 8. **Real alert received.** DEV PCC Owners/Administrators receive
    `[MyKhaya DEV] Service Unavailable: …` with environment, detection time,
-   failure category, consecutive failures, last success and a PCC link. The
-   alert centre shows the delivery as *sent*.
-9. **No duplicates.** Leave it failing for 10+ minutes: no further alert
-   email, one transition, one incident.
-10. **Recovery.** **Stop simulation**. After the recovery threshold, expect
-   Healthy in PCC, the incident auto-resolved on the public page, and a
-   `[MyKhaya DEV] Service Recovered: …` email.
-11. **Audit.** PCC Audit shows `monitoring.fault_injection_started`,
-    `monitoring.check_run`, `monitoring.fault_injection_cleared`, and any
-    override or acknowledgement actions.
+   failure category "Simulated failure (DEV fault injection)", its detail,
+   consecutive failures (1), last success and a PCC link. The alert centre
+   shows the delivery as *sent*. Email follows the existing controls: no
+   email for a component that is not public and awaits live validation, for
+   *info* severity, for warning severity when that is switched off, or when
+   the same kind of alert was emailed for the component within the cooldown
+   (default 30 minutes). Repeating the drill within the cooldown records the
+   alert in PCC without a second email.
+9. **No duplicates.** Leave the simulation active for 10+ minutes: scheduled
+   checks keep recording *simulated* observations, but there is no further
+   alert email, still one transition and one incident.
+10. **Recovery.** Choose **Stop simulation** once. It ends the simulation and
+   runs the component's real check at once. If that check succeeds, expect
+   right away: Healthy in PCC, a recovery transition whose detail says DEV
+   fault injection stopped, the incident auto-resolved on the public page,
+   and a `[MyKhaya DEV] Service Recovered: …` email. There is no wait for
+   the recovery threshold. If the real check fails, PCC says so and the
+   failure is reported and recovers under the normal thresholds. If PCC
+   says a monitoring cycle was in progress, the row still shows *Held by
+   DEV fault injection*; choose **Stop simulation** again. If a simulation
+   simply expires, the component stays *Held by DEV fault injection* until
+   **Stop simulation** is chosen, or until it recovers through the normal
+   recovery threshold.
+11. **Audit.** PCC Audit shows `monitoring.fault_injection_started` and
+    `monitoring.fault_injection_cleared` (a *failed* `cleared` entry means
+    the start was withdrawn because a cycle was in progress), plus any
+    `monitoring.check_run`, override or acknowledgement actions.
 12. **Restart behaviour.** During a simulated failure, run `docker compose
     restart scheduler worker`. Afterwards the component is still Unavailable
     (counters persisted), with no second incident and no duplicate alert.

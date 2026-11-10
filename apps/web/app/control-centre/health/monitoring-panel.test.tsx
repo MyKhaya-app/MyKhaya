@@ -135,6 +135,29 @@ describe("Automated monitoring panel", () => {
     expect(screen.getByRole("button", { name: "Acknowledge" })).toBeInTheDocument();
   });
 
+  it("shows an active simulation and a state still held by fault injection with Stop simulation", async () => {
+    const active = { ...component, simulating_until: "2026-11-09T19:40:00Z" };
+    const held = {
+      ...component,
+      key: "background.outbox",
+      name: "Job queue progress",
+      simulated_failure_held: true,
+    };
+    get.mockImplementation((path: string) => {
+      if (path === "/monitoring") return Promise.resolve({ ...overview, components: [active, held] });
+      if (path === "/monitoring/alerts") return Promise.resolve(alerts);
+      return Promise.resolve(settings);
+    });
+    render(<MonitoringPanel />);
+    const activeRow = (await screen.findByText("DVSA MOT History connectivity")).closest("tr")!;
+    expect(within(activeRow).getByText(/DEV fault injection active until/)).toBeInTheDocument();
+    expect(within(activeRow).getByRole("button", { name: "Stop simulation" })).toBeInTheDocument();
+    const heldRow = screen.getByText("Job queue progress").closest("tr")!;
+    expect(within(heldRow).getByText(/Held by DEV fault injection/)).toBeInTheDocument();
+    expect(within(heldRow).getByRole("button", { name: "Stop simulation" })).toBeInTheDocument();
+    expect(within(heldRow).queryByRole("button", { name: "Simulate failure" })).not.toBeInTheDocument();
+  });
+
   it("hides fault injection where the deployment does not allow it", async () => {
     get.mockImplementation((path: string) => {
       if (path === "/monitoring") return Promise.resolve({ ...overview, fault_injection_available: false });

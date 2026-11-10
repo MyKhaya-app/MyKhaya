@@ -44,6 +44,9 @@ export type MonitorComponent = {
   state_changed_at: string | null;
   stale_after_seconds: number;
   simulating_until: string | null;
+  // DEV only: failed solely because of fault injection (the simulation has
+  // ended but its recovery has not run yet). "Stop simulation" recovers it.
+  simulated_failure_held?: boolean;
   watchdog_managed: boolean;
   // Vantage-dependent (public hostname / third-party) check: PCC-only until
   // validated on the live environment and public reporting is enabled.

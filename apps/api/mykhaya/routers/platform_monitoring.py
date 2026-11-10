@@ -40,7 +40,13 @@ from mykhaya.models import (
 )
 from mykhaya.monitoring import alerts as monitoring_alerts
 from mykhaya.monitoring.catalogue import BY_KEY, CATALOGUE
-from mykhaya.monitoring.engine import build_http_client, ensure_components, run_cycle
+from mykhaya.monitoring.engine import (
+    CycleReport,
+    build_http_client,
+    ensure_components,
+    holds_simulated_failure,
+    run_cycle,
+)
 from mykhaya.monitoring.results import category_label
 from mykhaya.monitoring.state import (
     RUNNER_HEARTBEAT_SERVICE,
@@ -162,6 +168,10 @@ def _component_payload(row: MonitorComponent, now: datetime, runner_fresh: bool)
         "simulating_until": row.simulate_failure_until
         if row.simulate_failure_until and row.simulate_failure_until > now
         else None,
+        # Still failed only because of fault injection (e.g. the simulation
+        # expired, or its recovery check could not run yet): "Stop
+        # simulation" remains available to recover it.
+        "simulated_failure_held": holds_simulated_failure(row),
         "watchdog_managed": bool(definition and definition.watchdog_managed),
         "requires_live_validation": bool(definition and definition.requires_live_validation),
     }
@@ -387,6 +397,28 @@ async def update_component(
     return _component_payload(row, datetime.now(UTC), runner_fresh=True)
 
 
+async def _run_single_check(
+    settings: Settings, key: str, *, confirm_fault_injection: bool = False
+) -> CycleReport:
+    """Run one component's check now through the normal runner (advisory
+    lock, row lock, transitions, incidents, alerts)."""
+    redis = Redis.from_url(settings.redis_url, socket_timeout=5, decode_responses=True)
+    try:
+        async with build_http_client() as http:
+            return await run_cycle(
+                settings,
+                http=http,
+                redis=redis,
+                only_keys={key},
+                force=True,
+                trigger="manual",
+                wait_for_lock=10,
+                confirm_fault_injection=confirm_fault_injection,
+            )
+    finally:
+        await redis.aclose()
+
+
 @router.post("/components/{key}/run")
 async def run_component(
     key: str,
@@ -419,20 +451,7 @@ async def run_component(
         raise HTTPException(
             status.HTTP_429_TOO_MANY_REQUESTS, "This check was run moments ago; try again shortly."
         )
-    redis = Redis.from_url(settings.redis_url, socket_timeout=5, decode_responses=True)
-    try:
-        async with build_http_client() as http:
-            report = await run_cycle(
-                settings,
-                http=http,
-                redis=redis,
-                only_keys={key},
-                force=True,
-                trigger="manual",
-                wait_for_lock=10,
-            )
-    finally:
-        await redis.aclose()
+    report = await _run_single_check(settings, key)
     if not report.ran:
         raise HTTPException(
             status.HTTP_409_CONFLICT, "A monitoring cycle is in progress; try again shortly."
@@ -465,9 +484,13 @@ async def simulate_failure(
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
-    """DEV-only controlled fault injection: the component reports a
+    """DEV-only controlled fault injection. The component's check reports a
     simulated failure (and nothing else changes) until it expires or is
-    cleared. Refused outright in production."""
+    stopped. The first simulated result is applied immediately as an
+    already-confirmed failure through the normal runner, so the transition,
+    automated incident and alert are produced at once by the real pipeline;
+    later scheduled checks only repeat the same state, which raises nothing
+    new. Thresholds are not changed. Refused outright in production."""
     require_recent_auth(context, settings)
     if settings.environment == "production":
         raise HTTPException(
@@ -477,6 +500,10 @@ async def simulate_failure(
     if BY_KEY[key].watchdog_managed:
         raise HTTPException(
             status.HTTP_409_CONFLICT, "Stop the scheduler to exercise the monitoring watchdog."
+        )
+    if not row.enabled:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "Enable this component before simulating a failure."
         )
     until = datetime.now(UTC) + timedelta(minutes=body.minutes)
     row.simulate_failure_until = until
@@ -491,7 +518,39 @@ async def simulate_failure(
         new={"component": key, "until": until.isoformat(), "severity": body.severity},
     )
     await db.commit()
-    return {"key": key, "simulating_until": until, "severity": body.severity}
+
+    report = await _run_single_check(settings, key, confirm_fault_injection=True)
+    if not report.ran:
+        # Not applied: withdraw it rather than leave a simulation that would
+        # only be counted against the normal threshold by scheduled checks.
+        row = await _locked_component(db, key)
+        row.simulate_failure_until = None
+        row.simulate_failure_severity = None
+        platform_audit(
+            db,
+            request,
+            context,
+            "monitoring.fault_injection_cleared",
+            "monitor_component",
+            outcome="failed",
+            reason=body.reason,
+            new={"component": key, "applied": False},
+            failure_category="monitoring_cycle_in_progress",
+        )
+        await db.commit()
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "A monitoring cycle is in progress; try again shortly."
+        )
+    refreshed = await db.get(MonitorComponent, key, populate_existing=True)
+    assert refreshed is not None
+    return {
+        "key": key,
+        "simulating_until": until,
+        "severity": body.severity,
+        "transitions": report.transitions,
+        "alerts_raised": report.alerts,
+        "component": _component_payload(refreshed, datetime.now(UTC), runner_fresh=True),
+    }
 
 
 @router.post("/components/{key}/simulate-failure/clear")
@@ -503,10 +562,25 @@ async def clear_simulated_failure(
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
+    """Ends fault injection and starts a controlled recovery at once: the
+    component's real check runs immediately, and if it succeeds the state
+    held only by fault injection recovers through the normal pipeline
+    (transition, incident resolution, recovery alert). A real failure is
+    reported as a real failure and recovers under the normal thresholds."""
     require_recent_auth(context, settings)
     row = await _locked_component(db, key)
+    # Only while the simulation is still running, or the state is still held
+    # purely by it, do the failure counters consist of simulated results.
+    # After an expiry followed by real failures, they are real evidence and
+    # are kept, and no early recovery is attempted.
+    was_simulated = (
+        row.simulate_failure_until is not None and row.simulate_failure_until > datetime.now(UTC)
+    ) or holds_simulated_failure(row)
     row.simulate_failure_until = None
     row.simulate_failure_severity = None
+    if was_simulated:
+        # Simulated failures must not count towards a later real outage.
+        row.consecutive_failures = 0
     platform_audit(
         db,
         request,
@@ -517,7 +591,31 @@ async def clear_simulated_failure(
         new={"component": key},
     )
     await db.commit()
-    return {"key": key, "simulating_until": None}
+
+    transitions: list[str] = []
+    alerts_raised = 0
+    recovery_pending = False
+    if (
+        was_simulated
+        and settings.environment != "production"
+        and row.enabled
+        and not BY_KEY[key].watchdog_managed
+    ):
+        report = await _run_single_check(settings, key, confirm_fault_injection=True)
+        transitions, alerts_raised = report.transitions, report.alerts
+        recovery_pending = not report.ran
+    refreshed = await db.get(MonitorComponent, key, populate_existing=True)
+    assert refreshed is not None
+    return {
+        "key": key,
+        "simulating_until": None,
+        "transitions": transitions,
+        "alerts_raised": alerts_raised,
+        # A monitoring cycle held the lock: the state is still held, and
+        # "Stop simulation" stays available to retry the recovery.
+        "recovery_pending": recovery_pending,
+        "component": _component_payload(refreshed, datetime.now(UTC), runner_fresh=True),
+    }
 
 
 @router.post("/overrides", status_code=status.HTTP_201_CREATED)

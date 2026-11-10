@@ -18,6 +18,7 @@ live DEV acceptance runbook in docs/operations/service-monitoring.md.
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import smtplib
 import uuid
@@ -39,6 +40,7 @@ from mykhaya.db import SessionFactory
 from mykhaya.mailer import SmtpConfig
 from mykhaya.main import app
 from mykhaya.models import (
+    AdministrativeAuditEvent,
     MonitorAlert,
     MonitorComponent,
     MonitorObservation,
@@ -530,6 +532,264 @@ async def test_fault_injection_is_ignored_and_refused_in_production(
     finally:
         app.dependency_overrides.pop(get_settings, None)
     assert response.status_code == 403
+
+
+@pytest.mark.asyncio
+async def test_fault_injection_confirmation_is_ignored_in_production(
+    monitoring_state: Any, redis: Redis
+) -> None:
+    production = get_settings().model_copy(update={"environment": "production"})
+    await succeed_n(redis, "api.database", T0, 1)
+    await simulate("api.database", T0 + timedelta(hours=1))
+    async with _offline_http() as http:
+        await engine.run_cycle(
+            production,
+            http=http,
+            redis=redis,
+            now=T0 + timedelta(minutes=2),
+            only_keys={"api.database"},
+            force=True,
+            confirm_fault_injection=True,
+        )
+    row = await component("api.database")
+    assert row.state == "healthy"
+    assert row.last_failure_category is None
+
+
+def test_fault_injection_never_confirms_a_real_failure_or_real_recovery() -> None:
+    real_outage = _row("unavailable")
+    real_outage.last_failure_category = "connectivity"
+    assert not engine.holds_simulated_failure(real_outage)
+    assert not engine._fault_injection_confirms(real_outage, CheckResult.success())
+    assert not engine._fault_injection_confirms(
+        _row("healthy"), CheckResult.failure("connectivity", "x")
+    )
+    simulated = _row("unavailable")
+    simulated.last_failure_category = "simulated"
+    assert engine.holds_simulated_failure(simulated)
+    assert engine._fault_injection_confirms(simulated, CheckResult.success())
+    assert engine._fault_injection_confirms(_row("healthy"), CheckResult.failure("simulated", "x"))
+
+
+async def _transitions(key: str) -> list[MonitorTransition]:
+    async with SessionFactory() as db:
+        return list(
+            (
+                await db.scalars(
+                    select(MonitorTransition)
+                    .where(MonitorTransition.component_key == key)
+                    .order_by(MonitorTransition.occurred_at)
+                )
+            ).all()
+        )
+
+
+@pytest.mark.asyncio
+async def test_pcc_fault_injection_confirms_immediately_and_stop_recovers(
+    monitoring_state: Callable[[PlatformRole], Awaitable[PlatformAdministrator]],
+    redis: Redis,
+    admin_client: AsyncClient,  # noqa: F811
+) -> None:
+    owner = await monitoring_state(PlatformRole.owner)
+    await succeed_n(redis, "api.database", T0, 1)
+    before = await component("api.database")
+    assert before.state == "healthy"
+    thresholds = (before.failure_threshold, before.recovery_threshold)
+    assert thresholds[0] > 1
+    await login(admin_client, owner)
+
+    # One action: an already-confirmed failure through the real pipeline.
+    response = await unsafe(
+        admin_client,
+        "POST",
+        "/api/v1/platform/monitoring/components/api.database/simulate-failure",
+        json={
+            "minutes": 10,
+            "severity": "unavailable",
+            "reason": "DEV alert drill",
+            "confirmed": True,
+        },
+    )
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["transitions"] == ["api.database:unavailable"]
+    assert body["component"]["stored_state"] == "unavailable"
+    assert body["component"]["simulating_until"] is not None
+    transitions = await _transitions("api.database")
+    failure = transitions[-1]
+    assert (failure.from_state, failure.to_state) == ("healthy", "unavailable")
+    assert failure.failure_category == "simulated"
+    assert failure.consecutive_count == 1
+    assert "DEV fault injection" in (failure.detail or "")
+    incidents = await automated_incidents("api")
+    assert len(incidents) == 1
+    assert "fault injection" in (incidents[0].internal_notes or "")
+    assert "fault injection" not in incidents[0].message.lower()
+    raised = await alerts_for("api.database")
+    assert [alert.kind for alert in raised] == ["unavailable"]
+    assert raised[0].suppressed_reason is None
+    assert "DEV fault injection" in raised[0].summary
+    assert len(await deliveries_for(raised[0])) == 1
+
+    # Scheduled checks during the simulation repeat the state: nothing new.
+    now = datetime.now(UTC)
+    for offset in range(1, 5):
+        await write_runner_heartbeat(now + timedelta(minutes=offset))
+        await cycle(redis, {"api.database"}, now + timedelta(minutes=offset))
+    assert len(await _transitions("api.database")) == len(transitions)
+    assert len(await alerts_for("api.database")) == 1
+    assert len(await automated_incidents("api")) == 1
+    async with SessionFactory() as db:
+        triggers = set(
+            (
+                await db.scalars(
+                    select(MonitorObservation.trigger).where(
+                        MonitorObservation.component_key == "api.database",
+                        MonitorObservation.failure_category == "simulated",
+                    )
+                )
+            ).all()
+        )
+    assert triggers == {"simulated"}
+
+    # One action: the real check runs and the recovery is confirmed at once.
+    stopped = await unsafe(
+        admin_client,
+        "POST",
+        "/api/v1/platform/monitoring/components/api.database/simulate-failure/clear",
+        json={"reason": "End DEV alert drill", "confirmed": True},
+    )
+    assert stopped.status_code == 200, stopped.text
+    stop_body = stopped.json()
+    assert stop_body["transitions"] == ["api.database:healthy"]
+    assert stop_body["recovery_pending"] is False
+    assert stop_body["component"]["simulating_until"] is None
+    assert stop_body["component"]["simulated_failure_held"] is False
+    row = await component("api.database")
+    assert row.state == "healthy"
+    assert (row.failure_threshold, row.recovery_threshold) == thresholds
+    recovery = (await _transitions("api.database"))[-1]
+    assert (recovery.from_state, recovery.to_state) == ("unavailable", "healthy")
+    assert recovery.consecutive_count == 1
+    assert "DEV fault injection" in (recovery.detail or "")
+    incidents = await automated_incidents("api")
+    assert len(incidents) == 1 and incidents[0].resolved_at is not None
+    raised = await alerts_for("api.database")
+    assert [alert.kind for alert in raised] == ["unavailable", "recovered"]
+    assert raised[1].suppressed_reason is None
+    assert "DEV fault injection" in raised[1].summary
+
+    async with SessionFactory() as db:
+        actions = (
+            await db.scalars(
+                select(AdministrativeAuditEvent.action).where(
+                    AdministrativeAuditEvent.administrator_id == owner.id,
+                    AdministrativeAuditEvent.action.like("monitoring.fault_injection%"),
+                )
+            )
+        ).all()
+    assert sorted(actions) == [
+        "monitoring.fault_injection_cleared",
+        "monitoring.fault_injection_started",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_pcc_stop_simulation_never_reports_a_false_recovery(
+    monitoring_state: Callable[[PlatformRole], Awaitable[PlatformAdministrator]],
+    redis: Redis,
+    admin_client: AsyncClient,  # noqa: F811
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    owner = await monitoring_state(PlatformRole.owner)
+    await succeed_n(redis, "api.database", T0, 1)
+    await login(admin_client, owner)
+    started = await unsafe(
+        admin_client,
+        "POST",
+        "/api/v1/platform/monitoring/components/api.database/simulate-failure",
+        json={"minutes": 10, "reason": "DEV alert drill", "confirmed": True},
+    )
+    assert started.status_code == 200, started.text
+    assert (await component("api.database")).state == "unavailable"
+
+    # The real service is genuinely failing when the simulation is stopped.
+    async def real_failure(_: CheckContext) -> CheckResult:
+        return CheckResult.failure("connectivity", "The database refused the connection.")
+
+    failing = dataclasses.replace(BY_KEY["api.database"], run=real_failure)
+    monkeypatch.setattr(
+        engine,
+        "CATALOGUE",
+        [failing if item.key == "api.database" else item for item in engine.CATALOGUE],
+    )
+    stopped = await unsafe(
+        admin_client,
+        "POST",
+        "/api/v1/platform/monitoring/components/api.database/simulate-failure/clear",
+        json={"reason": "End DEV alert drill", "confirmed": True},
+    )
+    assert stopped.status_code == 200, stopped.text
+    body = stopped.json()
+    assert body["transitions"] == []
+    assert body["recovery_pending"] is False
+    assert body["component"]["simulated_failure_held"] is False
+    row = await component("api.database")
+    assert row.state == "unavailable"
+    assert row.last_failure_category == "connectivity"
+    assert row.consecutive_failures == 1
+    assert [t.to_state for t in await _transitions("api.database")][-1] == "unavailable"
+    incidents = await automated_incidents("api")
+    assert len(incidents) == 1 and incidents[0].resolved_at is None
+    assert [alert.kind for alert in await alerts_for("api.database")] == ["unavailable"]
+
+    # Once the service really recovers, the normal recovery threshold applies.
+    monkeypatch.undo()
+    now = datetime.now(UTC) + timedelta(minutes=1)
+    await write_runner_heartbeat(now)
+    await cycle(redis, {"api.database"}, now)
+    assert (await component("api.database")).state == "unavailable"
+    assert [alert.kind for alert in await alerts_for("api.database")] == ["unavailable"]
+
+
+@pytest.mark.asyncio
+async def test_pcc_fault_injection_is_refused_when_busy_or_disabled(
+    monitoring_state: Callable[[PlatformRole], Awaitable[PlatformAdministrator]],
+    admin_client: AsyncClient,  # noqa: F811
+) -> None:
+    owner = await monitoring_state(PlatformRole.owner)
+    await login(admin_client, owner)
+    path = "/api/v1/platform/monitoring/components/api.database/simulate-failure"
+    payload = {"minutes": 10, "reason": "DEV alert drill", "confirmed": True}
+
+    # A monitoring cycle holds the lock: nothing is applied or left behind.
+    async with SessionFactory() as holder:
+        assert await holder.scalar(
+            text("SELECT pg_try_advisory_lock(:k)"), {"k": engine.RUNNER_LOCK_KEY}
+        )
+        try:
+            busy = await unsafe(admin_client, "POST", path, json=payload)
+        finally:
+            await holder.execute(
+                text("SELECT pg_advisory_unlock(:k)"), {"k": engine.RUNNER_LOCK_KEY}
+            )
+            await holder.commit()
+    assert busy.status_code == 409
+    row = await component("api.database")
+    assert row.simulate_failure_until is None
+    assert row.state == "unknown"
+
+    # A disabled component cannot be used for fault injection.
+    async with SessionFactory() as db:
+        await db.execute(
+            update(MonitorComponent)
+            .where(MonitorComponent.key == "api.database")
+            .values(enabled=False)
+        )
+        await db.commit()
+    disabled = await unsafe(admin_client, "POST", path, json=payload)
+    assert disabled.status_code == 409
+    assert (await component("api.database")).simulate_failure_until is None
 
 
 def test_alert_environment_label_comes_from_this_deployment_only() -> None:

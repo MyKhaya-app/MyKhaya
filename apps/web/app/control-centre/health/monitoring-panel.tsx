@@ -170,20 +170,32 @@ export function MonitoringPanel() {
           });
           setNotice(`${pending.component.name} settings saved.`);
           break;
-        case "simulate":
-          await platformApi.post(
+        case "simulate": {
+          const result = await platformApi.post<{ transitions: string[] }>(
             `/monitoring/components/${encodeURIComponent(pending.component.key)}/simulate-failure`,
             { ...base, minutes: Number(form.get("minutes")), severity: field(form, "severity") },
           );
-          setNotice(`Simulated failure started for ${pending.component.name}.`);
+          setNotice(
+            result.transitions.length
+              ? `Simulated failure active for ${pending.component.name}: ${result.transitions.join(", ")}.`
+              : `Simulated failure active for ${pending.component.name}. Its state did not change (it was already in that state, or maintenance mode is active).`,
+          );
           break;
-        case "clear-simulation":
-          await platformApi.post(
+        }
+        case "clear-simulation": {
+          const result = await platformApi.post<{ transitions: string[]; recovery_pending: boolean }>(
             `/monitoring/components/${encodeURIComponent(pending.component.key)}/simulate-failure/clear`,
             base,
           );
-          setNotice(`Simulated failure cleared for ${pending.component.name}.`);
+          setNotice(
+            result.recovery_pending
+              ? `Simulation stopped for ${pending.component.name}, but a monitoring cycle was in progress. Choose Stop simulation again to run the recovery check.`
+              : result.transitions.length
+                ? `Simulation stopped for ${pending.component.name}: ${result.transitions.join(", ")}.`
+                : `Simulation stopped for ${pending.component.name}. The real check did not confirm a recovery; it now follows the normal thresholds.`,
+          );
           break;
+        }
         case "override": {
           const mode = field(form, "mode");
           await platformApi.post("/monitoring/overrides", {
@@ -266,7 +278,11 @@ export function MonitoringPanel() {
           <CcBadge tone={componentStateTone(row.state)}>{componentStateLabel(row.state)}</CcBadge>
           {row.confidence === "limited" && row.state === "healthy" && <small>Limited confidence</small>}
           {publicReportingNote(row) && <small>{publicReportingNote(row)}</small>}
-          {row.simulating_until && <small>Simulated failure until {readableDate(row.simulating_until)}</small>}
+          {row.simulating_until ? (
+            <small>DEV fault injection active until {readableDate(row.simulating_until)}</small>
+          ) : (
+            row.simulated_failure_held && <small>Held by DEV fault injection: stop the simulation to recover</small>
+          )}
         </div>
       ),
     },
@@ -318,7 +334,7 @@ export function MonitoringPanel() {
           </button>
           {overview.fault_injection_available &&
             !row.watchdog_managed &&
-            (row.simulating_until ? (
+            (row.simulating_until || row.simulated_failure_held ? (
               <button
                 type="button"
                 className="secondary"
@@ -604,7 +620,9 @@ function dialogDescription(pending: PendingAction | null): string | undefined {
     case "run":
       return "Runs this read-only check immediately. The result counts towards the failure and recovery thresholds like any scheduled check.";
     case "simulate":
-      return "DEV only. The check reports a simulated failure until the time below, driving the real public status, incident and alert path. Real services are not touched.";
+      return "DEV only. This component immediately enters the selected failed state, without waiting for the failure threshold, through the real transition, incident and alert path. If it affects the public status page, a public DEV incident is opened, and administrator alert emails are sent under the current alert settings. The simulation stays active for the duration below or until you stop it. Real services, data and monitoring settings are not touched.";
+    case "clear-simulation":
+      return "Ends the simulated failure and runs this component's real check now. If it succeeds, the component recovers immediately, any automated incident is resolved and a recovery alert is sent. If the real check fails, that failure is reported normally.";
     case "resend":
       return "Queues the alert email again to the current recipient list.";
     default:
@@ -618,6 +636,8 @@ function dialogConfirm(pending: PendingAction | null): string {
       return "Run check";
     case "simulate":
       return "Start simulation";
+    case "clear-simulation":
+      return "Stop simulation";
     case "revoke":
       return "Revoke";
     case "resend":

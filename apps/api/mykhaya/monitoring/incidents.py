@@ -33,7 +33,7 @@ from mykhaya.models import (
     StatusIncidentUpdate,
 )
 from mykhaya.monitoring.catalogue import BY_KEY
-from mykhaya.monitoring.results import HEALTHY
+from mykhaya.monitoring.results import HEALTHY, SIMULATED
 from mykhaya.monitoring.state import component_public_impact, effective_state, worst_public
 from mykhaya.status_aggregation import ALL_STATUS_SERVICES, is_override_active
 
@@ -113,6 +113,16 @@ async def reconcile_incidents(
             if key not in affected:
                 affected.append(key)
 
+    # Services whose change in this batch comes from DEV fault injection, so
+    # the incident's internal notes (never public) say it was simulated.
+    simulated_services = {
+        key
+        for event in events
+        if event.transition.failure_category == SIMULATED
+        and (definition := BY_KEY.get(event.component.key)) is not None
+        for key in definition.service_keys
+    }
+
     open_by_service: dict[str, uuid.UUID] = {}
     for service_key in affected:
         name = ALL_STATUS_SERVICES.get(service_key, service_key)
@@ -164,7 +174,12 @@ async def reconcile_incidents(
                 created_by=None,
                 source=AUTOMATED_SOURCE,
                 monitor_service_key=service_key,
-                internal_notes="Opened automatically by service monitoring.",
+                internal_notes=(
+                    "Opened automatically by service monitoring in response to DEV fault "
+                    "injection (simulated failure)."
+                    if service_key in simulated_services
+                    else "Opened automatically by service monitoring."
+                ),
             )
             db.add(incident)
             await db.flush()

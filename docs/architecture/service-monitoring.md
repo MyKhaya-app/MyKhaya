@@ -302,6 +302,27 @@ never gated, so monitoring-system and core-service failures always email.
   Owner/Administrator, recent authentication, a reason, and are audited.
   Acknowledgement is open to support operators. Fault injection is refused
   in production by both the API and the runner.
+- **DEV fault injection** (`simulate-failure` / `simulate-failure/clear`)
+  replaces only the component's check *result* while it is active; it never
+  touches the real service, provider, queue, data or stored configuration.
+  Starting it runs one cycle for that component immediately with
+  `confirm_fault_injection`, which lets that single simulated failure confirm
+  the Degraded/Unavailable transition without waiting for
+  `failure_threshold`. The transition, automated incident, alert,
+  deduplication and email delivery are the ordinary pipeline. Later
+  scheduled checks during the simulation repeat the same state, so they
+  raise nothing new. Stopping it clears the injection and, while the
+  simulation is still active or the state is still held purely by it, resets
+  the (simulated) failure counter and runs the *real* check at once. Real
+  failures recorded after an expired simulation are kept as evidence. Only a real success may end a
+  state held purely by fault injection (`last_failure_category =
+  simulated`) without waiting for `recovery_threshold`. A real failure is
+  reported as a real failure under the normal thresholds. The scheduled
+  runner never sets the flag, and it is ignored in production, so production
+  thresholds and behaviour are unchanged. Simulated transitions carry
+  category `simulated` and an explanatory detail. The observation trigger is
+  `simulated`, and an incident opened by it says so in its (non-public)
+  internal notes. Public incident wording is unchanged.
 
 ## DEV and PROD separation
 

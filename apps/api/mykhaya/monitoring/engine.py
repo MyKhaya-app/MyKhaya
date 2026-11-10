@@ -36,7 +36,9 @@ from mykhaya.monitoring.catalogue import BY_KEY, CATALOGUE, ComponentDefinition
 from mykhaya.monitoring.checks import CheckContext
 from mykhaya.monitoring.incidents import TransitionEvent
 from mykhaya.monitoring.results import (
+    DEGRADED,
     NETWORK_CATEGORIES,
+    SIMULATED,
     UNAVAILABLE,
     UNKNOWN,
     CheckResult,
@@ -102,6 +104,28 @@ async def ensure_components(db: AsyncSession) -> dict[str, MonitorComponent]:
     return {row.key: row for row in rows}
 
 
+def holds_simulated_failure(component: MonitorComponent) -> bool:
+    """The component's failed state was caused by DEV fault injection and no
+    real failure has been observed since (a real failure overwrites the
+    category). Never true in production, where injection cannot run."""
+    return component.state in (DEGRADED, UNAVAILABLE) and (
+        component.last_failure_category == SIMULATED
+    )
+
+
+def _fault_injection_confirms(component: MonitorComponent, result: CheckResult) -> bool:
+    """Whether an administrator's explicit DEV start/stop of fault injection
+    may confirm this result immediately instead of waiting for the
+    configured threshold: a simulated failure, or a real success that ends a
+    state held only by fault injection. A real failure is never confirmed
+    early, and a real outage is never recovered early."""
+    if result.outcome == "failure":
+        return result.category == SIMULATED
+    if result.outcome == "success":
+        return holds_simulated_failure(component)
+    return False
+
+
 async def apply_result(
     db: AsyncSession,
     component: MonitorComponent,
@@ -109,10 +133,18 @@ async def apply_result(
     now: datetime,
     *,
     trigger: str = "scheduled",
+    confirm_fault_injection: bool = False,
 ) -> TransitionEvent | None:
     """Persist one observation and advance the component's state machine.
-    The caller must hold the component row lock (SELECT ... FOR UPDATE)."""
+    The caller must hold the component row lock (SELECT ... FOR UPDATE).
+
+    ``confirm_fault_injection`` is set only by the PCC fault-injection
+    start/stop actions (never by the scheduled runner, and never in
+    production). It lets that one result confirm the transition at once; the
+    stored thresholds are not changed and every other result is counted
+    exactly as normal."""
     definition = BY_KEY.get(component.key)
+    injected = confirm_fault_injection and _fault_injection_confirms(component, result)
     db.add(
         MonitorObservation(
             component_key=component.key,
@@ -145,6 +177,22 @@ async def apply_result(
         component.last_failure_at = now
         component.last_failure_category = result.category
         component.last_failure_detail = result.detail
+    # The honest count of checks behind this result, recorded on the
+    # transition even when fault injection confirms it early.
+    observed_count = (
+        component.consecutive_failures + 1
+        if result.outcome == "failure"
+        else component.consecutive_successes + 1
+    )
+    if injected:
+        if result.outcome == "failure":
+            component.consecutive_failures = max(
+                component.consecutive_failures, component.failure_threshold - 1
+            )
+        else:
+            component.consecutive_successes = max(
+                component.consecutive_successes, component.recovery_threshold - 1
+            )
     target = next_state(component, result)
     if target == component.state:
         return None
@@ -156,6 +204,14 @@ async def apply_result(
         if result.outcome == "failure"
         else component.consecutive_successes
     )
+    detail = result.detail if result.outcome == "failure" else None
+    if injected:
+        count = observed_count
+        detail = (
+            "Simulated failure (DEV fault injection), confirmed immediately by an administrator."
+            if result.outcome == "failure"
+            else "DEV fault injection stopped; recovery confirmed by a successful real check."
+        )
     transition = MonitorTransition(
         component_key=component.key,
         occurred_at=now,
@@ -163,7 +219,7 @@ async def apply_result(
         to_state=target,
         consecutive_count=count,
         failure_category=result.category if result.outcome == "failure" else None,
-        detail=result.detail if result.outcome == "failure" else None,
+        detail=detail,
     )
     db.add(transition)
     await db.flush()
@@ -174,6 +230,7 @@ async def apply_result(
         to_state=target,
         category=transition.failure_category,
         public=bool(definition and component.public_visible),
+        fault_injection=injected,
     )
     return TransitionEvent(transition, component, previous_success_at)
 
@@ -306,10 +363,12 @@ async def run_cycle(
     force: bool = False,
     trigger: str = "scheduled",
     wait_for_lock: float = 0.0,
+    confirm_fault_injection: bool = False,
 ) -> CycleReport:
     """One monitoring pass. Returns ran=False without doing anything when
     another runner holds the lock (or, with ``wait_for_lock``, still holds it
-    after that many seconds)."""
+    after that many seconds). ``confirm_fault_injection`` is for the PCC DEV
+    fault-injection actions only; it is ignored in production."""
     async with session_factory() as lock_db:
         if not await _try_lock(lock_db, RUNNER_LOCK_KEY, wait_for_lock):
             return CycleReport(ran=False)
@@ -323,6 +382,9 @@ async def run_cycle(
                 only_keys=only_keys,
                 force=force,
                 trigger=trigger,
+                confirm_fault_injection=(
+                    confirm_fault_injection and settings.environment != "production"
+                ),
             )
         finally:
             await lock_db.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": RUNNER_LOCK_KEY})
@@ -339,6 +401,7 @@ async def _locked_cycle(
     only_keys: set[str] | None,
     force: bool,
     trigger: str,
+    confirm_fault_injection: bool = False,
 ) -> CycleReport:
     report = CycleReport(ran=True)
     async with session_factory() as db:
@@ -399,7 +462,14 @@ async def _locked_cycle(
             if component is None:
                 continue
             how = triggers[key] if triggers[key] == "simulated" else trigger
-            event = await apply_result(db, component, result, now, trigger=how)
+            event = await apply_result(
+                db,
+                component,
+                result,
+                now,
+                trigger=how,
+                confirm_fault_injection=confirm_fault_injection,
+            )
             report.executed.append(key)
             if result.outcome == "monitor_error":
                 report.errors += 1

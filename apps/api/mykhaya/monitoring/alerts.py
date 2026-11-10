@@ -184,6 +184,8 @@ def _compose(
             f"Previous status: {_STATE_LABEL.get(transition.from_state, transition.from_state)}"
         )
         lines.append(f"Consecutive successful checks: {transition.consecutive_count}")
+        if transition.detail:
+            lines.append(f"Detail: {transition.detail}")
     else:
         lines.append(f"Detected: {_format_time(transition.occurred_at)}")
         if transition.failure_category:
