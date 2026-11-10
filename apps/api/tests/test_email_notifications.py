@@ -123,6 +123,7 @@ def test_mandatory_email_types_are_registered() -> None:
         "support.ticket.follow_up",
         "legal_acceptance_confirmation",
         "platform.monitoring_alert",
+        "account.sign_in_method_disconnected",
     } == (MANDATORY_EMAIL_TYPES)
 
 
