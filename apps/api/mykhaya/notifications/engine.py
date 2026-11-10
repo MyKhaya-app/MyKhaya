@@ -73,6 +73,8 @@ MANDATORY_EMAIL_TYPES = {
     "account.sign_in_method_disconnected",
     # Confirmation of a Founding Beta enrolment the user has just completed.
     "founding_beta_welcome",
+    "founding_beta_waitlist_confirmation",
+    "founding_beta_invitation",
     "support.ticket.received",
     "support.ticket.reply",
     "support.ticket.resolved",

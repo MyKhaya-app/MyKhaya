@@ -152,6 +152,8 @@ def test_registry_matches_migration_version() -> None:
         "support.ticket.new_for_team",
         "email_verification",
         "founding_beta_welcome",
+        "founding_beta_waitlist_confirmation",
+        "founding_beta_invitation",
         "password_reset",
         "household_invitation",
         "calendar_share_invitation",
@@ -229,6 +231,7 @@ def test_mandatory_email_types_are_registered_as_non_disableable() -> None:
         # delivered but are not account-security mail.
         if not template_type.startswith("support.ticket.") and template_type not in {
             "founding_beta_welcome",
+            "founding_beta_waitlist_confirmation",
             "platform.monitoring_alert",
         }:
             assert TEMPLATES[template_type].security_critical is True
