@@ -30,6 +30,25 @@
    rollback constraints.
 6. Report the exact commit and whether `dev` is ready.
 
+The closure validation basis was DEV commit `9a8e6eee13232f8405c7c6eef01d9444054c0325`, plus the uncommitted remediation changes listed in the handoff. This is working-tree evidence, not a claim about a remote GitHub SHA until the changes are committed and CI reruns.
+
+The stable-release workflow installs the repository-pinned Node `22.23.4` and
+pnpm `10.14.0` toolchain before invoking the existing Make targets. This keeps
+tag validation equivalent to the normal quality workflow; it does not remove or
+weaken any application, migration, build or security gate.
+
+Migration `0125_service_monitoring` has a deliberate downgrade limitation:
+its downgrade removes monitoring-created incidents and incident updates with
+no administrator author before restoring the historical non-null constraints.
+Production rollback is therefore backup/forward-recovery based; do not run an
+Alembic downgrade against live production data merely to force older code to
+run.
+
+Current release evidence must distinguish repository/CI results from operator
+evidence. Production provider settings, branch protection, deployed SHAs,
+backup restore results and live monitoring remain unverified until an
+authorised operator records them.
+
 ## Anthony's release actions
 
 1. Merge approved `dev` into `main`.

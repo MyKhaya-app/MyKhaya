@@ -130,3 +130,21 @@ out of screenshots.
 | 2026-11-01 | — | Android emulator (Pixel 6 AVD, Android 16, Google APIs image) | Emulator | **Not run.** The image has no usable browser (Chrome is a library stub), and the Android shell only loads the live DEV or PROD frontend, so local changes cannot be shown in it. A Google Play image, or a DEV deployment, is needed. |
 | — | — | iOS Simulator | Simulator | **Not run.** Needs a Mac with Xcode. |
 | — | — | Every presentation above | Physical device | **Not run.** Native acceptance is not complete. |
+## Subsequent user-reported evidence
+
+The Owner/user reported that **MyKhaya-Dev iOS v0.1.36 (Build 1)** was
+distributed through TestFlight, installed and physically tested on an iPhone,
+and that the physical-device test passed. The same report says Apple and Google
+sign-in had previously been confirmed against live DEV.
+
+This is recorded as user-provided acceptance evidence, not independent agent
+verification. It does not establish that every checklist presentation or native
+capability was covered. APNs delivery, widgets, Face ID/Keychain persistence,
+iPad/Duo layouts, keyboard/picker behaviour and the deployed web SHA remain
+unverified unless separately recorded.
+
+Android remains unaccepted. Minimum outstanding evidence is a DEV or PROD
+physical-device/Play Internal Testing run covering Firebase project and
+`google-services.json` identity, FCM registration and delivery, notification
+permission/channels, foreground/background/terminated delivery, tap routing,
+biometric resume re-lock and predictive back behaviour.

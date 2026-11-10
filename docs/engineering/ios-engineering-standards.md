@@ -395,6 +395,15 @@ Verified from repository contents on 28 October 2026. Re-check before acting.
 
 ## 10. What this standard has and has not verified
 
+### Subsequent acceptance evidence
+
+The Owner/user reported acceptance of MyKhaya-Dev iOS v0.1.36 (Build 1) on a
+physical iPhone after TestFlight distribution, and reported that Apple and
+Google sign-in had previously worked against live DEV. This is user-reported
+evidence, not independent repository or device verification; it does not close
+the per-presentation, push, widget, biometric, deployed-SHA or PROD checks
+listed below.
+
 Verified against the repository: the two-app xcconfig matrix, the four build
 configurations and their base xcconfigs, the four shared schemes and their
 Run/Archive configurations, entitlements and Info.plist variable wiring, the
