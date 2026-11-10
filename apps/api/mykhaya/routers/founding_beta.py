@@ -671,6 +671,7 @@ async def _queue_beta_invitation_email(
     entry: BetaWaitlistEntry,
     raw_token: str,
 ) -> None:
+    expiry = invitation.expires_at.strftime("%d %B %Y at %H:%M UTC").lstrip("0")
     subject, message, html = await render_notification_email(
         db,
         settings,
@@ -678,7 +679,7 @@ async def _queue_beta_invitation_email(
         {
             "first_name": entry.name.split(maxsplit=1)[0],
             "link": f"{settings.public_web_url}/founding-beta?invitation={raw_token}",
-            "expires_at": invitation.expires_at.isoformat(),
+            "expires_at": expiry,
         },
     )
     await notify(

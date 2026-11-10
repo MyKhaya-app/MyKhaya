@@ -417,6 +417,83 @@ async def test_deployment_closed_wins_over_open_pcc_settings(client: AsyncClient
         app.dependency_overrides.pop(dependency, None)
 
 
+@pytest.mark.asyncio
+async def test_valid_beta_invitation_can_register_when_deployment_general_signup_is_closed(
+    client: AsyncClient,
+) -> None:
+    await set_setting("signup_mode", "beta_only")
+    invitee = _email("closed-beta")
+    raw = secrets.token_urlsafe(40)
+    async with SessionFactory() as db:
+        programme = await db.scalar(
+            select(BetaProgramme).where(BetaProgramme.slug == FOUNDING_BETA_SLUG)
+        )
+        assert programme is not None
+        db.add(
+            BetaInvitation(
+                programme_id=programme.id,
+                email=invitee,
+                token_hash=invitation_token_hash(raw),
+                expires_at=datetime.now(UTC) + timedelta(days=1),
+            )
+        )
+        await db.commit()
+
+    closed = get_settings().model_copy(update={"registration_mode": "closed"})
+    from mykhaya.config import get_settings as dependency
+
+    app.dependency_overrides[dependency] = lambda: closed
+    try:
+        response = await register(
+            client,
+            invitee,
+            beta=True,
+            beta_invitation_token=raw,
+        )
+        assert response.status_code == 202, response.text
+    finally:
+        app.dependency_overrides.pop(dependency, None)
+
+
+@pytest.mark.asyncio
+async def test_valid_beta_invitation_cannot_bypass_pcc_signup_killswitches(
+    client: AsyncClient,
+) -> None:
+    await set_setting("signup_mode", "beta_only")
+    invitee = _email("closed-beta-pcc")
+    raw = secrets.token_urlsafe(40)
+    async with SessionFactory() as db:
+        programme = await db.scalar(
+            select(BetaProgramme).where(BetaProgramme.slug == FOUNDING_BETA_SLUG)
+        )
+        assert programme is not None
+        db.add(
+            BetaInvitation(
+                programme_id=programme.id,
+                email=invitee,
+                token_hash=invitation_token_hash(raw),
+                expires_at=datetime.now(UTC) + timedelta(days=1),
+            )
+        )
+        await db.commit()
+
+    from mykhaya.config import get_settings as dependency
+
+    closed = get_settings().model_copy(update={"registration_mode": "closed"})
+    app.dependency_overrides[dependency] = lambda: closed
+    try:
+        await set_setting("registration_enabled", False)
+        blocked_by_switch = await register(client, invitee, beta=True, beta_invitation_token=raw)
+        assert blocked_by_switch.status_code == 403
+
+        await set_setting("registration_enabled", True)
+        await set_setting("signup_mode", "closed")
+        blocked_by_mode = await register(client, invitee, beta=True, beta_invitation_token=raw)
+        assert blocked_by_mode.status_code == 403
+    finally:
+        app.dependency_overrides.pop(dependency, None)
+
+
 # ----------------------------------------------------- allowed_registration_domains
 
 

@@ -573,6 +573,10 @@ async def test_an_invited_person_registers_and_joins_past_a_non_empty_waitlist(
     assert len(rows) == 1
     assert "/founding-beta?invitation=" in rows[0].payload["body"]
     assert token in rows[0].payload["body"]
+    assert "Accept your invitation" in rows[0].payload["html_body"]
+    base_url = get_settings().public_web_url.rstrip("/")
+    assert f'href="{base_url}/founding-beta?invitation={token}"' in rows[0].payload["html_body"]
+    assert "UTC" in rows[0].payload["body"]
     assert "token" not in invited.text
     resent = await admin_unsafe(
         admin_client,

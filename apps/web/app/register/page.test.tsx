@@ -205,6 +205,23 @@ describe("Founding Beta registration availability", () => {
     expect(screen.getAllByRole("link", { name: "Sign in" })[0]).toHaveAttribute("href", "/login");
   });
 
+  it("keeps the normal Beta registration form open for an invitation while general registration is closed", async () => {
+    searchParams.value = "beta=1&beta_invitation=invitation-token";
+    publicSignupState.mockResolvedValue({
+      signup_mode: "closed",
+      registration_open: false,
+      invitation_required: false,
+      normal_signup_available: false,
+      beta_joining_available: false,
+      waitlist_available: false,
+      joinable_count: null,
+    });
+    render(<Register />);
+
+    expect(await screen.findByRole("button", { name: "Create account and continue" })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: "Registration is currently closed" })).not.toBeInTheDocument();
+  });
+
   it("shows Beta registration when Beta joining is available in beta-only mode", async () => {
     searchParams.value = "beta=1";
     publicSignupState.mockResolvedValue({
