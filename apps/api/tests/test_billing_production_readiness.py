@@ -21,6 +21,7 @@ from sqlalchemy.exc import IntegrityError
 
 from mykhaya.billing import pricing as pricing_module
 from mykhaya.billing.client import StripeUnavailableError
+from mykhaya.billing.config import StripeConfig
 from mykhaya.billing.state import (
     apply_stripe_subscription_state,
 )
@@ -123,6 +124,31 @@ async def _make_home(client: AsyncClient, suffix: str) -> uuid.UUID:
 
 def _suffix() -> str:
     return datetime.now(UTC).strftime("%H%M%S%f")
+
+
+@pytest.mark.asyncio
+async def test_unconfigured_stripe_returns_explicit_non_error_pricing_state(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    async def unconfigured(*_: object) -> StripeConfig:
+        return StripeConfig(source="unconfigured", configured=False)
+
+    monkeypatch.setattr("mykhaya.routers.billing.resolve_stripe_config", unconfigured)
+    response = await client.get("/api/v1/billing/pricing")
+    assert response.status_code == 200
+    assert response.json() == {
+        "available": False,
+        "unavailable_reason": "not_configured",
+        "plan": "family",
+        "options": [],
+        "annual_saving_formatted": None,
+        "annual_is_best_value": False,
+        "acquisition_enabled": False,
+        "ultimate_options": None,
+        "ultimate_annual_saving_formatted": None,
+        "ultimate_annual_is_best_value": False,
+        "ultimate_acquisition_enabled": False,
+    }
 
 
 # ---------------------------------------------------------------------------

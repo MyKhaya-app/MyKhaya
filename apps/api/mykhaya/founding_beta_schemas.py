@@ -130,8 +130,8 @@ class BetaInviteCreate(StrictModel):
 
 class BetaInviteResponse(StrictModel):
     invitation_id: uuid.UUID
-    token: str
     expires_at: str
+    email_queued: bool
 
 
 class BetaOverviewResponse(StrictModel):

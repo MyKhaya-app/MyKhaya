@@ -32,6 +32,7 @@ from mykhaya.models import (
     BetaWaitlistEntry,
     BetaWaitlistStatus,
     LegalDocument,
+    OutboxEvent,
     PlatformAdministrator,
     PlatformRole,
     PlatformSetting,
@@ -299,6 +300,33 @@ async def test_waitlist_response_is_identical_for_new_and_already_listed_emails(
 
 
 @pytest.mark.asyncio
+async def test_waitlist_confirmation_is_queued_once_for_repeated_requests(
+    client: AsyncClient,  # noqa: F811
+) -> None:
+    await _set("signup_mode", "beta_only")
+    await _programme_settings(places_free=False, waitlist_enabled=True)
+    email = _email("confirmation")
+
+    assert (await _join_waitlist(client, email)).status_code == 202
+    assert (await _join_waitlist(client, email.upper())).status_code == 202
+
+    async with SessionFactory() as db:
+        rows = (
+            await db.scalars(
+                select(OutboxEvent).where(
+                    OutboxEvent.topic == "notification.email",
+                    OutboxEvent.payload["notification_type"].as_string()
+                    == "founding_beta_waitlist_confirmation",
+                    OutboxEvent.payload["recipient_email"].as_string() == email,
+                )
+            )
+        ).all()
+    assert len(rows) == 1
+    assert rows[0].payload["subject"] == "You’re on the MyKhaya Founding Beta waitlist"
+    assert "does not reserve a place" in rows[0].payload["body"]
+
+
+@pytest.mark.asyncio
 async def test_daily_cap_refuses_new_and_existing_emails_alike(
     client: AsyncClient,  # noqa: F811
 ) -> None:
@@ -525,7 +553,52 @@ async def test_an_invited_person_registers_and_joins_past_a_non_empty_waitlist(
         json={"waitlist_entry_id": str(invitee_entry)},
     )
     assert invited.status_code == 201, invited.text
-    token = invited.json()["token"]
+    invitation = invited.json()
+    assert "token" not in invitation
+    invitation_id = uuid.UUID(invitation["invitation_id"])
+    token = derived_token(
+        invitation_id, "beta_invitation", get_settings().secret_key.get_secret_value()
+    )
+    async with SessionFactory() as db:
+        rows = (
+            await db.scalars(
+                select(OutboxEvent).where(
+                    OutboxEvent.topic == "notification.email",
+                    OutboxEvent.payload["notification_type"].as_string()
+                    == "founding_beta_invitation",
+                    OutboxEvent.payload["recipient_email"].as_string() == invitee,
+                )
+            )
+        ).all()
+    assert len(rows) == 1
+    assert "/founding-beta?invitation=" in rows[0].payload["body"]
+    assert token in rows[0].payload["body"]
+    assert "Accept your invitation" in rows[0].payload["html_body"]
+    base_url = get_settings().public_web_url.rstrip("/")
+    assert f'href="{base_url}/founding-beta?invitation={token}"' in rows[0].payload["html_body"]
+    assert "UTC" in rows[0].payload["body"]
+    assert "token" not in invited.text
+    resent = await admin_unsafe(
+        admin_client,
+        "POST",
+        f"/api/v1/platform/beta/invitations/{invitation_id}/resend",
+        json={},
+    )
+    assert resent.status_code == 200, resent.text
+    assert "token" not in resent.text
+    async with SessionFactory() as db:
+        resent_rows = (
+            await db.scalars(
+                select(OutboxEvent).where(
+                    OutboxEvent.topic == "notification.email",
+                    OutboxEvent.payload["notification_type"].as_string()
+                    == "founding_beta_invitation",
+                    OutboxEvent.payload["recipient_email"].as_string() == invitee,
+                )
+            )
+        ).all()
+    assert len(resent_rows) == 2
+    assert all(token in row.payload["body"] for row in resent_rows)
     assert await _entry_status(invitee_entry) == BetaWaitlistStatus.invited
     assert await _entry_status(other_entry) == BetaWaitlistStatus.waiting
     if places_full:

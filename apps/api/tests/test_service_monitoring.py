@@ -1186,6 +1186,35 @@ async def test_stripe_check_is_a_single_read_and_never_leaks_the_key(
 
 
 @pytest.mark.asyncio
+async def test_disabled_stripe_is_not_applicable_but_enabled_incomplete_stripe_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from mykhaya.billing.config import StripeConfig
+
+    configs = iter(
+        [
+            StripeConfig(source="unconfigured", configured=False),
+            StripeConfig(source="database", configured=False, incomplete_reason="missing key"),
+        ]
+    )
+
+    async def fake_config(*_: object) -> StripeConfig:
+        return next(configs)
+
+    monkeypatch.setattr(checks, "resolve_stripe_config", fake_config)
+    async with _offline_http() as http:
+        context = _context(http)
+        disabled = await checks.check_stripe_api(context)
+        incomplete = await checks.check_stripe_api(context)
+        await context.redis.aclose()
+    assert disabled.outcome == "not_applicable"
+    assert disabled.category == "not_configured"
+    assert incomplete.outcome == "failure"
+    assert incomplete.category == "auth_config"
+    assert "missing key" not in (incomplete.detail or "")
+
+
+@pytest.mark.asyncio
 async def test_dvsa_and_dvla_checks_make_no_vehicle_lookups(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -1312,6 +1341,7 @@ async def test_error_rate_monitor_uses_real_request_counters(redis: Redis) -> No
     assert quiet.outcome == "success" and quiet.confidence == "limited"
     assert failing.outcome == "failure" and failing.failure_severity == "unavailable"
     assert healthy.outcome == "success"
+    assert healthy.detail is not None and "API: 1 of 100 requests" in healthy.detail
 
 
 def test_request_metrics_exclude_probe_and_control_centre_paths() -> None:

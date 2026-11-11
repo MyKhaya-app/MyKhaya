@@ -77,8 +77,8 @@ class StripeConfig:
 
 class StripeNotConfiguredError(RuntimeError):
     """Raised by any billing operation attempted while Stripe is disabled —
-    callers turn this into a 503 "billing is not available" response rather
-    than letting an AttributeError on a None secret key leak upward."""
+    operations that require Stripe turn this into a safe unavailable response
+    rather than letting an AttributeError on a None secret key leak upward."""
 
 
 def _from_environment(settings: Settings) -> StripeConfig:

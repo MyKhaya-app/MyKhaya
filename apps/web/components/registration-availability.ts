@@ -10,6 +10,10 @@ export function registrationUnavailableReason(
   betaRequested = false,
 ): string | null {
   if (!state) return null;
+  // A Beta invitation is checked again by the API against the recipient
+  // email. On this display-only surface it is enough to keep the normal Beta
+  // form visible; invalid or expired tokens receive the server's safe error.
+  if (betaRequested && hasInvitation) return null;
   if (!state.registration_open) {
     return state.signup_mode === "closed"
       ? "New registrations are currently closed. If you already have an account, you can still sign in."

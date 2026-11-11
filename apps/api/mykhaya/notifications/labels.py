@@ -28,6 +28,8 @@ NOTIFICATION_TYPE_LABELS: dict[str, str] = {
     "home_join_request": "Home join request",
     "daily_briefing": "Daily Briefing",
     "daily_nudge_summary": "Daily Nudge Summary",
+    "founding_beta_waitlist_confirmation": "Founding Beta Waitlist Confirmation",
+    "founding_beta_invitation": "Founding Beta Invitation",
     "test_push": "Test push",
 }
 

@@ -1,4 +1,3 @@
-import secrets
 import uuid
 from datetime import UTC, datetime, timedelta
 
@@ -75,7 +74,7 @@ from mykhaya.platform_audit import platform_audit
 from mykhaya.platform_runtime import evaluate_signup_policy, registration_invitation_required
 from mykhaya.platform_security import PlatformContext, require_recent_auth, require_roles
 from mykhaya.rate_limit import enforce_rate_limit
-from mykhaya.security import normalise_email, resolve_client_ip
+from mykhaya.security import derived_token, normalise_email, resolve_client_ip
 
 log = structlog.get_logger()
 
@@ -165,17 +164,36 @@ async def join_waitlist(
         )
     )
     if existing is None:
-        db.add(
-            BetaWaitlistEntry(
-                programme_id=programme.id,
-                name=body.name,
-                email=email,
-                normalized_email=email,
-                country=body.country.upper(),
-                household_size=body.household_size,
-                use_case=body.use_case,
-                marketing_consent=body.marketing_consent,
-            )
+        entry = BetaWaitlistEntry(
+            programme_id=programme.id,
+            name=body.name,
+            email=email,
+            normalized_email=email,
+            country=body.country.upper(),
+            household_size=body.household_size,
+            use_case=body.use_case,
+            marketing_consent=body.marketing_consent,
+        )
+        db.add(entry)
+        await db.flush()
+        subject, message, html = await render_notification_email(
+            db,
+            settings,
+            "founding_beta_waitlist_confirmation",
+            {
+                "first_name": body.name.split(maxsplit=1)[0],
+                "link": f"{settings.public_web_url}/founding-beta",
+            },
+        )
+        await notify(
+            db,
+            settings=settings,
+            recipient_email=email,
+            notification_type="founding_beta_waitlist_confirmation",
+            title=subject,
+            body=message,
+            html_body=html,
+            idempotency_key=f"founding_beta_waitlist_confirmation:{entry.id}",
         )
     await db.commit()
     return BetaWaitlistResponse(accepted=True, status=BetaWaitlistStatus.waiting.value)
@@ -646,6 +664,38 @@ async def remove_waitlist_entry(
     await db.commit()
 
 
+async def _queue_beta_invitation_email(
+    db: AsyncSession,
+    settings: Settings,
+    invitation: BetaInvitation,
+    entry: BetaWaitlistEntry,
+    raw_token: str,
+) -> None:
+    expiry = invitation.expires_at.strftime("%d %B %Y at %H:%M UTC").lstrip("0")
+    subject, message, html = await render_notification_email(
+        db,
+        settings,
+        "founding_beta_invitation",
+        {
+            "first_name": entry.name.split(maxsplit=1)[0],
+            "link": f"{settings.public_web_url}/founding-beta?invitation={raw_token}",
+            "expires_at": expiry,
+        },
+    )
+    await notify(
+        db,
+        settings=settings,
+        recipient_email=invitation.email,
+        notification_type="founding_beta_invitation",
+        title=subject,
+        body=message,
+        html_body=html,
+        idempotency_key=(
+            f"founding_beta_invitation:{invitation.id}:{invitation.expires_at.isoformat()}"
+        ),
+    )
+
+
 @platform_router.post(
     "/invitations", response_model=BetaInviteResponse, status_code=status.HTTP_201_CREATED
 )
@@ -679,17 +729,21 @@ async def invite(
     )
     if entry is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That waitlist entry is unavailable.")
-    raw = secrets.token_urlsafe(32)
+    pending_invitation_hash = "pending"
     invitation = BetaInvitation(
         programme_id=programme.id,
         waitlist_entry_id=entry.id,
         email=entry.normalized_email,
-        token_hash=invitation_token_hash(raw),
+        token_hash=pending_invitation_hash,
         expires_at=datetime.now(UTC) + timedelta(days=programme.invitation_ttl_days),
         invited_by=context.administrator.id,
     )
     db.add(invitation)
+    await db.flush()
+    raw = derived_token(invitation.id, "beta_invitation", settings.secret_key.get_secret_value())
+    invitation.token_hash = invitation_token_hash(raw)
     entry.status = BetaWaitlistStatus.invited
+    await _queue_beta_invitation_email(db, settings, invitation, entry, raw)
     platform_audit(
         db,
         request,
@@ -701,7 +755,56 @@ async def invite(
     )
     await db.commit()
     return BetaInviteResponse(
-        invitation_id=invitation.id, token=raw, expires_at=invitation.expires_at.isoformat()
+        invitation_id=invitation.id,
+        expires_at=invitation.expires_at.isoformat(),
+        email_queued=True,
+    )
+
+
+@platform_router.post("/invitations/{invitation_id}/resend", response_model=BetaInviteResponse)
+async def resend_invitation(
+    invitation_id: uuid.UUID,
+    request: Request,
+    context: PlatformContext = Depends(
+        require_roles(PlatformRole.owner, PlatformRole.administrator)
+    ),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> BetaInviteResponse:
+    require_recent_auth(context, settings)
+    invitation = await db.scalar(
+        select(BetaInvitation).where(BetaInvitation.id == invitation_id).with_for_update()
+    )
+    if invitation is None or invitation.status != BetaInvitationStatus.reserved:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Only an active invitation can be resent.")
+    entry = (
+        await db.get(BetaWaitlistEntry, invitation.waitlist_entry_id, with_for_update=True)
+        if invitation.waitlist_entry_id
+        else None
+    )
+    if entry is None or entry.status != BetaWaitlistStatus.invited:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "The waitlist applicant is no longer eligible."
+        )
+    programme = await current_programme(db, for_update=True)
+    await lock_programme(db, programme)
+    invitation.expires_at = datetime.now(UTC) + timedelta(days=programme.invitation_ttl_days)
+    raw = derived_token(invitation.id, "beta_invitation", settings.secret_key.get_secret_value())
+    invitation.token_hash = invitation_token_hash(raw)
+    await _queue_beta_invitation_email(db, settings, invitation, entry, raw)
+    platform_audit(
+        db,
+        request,
+        context,
+        "beta.invitation_resent",
+        "beta_invitation",
+        invitation.id,
+    )
+    await db.commit()
+    return BetaInviteResponse(
+        invitation_id=invitation.id,
+        expires_at=invitation.expires_at.isoformat(),
+        email_queued=True,
     )
 
 

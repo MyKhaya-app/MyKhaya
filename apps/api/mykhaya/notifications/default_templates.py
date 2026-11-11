@@ -157,6 +157,42 @@ TEMPLATES: dict[str, TemplateDefault] = {
         module="founding_beta",
         disableable=False,
     ),
+    "founding_beta_waitlist_confirmation": TemplateDefault(
+        subject="You’re on the MyKhaya Founding Beta waitlist",
+        body=(
+            "Hi {{first_name}},\n\n"
+            "Thanks for your interest in the MyKhaya Founding Beta. We’ve recorded your place "
+            "on the waitlist. Joining the waitlist does not reserve a place; we’ll contact you "
+            "if a place becomes available.\n\n"
+            "You can revisit the Founding Beta here:\n\n{{link}}\n\n"
+            "Thanks,\nMyKhaya"
+        ),
+        allowed_variables=frozenset({"first_name", "link"}),
+        required_variables=frozenset({"link"}),
+        description="Sent once when someone successfully joins the Founding Beta waitlist.",
+        module="founding_beta",
+        disableable=False,
+    ),
+    "founding_beta_invitation": TemplateDefault(
+        subject="Your MyKhaya Founding Beta invitation",
+        body=(
+            "Hi {{first_name}},\n\n"
+            "A place has opened for you in the MyKhaya Founding Beta.\n\n"
+            "Use this secure link to continue your registration:\n\n{{link}}\n\n"
+            "This invitation expires on {{expires_at}} and can be used once.\n\n"
+            "If you were not expecting this invitation, you can ignore this email.\n\n"
+            "Thanks,\nMyKhaya"
+        ),
+        allowed_variables=frozenset({"first_name", "link", "expires_at"}),
+        required_variables=frozenset({"link"}),
+        description=(
+            "Sent when a PCC administrator reserves a Founding Beta place "
+            "for a waitlisted applicant."
+        ),
+        module="founding_beta",
+        disableable=False,
+        security_critical=True,
+    ),
     "password_reset": TemplateDefault(
         subject="Reset your MyKhaya password",
         body=(
@@ -773,6 +809,15 @@ SAMPLE_VARIABLES: dict[str, dict[str, str]] = {
         "first_name": "Jamie",
         "home_name": "The Example Family",
         "link": "https://example.com/home",
+    },
+    "founding_beta_waitlist_confirmation": {
+        "first_name": "Jamie",
+        "link": "https://example.com/founding-beta",
+    },
+    "founding_beta_invitation": {
+        "first_name": "Jamie",
+        "link": "https://example.com/founding-beta?invitation=SAMPLE-TOKEN",
+        "expires_at": "2026-12-31",
     },
     "password_reset": {"link": "https://example.com/reset-password?token=SAMPLE-TOKEN"},
     "account.sign_in_method_disconnected": {

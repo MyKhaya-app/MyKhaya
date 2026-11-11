@@ -42,6 +42,7 @@ CTA_LABELS: dict[str, str] = {
     "household_invitation": "Join Home",
     "platform_administrator_invitation": "Accept invitation",
     "founding_beta_welcome": "Open MyKhaya",
+    "founding_beta_invitation": "Accept your invitation",
 }
 
 # Card heading where it differs from the subject line (default: the subject).

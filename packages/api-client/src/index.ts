@@ -2157,8 +2157,15 @@ export class MyKhayaClient {
     this.request<import("@mykhaya/shared-types").BillingStatus>(
       `/groups/${encodeURIComponent(homeId)}/billing`,
     );
-  familyPricing = () =>
-    this.request<import("@mykhaya/shared-types").FamilyPricing>("/billing/pricing");
+  familyPricing = async () => {
+    const pricing = await this.request<import("@mykhaya/shared-types").FamilyPricing>(
+      "/billing/pricing",
+    );
+    if (pricing.available === false) {
+      throw new ApiError(503, "Billing is not configured.");
+    }
+    return pricing;
+  };
   planComparison = () =>
     this.request<import("@mykhaya/shared-types").PlanComparison>("/billing/plans");
   createCheckoutSession = (

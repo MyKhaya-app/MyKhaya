@@ -102,6 +102,7 @@ from mykhaya.models import (
     MfaEmailChallenge,
     Session,
     SessionKind,
+    SignupMode,
     TokenPurpose,
     TrustedDevice,
     User,
@@ -136,7 +137,12 @@ from mykhaya.platform_mfa import (
     verify_family_authentication,
     verify_family_registration,
 )
-from mykhaya.platform_runtime import email_verification_required, evaluate_signup_policy
+from mykhaya.platform_runtime import (
+    SignupPolicy,
+    email_verification_required,
+    evaluate_signup_policy,
+    registration_enabled,
+)
 from mykhaya.rate_limit import enforce_rate_limit
 from mykhaya.schemas import (
     AppleRecoveryOptionsResponse,
@@ -1032,10 +1038,8 @@ async def apple_recovery_register(
         raise HTTPException(status.HTTP_409_CONFLICT, "This Apple identity has no usable email.")
     policy = await evaluate_signup_policy(db, settings)
     if body.beta:
-        beta_allowed = policy.beta_path and (
-            not policy.invitation_required
-            or bool(body.beta_invitation_token)
-            and await beta_invitation_valid(db, body.beta_invitation_token or "", provider_email)
+        beta_allowed = await _beta_signup_allowed(
+            db, settings, policy, body.beta_invitation_token, provider_email
         )
     else:
         beta_allowed = policy.normal_path and not policy.invitation_required
@@ -1563,10 +1567,8 @@ async def google_recovery_register(
         raise HTTPException(status.HTTP_409_CONFLICT, "This Google identity has no usable email.")
     policy = await evaluate_signup_policy(db, settings)
     if body.beta:
-        beta_allowed = policy.beta_path and (
-            not policy.invitation_required
-            or bool(body.beta_invitation_token)
-            and await beta_invitation_valid(db, body.beta_invitation_token or "", provider_email)
+        beta_allowed = await _beta_signup_allowed(
+            db, settings, policy, body.beta_invitation_token, provider_email
         )
     else:
         beta_allowed = policy.normal_path and not policy.invitation_required
@@ -2151,6 +2153,30 @@ async def authenticate_credentials(
 BETA_INTENT_TTL_DAYS = 30
 
 
+async def _beta_signup_allowed(
+    db: AsyncSession,
+    settings: Settings,
+    policy: SignupPolicy,
+    invitation_token: str | None,
+    email: str,
+) -> bool:
+    """Allow only a valid Beta invitation through deployment-closed signup.
+
+    PCC registration disablement, closed signup mode, domain restrictions and
+    all downstream verification, MFA and legal gates remain enforced.
+    """
+    if policy.open:
+        if not policy.beta_path:
+            return False
+        if not policy.invitation_required:
+            return True
+    elif settings.registration_mode != "closed":
+        return False
+    elif not await registration_enabled(db) or policy.mode == SignupMode.closed:
+        return False
+    return bool(invitation_token and await beta_invitation_valid(db, invitation_token, email))
+
+
 @router.post("/register", response_model=RegistrationResponse, status_code=status.HTTP_202_ACCEPTED)
 async def register(
     body: RegisterRequest,
@@ -2164,12 +2190,17 @@ async def register(
     # (see SignupPolicy for the documented precedence) and runs before the
     # existing-email lookup, so an existing and a new address are rejected
     # identically — none of these checks can become an account-discovery signal.
-    policy = await evaluate_signup_policy(db, settings)
-    if not policy.open:
-        raise HTTPException(status.HTTP_403_FORBIDDEN, "Registration is currently closed.")
     beta = body.beta_requested
+    policy = await evaluate_signup_policy(db, settings)
+    beta_allowed = (
+        await _beta_signup_allowed(db, settings, policy, body.beta_invitation_token, email)
+        if beta
+        else False
+    )
+    if not policy.open and not (beta and beta_allowed and settings.registration_mode == "closed"):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "Registration is currently closed.")
     if beta:
-        if not policy.beta_path:
+        if not beta_allowed:
             raise HTTPException(
                 status.HTTP_403_FORBIDDEN, "Founding Beta joining is not currently open."
             )

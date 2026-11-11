@@ -31,6 +31,16 @@ PCC alert centre only ("Not emailed: check awaiting live validation"). They
 start emailing once validated (see below). Core and monitoring-system alerts
 always email.
 
+The API error-rate component is an aggregate measure of real API traffic over
+the preceding five minutes. Its recovery means that the aggregate error-rate
+and latency thresholds have returned to normal for the configured recovery
+threshold; it does not prove that every endpoint has recovered. Endpoint-
+specific availability needs its own component. An intentionally disabled
+integration is `not_applicable`, not a provider failure. Disabled Stripe
+billing therefore returns an explicit non-error pricing state, while an
+enabled Stripe configuration or provider failure remains monitored and can
+raise an alert.
+
 ## Day-to-day
 
 - **An alert arrives.** Open the link (the automated incident, or Health).

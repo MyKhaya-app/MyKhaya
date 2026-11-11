@@ -298,7 +298,11 @@ export default function Register() {
       (document) => Boolean(document.current_version_id && legalChecked[document.key]),
     );
   const registrationClosed =
-    signupStateLoaded && !maintenance && Boolean(signupState) && !signupState!.registration_open;
+    signupStateLoaded &&
+    !maintenance &&
+    Boolean(signupState) &&
+    !signupState!.registration_open &&
+    !(betaRequested && Boolean(betaInvitation));
   const signInHref = invitation
     ? `/login?invitation=${encodeURIComponent(invitation)}`
     : calendarShare

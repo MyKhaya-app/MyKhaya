@@ -782,7 +782,9 @@ async def check_stripe_api(ctx: CheckContext) -> CheckResult:
     async with ctx.session_factory() as db:
         config = await resolve_stripe_config(ctx.settings, db)
     if not config.configured or not config.secret_key:
-        return CheckResult.not_applicable("Stripe is not configured in this environment.")
+        if config.source == "unconfigured":
+            return CheckResult.not_applicable("Stripe is not configured in this environment.")
+        return CheckResult.failure("auth_config", "Stripe is enabled but not fully configured.")
     target = "Stripe"
     response, latency, error = await _get(
         ctx,
@@ -812,8 +814,10 @@ async def check_stripe_api(ctx: CheckContext) -> CheckResult:
 async def check_stripe_webhooks(ctx: CheckContext) -> CheckResult:
     async with ctx.session_factory() as db:
         config = await resolve_stripe_config(ctx.settings, db)
-        if not config.configured:
-            return CheckResult.not_applicable("Stripe is not configured in this environment.")
+        if not config.configured or not config.webhook_secret:
+            if config.source == "unconfigured":
+                return CheckResult.not_applicable("Stripe is not configured in this environment.")
+            return CheckResult.failure("auth_config", "Stripe is enabled but not fully configured.")
         failures = int(
             await db.scalar(
                 select(func.count(StripeWebhookFailure.id)).where(
