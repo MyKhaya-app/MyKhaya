@@ -356,13 +356,13 @@ export class NativeMyKhayaClient {
     const result = await (this.linkTransactions.has(transactionId)
       ? this.request<
           (User & { session_token?: string; device_token?: string })
-          | { authentication_state: "account_choice"; transaction_id: string; provider: "apple" | "google"; provider_email: string | null; display_name: string; can_register: boolean }
+          | { authentication_state: "account_choice"; transaction_id: string; provider: "apple" | "google"; provider_email: string | null; display_name: string | null; can_register: boolean }
           | { authentication_state: "additional_auth_required"; transaction_id: string; provider: "apple" | "google" }
           | { message: string }
         >("/auth/mobile/external/redeem", { method: "POST", body: JSON.stringify(body) })
       : this.postUnauthenticated<
       (User & { session_token?: string; device_token?: string })
-      | { authentication_state: "account_choice"; transaction_id: string; provider: "apple" | "google"; provider_email: string | null; display_name: string; can_register: boolean }
+      | { authentication_state: "account_choice"; transaction_id: string; provider: "apple" | "google"; provider_email: string | null; display_name: string | null; can_register: boolean }
       | { authentication_state: "additional_auth_required"; transaction_id: string; provider: "apple" | "google" }
       | { message: string }
     >("/auth/mobile/external/redeem", body));
@@ -382,7 +382,7 @@ export class NativeMyKhayaClient {
     requestId?: string,
   ): Promise<
     | User
-    | { authentication_state: "account_choice"; transaction_id: string; provider: "apple" | "google"; provider_email: string | null; display_name: string; can_register: boolean }
+    | { authentication_state: "account_choice"; transaction_id: string; provider: "apple" | "google"; provider_email: string | null; display_name: string | null; can_register: boolean }
     | { authentication_state: "additional_auth_required"; transaction_id: string; provider: "apple" | "google" }
     | { message: string }
   > {
@@ -399,7 +399,7 @@ export class NativeMyKhayaClient {
           transaction_id?: string;
           provider?: "apple" | "google";
           provider_email?: string | null;
-          display_name?: string;
+          display_name?: string | null;
           can_register?: boolean;
           message?: string;
         }>("/auth/mobile/external/exchange", {
@@ -414,7 +414,7 @@ export class NativeMyKhayaClient {
       transaction_id?: string;
       provider?: "apple" | "google";
       provider_email?: string | null;
-      display_name?: string;
+      display_name?: string | null;
       can_register?: boolean;
       message?: string;
     }>("/auth/mobile/external/exchange", body, requestId));

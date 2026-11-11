@@ -126,6 +126,8 @@ describe("Login — Apple recovery choice", () => {
     render(<Login />);
 
     await screen.findByRole("heading", { name: "Continue with Apple" });
+    expect(screen.queryByLabelText("Email")).not.toBeInTheDocument();
+    expect(screen.queryByRole("link", { name: /forgot password/i })).not.toBeInTheDocument();
     await typist.click(screen.getByRole("button", { name: /link to an existing account/i }));
     await typist.type(screen.getByLabelText("Email"), "existing@example.com");
     await typist.type(screen.getByLabelText("Password"), "correct-password");
@@ -160,12 +162,14 @@ describe("Login — Apple recovery choice", () => {
     render(<Login />);
 
     await typist.click(await screen.findByRole("button", { name: /create a new account/i }));
+    expect(screen.getByLabelText("Your name")).toHaveValue("Apple User");
     await typist.click(screen.getByRole("button", { name: /accept and create account/i }));
     expect(api.appleRecoveryRegister).not.toHaveBeenCalled();
     await typist.click(screen.getByRole("checkbox"));
     await typist.click(screen.getByRole("button", { name: /accept and create account/i }));
 
     expect(api.appleRecoveryRegister).toHaveBeenCalledWith("tx-2", {
+      display_name: "Apple User",
       legal_acceptances: [{ document_key: "terms", document_version_id: "terms-v1" }],
       platform: "web",
     });

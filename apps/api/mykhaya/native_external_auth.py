@@ -41,7 +41,7 @@ class NativeExternalPendingIdentity:
     subject: str
     provider_email: str | None
     email_verified: bool
-    display_name: str
+    display_name: str | None
     can_register: bool
     platform: str
     redemption_verifier_hash: str
@@ -243,7 +243,7 @@ async def consume_native_external_pending(
             subject=str(value["subject"]),
             provider_email=str(value["provider_email"]) if value.get("provider_email") else None,
             email_verified=bool(value.get("email_verified", False)),
-            display_name=str(value.get("display_name") or "MyKhaya user"),
+            display_name=str(value["display_name"]) if value.get("display_name") else None,
             can_register=bool(value.get("can_register", False)),
             platform=str(value["platform"]),
             redemption_verifier_hash=str(value["redemption_verifier_hash"]),
@@ -276,7 +276,7 @@ async def load_native_external_pending(
             subject=str(value["subject"]),
             provider_email=str(value["provider_email"]) if value.get("provider_email") else None,
             email_verified=bool(value.get("email_verified", False)),
-            display_name=str(value.get("display_name") or "MyKhaya user"),
+            display_name=str(value["display_name"]) if value.get("display_name") else None,
             can_register=bool(value.get("can_register", False)),
             platform=str(value["platform"]),
             redemption_verifier_hash=str(value["redemption_verifier_hash"]),

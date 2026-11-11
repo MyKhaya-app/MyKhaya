@@ -79,7 +79,8 @@ async def test_google_callback_requires_explicit_registration_and_creates_one_id
     assert options.json()["can_register"] is True
 
     registered = await client.post(
-        "/api/v1/auth/google/recovery/register", json={"transaction_id": transaction}
+        "/api/v1/auth/google/recovery/register",
+        json={"transaction_id": transaction, "display_name": "Google Registrant"},
     )
     assert registered.status_code == 200, registered.text
     async with SessionFactory() as db:

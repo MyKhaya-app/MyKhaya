@@ -115,9 +115,10 @@ export default function Login() {
     [appleRecovery, setAppleRecovery] = useState<{
       can_register: boolean;
       provider_email: string | null;
-      display_name: string;
+      display_name: string | null;
     } | null>(null),
     [appleLinking, setAppleLinking] = useState(false),
+    [appleDisplayName, setAppleDisplayName] = useState(""),
     [appleRegistrationRequested, setAppleRegistrationRequested] = useState(false),
     [appleLegalDocuments, setAppleLegalDocuments] = useState<PublicLegalDocumentSummary[]>([]),
     [appleLegalChecked, setAppleLegalChecked] = useState<Record<string, boolean>>({}),
@@ -127,9 +128,10 @@ export default function Login() {
     [googleRecovery, setGoogleRecovery] = useState<{
       can_register: boolean;
       provider_email: string | null;
-      display_name: string;
+      display_name: string | null;
     } | null>(null),
     [googleLinking, setGoogleLinking] = useState(false),
+    [googleDisplayName, setGoogleDisplayName] = useState(""),
     [googleRegistrationRequested, setGoogleRegistrationRequested] = useState(false),
     [googleLegalDocuments, setGoogleLegalDocuments] = useState<PublicLegalDocumentSummary[]>([]),
     [googleLegalChecked, setGoogleLegalChecked] = useState<Record<string, boolean>>({}),
@@ -139,9 +141,11 @@ export default function Login() {
       transaction_id: string;
       provider: "apple" | "google";
       provider_email: string | null;
-      display_name: string;
+      display_name: string | null;
       can_register: boolean;
     } | null>(null),
+    [nativeDisplayName, setNativeDisplayName] = useState(""),
+    [nativeLinking, setNativeLinking] = useState(false),
     [nativeLegalDocuments, setNativeLegalDocuments] = useState<PublicLegalDocumentSummary[]>([]),
     [nativeLegalChecked, setNativeLegalChecked] = useState<Record<string, boolean>>({}),
     [nativeRegistrationRequested, setNativeRegistrationRequested] = useState(false),
@@ -160,6 +164,12 @@ export default function Login() {
   // the password form, provider buttons and recovery choices are hidden so a
   // second primary sign-in cannot be started underneath the challenge.
   const nativeMfaActive = isNativeShell() && nativeMfaTransaction !== null;
+  const providerChoiceActive = !nativeMfaActive && Boolean(
+    (appleResult === "choose" && appleTransaction) ||
+    (googleResult === "choose" && googleTransaction) ||
+    (isNativeShell() && nativeRecovery),
+  );
+  const showRecoveryAuthentication = appleLinking || googleLinking || nativeLinking;
 
   useEffect(() => {
     if (!isNativeShell() || (social !== "apple" && social !== "google") || appleResult || googleResult) return;
@@ -212,6 +222,7 @@ export default function Login() {
     Promise.all([api.appleRecoveryOptions(appleTransaction), api.publicLegalDocuments()])
       .then(([options, documents]) => {
         setAppleRecovery(options);
+        setAppleDisplayName(options.display_name ?? "");
         setAppleLegalDocuments(documents);
       })
       .catch(() => {
@@ -227,6 +238,7 @@ export default function Login() {
     Promise.all([api.googleRecoveryOptions(googleTransaction), api.publicLegalDocuments()])
       .then(([options, documents]) => {
         setGoogleRecovery(options);
+        setGoogleDisplayName(options.display_name ?? "");
         setGoogleLegalDocuments(documents);
       })
       .catch(() => {
@@ -312,7 +324,11 @@ export default function Login() {
           if (disposed) return;
           if ("id" in result) await afterSignedIn(result);
           else if ("message" in result) throw new Error(result.message);
-          else if (result.authentication_state === "account_choice") setNativeRecovery(result);
+          else if (result.authentication_state === "account_choice") {
+            setNativeRecovery(result);
+            setNativeDisplayName(result.display_name ?? "");
+            setNativeLinking(false);
+          }
           else await enterNativeMfa(result.transaction_id);
         })().catch((cause) => setError(cause instanceof ApiError ? cause.message : "The provider callback could not be completed.")).finally(() => setBusy(false));
       } catch {
@@ -358,6 +374,8 @@ export default function Login() {
         await enterNativeMfa(result.transaction_id);
       } else if ("authentication_state" in result) {
         setNativeRecovery(result);
+        setNativeDisplayName(result.display_name ?? "");
+        setNativeLinking(false);
       }
     } catch (cause) {
       const failure = classifyNativeProviderFailure(cause, provider, stage);
@@ -438,6 +456,10 @@ export default function Login() {
 
   async function registerNativeProvider() {
     if (!nativeRecovery) return;
+    if (!nativeDisplayName.trim()) {
+      setError("Please enter your name before continuing.");
+      return;
+    }
     const requiredLegal = nativeLegalDocuments.filter((document) =>
       document.audience === "adult" && document.acceptance_required && document.action_verb === "accept" && document.scope === "global",
     );
@@ -450,7 +472,7 @@ export default function Login() {
     try {
       const result = await nativeExternalRecoveryRegister({
         transaction_id: nativeRecovery.transaction_id,
-        display_name: nativeRecovery.display_name,
+        display_name: nativeDisplayName,
         legal_acceptances: requiredLegal.map((document) => ({ document_key: document.key, document_version_id: document.current_version_id! })),
         platform: nativePlatform() === "android" ? "android" : "ios",
       });
@@ -630,6 +652,10 @@ export default function Login() {
 
   async function registerWithApple() {
     if (!appleTransaction) return;
+    if (!appleDisplayName.trim()) {
+      setError("Please enter your name before continuing.");
+      return;
+    }
     const requiredLegal = appleLegalDocuments.filter(
       (document) =>
         document.audience === "adult" &&
@@ -649,6 +675,7 @@ export default function Login() {
     setError("");
     try {
       const result = await api.appleRecoveryRegister(appleTransaction, {
+        display_name: appleDisplayName,
         legal_acceptances: requiredLegal.map((document) => ({
           document_key: document.key,
           document_version_id: document.current_version_id!,
@@ -670,6 +697,10 @@ export default function Login() {
 
   async function registerWithGoogle() {
     if (!googleTransaction) return;
+    if (!googleDisplayName.trim()) {
+      setError("Please enter your name before continuing.");
+      return;
+    }
     const requiredLegal = googleLegalDocuments.filter(
       (document) => document.audience === "adult" && document.acceptance_required && document.action_verb === "accept" && document.scope === "global",
     );
@@ -681,6 +712,7 @@ export default function Login() {
     setError("");
     try {
       const result = await api.googleRecoveryRegister(googleTransaction, {
+        display_name: googleDisplayName,
         legal_acceptances: requiredLegal.map((document) => ({ document_key: document.key, document_version_id: document.current_version_id! })),
         platform: "web",
         ...(beta ? { beta: true, beta_invitation_token: betaInvitation } : {}),
@@ -695,6 +727,18 @@ export default function Login() {
     } finally {
       setBusy(false);
     }
+  }
+
+  function cancelWebProviderRecovery() {
+    router.replace("/login");
+  }
+
+  function cancelNativeProviderRecovery() {
+    setNativeRecovery(null);
+    setNativeDisplayName("");
+    setNativeRegistrationRequested(false);
+    setNativeLinking(false);
+    setError("");
   }
 
   if (additionalAuth) {
@@ -786,7 +830,7 @@ export default function Login() {
                 <button
                   type="button"
                   className="secondary"
-                  onClick={() => setAppleLinking(true)}
+                  onClick={() => { setAppleLinking(true); setError(""); }}
                   disabled={busy}
                 >
                   Link to an existing account
@@ -832,9 +876,13 @@ export default function Login() {
                         </span>
                       </label>
                     ))}
-                  <button type="button" onClick={() => void registerWithApple()} disabled={busy || appleLegalLoading}>
-                    {busy ? "Creating account…" : "Accept and create account"}
-                  </button>
+                   <label className="signin-field" htmlFor="apple-display-name">
+                     Your name
+                     <input id="apple-display-name" value={appleDisplayName} maxLength={100} onChange={(event) => setAppleDisplayName(event.target.value)} required />
+                   </label>
+                   <button type="button" onClick={() => void registerWithApple()} disabled={busy || appleLegalLoading}>
+                     {busy ? "Creating account…" : "Accept and create account"}
+                   </button>
                 </div>
               )}
               {appleLinking && (
@@ -843,6 +891,10 @@ export default function Login() {
                   linked only after that authentication succeeds.
                 </p>
               )}
+              {!appleLinking && !appleRegistrationRequested && (
+                <button type="button" className="tertiary" onClick={cancelWebProviderRecovery} disabled={busy}>Cancel</button>
+              )}
+              {appleRegistrationRequested && <button type="button" className="tertiary" onClick={() => setAppleRegistrationRequested(false)} disabled={busy}>Back</button>}
             </section>
           )}
           {appleResult === "registration_unavailable" && (
@@ -858,7 +910,7 @@ export default function Login() {
               <h2 id="google-recovery-heading">Continue with Google</h2>
               <p>Google sign-in is ready. Choose an existing MyKhaya account or create a new one. We will not merge accounts automatically.</p>
               <div className="signin-recovery-actions">
-                <button type="button" className="secondary" onClick={() => setGoogleLinking(true)} disabled={busy}>Link to an existing account</button>
+                <button type="button" className="secondary" onClick={() => { setGoogleLinking(true); setError(""); }} disabled={busy}>Link to an existing account</button>
                 {googleRecovery?.can_register && <button type="button" className="tertiary" onClick={() => setGoogleRegistrationRequested(true)} disabled={busy}>Create a new account</button>}
               </div>
               {googleRegistrationRequested && googleRecovery?.can_register && (
@@ -871,10 +923,16 @@ export default function Login() {
                       <span>I accept the <Link href={`/legal/${document.key}`}>{document.display_name}</Link> (version {document.current_version ?? "current"})</span>
                     </label>
                   ))}
-                  <button type="button" onClick={() => void registerWithGoogle()} disabled={busy || googleLegalLoading}>{busy ? "Creating account…" : "Accept and create account"}</button>
+                   <label className="signin-field" htmlFor="google-display-name">
+                     Your name
+                     <input id="google-display-name" value={googleDisplayName} maxLength={100} onChange={(event) => setGoogleDisplayName(event.target.value)} required />
+                   </label>
+                   <button type="button" onClick={() => void registerWithGoogle()} disabled={busy || googleLegalLoading}>{busy ? "Creating account…" : "Accept and create account"}</button>
                 </div>
               )}
               {googleLinking && <p>Sign in below with your existing MyKhaya email and password. Google will be linked only after that authentication succeeds.</p>}
+              {!googleLinking && !googleRegistrationRequested && <button type="button" className="tertiary" onClick={cancelWebProviderRecovery} disabled={busy}>Cancel</button>}
+              {googleRegistrationRequested && <button type="button" className="tertiary" onClick={() => setGoogleRegistrationRequested(false)} disabled={busy}>Back</button>}
             </section>
           )}
           {googleResult === "error" && <p className="notice">Google sign-in could not be completed. Please try again or use your password.</p>}
@@ -883,7 +941,7 @@ export default function Login() {
               <h2 id="native-recovery-heading">Continue with {nativeRecovery.provider === "apple" ? "Apple" : "Google"}</h2>
               <p>Choose whether to link this provider to an existing MyKhaya account or create a new one. Accounts are never merged automatically.</p>
               <div className="signin-recovery-actions">
-                <button type="button" className="secondary" onClick={() => setError("Sign in with your existing password below. The provider will be linked after that authentication succeeds.")} disabled={busy}>Link to an existing account</button>
+                <button type="button" className="secondary" onClick={() => { setNativeLinking(true); setError(""); }} disabled={busy}>Link to an existing account</button>
                 {nativeRecovery.can_register && <button type="button" className="tertiary" onClick={() => void chooseNativeRegistration()} disabled={busy}>Create a new account</button>}
               </div>
               {nativeRegistrationRequested && nativeRecovery.can_register && (
@@ -896,9 +954,15 @@ export default function Login() {
                       <span>I accept the <Link href={`/legal/${document.key}`}>{document.display_name}</Link> (version {document.current_version ?? "current"})</span>
                     </label>
                   ))}
-                  <button type="button" onClick={() => void registerNativeProvider()} disabled={busy}>Accept and create account</button>
+                   <label className="signin-field" htmlFor="native-display-name">
+                     Your name
+                     <input id="native-display-name" value={nativeDisplayName} maxLength={100} onChange={(event) => setNativeDisplayName(event.target.value)} required />
+                   </label>
+                   <button type="button" onClick={() => void registerNativeProvider()} disabled={busy}>Accept and create account</button>
+                   <button type="button" className="tertiary" onClick={() => setNativeRegistrationRequested(false)} disabled={busy}>Back</button>
                 </div>
               )}
+               {!nativeLinking && !nativeRegistrationRequested && <button type="button" className="tertiary" onClick={cancelNativeProviderRecovery} disabled={busy}>Cancel</button>}
             </section>
           )}
           {nativeMfaActive && (
@@ -926,7 +990,7 @@ export default function Login() {
               <button type="button" className="tertiary" onClick={leaveNativeMfa} disabled={busy}>Use a different sign-in method</button>
             </section>
           )}
-          {!nativeMfaActive && (<>
+          {!nativeMfaActive && (!providerChoiceActive || showRecoveryAuthentication) && (<>
           <form className="signin-form" onSubmit={submit}>
             <div className="signin-field">
               <label htmlFor="signin-email">Email</label>
@@ -976,12 +1040,12 @@ export default function Login() {
             )}
             <button className="signin-submit" disabled={busy}>{busy ? "Signing in…" : "Sign in"}</button>
           </form>
-          {(appleEnabled || isNativeShell()) && !nativeRecovery && (
+          {(appleEnabled || isNativeShell()) && !nativeRecovery && !providerChoiceActive && (
             <button type="button" className="apple-sign-in" onClick={() => isNativeShell() ? void startNativeProvider("apple") : startAppleSignIn()} disabled={busy}>
               Continue with Apple
             </button>
           )}
-          {(googleEnabled || isNativeShell()) && !nativeRecovery && (
+          {(googleEnabled || isNativeShell()) && !nativeRecovery && !providerChoiceActive && (
             <button type="button" className="google-sign-in" onClick={() => isNativeShell() ? void startNativeProvider("google") : startGoogleSignIn()} disabled={busy}>
               Continue with Google
             </button>

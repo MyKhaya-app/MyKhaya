@@ -836,7 +836,7 @@ def _apple_audit_failure(
 
 def _apple_name(raw: str | None) -> str:
     if not raw or len(raw) > 8192:
-        return "Apple user"
+        return ""
     try:
         parsed = json.loads(raw)
         name = parsed.get("name") if isinstance(parsed, dict) else None
@@ -851,14 +851,14 @@ def _apple_name(raw: str | None) -> str:
                 return value[:100]
     except (TypeError, ValueError, json.JSONDecodeError):
         pass
-    return "Apple user"
+    return ""
 
 
 def _google_name(claims: dict[str, object]) -> str:
     value = claims.get("name")
     if isinstance(value, str) and value.strip():
         return " ".join(value.split())[:100]
-    return "Google user"
+    return ""
 
 
 @router.get("/apple/start")
@@ -1033,6 +1033,8 @@ async def apple_recovery_register(
             status.HTTP_409_CONFLICT,
             "This Apple identity must be linked to an existing account.",
         )
+    if not body.display_name:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Your name is required.")
     provider_email = pending.provider_email
     if not provider_email:
         raise HTTPException(status.HTTP_409_CONFLICT, "This Apple identity has no usable email.")
@@ -1070,7 +1072,7 @@ async def apple_recovery_register(
         raise HTTPException(status.HTTP_409_CONFLICT, "This Apple identity is already linked.")
     user = User(
         email=normalise_email(provider_email),
-        display_name=pending.display_name,
+        display_name=body.display_name,
         email_verified_at=datetime.now(UTC) if pending.email_verified else None,
     )
     db.add(user)
@@ -1562,6 +1564,8 @@ async def google_recovery_register(
         raise HTTPException(
             status.HTTP_409_CONFLICT, "This Google identity must be linked to an existing account."
         )
+    if not body.display_name:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Your name is required.")
     provider_email = pending.provider_email
     if not provider_email:
         raise HTTPException(status.HTTP_409_CONFLICT, "This Google identity has no usable email.")
@@ -1597,7 +1601,7 @@ async def google_recovery_register(
         raise HTTPException(status.HTTP_409_CONFLICT, "This Google identity is already linked.")
     user = User(
         email=normalise_email(provider_email),
-        display_name=pending.display_name,
+        display_name=body.display_name,
         email_verified_at=datetime.now(UTC),
     )
     db.add(user)
@@ -3190,7 +3194,7 @@ async def mobile_external_exchange(
             email_verified = (
                 claims.get("email_verified") is True or claims.get("email_verified") == "true"
             )
-            display_name = str(claims.get("name") or claims.get("given_name") or "Apple user")
+            display_name = str(claims.get("name") or claims.get("given_name") or "")
         else:
             claims = await verify_google_identity_token(
                 settings,
@@ -3201,7 +3205,7 @@ async def mobile_external_exchange(
             subject = str(claims["sub"])
             provider_email = str(claims["email"])
             email_verified = True
-            display_name = str(claims.get("name") or "Google user")
+            display_name = str(claims.get("name") or "")
     except (
         AppleAuthenticationError,
         GoogleAuthenticationError,
@@ -3499,6 +3503,18 @@ async def mobile_external_recovery_register(
             status.HTTP_409_CONFLICT,
             "This provider identity must be linked to an existing account.",
         )
+    if not body.display_name:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Your name is required.")
+    signup_policy = await evaluate_signup_policy(db, settings)
+    if (
+        not signup_policy.normal_path
+        or signup_policy.invitation_required
+        or not signup_policy.domain_allowed(pending.provider_email)
+    ):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "New accounts cannot be created with this provider right now.",
+        )
     if not verify_redemption_verifier(body.redemption_verifier, pending.redemption_verifier_hash):
         raise HTTPException(
             status.HTTP_400_BAD_REQUEST, "This sign-in attempt is invalid or has expired."
@@ -3527,7 +3543,7 @@ async def mobile_external_recovery_register(
     assert pending.provider_email is not None
     user = User(
         email=normalise_email(pending.provider_email),
-        display_name=body.display_name or pending.display_name,
+        display_name=body.display_name,
         email_verified_at=datetime.now(UTC) if pending.email_verified else None,
     )
     db.add(user)

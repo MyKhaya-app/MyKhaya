@@ -52,7 +52,7 @@ class GooglePendingIdentity:
     subject: str
     provider_email: str
     email_verified: bool
-    display_name: str
+    display_name: str | None
     can_register: bool
     return_path: str | None
 
@@ -264,7 +264,7 @@ async def load_pending_identity(
             subject=str(data["subject"]),
             provider_email=str(data["provider_email"]),
             email_verified=bool(data.get("email_verified", False)),
-            display_name=str(data.get("display_name") or "Google user"),
+            display_name=str(data["display_name"]) if data.get("display_name") else None,
             can_register=bool(data.get("can_register", False)),
             return_path=str(data["return_path"]) if data.get("return_path") else None,
         )
@@ -291,7 +291,7 @@ async def consume_pending_identity(
             subject=str(data["subject"]),
             provider_email=str(data["provider_email"]),
             email_verified=bool(data.get("email_verified", False)),
-            display_name=str(data.get("display_name") or "Google user"),
+            display_name=str(data["display_name"]) if data.get("display_name") else None,
             can_register=bool(data.get("can_register", False)),
             return_path=str(data["return_path"]) if data.get("return_path") else None,
         )

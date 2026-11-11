@@ -39,6 +39,11 @@ never linked from an email match alone. An unlinked Apple callback creates a
 short-lived, single-use recovery transaction containing verified provider
 metadata only; the browser must explicitly choose existing-account linking or
 new registration before a `User` row is created.
+The account-choice screen is exclusive until that choice is made. New Apple
+and Google registrations must confirm a server-normalized display name;
+provider metadata is only an initial value and missing provider names never
+become a generic account name. Native registration repeats the current
+signup-policy check at final redemption before creating the user.
 
 Database ownership, provider-subject lookup, metadata refresh, linking,
 concurrency conflict handling and safe unlinking live in the provider-neutral

@@ -197,7 +197,8 @@ async def test_explicit_new_apple_registration_creates_one_user_and_identity(
     transaction = parse_qs(urlparse(callback.headers["location"]).query)["transaction"][0]
     provider_email = _pending[transaction].provider_email
     registered = await client.post(
-        "/api/v1/auth/apple/recovery/register", json={"transaction_id": transaction}
+        "/api/v1/auth/apple/recovery/register",
+        json={"transaction_id": transaction, "display_name": "  Apple   Registrant "},
     )
     assert registered.status_code == 200, registered.text
     async with SessionFactory() as db:
@@ -212,6 +213,23 @@ async def test_explicit_new_apple_registration_creates_one_user_and_identity(
         ).all()
         assert len(users) == 1
         assert len(identities) == 1
+        assert users[0].display_name == "Apple Registrant"
+
+
+@pytest.mark.asyncio
+async def test_new_apple_registration_requires_a_confirmed_name(
+    client: AsyncClient, fake_apple_callback
+) -> None:
+    _pending, _subject = fake_apple_callback
+    callback = await client.get(
+        "/api/v1/auth/apple/callback?state=state&code=code", follow_redirects=False
+    )
+    transaction = parse_qs(urlparse(callback.headers["location"]).query)["transaction"][0]
+    rejected = await client.post(
+        "/api/v1/auth/apple/recovery/register", json={"transaction_id": transaction}
+    )
+    assert rejected.status_code == 422
+    assert rejected.json()["detail"] == "Your name is required."
 
 
 @pytest.mark.asyncio
@@ -435,6 +453,7 @@ async def test_social_beta_rejects_disabled_beta_path(
         endpoint,
         json={
             "transaction_id": transaction,
+            "display_name": "Beta Registrant",
             "beta": True,
             "beta_invitation_token": "i" * 40,
             "legal_acceptances": [],
@@ -504,6 +523,7 @@ async def test_social_beta_rejects_invalid_invitation(
         endpoint,
         json={
             "transaction_id": transaction,
+            "display_name": "Beta Registrant",
             "beta": True,
             "beta_invitation_token": "i" * 40,
             "legal_acceptances": [],
@@ -582,6 +602,7 @@ async def test_social_beta_accepts_valid_invited_registration(
         endpoint,
         json={
             "transaction_id": transaction,
+            "display_name": "Beta Registrant",
             "beta": True,
             "beta_invitation_token": "i" * 40,
             "legal_acceptances": [],

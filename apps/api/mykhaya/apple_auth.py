@@ -66,7 +66,7 @@ class ApplePendingIdentity:
     subject: str
     provider_email: str | None
     email_verified: bool
-    display_name: str
+    display_name: str | None
     can_register: bool
     return_path: str | None
     intended_user_id: str | None = None
@@ -208,7 +208,7 @@ async def load_pending_identity(
                 str(payload["provider_email"]) if payload.get("provider_email") else None
             ),
             email_verified=bool(payload.get("email_verified", False)),
-            display_name=str(payload.get("display_name") or "Apple user"),
+            display_name=str(payload["display_name"]) if payload.get("display_name") else None,
             can_register=bool(payload.get("can_register", False)),
             return_path=(str(payload["return_path"]) if payload.get("return_path") else None),
             intended_user_id=(
@@ -240,7 +240,7 @@ async def consume_pending_identity(
                 str(payload["provider_email"]) if payload.get("provider_email") else None
             ),
             email_verified=bool(payload.get("email_verified", False)),
-            display_name=str(payload.get("display_name") or "Apple user"),
+            display_name=str(payload["display_name"]) if payload.get("display_name") else None,
             can_register=bool(payload.get("can_register", False)),
             return_path=(str(payload["return_path"]) if payload.get("return_path") else None),
             intended_user_id=(

@@ -101,30 +101,52 @@ class AuthContinuationResponse(BaseModel):
 
 class AppleRecoveryRequest(StrictModel):
     transaction_id: str = Field(min_length=20, max_length=256)
+    display_name: str | None = Field(default=None, min_length=1, max_length=100)
     legal_acceptances: list[SignupLegalAcceptanceItem] = Field(default_factory=list)
     platform: LegalPlatform = LegalPlatform.web
     beta: bool = False
     beta_invitation_token: str | None = Field(default=None, min_length=32, max_length=500)
+
+    @field_validator("display_name")
+    @classmethod
+    def clean_display_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = " ".join(value.strip().split())
+        if not value:
+            raise ValueError("display_name must not be blank")
+        return value
 
 
 class AppleRecoveryOptionsResponse(BaseModel):
     can_register: bool
     provider_email: str | None = None
-    display_name: str
+    display_name: str | None = None
 
 
 class GoogleRecoveryRequest(StrictModel):
     transaction_id: str = Field(min_length=20, max_length=256)
+    display_name: str | None = Field(default=None, min_length=1, max_length=100)
     legal_acceptances: list[SignupLegalAcceptanceItem] = Field(default_factory=list)
     platform: LegalPlatform = LegalPlatform.web
     beta: bool = False
     beta_invitation_token: str | None = Field(default=None, min_length=32, max_length=500)
 
+    @field_validator("display_name")
+    @classmethod
+    def clean_display_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = " ".join(value.strip().split())
+        if not value:
+            raise ValueError("display_name must not be blank")
+        return value
+
 
 class GoogleRecoveryOptionsResponse(BaseModel):
     can_register: bool
     provider_email: EmailStr | None = None
-    display_name: str
+    display_name: str | None = None
 
 
 class MfaStartRequest(StrictModel):
@@ -342,7 +364,7 @@ class NativeExternalRecoveryResponse(BaseModel):
     transaction_id: str
     provider: Literal["apple", "google"]
     provider_email: str | None = None
-    display_name: str
+    display_name: str | None = None
     can_register: bool
 
 
@@ -364,6 +386,16 @@ class NativeExternalRegisterRequest(StrictModel):
     legal_acceptances: list[SignupLegalAcceptanceItem] = Field(default_factory=list)
     platform: Literal["ios", "android"]
     redemption_verifier: str = Field(min_length=32, max_length=256)
+
+    @field_validator("display_name")
+    @classmethod
+    def clean_display_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = " ".join(value.strip().split())
+        if not value:
+            raise ValueError("display_name must not be blank")
+        return value
 
 
 class GroupCreate(StrictModel):
