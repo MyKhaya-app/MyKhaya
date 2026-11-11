@@ -763,6 +763,14 @@ def _safe_return_path(value: str | None) -> str | None:
     return None
 
 
+def _post_auth_destination(return_path: str | None, has_home: bool) -> str:
+    """Choose a safe destination after an existing provider identity signs in."""
+    safe_path = _safe_return_path(return_path)
+    if safe_path and safe_path.split("?", 1)[0] != "/register":
+        return safe_path
+    return "/home" if has_home else "/onboarding"
+
+
 def _native_browser_return_uri(
     settings: Settings, provider: ExternalIdentityProvider, platform: str
 ) -> str:
@@ -1333,7 +1341,7 @@ async def _apple_callback(
         has_home = await db.scalar(
             select(Membership.id).where(Membership.user_id == linked_user.id)
         )
-        destination = flow.return_path or ("/home" if has_home else "/onboarding")
+        destination = _post_auth_destination(flow.return_path, has_home is not None)
         session_response = RedirectResponse(
             f"{settings.public_web_url.rstrip('/')}{destination}",
             status_code=status.HTTP_303_SEE_OTHER,
@@ -1823,7 +1831,7 @@ async def google_callback(
         has_home = await db.scalar(
             select(Membership.id).where(Membership.user_id == linked_user.id)
         )
-        destination = flow.return_path or ("/home" if has_home else "/onboarding")
+        destination = _post_auth_destination(flow.return_path, has_home is not None)
         response = RedirectResponse(
             f"{settings.public_web_url.rstrip('/')}{destination}",
             status_code=status.HTTP_303_SEE_OTHER,
