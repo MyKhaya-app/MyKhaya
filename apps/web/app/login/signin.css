@@ -14,21 +14,10 @@
    =========================================================================== */
 
 .signin-page {
-  --si-paper: #f6f4ee;
-  --si-surface: #fffefb;
-  --si-line: #e3e0d6;
-  --si-ink: #1e2a23;
-  --si-muted: #5d6960;
-  --si-placeholder: #8a948c;
-  --si-forest: #3e5343;
-  --si-forest-deep: #2e3f33;
-  --si-on-forest: #f3f1ea;
-  --si-display: "Bricolage Grotesque", "Avenir Next", system-ui, sans-serif;
-  --si-body: Figtree, "Helvetica Neue", system-ui, sans-serif;
-
-  background: var(--si-paper);
-  color: var(--si-ink);
-  font-family: var(--si-body);
+  /* Colours and fonts come from the shared auth token set (app/auth-tokens.css). */
+  background: var(--auth-paper);
+  color: var(--auth-ink);
+  font-family: var(--auth-body);
   line-height: normal;
   min-height: 100vh;
   min-height: 100dvh;
@@ -58,9 +47,9 @@
 .signin-page .signin-brand {
   align-items: center;
   align-self: flex-start;
-  color: var(--si-ink);
+  color: var(--auth-ink);
   display: inline-flex;
-  font-family: var(--si-display);
+  font-family: var(--auth-display);
   font-size: 22px;
   font-weight: 800;
   gap: 10px;
@@ -77,8 +66,8 @@
 }
 
 .signin-page h1 {
-  color: var(--si-ink);
-  font-family: var(--si-display);
+  color: var(--auth-ink);
+  font-family: var(--auth-display);
   font-size: 36px;
   font-weight: 800;
   letter-spacing: -0.03em;
@@ -86,7 +75,7 @@
   margin: 28px 0 6px;
 }
 .signin-intro {
-  color: var(--si-muted);
+  color: var(--auth-muted);
   font-size: 16px;
   line-height: 1.45;
   margin: 0;
@@ -117,18 +106,18 @@
   gap: 6px;
 }
 .signin-page .signin-field label {
-  color: var(--si-ink);
+  color: var(--auth-ink);
   display: block;
   font-size: 14px;
   font-weight: 600;
   line-height: normal;
 }
 .signin-page .signin-field input {
-  background: var(--si-surface);
-  border: 1px solid var(--si-line);
+  background: var(--auth-surface);
+  border: 1px solid var(--auth-line);
   border-radius: 14px;
   box-sizing: border-box;
-  color: var(--si-ink);
+  color: var(--auth-ink);
   font-family: inherit;
   font-size: 16px;
   height: 50px;
@@ -137,7 +126,7 @@
   width: 100%;
 }
 .signin-field input::placeholder {
-  color: var(--si-placeholder);
+  color: var(--auth-placeholder);
   opacity: 1;
 }
 .signin-password {
@@ -150,7 +139,7 @@
   background: transparent;
   border-radius: 12px;
   box-shadow: none;
-  color: var(--si-muted);
+  color: var(--auth-muted);
   height: 44px;
   min-height: 44px;
   padding: 0;
@@ -166,10 +155,10 @@
 }
 
 .signin-page .signin-submit {
-  background: var(--si-forest);
+  background: var(--auth-forest);
   border-radius: 999px;
-  box-shadow: 0 12px 26px -16px var(--si-forest-deep);
-  color: var(--si-on-forest);
+  box-shadow: 0 12px 26px -16px var(--auth-forest-deep);
+  color: var(--auth-on-forest);
   font-family: inherit;
   font-size: 17px;
   font-weight: 700;
@@ -178,7 +167,7 @@
   width: 100%;
 }
 .signin-page .signin-submit:hover {
-  box-shadow: 0 12px 26px -16px var(--si-forest-deep);
+  box-shadow: 0 12px 26px -16px var(--auth-forest-deep);
   transform: none;
 }
 .signin-page .apple-sign-in {
@@ -206,12 +195,12 @@
 
 /* --- Text links --------------------------------------------------------- */
 .signin-page .signin-link {
-  color: var(--si-forest);
+  color: var(--auth-forest);
   text-decoration: underline;
   text-underline-offset: 3px;
 }
 .signin-page .signin-link:hover {
-  color: var(--si-forest-deep);
+  color: var(--auth-forest-deep);
 }
 /* Text links keep a 44px touch target: 14px of padding above and below,
    cancelled by negative margins so the visual spacing matches the design. */
@@ -227,11 +216,11 @@
 .signin-card--new {
   --card-bg: #eceee6;
   --card-line: #dce0d3;
-  --card-tile: var(--si-forest);
-  --card-tile-ink: var(--si-on-forest);
+  --card-tile: var(--auth-forest);
+  --card-tile-ink: var(--auth-on-forest);
   --card-eyebrow: #536855;
   --card-body: #4a5650;
-  --card-action: var(--si-forest);
+  --card-action: var(--auth-forest);
 }
 .signin-card--beta {
   --card-bg: #f8e2d8;
@@ -282,8 +271,8 @@
   text-transform: uppercase;
 }
 .signin-page .signin-card h2 {
-  color: var(--si-ink);
-  font-family: var(--si-display);
+  color: var(--auth-ink);
+  font-family: var(--auth-display);
   font-size: 20px;
   font-weight: 800;
   letter-spacing: -0.02em;
@@ -298,7 +287,7 @@
 }
 .signin-page .signin-card-action {
   align-items: center;
-  background: var(--si-surface);
+  background: var(--auth-surface);
   border: 1.5px solid var(--card-action);
   border-radius: 999px;
   /* 48px plus the border, as in the design reference. */
@@ -314,7 +303,7 @@
 }
 
 .signin-child {
-  color: var(--si-muted);
+  color: var(--auth-muted);
   font-size: 14.5px;
   margin: auto 0 0;
   padding-top: 28px;

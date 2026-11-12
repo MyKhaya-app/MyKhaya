@@ -127,13 +127,18 @@ describe("Login — Apple recovery choice", () => {
 
     await screen.findByRole("heading", { name: "Welcome to MyKhaya" });
     expect(screen.queryByRole("heading", { name: "Welcome back" })).not.toBeInTheDocument();
-    expect(screen.getByText("You're nearly there! How would you like to continue?")).toBeInTheDocument();
-    expect(screen.getByRole("status")).toHaveTextContent("Apple authentication successful");
-    expect(screen.getByRole("button", { name: "Create your account" })).toHaveClass("signin-submit");
-    expect(screen.getByRole("button", { name: "Link your existing account" })).toHaveClass("secondary");
+    expect(screen.queryByText(/nearly there/i)).not.toBeInTheDocument();
+    // The identity card replaces the old "authentication successful" line.
+    expect(screen.getByText("Apple User")).toBeInTheDocument();
+    expect(screen.getByText("Signed in with Apple")).toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: /I’m new to MyKhaya/ })).toBeChecked();
+    // Linking is never started until the person asks for it.
     expect(screen.queryByLabelText("Email")).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /forgot password/i })).not.toBeInTheDocument();
-    await typist.click(screen.getByRole("button", { name: /link your existing account/i }));
+
+    await typist.click(screen.getByRole("radio", { name: /I already have an account/ }));
+    expect(screen.getByText(/Apple will be linked only after that authentication succeeds/)).toBeInTheDocument();
+    await typist.click(screen.getByRole("button", { name: "Continue to sign in" }));
     await typist.type(screen.getByLabelText("Email"), "existing@example.com");
     await typist.type(screen.getByLabelText("Password"), "correct-password");
     await typist.click(screen.getByRole("button", { name: /^sign in$/i }));
@@ -166,12 +171,16 @@ describe("Login — Apple recovery choice", () => {
     const typist = userEvent.setup();
     render(<Login />);
 
-    await typist.click(await screen.findByRole("button", { name: /create your account/i }));
+    const create = await screen.findByRole("button", { name: "Create account" });
     expect(screen.getByLabelText("Your name")).toHaveValue("Apple User");
-    await typist.click(screen.getByRole("button", { name: /accept and create account/i }));
+    const terms = screen.getByRole("checkbox", { name: "I agree to the Terms of Service (v1.0)." });
+    expect(terms).not.toBeChecked();
+    expect(create).toBeDisabled();
+    await typist.click(create);
     expect(api.appleRecoveryRegister).not.toHaveBeenCalled();
-    await typist.click(screen.getByRole("checkbox"));
-    await typist.click(screen.getByRole("button", { name: /accept and create account/i }));
+    await typist.click(terms);
+    expect(create).toBeEnabled();
+    await typist.click(create);
 
     expect(api.appleRecoveryRegister).toHaveBeenCalledWith("tx-2", {
       display_name: "Apple User",
@@ -192,8 +201,10 @@ describe("Login — Apple recovery choice", () => {
 
     await screen.findByRole("heading", { name: "Continue with Apple" });
     expect(screen.getByText(/new account creation is currently unavailable/i)).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /create your beta account/i })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /link your existing account/i })).toBeInTheDocument();
+    expect(screen.queryByRole("radio", { name: /I’m new to MyKhaya/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Create account" })).not.toBeInTheDocument();
+    expect(screen.getByRole("radio", { name: /I already have an account/ })).toBeChecked();
+    expect(screen.getByRole("button", { name: "Continue to sign in" })).toBeInTheDocument();
   });
 });
 
@@ -213,17 +224,42 @@ describe("Login — Google recovery choice", () => {
 
     await screen.findByRole("heading", { name: "Welcome to MyKhaya" });
     expect(screen.queryByRole("heading", { name: "Welcome back" })).not.toBeInTheDocument();
-    expect(screen.getByText("You're nearly there! How would you like to continue?")).toBeInTheDocument();
-    expect(screen.getByRole("status")).toHaveTextContent("Google authentication successful");
-    expect(screen.getByRole("button", { name: "Create your Beta account" })).toHaveClass("signin-submit");
-    expect(screen.getByRole("button", { name: "Link your existing account" })).toHaveClass("secondary");
-    await typist.click(screen.getByRole("button", { name: /link your existing account/i }));
+    expect(screen.getByText("Signed in with Google")).toBeInTheDocument();
+    // Beta: the "new" option carries the Founding Beta badge and line.
+    expect(
+      screen.getByRole("radio", { name: /I’m new to MyKhaya\s*Founding Beta\s*Create an account with complimentary Ultimate access/ }),
+    ).toBeChecked();
+    await typist.click(screen.getByRole("radio", { name: /I already have an account/ }));
+    await typist.click(screen.getByRole("button", { name: "Continue to sign in" }));
     await typist.type(screen.getByLabelText("Email"), "existing@example.com");
     await typist.type(screen.getByLabelText("Password"), "correct-password");
     await typist.click(screen.getByRole("button", { name: /^sign in$/i }));
 
     expect(api.googleRecoveryLink).toHaveBeenCalledWith("google-tx-1");
     expect(api.googleRecoveryRegister).not.toHaveBeenCalled();
+  });
+
+  it("creates a Beta account with the Beta intent when the new option is used", async () => {
+    searchParams = new URLSearchParams("google=choose&transaction=google-tx-3&beta=1");
+    (api.googleRecoveryOptions as ReturnType<typeof vi.fn>).mockResolvedValue({
+      can_register: true,
+      provider_email: "person@gmail.com",
+      display_name: "Google User",
+    });
+    (api.publicLegalDocuments as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    (api.googleRecoveryRegister as ReturnType<typeof vi.fn>).mockResolvedValue(user);
+    const typist = userEvent.setup();
+    render(<Login />);
+
+    await typist.click(await screen.findByRole("button", { name: "Create account" }));
+
+    expect(api.googleRecoveryRegister).toHaveBeenCalledWith("google-tx-3", {
+      display_name: "Google User",
+      legal_acceptances: [],
+      platform: "web",
+      beta: true,
+      beta_invitation_token: null,
+    });
   });
 
   it("does not promise new registration when Google eligibility is denied", async () => {
@@ -238,8 +274,8 @@ describe("Login — Google recovery choice", () => {
 
     await screen.findByRole("heading", { name: "Continue with Google" });
     expect(screen.getByText(/new account creation is currently unavailable/i)).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: /create your beta account/i })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /link your existing account/i })).toBeInTheDocument();
+    expect(screen.queryByRole("radio", { name: /I’m new to MyKhaya/ })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Continue to sign in" })).toBeInTheDocument();
   });
 });
 

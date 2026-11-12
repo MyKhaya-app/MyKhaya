@@ -1,0 +1,872 @@
+/* ===========================================================================
+   Shared sign-up screens: /register (normal and Founding Beta) and the Apple
+   and Google account choice step on /login. One layout so the two read as a
+   single flow. Colours and fonts come from app/auth-tokens.css.
+
+   Mobile first. The base rules are the phone/native layout (320-430px): a
+   full-bleed paper page, safe-area padding, a top bar and one stacked
+   column. The single (min-width: 801px) enhancement, the same breakpoint as
+   the other auth screens' .auth-brand panel, adds the forest brand panel
+   and centres the form column in the remaining space.
+
+   Everything is scoped under .signup-screen with plain descendant selectors
+   (no @scope: it is unsupported before iOS 17.4, and inside @scope a
+   ".signup-screen ..." selector would look for a second, nested root). The
+   prefix also out-ranks the global button/input/label/form element rules in
+   app/styles.css on specificity, so no !important is needed.
+   =========================================================================== */
+
+.signup-screen {
+  background: var(--auth-paper);
+  color: var(--auth-ink);
+  font-family: var(--auth-body);
+  line-height: normal;
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+.signup-screen *,
+.signup-screen *::before,
+.signup-screen *::after {
+  box-sizing: border-box;
+}
+.signup-screen a {
+  color: var(--auth-forest);
+  text-underline-offset: 3px;
+}
+.signup-screen a:hover {
+  color: var(--auth-forest-deep);
+}
+.signup-screen :is(a, button, input, select, textarea):focus-visible {
+  outline: 3px solid var(--auth-focus);
+  outline-offset: 2px;
+}
+/* The global button hover lifts with a transform; these screens stay still. */
+.signup-screen button:hover {
+  box-shadow: none;
+  transform: none;
+}
+.signup-screen .signup-visually-hidden {
+  border: 0;
+  clip: rect(0 0 0 0);
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  padding: 0;
+  position: absolute;
+  white-space: nowrap;
+  width: 1px;
+}
+
+/* --- Brand panel: wide screens only --------------------------------------- */
+.signup-screen .signup-brand {
+  display: none;
+}
+
+/* --- Main area ------------------------------------------------------------- */
+.signup-screen .signup-main {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+  min-height: 100dvh;
+  min-width: 0;
+  padding: calc(var(--safe-top) + 8px) max(20px, var(--safe-right))
+    calc(var(--safe-bottom) + 24px) max(20px, var(--safe-left));
+}
+.signup-screen .signup-topbar {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: space-between;
+  min-height: 44px;
+}
+.signup-screen .signup-wordmark {
+  align-items: center;
+  color: var(--auth-ink);
+  display: inline-flex;
+  font: 800 20px/1 var(--auth-display);
+  gap: 10px;
+  letter-spacing: -0.02em;
+  min-height: 44px;
+  text-decoration: none;
+}
+.signup-screen .signup-wordmark img {
+  border-radius: 10px;
+  box-shadow: 0 2px 8px -3px rgb(0 0 0 / 25%);
+  height: 36px;
+  width: 36px;
+}
+.signup-screen .signup-topbar-link {
+  color: var(--auth-muted);
+  font-size: 15px;
+  margin: 0;
+}
+.signup-screen .signup-topbar-link a {
+  align-items: center;
+  display: inline-flex;
+  font-weight: 700;
+  min-height: 44px;
+  padding: 0 4px;
+  text-decoration: none;
+}
+/* The "Already have an account?" lead-in is a wide-screen nicety. */
+.signup-screen .signup-topbar-lead {
+  display: none;
+}
+.signup-screen .signup-icon-button {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 12px;
+  color: var(--auth-ink);
+  display: inline-flex;
+  font: 600 15px var(--auth-body);
+  gap: 6px;
+  justify-content: center;
+  min-height: 44px;
+  min-width: 44px;
+  padding: 0;
+}
+.signup-screen .signup-icon-button-text {
+  display: none;
+}
+
+/* The column. On phone it is simply the page content. */
+.signup-screen .signup-body {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+}
+.signup-screen .signup-column {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  margin-inline: auto;
+  max-width: 440px;
+  padding-top: 12px;
+  width: 100%;
+}
+.signup-screen .signup-heading {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.signup-screen .signup-heading h1 {
+  font: 800 30px/1.1 var(--auth-display);
+  letter-spacing: -0.025em;
+  margin: 0;
+}
+.signup-screen .signup-heading p {
+  color: var(--auth-muted);
+  font-size: 16px;
+  line-height: 1.45;
+  margin: 0;
+}
+
+/* Phone step indicator (register: inline; choice step: in the top bar). */
+.signup-screen .signup-progress {
+  align-items: center;
+  color: var(--auth-muted);
+  display: flex;
+  font-size: 13px;
+  font-weight: 600;
+  gap: 10px;
+  margin: 0;
+}
+.signup-screen .signup-progress-bars {
+  display: flex;
+  gap: 4px;
+}
+.signup-screen .signup-progress-bars > span {
+  background: var(--auth-line);
+  border-radius: 2px;
+  height: 4px;
+  width: 28px;
+}
+.signup-screen .signup-progress-bars > span.is-done {
+  background: var(--auth-forest);
+}
+.signup-screen.is-beta .signup-progress-bars > span.is-done {
+  background: var(--auth-beta-tile);
+}
+
+/* --- Notices and context cards ---------------------------------------------- */
+.signup-screen .signup-notice {
+  background: var(--auth-surface);
+  border: 1px solid var(--auth-line);
+  border-radius: 14px;
+  color: var(--auth-muted);
+  font-size: 14px;
+  line-height: 1.45;
+  margin: 0;
+  padding: 12px 14px;
+}
+.signup-screen .signup-notice--success {
+  background: #e7ebe4;
+  border-color: #d6dfd3;
+  color: var(--auth-forest-deep);
+}
+.signup-screen .signup-notice--beta {
+  background: var(--auth-beta-bg);
+  border-color: var(--auth-beta-line);
+  color: var(--auth-beta-ink);
+}
+.signup-screen .signup-pill-link {
+  align-items: center;
+  background: var(--auth-forest);
+  border-radius: 12px;
+  color: var(--auth-on-forest);
+  display: flex;
+  font-size: 16px;
+  font-weight: 700;
+  justify-content: center;
+  min-height: 52px;
+  text-decoration: none;
+}
+.signup-screen .signup-pill-link:hover {
+  color: var(--auth-on-forest);
+}
+.signup-screen .signup-pill-link--secondary {
+  background: var(--auth-surface);
+  border: 1px solid var(--auth-line);
+  color: var(--auth-forest);
+}
+.signup-screen .signup-pill-link--secondary:hover {
+  color: var(--auth-forest-deep);
+}
+
+/* --- Social buttons and divider ---------------------------------------------- */
+.signup-screen .signup-social {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.signup-screen .signup-social-button {
+  align-items: center;
+  border-radius: 12px;
+  display: flex;
+  font: 600 16px var(--auth-body);
+  gap: 10px;
+  justify-content: center;
+  min-height: 52px;
+  padding: 0 16px;
+  width: 100%;
+}
+.signup-screen .signup-social-button--apple {
+  background: #000;
+  border: 0;
+  color: #fff;
+}
+.signup-screen .signup-social-button--google {
+  background: #fff;
+  border: 1px solid #dadce0;
+  color: #202124;
+}
+.signup-screen .signup-divider {
+  align-items: center;
+  color: var(--auth-muted);
+  display: flex;
+  font-size: 13px;
+  gap: 12px;
+}
+.signup-screen .signup-divider > span {
+  background: var(--auth-line);
+  flex: 1;
+  height: 1px;
+}
+
+/* --- Fields ---------------------------------------------------------------- */
+.signup-screen .signup-form {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  margin: 0;
+}
+.signup-screen .signup-fields {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+.signup-screen .signup-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.signup-screen .signup-field label {
+  color: var(--auth-ink);
+  display: block;
+  font-size: 14px;
+  font-weight: 600;
+}
+/* 52px tall and 16px text: no iOS focus zoom, comfortable thumb target. */
+.signup-screen .signup-field input {
+  background: var(--auth-surface);
+  border: 1px solid var(--auth-line);
+  border-radius: 12px;
+  color: var(--auth-ink);
+  font: 400 16px var(--auth-body);
+  height: 52px;
+  min-height: 52px;
+  padding: 0 14px;
+  width: 100%;
+}
+.signup-screen .signup-field input::placeholder {
+  color: var(--auth-placeholder);
+  opacity: 1;
+}
+.signup-screen .signup-field-hint {
+  color: var(--auth-muted);
+  font-size: 13px;
+  margin: 0;
+}
+/* The show/hide control sits inside the field, at its right edge. */
+.signup-screen .signup-password {
+  position: relative;
+}
+.signup-screen .signup-password input {
+  padding-right: 52px;
+}
+.signup-screen .signup-password-toggle {
+  align-items: center;
+  background: transparent;
+  border: 0;
+  border-radius: 10px;
+  color: var(--auth-muted);
+  display: flex;
+  height: 44px;
+  justify-content: center;
+  min-height: 44px;
+  padding: 0;
+  position: absolute;
+  right: 4px;
+  top: 4px;
+  width: 44px;
+}
+
+/* --- Legal consent ----------------------------------------------------------- */
+.signup-screen .signup-consent {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.signup-screen .signup-check-row {
+  align-items: flex-start;
+  color: var(--auth-ink);
+  display: flex;
+  font-size: 15px;
+  font-weight: 400;
+  gap: 12px;
+  line-height: 1.45;
+  min-height: 44px;
+}
+/* Sized explicitly: the global input rule would make it full width. */
+.signup-screen .signup-check-row input {
+  accent-color: var(--auth-forest);
+  flex: none;
+  height: 22px;
+  margin: 0;
+  min-height: 22px;
+  padding: 0;
+  width: 22px;
+}
+.signup-screen .signup-consent-notices {
+  color: var(--auth-muted);
+  font-size: 13px;
+  line-height: 1.5;
+  margin: 0 0 0 34px;
+}
+
+/* --- Primary action ------------------------------------------------------------ */
+.signup-screen .signup-primary {
+  background: var(--auth-forest);
+  border: 0;
+  border-radius: 14px;
+  color: var(--auth-on-forest);
+  font: 700 17px var(--auth-body);
+  min-height: 54px;
+  padding: 0 16px;
+  width: 100%;
+}
+.signup-screen .signup-primary:disabled {
+  background: var(--auth-disabled);
+  color: var(--auth-muted);
+  cursor: not-allowed;
+  opacity: 1;
+}
+.signup-screen .signup-after-primary {
+  color: var(--auth-muted);
+  font-size: 13px;
+  margin: -8px 0 0;
+  text-align: center;
+}
+.signup-screen .signup-footer-line {
+  color: var(--auth-muted);
+  font-size: 15px;
+  margin: 0;
+  text-align: center;
+}
+.signup-screen .signup-footer-line a {
+  align-items: center;
+  display: inline-flex;
+  font-weight: 700;
+  min-height: 44px;
+  padding: 0 2px;
+}
+
+/* --- Provider account choice: identity card ------------------------------------ */
+.signup-screen .signup-identity {
+  align-items: center;
+  background: var(--auth-surface);
+  border: 1px solid var(--auth-line);
+  border-radius: 14px;
+  display: flex;
+  gap: 12px;
+  padding: 10px 12px;
+}
+.signup-screen .signup-avatar {
+  align-items: center;
+  background: #e3eae4;
+  border-radius: 50%;
+  color: var(--auth-forest);
+  display: flex;
+  flex: none;
+  font-size: 15px;
+  font-weight: 800;
+  height: 40px;
+  justify-content: center;
+  width: 40px;
+}
+.signup-screen .signup-identity-text {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.signup-screen .signup-identity-text strong {
+  font-size: 15px;
+  overflow-wrap: anywhere;
+}
+.signup-screen .signup-identity-provider {
+  align-items: center;
+  color: var(--auth-muted);
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 13px;
+  gap: 6px;
+}
+.signup-screen .signup-identity-provider svg {
+  flex: none;
+}
+.signup-screen .signup-identity-email {
+  color: var(--auth-muted);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.signup-screen .signup-link-button {
+  background: transparent;
+  border: 0;
+  color: var(--auth-forest);
+  flex: none;
+  font: 600 14px var(--auth-body);
+  min-height: 44px;
+  padding: 0 6px;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+/* --- Provider account choice: radio cards -------------------------------------- */
+.signup-screen .signup-choice {
+  border: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin: 0;
+  min-width: 0;
+  padding: 0;
+}
+.signup-screen .signup-choice-card {
+  background: var(--auth-surface);
+  border: 1px solid #d6d2c8;
+  border-radius: 16px;
+  overflow: hidden;
+}
+.signup-screen .signup-choice-card.is-selected {
+  border: 2px solid var(--auth-forest);
+}
+.signup-screen .signup-choice-option {
+  align-items: flex-start;
+  color: var(--auth-ink);
+  cursor: pointer;
+  display: flex;
+  font-weight: 400;
+  gap: 12px;
+  min-height: 44px;
+  padding: 14px 16px;
+}
+.signup-screen .signup-choice-card.is-selected .signup-choice-option {
+  padding: 13px 15px;
+}
+.signup-screen .signup-choice-option input {
+  accent-color: var(--auth-forest);
+  flex: none;
+  height: 22px;
+  margin: 1px 0 0;
+  min-height: 22px;
+  padding: 0;
+  width: 22px;
+}
+.signup-screen .signup-choice-copy {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.signup-screen .signup-choice-title {
+  align-items: center;
+  display: flex;
+  flex-wrap: wrap;
+  font-size: 16px;
+  font-weight: 700;
+  gap: 8px;
+}
+.signup-screen .signup-choice-copy > span:last-child {
+  color: var(--auth-muted);
+  font-size: 14px;
+  line-height: 1.4;
+}
+.signup-screen .signup-badge {
+  background: var(--auth-beta-bg);
+  border-radius: 999px;
+  color: var(--auth-beta-ink);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  padding: 3px 8px;
+  text-transform: uppercase;
+}
+.signup-screen .signup-choice-details {
+  background: #fcfbf8;
+  border-top: 1px solid var(--auth-line-soft);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 14px 16px 16px;
+}
+.signup-screen .signup-choice-details > p {
+  color: var(--auth-muted);
+  font-size: 14px;
+  line-height: 1.5;
+  margin: 0;
+}
+@media (prefers-reduced-motion: no-preference) {
+  .signup-screen .signup-choice-details {
+    animation: signup-reveal 160ms ease-out;
+  }
+}
+@keyframes signup-reveal {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+/* The existing sign-in form, shown inside "I already have an account". */
+.signup-screen .signup-choice-details .signin-form {
+  margin-top: 0;
+}
+
+/* The choice step's primary action: pinned to the bottom of the phone screen
+   (sticky, so it rides up with the keyboard when the web view resizes) with
+   safe-area padding. */
+.signup-screen .signup-sticky-actions {
+  background: var(--auth-paper);
+  border-top: 1px solid var(--auth-line);
+  bottom: 0;
+  /* Paint the paper background out to the screen edges without changing
+     layout: a spread shadow, clipped so nothing is drawn above the bar. */
+  box-shadow: 0 0 0 100vmax var(--auth-paper);
+  clip-path: inset(0 -100vmax);
+  margin-top: auto;
+  padding: 12px 0 calc(var(--safe-bottom) + 12px);
+  position: sticky;
+}
+.signup-choice-screen .signup-main {
+  padding-bottom: 0;
+}
+.signup-choice-screen .signup-column {
+  flex: 1;
+}
+/* Choice step top bar: back | "Step 2 of 3" | spacer, then a progress bar. */
+.signup-screen .signup-progress--centre {
+  flex: 1;
+  justify-content: center;
+}
+.signup-screen .signup-topbar-spacer {
+  flex: none;
+  width: 44px;
+}
+.signup-screen .signup-progress-track {
+  background: var(--auth-line);
+  border-radius: 2px;
+  height: 4px;
+  margin: 4px 0 0;
+}
+.signup-screen .signup-progress-track > span {
+  background: var(--auth-forest);
+  border-radius: 2px;
+  display: block;
+  height: 4px;
+  width: 66.67%;
+}
+.signup-choice-screen.is-beta .signup-progress-track > span {
+  background: var(--auth-beta-tile);
+}
+
+/* --- Wide screens ----------------------------------------------------------------- */
+@media (min-width: 801px) {
+  main.signup-screen {
+    display: grid;
+    grid-template-columns: minmax(380px, 520px) minmax(0, 1fr);
+  }
+  .signup-screen .signup-brand {
+    align-self: start;
+    background: var(--auth-forest);
+    color: var(--auth-on-forest);
+    display: flex;
+    flex-direction: column;
+    gap: 32px;
+    height: 100vh;
+    height: 100dvh;
+    overflow-y: auto;
+    padding: 56px 56px 48px;
+    position: sticky;
+    top: 0;
+  }
+  .signup-screen .signup-main {
+    padding: 24px 40px;
+    position: relative;
+  }
+  .signup-screen .signup-topbar {
+    position: absolute;
+    right: 40px;
+    top: 20px;
+  }
+  .signup-screen .signup-topbar--start {
+    left: 32px;
+    right: auto;
+  }
+  /* The brand panel carries the logo and the steps on wide screens. */
+  .signup-screen .signup-wordmark,
+  .signup-screen .signup-progress {
+    display: none;
+  }
+  .signup-screen .signup-topbar-lead {
+    display: inline;
+  }
+  .signup-screen .signup-icon-button {
+    padding: 0 8px 0 4px;
+  }
+  .signup-screen .signup-icon-button-text {
+    display: inline;
+  }
+  /* Centred both ways; margin-block: auto (not align-items: center) so a
+     column taller than the window starts at the top and scrolls, rather
+     than being clipped above the fold. */
+  .signup-screen .signup-body {
+    padding: 40px 0 8px;
+  }
+  .signup-screen .signup-column {
+    gap: 14px;
+    margin-block: auto;
+    max-width: 440px;
+    padding-top: 0;
+  }
+  .signup-screen .signup-heading h1 {
+    font-size: 34px;
+  }
+  .signup-screen .signup-social {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  }
+  .signup-screen .signup-social-button {
+    font-size: 15px;
+    min-height: 48px;
+  }
+  .signup-screen .signup-fields {
+    gap: 10px;
+  }
+  .signup-screen .signup-notice {
+    padding: 10px 14px;
+  }
+  .signup-screen .signup-form {
+    gap: 14px;
+  }
+  .signup-screen .signup-field input {
+    height: 48px;
+    min-height: 48px;
+  }
+  .signup-screen .signup-password-toggle {
+    top: 2px;
+  }
+  .signup-screen .signup-check-row {
+    font-size: 14px;
+  }
+  .signup-screen .signup-primary {
+    font-size: 16px;
+    min-height: 52px;
+  }
+  .signup-screen .signup-sticky-actions {
+    background: transparent;
+    border-top: 0;
+    box-shadow: none;
+    clip-path: none;
+    margin: 0;
+    padding: 0;
+    position: static;
+  }
+  .signup-choice-screen .signup-main {
+    padding-bottom: 40px;
+  }
+  .signup-choice-screen .signup-column {
+    flex: none;
+  }
+  .signup-screen .signup-progress-track,
+  .signup-screen .signup-topbar-spacer {
+    display: none;
+  }
+}
+
+/* --- Brand panel content (displayed from 801px; see the wide block) -------- */
+.signup-screen .signup-brand-logo {
+  align-items: center;
+  color: inherit;
+  display: inline-flex;
+  gap: 12px;
+  text-decoration: none;
+}
+.signup-screen .signup-brand-logo:hover {
+  color: inherit;
+}
+.signup-screen .signup-brand-logo img {
+  border-radius: 12px;
+  box-shadow: 0 2px 10px -3px rgb(0 0 0 / 35%);
+  height: 44px;
+  width: 44px;
+}
+.signup-screen .signup-brand-logo span {
+  font: 800 24px/1 var(--auth-display);
+  letter-spacing: -0.02em;
+}
+.signup-screen .signup-brand-message {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  margin-block: auto;
+}
+.signup-screen .signup-brand-message h2 {
+  font: 800 44px/1.05 var(--auth-display);
+  letter-spacing: -0.03em;
+  margin: 0;
+  max-width: 410px;
+}
+.signup-screen .signup-brand-message > p {
+  color: var(--auth-panel-soft);
+  font-size: 17px;
+  line-height: 1.5;
+  margin: 0;
+  max-width: 400px;
+}
+.signup-screen .signup-brand-message > p.signup-brand-eyebrow {
+  color: var(--auth-focus);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+.signup-screen .signup-brand-pill {
+  align-self: flex-start;
+  background: var(--auth-beta-bg);
+  border-radius: 999px;
+  color: var(--auth-beta-ink);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  padding: 6px 12px;
+  text-transform: uppercase;
+}
+.signup-screen .signup-brand-benefits {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+}
+.signup-screen .signup-brand-benefits li {
+  align-items: center;
+  display: flex;
+  gap: 14px;
+}
+.signup-screen .signup-brand-benefit-tile {
+  align-items: center;
+  background: rgb(243 241 234 / 12%);
+  border-radius: 12px;
+  display: flex;
+  flex: none;
+  height: 40px;
+  justify-content: center;
+  width: 40px;
+}
+.signup-screen .signup-brand-benefits li > span:last-child {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.signup-screen .signup-brand-benefits strong {
+  font-size: 16px;
+}
+.signup-screen .signup-brand-benefits small {
+  color: var(--auth-panel-muted);
+  font-size: 14px;
+}
+.signup-screen .signup-brand-steps {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.signup-screen .signup-brand-steps li {
+  align-items: center;
+  color: var(--auth-panel-soft);
+  display: flex;
+  font-size: 15px;
+  gap: 12px;
+}
+.signup-screen .signup-brand-steps li > span[aria-hidden] {
+  align-items: center;
+  border: 1.5px solid #8fa08c;
+  border-radius: 50%;
+  display: flex;
+  flex: none;
+  font-size: 13px;
+  font-weight: 700;
+  height: 28px;
+  justify-content: center;
+  width: 28px;
+}
+.signup-screen .signup-brand-steps li.is-current {
+  color: #fff;
+  font-weight: 700;
+}
+.signup-screen .signup-brand-steps li.is-current > span[aria-hidden] {
+  border: 2px solid var(--auth-on-forest);
+}
+.signup-screen .signup-brand-steps li.is-done > span[aria-hidden] {
+  background: var(--auth-on-forest);
+  border-color: var(--auth-on-forest);
+  color: var(--auth-forest-deep);
+}

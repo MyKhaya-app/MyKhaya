@@ -99,6 +99,12 @@ async function completePasswordMfaIfShown(page: Page, name: string): Promise<voi
   }
 }
 
+async function fillProviderNameIfMissing(page: Page, provider: "Apple" | "Google"): Promise<void> {
+  // The synthetic providers may not return a name; "Your name" is required.
+  const name = page.getByLabel("Your name");
+  if (!(await name.inputValue()).trim()) await name.fill(`${provider} E2E Person`);
+}
+
 test("synthetic Google registration completes the browser security handoff", async ({ page }) => {
   page.on("console", (message) => console.log(`[browser:${message.type()}] ${message.text()}`));
   page.on("requestfailed", (request) => console.log(`[request-failed] ${request.method()} ${request.url()} ${request.failure()?.errorText ?? "unknown"}`));
@@ -120,14 +126,16 @@ test("synthetic Google registration completes the browser security handoff", asy
   await page.getByRole("button", { name: "Continue with Google" }).click();
   await startRequest;
   await page.waitForURL(/\/login\?google=choose&transaction=/);
-  await expect(page.getByRole("heading", { name: "Continue with Google" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Welcome to MyKhaya" })).toBeVisible();
   await page.screenshot({ path: "test-results/google-register-choice.png", fullPage: true });
 
-  await page.getByRole("button", { name: "Create a new account" }).click();
-  const legal = page.locator(".auth-legal-consent input[type=checkbox]");
+  // "I'm new to MyKhaya" is selected by default when registration is allowed.
+  await expect(page.getByRole("radio", { name: /I’m new to MyKhaya/ })).toBeChecked();
+  const legal = page.locator(".signup-consent input[type=checkbox]");
   await expect(legal).toHaveCount(1);
   await legal.check();
-  await page.getByRole("button", { name: "Accept and create account" }).click();
+  await fillProviderNameIfMissing(page, "Google");
+  await page.getByRole("button", { name: "Create account", exact: true }).click();
   await page.waitForURL(/\/onboarding$|\/mfa\?transaction=/);
   if (page.url().includes("/mfa?transaction=")) {
     await completeBrowserMfa(page, "test-results/google-register-mfa.png");
@@ -164,12 +172,13 @@ test("synthetic Apple registration completes the browser security handoff", asyn
   await page.screenshot({ path: "test-results/apple-register-start.png", fullPage: true });
   await page.getByRole("button", { name: "Continue with Apple" }).click();
   await page.waitForURL(/\/login\?apple=choose&transaction=/);
-  await expect(page.getByRole("heading", { name: "Continue with Apple" })).toBeVisible();
-  await page.getByRole("button", { name: "Create a new account" }).click();
-  await page.locator(".auth-legal-consent input[type=checkbox]").all().then(async (boxes) => {
+  await expect(page.getByRole("heading", { name: "Welcome to MyKhaya" })).toBeVisible();
+  await expect(page.getByRole("radio", { name: /I’m new to MyKhaya/ })).toBeChecked();
+  await page.locator(".signup-consent input[type=checkbox]").all().then(async (boxes) => {
     for (const box of boxes) await box.check();
   });
-  await page.getByRole("button", { name: "Accept and create account" }).click();
+  await fillProviderNameIfMissing(page, "Apple");
+  await page.getByRole("button", { name: "Create account", exact: true }).click();
   await page.waitForURL(/\/onboarding$|\/mfa\?transaction=/);
   await completePasswordMfaIfShown(page, "apple-register");
   await completeNewHome(page, "Apple E2E Home");
@@ -231,9 +240,10 @@ async function completeBetaSocial(page: Page, provider: "Apple" | "Google", invi
   await expect(page.getByRole("heading", { name: "Create your account" })).toBeVisible();
   await page.getByRole("button", { name: `Join Beta with ${provider}` }).click();
   await page.waitForURL(new RegExp(`\\/login\\?${provider.toLowerCase()}=choose&transaction=`));
-  await page.getByRole("button", { name: "Create a new account" }).click();
-  for (const box of await page.locator(".auth-legal-consent input[type=checkbox]").all()) await box.check();
-  await page.getByRole("button", { name: "Accept and create account" }).click();
+  await expect(page.getByRole("radio", { name: /I’m new to MyKhaya\s*Founding Beta/ })).toBeChecked();
+  for (const box of await page.locator(".signup-consent input[type=checkbox]").all()) await box.check();
+  await fillProviderNameIfMissing(page, provider);
+  await page.getByRole("button", { name: "Create account", exact: true }).click();
   await page.waitForURL(/\/onboarding(?:\?beta=1[^/]*)?$|\/mfa\?transaction=/);
   await completePasswordMfaIfShown(page, `${provider.toLowerCase()}-beta-register`);
   await completeNewHome(page, homeName, true);

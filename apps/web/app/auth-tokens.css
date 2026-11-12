@@ -1,0 +1,37 @@
+/* ===========================================================================
+   One token set for the unauthenticated sign-in and sign-up screens:
+   /login (.signin-page), /register (.register-page) and the provider account
+   choice step (.signup-screen). Replaces the former --si-* (signin.css) and
+   --rg-* (register.css) duplicates; every value is unchanged from those, so
+   the sign-in screen renders exactly as before.
+
+   Where a value already exists as a global design token it is aliased rather
+   than repeated. The auth palette's paper, ink and forest are deliberately a
+   shade apart from the signed-in app's tokens, so they stay literal here.
+   :where() keeps this at zero specificity: it only declares properties.
+   =========================================================================== */
+:where(.signin-page, .register-page, .signup-screen) {
+  --auth-paper: #f6f4ee;
+  --auth-surface: var(--colour-white, #fffefb);
+  --auth-line: #e3e0d6;
+  --auth-line-soft: #ece8de;
+  --auth-ink: #1e2a23;
+  /* 5.2:1 on --auth-paper and 5.6:1 on --auth-surface (AA for body text). */
+  --auth-muted: #5d6960;
+  --auth-placeholder: #8a948c;
+  --auth-forest: #3e5343;
+  --auth-forest-deep: #2e3f33;
+  --auth-on-forest: #f3f1ea;
+  --auth-panel-muted: #c9d3c6;
+  --auth-panel-soft: #dfe6dc;
+  --auth-legend: #536855;
+  --auth-focus: var(--colour-mustard, #e9b44c);
+  --auth-beta-bg: #f8e2d8;
+  --auth-beta-line: #efcdbd;
+  --auth-beta-tile: #c9603d;
+  --auth-beta-ink: #9e4426;
+  --auth-beta-body: #4f4038;
+  --auth-disabled: #e3e5dd;
+  --auth-display: "Bricolage Grotesque", "Avenir Next", system-ui, sans-serif;
+  --auth-body: Figtree, "Helvetica Neue", system-ui, sans-serif;
+}
