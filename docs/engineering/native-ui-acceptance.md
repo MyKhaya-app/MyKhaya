@@ -113,6 +113,72 @@ For each form below, on each presentation:
 | Sign-in MFA challenge | With consumer MFA Required: native password, Apple and Google sign-in each show only the "Additional verification required" challenge. No email/password form or provider buttons are underneath. The code field stays visible above the keyboard, errors appear inside the challenge, and "Use a different sign-in method" brings the form back. See [Consumer MFA enforcement](consumer-mfa-enforcement.md). |
 | Calendar toolbar (not a form) | The Everyone and view pickers and the Tags pill: no zoom when opened, each picker's native list opens and applies, the pills wrap to a second row only when there is no room, month navigation stays on one row, and nothing is cut off. Check portrait, landscape, both Duo screens and after folding. |
 
+## Sign-up, provider sign-in and linking
+
+Run on a physical iPhone; repeat steps 3–5 on a physical Android phone when
+one is available. iPhone uses the Apple SDK and the Google system-browser
+routes; Android is the reverse. Automated tests mock both providers, so these
+steps are the only live check.
+
+**Setup.** On DEV, set consumer MFA to Required and the signup mode to Beta
+only with invitations required. Use synthetic test Apple and Google accounts
+whose email has no MyKhaya account, plus two synthetic MyKhaya accounts,
+`Native QA A` and `Native QA X`. Delete the new accounts and Homes when you
+finish.
+
+1. **Sign-up screens (redesign).** Open `/register` and `/register?beta=1`,
+   portrait and landscape:
+   - [ ] the password show/hide control sits inside its field;
+   - [ ] each legal checkbox row is a 44px target with its version, and
+         Create account stays disabled until every box is ticked;
+   - [ ] no zoom on focus, and nothing scrolls sideways;
+   - [ ] on the Apple/Google choose step there is one primary action, the
+         identity card fits, and the action stays above the home indicator
+         and the keyboard.
+2. **Email sign-up through MFA to onboarding (`/mfa` → onboarding).**
+   - [ ] Register with email, verify, sign in and complete the MFA code.
+   - [ ] The app goes straight to onboarding. It never stops on "Taking you
+         to sign in…" or "Checking your MyKhaya session…".
+   - [ ] Repeat three times, including once with Low Power Mode on.
+3. **Native Beta sign-up with Apple.**
+   - [ ] Issue an invitation in PCC to the Apple test account's email and
+         open the invitation link on the phone.
+   - [ ] Continue with Apple and choose **Share My Email**. The choose step
+         shows the **Founding Beta** badge with "I'm new to MyKhaya"
+         selected.
+   - [ ] Tick the Terms, Create account, and complete MFA if asked.
+   - [ ] The app opens the Founding Beta welcome (Beta Terms and Home
+         enrolment), not `/home` or the plan choice.
+4. **Native Beta sign-up with Google.** Repeat step 3 with the Google test
+   account.
+   - [ ] The system browser opens and returns to the app with the same
+         result.
+5. **Negative sign-up checks.**
+   - [ ] With an invitation for a different email, only "I already have an
+         account" is offered.
+   - [ ] With **Hide My Email**, only "I already have an account" is offered.
+         This is a known limitation; see
+         [Beta waitlist and invitations](../operations/beta-waitlist-and-invitations.md).
+   - [ ] Without `beta=1`, only "I already have an account" is offered.
+   - [ ] In PCC, the new users show a pending Beta enrolment, and the API logs
+         contain no invitation token.
+6. **Linking from Settings.** Signed in as `Native QA A`, open **Settings →
+   Security → Sign-in methods**:
+   - [ ] **Connect Apple** links an unlinked Apple test account, and it shows
+         as connected.
+   - [ ] **Connect Google** links an unlinked Google test account through the
+         system browser, and it shows as connected.
+7. **Linking: shared-device case.** Link the Google test account to
+   `Native QA X` first (sign in as X, link it, sign out). Then sign in as
+   `Native QA A` on the same phone and choose **Connect Google** with that
+   same Google account.
+   - [ ] Settings shows "That Google account is already linked to another
+         MyKhaya account."
+   - [ ] **More → About MyKhaya** and the profile still show `Native QA A`.
+         The app did not switch to X.
+   - [ ] Close and reopen the app: it is still signed in as A.
+   - [ ] Repeat with Apple.
+
 ## Recording results
 
 Add a row per device and presentation. Keep private family and child data

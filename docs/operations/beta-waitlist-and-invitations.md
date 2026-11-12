@@ -49,6 +49,12 @@ legal-acceptance context and the same `BetaPendingRegistration` as web, so the
 app resumes the Beta continuation after sign-in. The registration request
 itself never carries Beta fields.
 
+Local tests prove queueing, rendering, idempotency, token rotation and the
+existing expiry/redemption checks. They do not prove live DEV SMTP/provider
+delivery. After deployment, verify the DEV email configuration, worker and
+SMTP/provider delivery records in PCC Communications before treating the live
+flow as confirmed.
+
 ### Follow-up: Apple "Hide My Email" and email-bound invitations
 
 **Status:** open. Logged 2026-11-12. Behaviour unchanged.
@@ -97,32 +103,5 @@ the email form can be used.
 
 ### Physical-device check (native Beta sign-up)
 
-Automated tests mock the providers, so run this on DEV with a physical iPhone
-(Apple uses the SDK flow, Google the system-browser flow) and, when available,
-a physical Android phone. Use test provider accounts whose email has no
-MyKhaya account, and set DEV to a Beta-only signup mode that requires
-invitations.
-
-1. In PCC, issue a Beta invitation to the provider account's email. Open the
-   invitation link on the phone so the app shows `/register?beta=1` with the
-   invitation.
-2. Tap **Continue with Apple**. Complete the Apple sheet. The choose step shows
-   the **Founding Beta** badge with "I'm new to MyKhaya" selected.
-3. Tick the Terms checkbox and tap **Create account**. Complete MFA if
-   prompted. The app opens the Founding Beta welcome (Beta Terms and Home
-   enrolment), not `/home` or the paid-plan onboarding.
-4. Repeat with **Continue with Google**. The system browser opens and returns
-   to the app, with the same result.
-5. Negative checks:
-   - With an invitation issued to a *different* email, the choose step offers
-     only "I already have an account".
-   - Without `beta=1` during the Beta-only period, the choose step offers only
-     "I already have an account".
-6. In PCC, the new users show a pending Beta enrolment. The API logs for these
-   requests contain no invitation token.
-
-Local tests prove queueing, rendering, idempotency, token rotation and the
-existing expiry/redemption checks. They do not prove live DEV SMTP/provider
-delivery. After deployment, verify the DEV email configuration, worker and
-SMTP/provider delivery records in PCC Communications before treating the live
-flow as confirmed.
+The device check for native Beta sign-up with Apple and Google is part of
+[Native UI acceptance: Sign-up, provider sign-in and linking](../engineering/native-ui-acceptance.md#sign-up-provider-sign-in-and-linking).
