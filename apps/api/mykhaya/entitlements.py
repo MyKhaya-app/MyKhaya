@@ -383,6 +383,43 @@ async def record_subscription_event(
     )
 
 
+async def revoke_complimentary_access(
+    db: AsyncSession,
+    subscription: HomeSubscription,
+    *,
+    actor_administrator_id: uuid.UUID | None = None,
+    reason: str | None = None,
+) -> bool:
+    """Downgrade complimentary-only access to Free and record the transition."""
+    if subscription.provider != SubscriptionProvider.complimentary:
+        return False
+    from_plan, from_provider, from_status = (
+        subscription.plan,
+        subscription.provider,
+        subscription.status,
+    )
+    subscription.plan = SubscriptionPlan.free
+    subscription.provider = SubscriptionProvider.free
+    subscription.status = SubscriptionStatus.active
+    subscription.complimentary_reason = None
+    subscription.complimentary_note = None
+    subscription.complimentary_expires_at = None
+    await record_subscription_event(
+        db,
+        subscription.group_id,
+        event_type="downgraded",
+        from_plan=from_plan,
+        to_plan=subscription.plan,
+        from_provider=from_provider,
+        to_provider=subscription.provider,
+        from_status=from_status,
+        to_status=subscription.status,
+        actor_administrator_id=actor_administrator_id,
+        reason=reason,
+    )
+    return True
+
+
 def _complimentary_active(subscription: HomeSubscription) -> bool:
     if subscription.complimentary_expires_at is None:
         return True

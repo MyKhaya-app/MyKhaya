@@ -105,3 +105,31 @@ the email form can be used.
 
 The device check for native Beta sign-up with Apple and Google is part of
 [Native UI acceptance: Sign-up, provider sign-in and linking](../engineering/native-ui-acceptance.md#sign-up-provider-sign-in-and-linking).
+
+### Founding Beta place lifecycle
+
+Founding Beta enrollments have explicit `active`, `withdrawn` and `released`
+states. Only active, non-exempt enrollments consume capacity. Withdrawn
+enrollments retain the participant's normalized-email repeat-claim restriction;
+released enrollments retain historical participation but have that association
+irreversibly removed. Anonymisation alone never releases a place.
+
+PCC Owner and Administrator operators may release a place for an already
+anonymised user or withdraw an active participant. Both actions require recent
+privileged authentication, an explicit reason and confirmation. The server
+locks the programme and enrollment, revalidates the entitlement source, records
+the transition and uses the existing entitlement service to remove only a
+Founding-Beta-derived complimentary benefit. Redeemed invitations are never
+reopened, and Home data is never deleted.
+
+The PCC overview reports active allocations separately from withdrawn and
+released historical totals. A released claim may become eligible again only
+through normal current registration, invitation and capacity rules.
+
+Migration `0129_beta_enrollment_lifecycle` must be applied before
+deploying code that accepts lifecycle transitions. Its downgrade performs a
+complete preflight and is permitted only while every enrollment is still an
+active, non-null, uniquely representable 0128 row. Any withdrawn, released or
+de-identified row blocks the downgrade before schema changes begin; rollback
+then requires a reviewed database-backup restore rather than an in-place
+downgrade.
