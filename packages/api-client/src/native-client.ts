@@ -70,6 +70,21 @@ export function isPublicNativeEndpoint(path: string, method: string = "GET"): bo
 
 /** Native pre-authentication awaiting the consumer MFA policy. `provider` is
  * the completed primary factor; no session exists until MFA verification. */
+/** Founding Beta intent for a native provider sign-in started from
+ *  /register?beta=1. The API keeps only a hash of the invitation token. */
+export type NativeBetaIntent = { beta: true; invitationToken?: string | null };
+
+function nativeBetaFields(
+  intent: "login" | "link",
+  beta: NativeBetaIntent | undefined,
+): { beta?: true; beta_invitation_token?: string } {
+  // Linking an existing account never carries Beta intent.
+  if (intent !== "login" || !beta?.beta) return {};
+  return beta.invitationToken
+    ? { beta: true, beta_invitation_token: beta.invitationToken }
+    : { beta: true };
+}
+
 export type NativeMfaContinuation = {
   authentication_state: "additional_auth_required";
   transaction_id: string;
@@ -325,8 +340,9 @@ export class NativeMyKhayaClient {
     redemptionVerifier: string,
     intent: "login" | "link" = "login",
     requestId?: string,
+    beta?: NativeBetaIntent,
   ): Promise<{ transaction_id: string; nonce: string; provider: "apple" | "google"; client_id: string | null }> {
-    const body = { provider, platform, intent, redemption_verifier: redemptionVerifier };
+    const body = { provider, platform, intent, redemption_verifier: redemptionVerifier, ...nativeBetaFields(intent, beta) };
     if (intent === "link") {
       return this.request<{ transaction_id: string; nonce: string; provider: "apple" | "google"; client_id: string | null }>("/auth/mobile/external/start", {
         method: "POST",
@@ -337,8 +353,8 @@ export class NativeMyKhayaClient {
     return this.postUnauthenticated("/auth/mobile/external/start", body, requestId);
   }
 
-  externalBrowserStart(provider: "apple" | "google", platform: "ios" | "android", returnUri: string, redemptionVerifier: string, intent: "login" | "link" = "login") {
-    const body = { provider, platform, intent, return_uri: returnUri, redemption_verifier: redemptionVerifier };
+  externalBrowserStart(provider: "apple" | "google", platform: "ios" | "android", returnUri: string, redemptionVerifier: string, intent: "login" | "link" = "login", beta?: NativeBetaIntent) {
+    const body = { provider, platform, intent, return_uri: returnUri, redemption_verifier: redemptionVerifier, ...nativeBetaFields(intent, beta) };
     if (intent === "link") {
       return this.request<{ authorization_url: string; transaction_id: string }>(
         "/auth/mobile/external/browser/start",

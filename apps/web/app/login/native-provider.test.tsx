@@ -9,9 +9,10 @@ import userEvent from "@testing-library/user-event";
 
 const push = vi.fn();
 const replace = vi.fn();
+let searchParams = new URLSearchParams();
 vi.mock("next/navigation", () => ({
   useRouter: () => ({ push, replace }),
-  useSearchParams: () => new URLSearchParams(),
+  useSearchParams: () => searchParams,
 }));
 
 vi.mock("@capacitor/app", () => ({
@@ -37,6 +38,7 @@ vi.mock("@mykhaya/api-client", async (importOriginal) => {
         joinable_count: null,
       })),
       authProviders: vi.fn(async () => ({ providers: [] })),
+      publicLegalDocuments: vi.fn(async () => []),
     },
   };
 });
@@ -52,6 +54,7 @@ const nativeExternalStart = vi.fn<AsyncMock>();
 const nativeExternalAssertion = vi.fn<AsyncMock>();
 const nativeExternalExchange = vi.fn<AsyncMock>();
 const nativeExternalBrowserStart = vi.fn<AsyncMock>();
+const nativeExternalRecoveryRegister = vi.fn<AsyncMock>();
 vi.mock("@/components/native-auth", () => ({
   nativeLogin: vi.fn(),
   nativeExternalStart: (...args: unknown[]) => nativeExternalStart(...args),
@@ -60,7 +63,7 @@ vi.mock("@/components/native-auth", () => ({
   nativeExternalBrowserStart: (...args: unknown[]) => nativeExternalBrowserStart(...args),
   nativeExternalRedeem: vi.fn(),
   nativeExternalRecoveryLink: vi.fn(),
-  nativeExternalRecoveryRegister: vi.fn(),
+  nativeExternalRecoveryRegister: (...args: unknown[]) => nativeExternalRecoveryRegister(...args),
   nativeMfaOptions: vi.fn(async () => ({ methods: ["email"], preferred_method: "email" })),
   nativeMfaStart: vi.fn(),
   nativeMfaVerify: vi.fn(),
@@ -74,7 +77,7 @@ vi.mock("@/components/auth-provider", () => ({
   useAuth: () => ({ user: null, status: "signed_out", setAuthenticatedUser, refresh: vi.fn(), signOut: vi.fn() }),
 }));
 
-const { ApiError } = await import("@mykhaya/api-client");
+const { ApiError, api } = await import("@mykhaya/api-client");
 const { default: Login } = await import("./page");
 
 const IDENTITY_TOKEN = "eyJ.synthetic-apple-identity-token.sig";
@@ -100,6 +103,7 @@ async function continueWithApple() {
 beforeEach(() => {
   vi.clearAllMocks();
   platform = "ios";
+  searchParams = new URLSearchParams();
   window.localStorage.clear();
   nativeExternalStart.mockResolvedValue(started());
   nativeExternalAssertion.mockResolvedValue({ identity_token: IDENTITY_TOKEN });
@@ -111,7 +115,8 @@ describe("Login — native iOS Sign in with Apple", () => {
     await continueWithApple();
 
     await waitFor(() => expect(push).toHaveBeenCalledWith("/home"));
-    expect(nativeExternalStart).toHaveBeenCalledWith("apple", "login", expect.stringMatching(/^nauth-[0-9a-f]{16}$/));
+    // A plain sign-in carries no Beta intent.
+    expect(nativeExternalStart).toHaveBeenCalledWith("apple", "login", expect.stringMatching(/^nauth-[0-9a-f]{16}$/), undefined);
     const correlationId = nativeExternalStart.mock.calls[0]![2];
     expect(nativeExternalAssertion).toHaveBeenCalledWith("apple", "raw-nonce-abcdefghijklmnop", "app.mykhaya.mobile");
     expect(nativeExternalExchange).toHaveBeenCalledWith("tx-123", IDENTITY_TOKEN, correlationId);
@@ -229,7 +234,64 @@ describe("Login — native Google keeps its platform flows", () => {
     await person.click(await screen.findByRole("button", { name: "Continue with Google" }));
 
     await waitFor(() => expect(browserOpen).toHaveBeenCalledWith({ url: "https://accounts.google.com/o/oauth2/v2/auth?x=1" }));
-    expect(nativeExternalBrowserStart).toHaveBeenCalledWith("google");
+    expect(nativeExternalBrowserStart).toHaveBeenCalledWith("google", "login", undefined);
     expect(nativeExternalAssertion).not.toHaveBeenCalled();
+  });
+});
+
+describe("Login — native Founding Beta sign-up", () => {
+  const INVITATION = "beta-invitation-token-abcdefghijklmnopqrstuvwxyz";
+
+  it("carries Beta intent and the invitation on the native Apple start", async () => {
+    searchParams = new URLSearchParams(`social=apple&beta=1&beta_invitation=${INVITATION}`);
+    render(<Login />);
+    await waitFor(() => expect(nativeExternalStart).toHaveBeenCalledTimes(1));
+    expect(nativeExternalStart).toHaveBeenCalledWith(
+      "apple",
+      "login",
+      expect.stringMatching(/^nauth-[0-9a-f]{16}$/),
+      { beta: true, invitationToken: INVITATION },
+    );
+  });
+
+  it("carries Beta intent on the system-browser start (Google on iOS)", async () => {
+    nativeExternalBrowserStart.mockResolvedValue({ authorization_url: "https://accounts.google.com/o/oauth2/v2/auth?x=1", transaction_id: "g-1" });
+    searchParams = new URLSearchParams("social=google&beta=1");
+    render(<Login />);
+    await waitFor(() => expect(nativeExternalBrowserStart).toHaveBeenCalledTimes(1));
+    expect(nativeExternalBrowserStart).toHaveBeenCalledWith("google", "login", { beta: true, invitationToken: null });
+  });
+
+  it("shows the Beta choice and resumes Beta onboarding after a native Beta account is created", async () => {
+    searchParams = new URLSearchParams(`social=apple&beta=1&beta_invitation=${INVITATION}`);
+    nativeExternalExchange.mockResolvedValue({
+      authentication_state: "account_choice",
+      transaction_id: "tx-123",
+      provider: "apple",
+      provider_email: "relay@privaterelay.appleid.com",
+      display_name: "Apple Beta Person",
+      can_register: true,
+    });
+    nativeExternalRecoveryRegister.mockResolvedValue(user);
+    (api.betaContinuation as ReturnType<typeof vi.fn>).mockResolvedValueOnce({ pending: true, enrolled: false });
+    const person = userEvent.setup();
+    render(<Login />);
+
+    expect(
+      await screen.findByRole("radio", { name: /I’m new to MyKhaya\s*Founding Beta/ }),
+    ).toBeChecked();
+    await person.click(await screen.findByRole("button", { name: "Create account" }));
+
+    await waitFor(() => expect(nativeExternalRecoveryRegister).toHaveBeenCalledTimes(1));
+    // Beta intent is held server-side from the start request: the
+    // registration call itself never carries the invitation.
+    expect(nativeExternalRecoveryRegister).toHaveBeenCalledWith({
+      transaction_id: "tx-123",
+      display_name: "Apple Beta Person",
+      legal_acceptances: [],
+      platform: "ios",
+    });
+    expect(JSON.stringify(nativeExternalRecoveryRegister.mock.calls)).not.toContain(INVITATION);
+    await waitFor(() => expect(push).toHaveBeenCalledWith("/onboarding?beta=1"));
   });
 });

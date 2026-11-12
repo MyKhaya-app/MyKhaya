@@ -357,12 +357,15 @@ export default function Login() {
     const correlationId = newNativeAuthCorrelationId();
     try {
       const useBrowser = (provider === "google" && nativePlatform() === "ios") || (provider === "apple" && nativePlatform() === "android");
+      // /register?beta=1 hands the Beta intent (and any invitation) to this
+      // page; the API records it with the sign-in so registration is Beta.
+      const betaIntent = beta ? { beta: true as const, invitationToken: betaInvitation } : undefined;
       if (useBrowser) {
-        const started = await nativeExternalBrowserStart(provider);
+        const started = await nativeExternalBrowserStart(provider, "login", betaIntent);
         await Browser.open({ url: started.authorization_url });
         return;
       }
-      const started = await nativeExternalStart(provider, "login", correlationId);
+      const started = await nativeExternalStart(provider, "login", correlationId, betaIntent);
       stage = "provider";
       const assertion = await nativeExternalAssertion(provider, started.nonce, started.client_id);
       stage = "exchange";
@@ -931,9 +934,9 @@ export default function Login() {
           provider={nativeProvider}
           idPrefix="native"
           recovery={nativeRecovery}
-          // The native registration request carries no Beta intent today
-          // (registerNativeProvider), so the screen must not promise it.
-          beta={false}
+          // Beta intent travels with the native sign-in (startNativeProvider);
+          // the API re-checks eligibility when the account is created.
+          beta={beta}
           legalDocuments={nativeLegalDocuments}
           legalChecked={nativeLegalChecked}
           onLegalChange={(key, value) => setNativeLegalChecked((current) => ({ ...current, [key]: value }))}

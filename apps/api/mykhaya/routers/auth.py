@@ -63,6 +63,7 @@ from mykhaya.external_identities import (
     unlink_external_identity,
 )
 from mykhaya.founding_beta import (
+    beta_invitation_hash_valid,
     beta_invitation_valid,
     current_programme,
     invitation_token_hash,
@@ -1258,14 +1259,21 @@ async def _apple_callback(
                     email_verified=email_verified,
                     display_name=_apple_name(user),
                     can_register=identity is None
-                    and bool(provider_email)
-                    and policy.normal_path
-                    and not policy.invitation_required
-                    and policy.domain_allowed(provider_email or ""),
+                    and await _native_can_register(
+                        db,
+                        settings,
+                        policy,
+                        provider_email=provider_email,
+                        email_verified=email_verified,
+                        beta=flow.native_beta,
+                        beta_invitation_hash=flow.native_beta_invitation_hash,
+                    ),
                     platform=flow.native_platform,
                     redemption_verifier_hash=flow.native_redemption_verifier_hash,
                     intended_user_id=flow.user_id if flow.intent == "link" else None,
                     intent=flow.intent,
+                    beta=flow.native_beta,
+                    beta_invitation_hash=flow.native_beta_invitation_hash,
                 ),
             )
             await db.commit()
@@ -1781,13 +1789,21 @@ async def google_callback(
                     email_verified=True,
                     display_name=_google_name(claims),
                     can_register=identity is None
-                    and policy.normal_path
-                    and not policy.invitation_required
-                    and policy.domain_allowed(provider_email),
+                    and await _native_can_register(
+                        db,
+                        settings,
+                        policy,
+                        provider_email=provider_email,
+                        email_verified=True,
+                        beta=flow.native_beta,
+                        beta_invitation_hash=flow.native_beta_invitation_hash,
+                    ),
                     platform=flow.native_platform,
                     redemption_verifier_hash=flow.native_redemption_verifier_hash,
                     intended_user_id=flow.user_id if flow.intent == "link" else None,
                     intent=flow.intent,
+                    beta=flow.native_beta,
+                    beta_invitation_hash=flow.native_beta_invitation_hash,
                 ),
             )
             await db.commit()
@@ -2198,11 +2214,15 @@ async def _beta_signup_allowed(
     policy: SignupPolicy,
     invitation_token: str | None,
     email: str,
+    *,
+    invitation_token_hash: str | None = None,
 ) -> bool:
     """Allow only a valid Beta invitation through deployment-closed signup.
 
     PCC registration disablement, closed signup mode, domain restrictions and
     all downstream verification, MFA and legal gates remain enforced.
+    Native provider sign-in holds only the invitation's hash (taken when the
+    sign-in started) and passes it as ``invitation_token_hash``.
     """
     if policy.open:
         if not policy.beta_path:
@@ -2213,7 +2233,11 @@ async def _beta_signup_allowed(
         return False
     elif not await registration_enabled(db) or policy.mode == SignupMode.closed:
         return False
-    return bool(invitation_token and await beta_invitation_valid(db, invitation_token, email))
+    if invitation_token:
+        return await beta_invitation_valid(db, invitation_token, email)
+    if invitation_token_hash:
+        return await beta_invitation_hash_valid(db, invitation_token_hash, email)
+    return False
 
 
 async def _social_registration_allowed(
@@ -2224,11 +2248,48 @@ async def _social_registration_allowed(
     beta: bool,
     invitation_token: str | None,
     email: str,
+    invitation_token_hash: str | None = None,
 ) -> bool:
     """Resolve provider-registration eligibility through the central policy."""
     if beta:
-        return await _beta_signup_allowed(db, settings, policy, invitation_token, email)
+        return await _beta_signup_allowed(
+            db,
+            settings,
+            policy,
+            invitation_token,
+            email,
+            invitation_token_hash=invitation_token_hash,
+        )
     return policy.normal_path and not policy.invitation_required
+
+
+async def _native_can_register(
+    db: AsyncSession,
+    settings: Settings,
+    policy: SignupPolicy,
+    *,
+    provider_email: str | None,
+    email_verified: bool,
+    beta: bool,
+    beta_invitation_hash: str | None,
+) -> bool:
+    """Whether a native provider sign-in may offer and create a new account.
+
+    The same central policy as web provider registration: a verified provider
+    email, an allowed domain, and either the normal path or (with Beta intent)
+    the Founding Beta invitation check.
+    """
+    if not provider_email or not email_verified or not policy.domain_allowed(provider_email):
+        return False
+    return await _social_registration_allowed(
+        db,
+        settings,
+        policy,
+        beta=beta,
+        invitation_token=None,
+        email=provider_email,
+        invitation_token_hash=beta_invitation_hash,
+    )
 
 
 @router.post("/register", response_model=RegistrationResponse, status_code=status.HTTP_202_ACCEPTED)
@@ -3050,6 +3111,18 @@ async def mobile_login(
     )
 
 
+def _native_beta_invitation_hash(
+    body: NativeExternalStartRequest | NativeExternalBrowserStartRequest,
+) -> str | None:
+    """Hash the Beta invitation token as soon as it arrives.
+
+    Only this hash is stored with the sign-in; the raw token is never
+    persisted, returned or logged."""
+    if not body.beta or not body.beta_invitation_token:
+        return None
+    return invitation_token_hash(body.beta_invitation_token)
+
+
 @router.post("/mobile/external/start", response_model=NativeExternalStartResponse)
 async def mobile_external_start(
     body: NativeExternalStartRequest,
@@ -3103,6 +3176,8 @@ async def mobile_external_start(
         platform=body.platform,
         redemption_verifier=body.redemption_verifier,
         apple_nonce_hash=provider == ExternalIdentityProvider.apple,
+        beta=body.beta,
+        beta_invitation_hash=_native_beta_invitation_hash(body),
     )
     await store_native_external_transaction(settings, tx)
     return NativeExternalStartResponse(
@@ -3142,6 +3217,7 @@ async def mobile_external_browser_start(
     nonce = secrets.token_urlsafe(32)
     transaction_id = secrets.token_urlsafe(32)
     redemption_verifier_hash = hash_redemption_verifier(body.redemption_verifier)
+    beta_invitation_hash = _native_beta_invitation_hash(body)
     if body.provider == "apple":
         require_apple_configuration(settings)
         await store_flow_state(
@@ -3157,6 +3233,8 @@ async def mobile_external_browser_start(
                 native_environment=settings.environment,
                 native_transaction_id=transaction_id,
                 native_redemption_verifier_hash=redemption_verifier_hash,
+                native_beta=body.beta,
+                native_beta_invitation_hash=beta_invitation_hash,
             ),
         )
         url = authorization_url(settings, state, nonce)
@@ -3177,6 +3255,8 @@ async def mobile_external_browser_start(
                 native_environment=settings.environment,
                 native_transaction_id=transaction_id,
                 native_redemption_verifier_hash=redemption_verifier_hash,
+                native_beta=body.beta,
+                native_beta_invitation_hash=beta_invitation_hash,
             ),
         )
         url = google_authorization_url(settings, state, nonce, verifier)
@@ -3344,12 +3424,14 @@ async def mobile_external_exchange(
         )
 
     signup_policy = await evaluate_signup_policy(db, settings)
-    can_register = bool(
-        provider_email
-        and email_verified
-        and signup_policy.normal_path
-        and not signup_policy.invitation_required
-        and signup_policy.domain_allowed(provider_email)
+    can_register = await _native_can_register(
+        db,
+        settings,
+        signup_policy,
+        provider_email=provider_email,
+        email_verified=email_verified,
+        beta=tx.beta,
+        beta_invitation_hash=tx.beta_invitation_hash,
     )
     await store_native_external_pending(
         settings,
@@ -3363,6 +3445,8 @@ async def mobile_external_exchange(
             can_register=can_register,
             platform=tx.platform,
             redemption_verifier_hash=tx.redemption_verifier_hash,
+            beta=tx.beta,
+            beta_invitation_hash=tx.beta_invitation_hash,
         ),
     )
     return NativeExternalRecoveryResponse(
@@ -3548,7 +3632,12 @@ async def mobile_external_recovery_register(
 ) -> MobileSessionResponse | NativeMfaContinuationResponse:
     require_secure_transport(request, settings)
     pending = await load_native_external_pending(settings, body.transaction_id)
-    if pending is None or not pending.can_register or not pending.provider_email:
+    if (
+        pending is None
+        or not pending.can_register
+        or not pending.provider_email
+        or not pending.email_verified
+    ):
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             "This provider identity must be linked to an existing account.",
@@ -3556,10 +3645,16 @@ async def mobile_external_recovery_register(
     if not body.display_name:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Your name is required.")
     signup_policy = await evaluate_signup_policy(db, settings)
-    if (
-        not signup_policy.normal_path
-        or signup_policy.invitation_required
-        or not signup_policy.domain_allowed(pending.provider_email)
+    # Re-checked at registration: the policy or the invitation may have
+    # changed since the sign-in recorded can_register.
+    if not await _native_can_register(
+        db,
+        settings,
+        signup_policy,
+        provider_email=pending.provider_email,
+        email_verified=pending.email_verified,
+        beta=pending.beta,
+        beta_invitation_hash=pending.beta_invitation_hash,
     ):
         raise HTTPException(
             status.HTTP_403_FORBIDDEN,
@@ -3608,7 +3703,11 @@ async def mobile_external_recovery_register(
             ),
             document_version_id=item.version.id,
             user_id=user.id,
-            context=LegalAcceptanceContext.signup,
+            context=(
+                LegalAcceptanceContext.beta_registration
+                if pending.beta
+                else LegalAcceptanceContext.signup
+            ),
             platform=body.platform,
             ip_address=resolve_client_ip(request, settings),
             user_agent=request.headers.get("user-agent", "")[:300] or None,
@@ -3626,6 +3725,21 @@ async def mobile_external_recovery_register(
         provider_email=pending.provider_email,
         provider_email_verified=pending.email_verified,
     )
+    if pending.beta:
+        # The same Beta intent record web provider registration creates; the
+        # authenticated Beta continuation (GET /beta/continuation) resumes it.
+        programme = await current_programme(db)
+        db.add(
+            BetaPendingRegistration(
+                user_id=user.id,
+                programme_id=programme.id,
+                token_hash=hash_secret(
+                    secrets.token_urlsafe(32), settings.secret_key.get_secret_value()
+                ),
+                invitation_token_hash=pending.beta_invitation_hash,
+                expires_at=datetime.now(UTC) + timedelta(days=BETA_INTENT_TTL_DAYS),
+            )
+        )
     policy = await _resolve_browser_mfa_policy(db, user.id, settings)
     if policy.enforcement_enabled and policy.required:
         continuation = await _native_mfa_continuation(

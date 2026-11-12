@@ -2233,7 +2233,7 @@ export { platformApi, PlatformClient } from "./platform";
 // rather than folded into MyKhayaClient, so nothing about the browser
 // client's cookie/CSRF/relative-path behaviour above this line is affected
 // by, or has to account for, native transport at all.
-export { NativeMyKhayaClient, type NativeMfaContinuation } from "./native-client";
+export { NativeMyKhayaClient, type NativeBetaIntent, type NativeMfaContinuation } from "./native-client";
 export type {
   NativeSession,
   NativeSessionStore,

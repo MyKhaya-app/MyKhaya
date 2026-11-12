@@ -974,3 +974,51 @@ describe("NativeMyKhayaClient — native provider correlation", () => {
     expect(new Headers((fetchMock.mock.calls[0]![1] as RequestInit).headers).has("X-Request-ID")).toBe(false);
   });
 });
+
+describe("NativeMyKhayaClient — Founding Beta intent on native provider start", () => {
+  const VERIFIER = "v".repeat(64);
+  const INVITATION = "beta-invitation-token-abcdefghijklmnopqrstuvwxyz";
+  const startResult = { transaction_id: "t".repeat(32), nonce: "n", provider: "apple", client_id: "app" };
+
+  function sentBody(fetchMock: ReturnType<typeof vi.fn>): Record<string, unknown> {
+    const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
+    return JSON.parse(String(init.body)) as Record<string, unknown>;
+  }
+
+  it("sends Beta intent and the invitation token on a sign-in start", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, startResult));
+    const client = new NativeMyKhayaClient(BASE_URL, new InMemoryNativeSessionStore(), { fetch: fetchMock });
+    await client.startExternal("apple", "ios", VERIFIER, "login", undefined, { beta: true, invitationToken: INVITATION });
+    expect(sentBody(fetchMock)).toMatchObject({ intent: "login", beta: true, beta_invitation_token: INVITATION });
+  });
+
+  it("sends only beta: true when there is no invitation", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, { authorization_url: "https://x", transaction_id: "t" }));
+    const client = new NativeMyKhayaClient(BASE_URL, new InMemoryNativeSessionStore(), { fetch: fetchMock });
+    await client.externalBrowserStart("google", "ios", "mykhaya://auth/callback", VERIFIER, "login", { beta: true, invitationToken: null });
+    const body = sentBody(fetchMock);
+    expect(body.beta).toBe(true);
+    expect(body).not.toHaveProperty("beta_invitation_token");
+  });
+
+  it("sends no Beta fields for a plain sign-in", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, startResult));
+    const client = new NativeMyKhayaClient(BASE_URL, new InMemoryNativeSessionStore(), { fetch: fetchMock });
+    await client.startExternal("apple", "ios", VERIFIER);
+    const body = sentBody(fetchMock);
+    expect(body).not.toHaveProperty("beta");
+    expect(body).not.toHaveProperty("beta_invitation_token");
+  });
+
+  it("never sends Beta intent when linking an existing account", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, startResult));
+    const store = new InMemoryNativeSessionStore();
+    await store.set({ token: "session-token-for-link" });
+    const client = new NativeMyKhayaClient(BASE_URL, store, { fetch: fetchMock });
+    await client.startExternal("apple", "ios", VERIFIER, "link", undefined, { beta: true, invitationToken: INVITATION });
+    const body = sentBody(fetchMock);
+    expect(body.intent).toBe("link");
+    expect(body).not.toHaveProperty("beta");
+    expect(JSON.stringify(body)).not.toContain(INVITATION);
+  });
+});

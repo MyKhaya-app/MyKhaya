@@ -85,11 +85,20 @@ async def beta_invitation_valid(db: AsyncSession, token: str, email: str) -> boo
     """Whether `token` is a live (reserved, unexpired) Beta invitation issued to
     `email` for the active programme. Read-only: the invitation is consumed
     later, inside join_beta, under the programme lock."""
+    return await beta_invitation_hash_valid(db, invitation_token_hash(token), email)
+
+
+async def beta_invitation_hash_valid(db: AsyncSession, token_hash: str, email: str) -> bool:
+    """`beta_invitation_valid` for a caller that holds only the token's hash.
+
+    Native provider sign-in hashes the invitation token when the sign-in
+    starts and keeps only the hash in its short-lived sign-in record, so the
+    raw token is never stored server-side."""
     invitation = await db.scalar(
         select(BetaInvitation)
         .join(BetaProgramme, BetaProgramme.id == BetaInvitation.programme_id)
         .where(
-            BetaInvitation.token_hash == invitation_token_hash(token),
+            BetaInvitation.token_hash == token_hash,
             BetaProgramme.slug == FOUNDING_BETA_SLUG,
             BetaProgramme.status == BetaProgrammeStatus.active,
         )

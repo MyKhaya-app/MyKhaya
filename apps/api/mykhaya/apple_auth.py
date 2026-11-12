@@ -52,6 +52,10 @@ class AppleFlowState:
     native_environment: str | None = None
     native_transaction_id: str | None = None
     native_redemption_verifier_hash: str | None = None
+    # Founding Beta intent from a native start request; only the invitation
+    # token's SHA-256 is kept, never the token.
+    native_beta: bool = False
+    native_beta_invitation_hash: str | None = None
 
 
 @dataclass(frozen=True)
@@ -117,6 +121,8 @@ async def store_flow_state(settings: Settings, state: str, value: AppleFlowState
                     "native_environment": value.native_environment,
                     "native_transaction_id": value.native_transaction_id,
                     "native_redemption_verifier_hash": value.native_redemption_verifier_hash,
+                    "native_beta": value.native_beta,
+                    "native_beta_invitation_hash": value.native_beta_invitation_hash,
                 }
             ),
             ex=STATE_TTL_SECONDS,
@@ -154,6 +160,10 @@ async def consume_flow_state(settings: Settings, state: str) -> AppleFlowState:
             else None,
             native_redemption_verifier_hash=str(parsed["native_redemption_verifier_hash"])
             if parsed.get("native_redemption_verifier_hash")
+            else None,
+            native_beta=parsed.get("native_beta") is True,
+            native_beta_invitation_hash=str(parsed["native_beta_invitation_hash"])
+            if parsed.get("native_beta") is True and parsed.get("native_beta_invitation_hash")
             else None,
         )
     except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:

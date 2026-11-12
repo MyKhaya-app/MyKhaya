@@ -63,10 +63,13 @@ async def test_social_registration_allowed_delegates_beta_to_central_invitation_
         policy: SignupPolicy,
         invitation_token: str | None,
         email: str,
+        *,
+        invitation_token_hash: str | None = None,
     ) -> bool:
         observed.update(
             invitation_token=invitation_token,
             email=email,
+            invitation_token_hash=invitation_token_hash,
         )
         return True
 
@@ -87,4 +90,6 @@ async def test_social_registration_allowed_delegates_beta_to_central_invitation_
     assert observed == {
         "invitation_token": "invite-token",
         "email": "person@example.com",
+        # Web provider registration passes the raw token, never a hash.
+        "invitation_token_hash": None,
     }

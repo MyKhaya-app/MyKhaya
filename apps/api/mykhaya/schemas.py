@@ -326,7 +326,24 @@ class MobileDeviceRenewRequest(StrictModel):
     device_token: str = Field(min_length=30, max_length=500)
 
 
-class NativeExternalStartRequest(StrictModel):
+class NativeBetaIntent(StrictModel):
+    """Founding Beta intent carried from /register?beta=1 into native provider
+    sign-in. The API keeps only a hash of the invitation token in the
+    short-lived sign-in record, and never returns or logs the token."""
+
+    beta: bool = False
+    beta_invitation_token: str | None = Field(default=None, min_length=32, max_length=500)
+
+    @model_validator(mode="after")
+    def beta_intent_is_consistent(self) -> "NativeBetaIntent":
+        if self.beta_invitation_token is not None and not self.beta:
+            raise ValueError("beta_invitation_token requires beta")
+        if self.beta and getattr(self, "intent", "login") != "login":
+            raise ValueError("beta is only valid for sign-in")
+        return self
+
+
+class NativeExternalStartRequest(NativeBetaIntent):
     provider: Literal["apple", "google"]
     intent: Literal["login", "link"] = "login"
     platform: Literal["ios", "android"]
@@ -340,7 +357,7 @@ class NativeExternalStartResponse(BaseModel):
     client_id: str | None = None
 
 
-class NativeExternalBrowserStartRequest(StrictModel):
+class NativeExternalBrowserStartRequest(NativeBetaIntent):
     provider: Literal["apple", "google"]
     intent: Literal["login", "link"] = "login"
     platform: Literal["ios", "android"]

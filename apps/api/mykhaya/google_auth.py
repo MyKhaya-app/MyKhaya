@@ -44,6 +44,10 @@ class GoogleFlowState:
     native_environment: str | None = None
     native_transaction_id: str | None = None
     native_redemption_verifier_hash: str | None = None
+    # Founding Beta intent from a native start request; only the invitation
+    # token's SHA-256 is kept, never the token.
+    native_beta: bool = False
+    native_beta_invitation_hash: str | None = None
 
 
 @dataclass(frozen=True)
@@ -148,6 +152,10 @@ async def consume_flow_state(settings: Settings, state: str) -> GoogleFlowState:
             else None,
             native_redemption_verifier_hash=str(data["native_redemption_verifier_hash"])
             if data.get("native_redemption_verifier_hash")
+            else None,
+            native_beta=data.get("native_beta") is True,
+            native_beta_invitation_hash=str(data["native_beta_invitation_hash"])
+            if data.get("native_beta") is True and data.get("native_beta_invitation_hash")
             else None,
         )
     except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
