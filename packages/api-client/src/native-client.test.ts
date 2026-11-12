@@ -1022,3 +1022,24 @@ describe("NativeMyKhayaClient — Founding Beta intent on native provider start"
     expect(JSON.stringify(body)).not.toContain(INVITATION);
   });
 });
+
+describe("NativeMyKhayaClient — a link never replaces the signed-in session", () => {
+  it("refuses a session returned to a link redemption and keeps the stored one", async () => {
+    const VERIFIER = "v".repeat(64);
+    const store = new InMemoryNativeSessionStore();
+    await store.set({ token: "account-a-session", deviceToken: "account-a-device" });
+    const fetchMock = vi
+      .fn()
+      // Link start (authenticated) marks the transaction as a link.
+      .mockResolvedValueOnce(jsonResponse(200, { authorization_url: "https://x", transaction_id: "t".repeat(32) }))
+      // A misbehaving server answers the link with another account's session.
+      .mockResolvedValueOnce(
+        jsonResponse(200, { id: "account-x", display_name: "X", session_token: "account-x-session", device_token: "x-device" }),
+      );
+    const client = new NativeMyKhayaClient(BASE_URL, store, { fetch: fetchMock });
+    await client.externalBrowserStart("google", "ios", "mykhaya://auth/callback", VERIFIER, "link");
+
+    await expect(client.externalRedeem("t".repeat(32), VERIFIER)).rejects.toThrow(/link did not complete/);
+    expect(await store.get()).toEqual({ token: "account-a-session", deviceToken: "account-a-device" });
+  });
+});

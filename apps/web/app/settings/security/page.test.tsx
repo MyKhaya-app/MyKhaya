@@ -87,7 +87,21 @@ vi.mock("@/components/passkey-client", async (importOriginal) => {
 let nativeShell = false;
 vi.mock("@/components/native-runtime", () => ({
   isNativeShell: () => nativeShell,
+  nativePlatform: () => (nativeShell ? "ios" : "web"),
 }));
+
+// Native linking: capture the deep-link listener so a test can deliver the
+// system-browser return, and stub the in-app browser.
+const appUrlOpen = vi.hoisted(() => ({ handler: null as ((event: { url: string }) => void) | null }));
+vi.mock("@capacitor/app", () => ({
+  App: {
+    addListener: vi.fn((event: string, handler: (event: { url: string }) => void) => {
+      if (event === "appUrlOpen") appUrlOpen.handler = handler;
+      return Promise.resolve({ remove: vi.fn() });
+    }),
+  },
+}));
+vi.mock("@capacitor/browser", () => ({ Browser: { open: vi.fn(async () => {}) } }));
 
 vi.mock("@/components/native-biometric", () => ({
   biometricLabel: vi.fn(() => "Face ID"),
@@ -117,11 +131,17 @@ vi.mock("@/components/native-biometric-preference", () => ({
 // AppShell's "offline" state instead of ever rendering Security's content.
 vi.mock("@/components/native-auth", () => ({
   bootstrapNativeSession: vi.fn(),
+  nativeExternalStart: vi.fn(),
+  nativeExternalAssertion: vi.fn(),
+  nativeExternalExchange: vi.fn(),
+  nativeExternalBrowserStart: vi.fn(),
+  nativeExternalRedeem: vi.fn(),
 }));
 
-const { api } = await import("@mykhaya/api-client");
+const { api, ApiError } = await import("@mykhaya/api-client");
 const passkeyClient = await import("@/components/passkey-client");
-const { bootstrapNativeSession } = await import("@/components/native-auth");
+const nativeAuth = await import("@/components/native-auth");
+const { bootstrapNativeSession } = nativeAuth;
 
 const meResponse = {
   id: "user-1",
@@ -725,5 +745,52 @@ describe("Security — native shell keeps account security features", () => {
     expect(api.authProviders).not.toHaveBeenCalled();
     expect(await screen.findByRole("button", { name: "Connect Apple" })).toBeInTheDocument();
     expect(passkeyClient.biometricSignInAvailable).not.toHaveBeenCalled();
+  });
+});
+
+describe("Security — native linking when the provider account belongs to someone else", () => {
+  const ALREADY_LINKED = (provider: string) =>
+    `That ${provider} account is already linked to another MyKhaya account.`;
+
+  it("explains a 409 from the system-browser link (Google on iPhone)", async () => {
+    nativeShell = true;
+    (nativeAuth.nativeExternalBrowserStart as ReturnType<typeof vi.fn>).mockResolvedValue({
+      authorization_url: "https://accounts.google.com/o/oauth2/v2/auth?state=native",
+      transaction_id: "google-link-tx",
+    });
+    (nativeAuth.nativeExternalRedeem as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new ApiError(409, "Conflict"),
+    );
+    const user = userEvent.setup();
+    render(<Security />);
+
+    await user.click(await screen.findByRole("button", { name: "Connect Google" }));
+    await waitFor(() => expect(nativeAuth.nativeExternalBrowserStart).toHaveBeenCalledWith("google", "link"));
+    // The browser returns to the app through its deep link.
+    await waitFor(() => expect(appUrlOpen.handler).not.toBeNull());
+    appUrlOpen.handler!({ url: "mykhaya://auth/callback?transaction=google-link-tx" });
+
+    expect(await screen.findByText(ALREADY_LINKED("Google"))).toBeInTheDocument();
+    expect(nativeAuth.nativeExternalRedeem).toHaveBeenCalledWith("google-link-tx");
+  });
+
+  it("explains a 409 from the SDK link (Apple on iPhone)", async () => {
+    nativeShell = true;
+    (nativeAuth.nativeExternalStart as ReturnType<typeof vi.fn>).mockResolvedValue({
+      transaction_id: "apple-link-tx",
+      nonce: "nonce",
+      provider: "apple",
+      client_id: "app.mykhaya.mobile",
+    });
+    (nativeAuth.nativeExternalAssertion as ReturnType<typeof vi.fn>).mockResolvedValue({ identity_token: "token" });
+    (nativeAuth.nativeExternalExchange as ReturnType<typeof vi.fn>).mockRejectedValue(
+      new ApiError(409, "Conflict"),
+    );
+    const user = userEvent.setup();
+    render(<Security />);
+
+    await user.click(await screen.findByRole("button", { name: "Connect Apple" }));
+
+    expect(await screen.findByText(ALREADY_LINKED("Apple"))).toBeInTheDocument();
   });
 });

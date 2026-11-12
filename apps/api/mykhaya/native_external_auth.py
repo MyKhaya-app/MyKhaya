@@ -247,16 +247,15 @@ async def store_native_external_pending(
         await redis.aclose()
 
 
-async def consume_native_external_pending(
-    settings: Settings, transaction_id: str
+def _parse_native_external_pending(
+    transaction_id: str, raw: str | None
 ) -> NativeExternalPendingIdentity | None:
-    if not transaction_id or len(transaction_id) > 256:
-        return None
-    redis = Redis.from_url(settings.redis_url, socket_timeout=2, decode_responses=True)
-    try:
-        raw = await redis.getdel(_pending_key(transaction_id))
-    finally:
-        await redis.aclose()
+    """The single parser for a stored pending identity.
+
+    Both load and consume use it, so every stored field (including the link
+    binding: ``intent`` and ``intended_user_id``) is always read back. A
+    separate copy in the loader once dropped those two fields, which disabled
+    the link checks that depend on them."""
     if not raw:
         return None
     try:
@@ -282,6 +281,19 @@ async def consume_native_external_pending(
         return None
 
 
+async def consume_native_external_pending(
+    settings: Settings, transaction_id: str
+) -> NativeExternalPendingIdentity | None:
+    if not transaction_id or len(transaction_id) > 256:
+        return None
+    redis = Redis.from_url(settings.redis_url, socket_timeout=2, decode_responses=True)
+    try:
+        raw = await redis.getdel(_pending_key(transaction_id))
+    finally:
+        await redis.aclose()
+    return _parse_native_external_pending(transaction_id, raw)
+
+
 async def load_native_external_pending(
     settings: Settings, transaction_id: str
 ) -> NativeExternalPendingIdentity | None:
@@ -292,25 +304,7 @@ async def load_native_external_pending(
         raw = await redis.get(_pending_key(transaction_id))
     finally:
         await redis.aclose()
-    if not raw:
-        return None
-    try:
-        value = json.loads(raw)
-        return NativeExternalPendingIdentity(
-            transaction_id=transaction_id,
-            provider=ExternalIdentityProvider(str(value["provider"])),
-            subject=str(value["subject"]),
-            provider_email=str(value["provider_email"]) if value.get("provider_email") else None,
-            email_verified=bool(value.get("email_verified", False)),
-            display_name=str(value["display_name"]) if value.get("display_name") else None,
-            can_register=bool(value.get("can_register", False)),
-            platform=str(value["platform"]),
-            redemption_verifier_hash=str(value["redemption_verifier_hash"]),
-            beta=value.get("beta") is True,
-            beta_invitation_hash=_beta_hash(value),
-        )
-    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
-        return None
+    return _parse_native_external_pending(transaction_id, raw)
 
 
 async def store_native_mfa_transaction(settings: Settings, value: NativeMfaTransaction) -> None:

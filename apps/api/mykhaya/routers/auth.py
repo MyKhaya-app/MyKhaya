@@ -1259,6 +1259,7 @@ async def _apple_callback(
                     email_verified=email_verified,
                     display_name=_apple_name(user),
                     can_register=identity is None
+                    and flow.intent != "link"
                     and await _native_can_register(
                         db,
                         settings,
@@ -1789,6 +1790,7 @@ async def google_callback(
                     email_verified=True,
                     display_name=_google_name(claims),
                     can_register=identity is None
+                    and flow.intent != "link"
                     and await _native_can_register(
                         db,
                         settings,
@@ -3111,6 +3113,15 @@ async def mobile_login(
     )
 
 
+def _is_native_link(pending: NativeExternalPendingIdentity) -> bool:
+    """Whether a pending native identity came from a link request."""
+    return pending.intent == "link" or pending.intended_user_id is not None
+
+
+def _provider_linked_elsewhere(provider: ExternalIdentityProvider) -> str:
+    return f"That {provider.value.title()} account is already linked to another MyKhaya account."
+
+
 def _native_beta_invitation_hash(
     body: NativeExternalStartRequest | NativeExternalBrowserStartRequest,
 ) -> str | None:
@@ -3364,9 +3375,7 @@ async def mobile_external_exchange(
                 status.HTTP_403_FORBIDDEN, "This linking attempt belongs to another session."
             )
         if identity is not None and identity.user_id != auth.user.id:
-            raise HTTPException(
-                status.HTTP_409_CONFLICT, "This provider identity is already linked."
-            )
+            raise HTTPException(status.HTTP_409_CONFLICT, _provider_linked_elsewhere(tx.provider))
         try:
             await link_external_identity(
                 db,
@@ -3381,7 +3390,7 @@ async def mobile_external_exchange(
         except (ExternalIdentityOwnershipConflict, IntegrityError):
             await db.rollback()
             raise HTTPException(
-                status.HTTP_409_CONFLICT, "This provider identity is already linked."
+                status.HTTP_409_CONFLICT, _provider_linked_elsewhere(tx.provider)
             ) from None
         return MessageResponse(
             message=f"{tx.provider.value.title()} sign-in has been linked to your account."
@@ -3487,7 +3496,12 @@ async def mobile_external_redeem(
             status.HTTP_400_BAD_REQUEST, "This sign-in attempt is invalid or has expired."
         )
     identity = await find_external_identity(db, pending.provider, pending.subject, for_update=True)
-    if pending.intended_user_id is not None:
+    if _is_native_link(pending):
+        # A link request only ever links, to the account that started it. It
+        # must never fall through to the sign-in handling below, which would
+        # issue a session for whoever already owns the provider identity.
+        if not pending.intended_user_id:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "This linking attempt is invalid.")
         auth = await auth_context(request, db, settings)
         require_adult_session(auth)
         if str(auth.user.id) != pending.intended_user_id:
@@ -3495,8 +3509,9 @@ async def mobile_external_redeem(
                 status.HTTP_403_FORBIDDEN, "This linking attempt belongs to another session."
             )
         if identity is not None and identity.user_id != auth.user.id:
+            await consume_native_external_pending(settings, body.transaction_id)
             raise HTTPException(
-                status.HTTP_409_CONFLICT, "This provider identity is already linked."
+                status.HTTP_409_CONFLICT, _provider_linked_elsewhere(pending.provider)
             )
         consumed = await consume_native_external_pending(settings, body.transaction_id)
         if consumed is None:
@@ -3515,7 +3530,7 @@ async def mobile_external_redeem(
         except (ExternalIdentityOwnershipConflict, IntegrityError):
             await db.rollback()
             raise HTTPException(
-                status.HTTP_409_CONFLICT, "This provider identity is already linked."
+                status.HTTP_409_CONFLICT, _provider_linked_elsewhere(pending.provider)
             ) from None
         return MessageResponse(
             message=f"{pending.provider.value.title()} sign-in has been linked to your account."
@@ -3584,7 +3599,7 @@ async def mobile_external_recovery_link(
     pending = await load_native_external_pending(settings, body.transaction_id)
     if pending is None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "This sign-in attempt has expired.")
-    if pending.intent == "link":
+    if _is_native_link(pending):
         if not pending.intended_user_id:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "This linking attempt is invalid.")
         if pending.intended_user_id != str(auth.user.id):
@@ -3612,7 +3627,7 @@ async def mobile_external_recovery_link(
     except (ExternalIdentityOwnershipConflict, IntegrityError):
         await db.rollback()
         raise HTTPException(
-            status.HTTP_409_CONFLICT, "This provider identity is already linked."
+            status.HTTP_409_CONFLICT, _provider_linked_elsewhere(pending.provider)
         ) from None
     return MessageResponse(
         message=f"{pending.provider.value.title()} sign-in has been linked to your account."
@@ -3632,6 +3647,10 @@ async def mobile_external_recovery_register(
 ) -> MobileSessionResponse | NativeMfaContinuationResponse:
     require_secure_transport(request, settings)
     pending = await load_native_external_pending(settings, body.transaction_id)
+    if pending is not None and _is_native_link(pending):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "This sign-in was started to link an account, not create one."
+        )
     if (
         pending is None
         or not pending.can_register

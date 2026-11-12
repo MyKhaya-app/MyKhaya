@@ -369,7 +369,8 @@ export class NativeMyKhayaClient {
 
   async externalRedeem(transactionId: string, redemptionVerifier: string) {
     const body = { transaction_id: transactionId, redemption_verifier: redemptionVerifier };
-    const result = await (this.linkTransactions.has(transactionId)
+    const linking = this.linkTransactions.has(transactionId);
+    const result = await (linking
       ? this.request<
           (User & { session_token?: string; device_token?: string })
           | { authentication_state: "account_choice"; transaction_id: string; provider: "apple" | "google"; provider_email: string | null; display_name: string | null; can_register: boolean }
@@ -384,6 +385,9 @@ export class NativeMyKhayaClient {
     >("/auth/mobile/external/redeem", body));
     this.linkTransactions.delete(transactionId);
     if ("session_token" in result && result.session_token) {
+      // A link only ever links the signed-in account. Never let it replace
+      // that account's session with another one (the API refuses this too).
+      if (linking) throw new Error("The provider link did not complete.");
       const { session_token, device_token, ...user } = result;
       await this.store.set({ token: session_token, deviceToken: device_token });
       return user;
