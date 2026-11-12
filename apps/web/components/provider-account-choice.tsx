@@ -103,17 +103,16 @@ export function ProviderAccountChoice({
   const Mark = provider === "apple" ? AppleMark : GoogleMark;
   const steps = signupSteps(beta, "provider");
   const canRegister = recovery?.can_register === true;
-  const [choice, setChoice] = useState<Choice>("new");
+  const [chosen, setChoice] = useState<Choice>("new");
+  // Account creation is the default when it is allowed; otherwise linking is
+  // the only route, so it is selected and the "new" card is not offered.
+  // Derived during render (not set in an effect) so no frame ever shows
+  // neither option selected.
+  const choice: Choice = recovery && !recovery.can_register ? "existing" : chosen;
   const userChanged = useRef(false);
   const nameInput = useRef<HTMLInputElement>(null);
   const latestOnChooseNew = useRef(onChooseNew);
   latestOnChooseNew.current = onChooseNew;
-
-  // Account creation is the default when it is allowed; otherwise linking is
-  // the only route, so it is selected and the "new" card is not offered.
-  useEffect(() => {
-    if (recovery && !recovery.can_register) setChoice("existing");
-  }, [recovery]);
 
   // Selecting "new" (including by default) prepares creation exactly as the
   // former "Create your account" button did.
