@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import { App } from "@capacitor/app";
 import { Browser } from "@capacitor/browser";
-import { Eye, EyeOff } from "lucide-react";
+import { CheckCircle2, Eye, EyeOff } from "lucide-react";
 import { api, ApiError, type PublicLegalDocumentSummary } from "@mykhaya/api-client";
 import type { User } from "@mykhaya/shared-types";
 import { Avatar } from "@/components/avatar";
@@ -801,8 +801,12 @@ export default function Login() {
             <img src="/images/mykhaya-logo.png" alt="" aria-hidden="true" />
             <span>MyKhaya</span>
           </Link>
-          <h1>Welcome back</h1>
-          <p className="signin-intro">Sign in to see what’s happening at Home.</p>
+          {!providerChoiceActive && (
+            <>
+              <h1>Welcome back</h1>
+              <p className="signin-intro">Sign in to see what’s happening at Home.</p>
+              </>
+          )}
           {inviteContext && (
             <p className="notice success">
               Continue signing in to join {inviteContext.group_name}.
@@ -821,32 +825,41 @@ export default function Login() {
           )}
           {appleResult === "choose" && appleTransaction && (
             <section className="notice" aria-labelledby="apple-recovery-heading">
-              <h2 id="apple-recovery-heading">Continue with Apple</h2>
-              <p>
-                {appleRecovery?.can_register
-                  ? `Apple sign-in is ready. Choose whether to connect it to an existing MyKhaya account or create ${beta ? "your Beta account" : "a new account"}. We will not merge accounts automatically.`
-                  : "New account creation is currently unavailable for this Apple sign-in. You can still link Apple to an existing MyKhaya account."}
-              </p>
+              {appleRecovery?.can_register ? (
+                <>
+                  <h2 id="apple-recovery-heading">Welcome to MyKhaya</h2>
+                  <p>You're nearly there! How would you like to continue?</p>
+                  <p className="provider-auth-success" role="status">
+                    <CheckCircle2 size={16} aria-hidden="true" /> Apple authentication successful
+                  </p>
+                </>
+              ) : (
+                <>
+                  <h2 id="apple-recovery-heading">Continue with Apple</h2>
+                  <p>New account creation is currently unavailable for this Apple sign-in. You can still link Apple to an existing MyKhaya account.</p>
+                </>
+              )}
               <div className="signin-recovery-actions">
+                {appleRecovery?.can_register && (
+                  <button
+                    type="button"
+                    className="signin-submit"
+                    onClick={() => setAppleRegistrationRequested(true)}
+                    disabled={busy}
+                  >
+                    {beta ? "Create your Beta account" : "Create your account"}
+                  </button>
+                )}
                 <button
                   type="button"
                   className="secondary"
                   onClick={() => { setAppleLinking(true); setError(""); }}
                   disabled={busy}
                 >
-                  Link to an existing account
+                  Link your existing account
                 </button>
-                {appleRecovery?.can_register && (
-                  <button
-                    type="button"
-                    className="tertiary"
-                    onClick={() => setAppleRegistrationRequested(true)}
-                    disabled={busy}
-                  >
-                    {beta ? "Create your Beta account" : "Create a new account"}
-                  </button>
-                )}
               </div>
+              {appleRecovery?.can_register && <p className="muted">Already have a MyKhaya account?</p>}
               {appleRegistrationRequested && appleRecovery?.can_register && (
                 <div className="auth-legal-consent">
                   <p><strong>Before you create your account</strong></p>
@@ -893,7 +906,7 @@ export default function Login() {
                 </p>
               )}
               {!appleLinking && !appleRegistrationRequested && (
-                <button type="button" className="tertiary" onClick={cancelWebProviderRecovery} disabled={busy}>Cancel</button>
+                <button type="button" className="tertiary" onClick={cancelWebProviderRecovery} disabled={busy}>Back to sign in</button>
               )}
               {appleRegistrationRequested && <button type="button" className="tertiary" onClick={() => setAppleRegistrationRequested(false)} disabled={busy}>Back</button>}
             </section>
@@ -908,16 +921,25 @@ export default function Login() {
           )}
           {googleResult === "choose" && googleTransaction && (
             <section className="notice" aria-labelledby="google-recovery-heading">
-              <h2 id="google-recovery-heading">Continue with Google</h2>
-              <p>
-                {googleRecovery?.can_register
-                  ? `Google sign-in is ready. Choose an existing MyKhaya account or create ${beta ? "your Beta account" : "a new one"}. We will not merge accounts automatically.`
-                  : "New account creation is currently unavailable for this Google sign-in. You can still link Google to an existing MyKhaya account."}
-              </p>
+              {googleRecovery?.can_register ? (
+                <>
+                  <h2 id="google-recovery-heading">Welcome to MyKhaya</h2>
+                  <p>You're nearly there! How would you like to continue?</p>
+                  <p className="provider-auth-success" role="status">
+                    <CheckCircle2 size={16} aria-hidden="true" /> Google authentication successful
+                  </p>
+                </>
+              ) : (
+                <>
+                  <h2 id="google-recovery-heading">Continue with Google</h2>
+                  <p>New account creation is currently unavailable for this Google sign-in. You can still link Google to an existing MyKhaya account.</p>
+                </>
+              )}
               <div className="signin-recovery-actions">
-                <button type="button" className="secondary" onClick={() => { setGoogleLinking(true); setError(""); }} disabled={busy}>Link to an existing account</button>
-                {googleRecovery?.can_register && <button type="button" className="tertiary" onClick={() => setGoogleRegistrationRequested(true)} disabled={busy}>{beta ? "Create your Beta account" : "Create a new account"}</button>}
+                {googleRecovery?.can_register && <button type="button" className="signin-submit" onClick={() => setGoogleRegistrationRequested(true)} disabled={busy}>{beta ? "Create your Beta account" : "Create your account"}</button>}
+                <button type="button" className="secondary" onClick={() => { setGoogleLinking(true); setError(""); }} disabled={busy}>Link your existing account</button>
               </div>
+              {googleRecovery?.can_register && <p className="muted">Already have a MyKhaya account?</p>}
               {googleRegistrationRequested && googleRecovery?.can_register && (
                 <div className="auth-legal-consent">
                   <p><strong>Before you create your account</strong></p>
@@ -936,7 +958,7 @@ export default function Login() {
                 </div>
               )}
               {googleLinking && <p>Sign in below with your existing MyKhaya email and password. Google will be linked only after that authentication succeeds.</p>}
-              {!googleLinking && !googleRegistrationRequested && <button type="button" className="tertiary" onClick={cancelWebProviderRecovery} disabled={busy}>Cancel</button>}
+              {!googleLinking && !googleRegistrationRequested && <button type="button" className="tertiary" onClick={cancelWebProviderRecovery} disabled={busy}>Back to sign in</button>}
               {googleRegistrationRequested && <button type="button" className="tertiary" onClick={() => setGoogleRegistrationRequested(false)} disabled={busy}>Back</button>}
             </section>
           )}

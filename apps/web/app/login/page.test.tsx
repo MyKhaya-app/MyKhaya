@@ -125,10 +125,15 @@ describe("Login — Apple recovery choice", () => {
     const typist = userEvent.setup();
     render(<Login />);
 
-    await screen.findByRole("heading", { name: "Continue with Apple" });
+    await screen.findByRole("heading", { name: "Welcome to MyKhaya" });
+    expect(screen.queryByRole("heading", { name: "Welcome back" })).not.toBeInTheDocument();
+    expect(screen.getByText("You're nearly there! How would you like to continue?")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Apple authentication successful");
+    expect(screen.getByRole("button", { name: "Create your account" })).toHaveClass("signin-submit");
+    expect(screen.getByRole("button", { name: "Link your existing account" })).toHaveClass("secondary");
     expect(screen.queryByLabelText("Email")).not.toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /forgot password/i })).not.toBeInTheDocument();
-    await typist.click(screen.getByRole("button", { name: /link to an existing account/i }));
+    await typist.click(screen.getByRole("button", { name: /link your existing account/i }));
     await typist.type(screen.getByLabelText("Email"), "existing@example.com");
     await typist.type(screen.getByLabelText("Password"), "correct-password");
     await typist.click(screen.getByRole("button", { name: /^sign in$/i }));
@@ -161,7 +166,7 @@ describe("Login — Apple recovery choice", () => {
     const typist = userEvent.setup();
     render(<Login />);
 
-    await typist.click(await screen.findByRole("button", { name: /create a new account/i }));
+    await typist.click(await screen.findByRole("button", { name: /create your account/i }));
     expect(screen.getByLabelText("Your name")).toHaveValue("Apple User");
     await typist.click(screen.getByRole("button", { name: /accept and create account/i }));
     expect(api.appleRecoveryRegister).not.toHaveBeenCalled();
@@ -188,13 +193,13 @@ describe("Login — Apple recovery choice", () => {
     await screen.findByRole("heading", { name: "Continue with Apple" });
     expect(screen.getByText(/new account creation is currently unavailable/i)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /create your beta account/i })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /link to an existing account/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /link your existing account/i })).toBeInTheDocument();
   });
 });
 
 describe("Login — Google recovery choice", () => {
   it("requires an explicit existing-account choice before linking Google", async () => {
-    searchParams = new URLSearchParams("google=choose&transaction=google-tx-1");
+    searchParams = new URLSearchParams("google=choose&transaction=google-tx-1&beta=1");
     (api.googleRecoveryOptions as ReturnType<typeof vi.fn>).mockResolvedValue({
       can_register: true,
       provider_email: "person@gmail.com",
@@ -206,8 +211,13 @@ describe("Login — Google recovery choice", () => {
     const typist = userEvent.setup();
     render(<Login />);
 
-    await screen.findByRole("heading", { name: "Continue with Google" });
-    await typist.click(screen.getByRole("button", { name: /link to an existing account/i }));
+    await screen.findByRole("heading", { name: "Welcome to MyKhaya" });
+    expect(screen.queryByRole("heading", { name: "Welcome back" })).not.toBeInTheDocument();
+    expect(screen.getByText("You're nearly there! How would you like to continue?")).toBeInTheDocument();
+    expect(screen.getByRole("status")).toHaveTextContent("Google authentication successful");
+    expect(screen.getByRole("button", { name: "Create your Beta account" })).toHaveClass("signin-submit");
+    expect(screen.getByRole("button", { name: "Link your existing account" })).toHaveClass("secondary");
+    await typist.click(screen.getByRole("button", { name: /link your existing account/i }));
     await typist.type(screen.getByLabelText("Email"), "existing@example.com");
     await typist.type(screen.getByLabelText("Password"), "correct-password");
     await typist.click(screen.getByRole("button", { name: /^sign in$/i }));
@@ -229,7 +239,7 @@ describe("Login — Google recovery choice", () => {
     await screen.findByRole("heading", { name: "Continue with Google" });
     expect(screen.getByText(/new account creation is currently unavailable/i)).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: /create your beta account/i })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /link to an existing account/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /link your existing account/i })).toBeInTheDocument();
   });
 });
 
