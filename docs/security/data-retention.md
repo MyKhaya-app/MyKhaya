@@ -35,3 +35,10 @@ Two narrowly-scoped, PCC-operator-only actions go further than Archive and are *
 - **Permanent Home deletion** (`POST /platform/homes/{id}/permanent-delete`). Available only for an already-Archived Home that is genuinely empty: no active or historical membership beyond the unavoidable creator record left by Home creation, no calendar events, routines, reminders, meals, lists, wishlists, calendar shares, invitations or join requests, no non-system calendar labels, no current or historical non-free billing, and no link to a managed demo Home. Any Home with real household history is left to Archive; this action exists only for accidental or disposable test Homes and hard-deletes the Home row (cascading only the automatic scaffolding a Home creation itself produces). The administrative audit record of the deletion (Home id, name, reason) is retained independently of the deleted row.
 
 Both actions require PCC administrative authorisation, recent re-authentication, a documented reason, and an explicit typed confirmation, and both write a permanent `AdministrativeAuditEvent`. Neither action is available in bulk. General User hard-deletion and hard-deletion of a populated Home remain intentionally unavailable from the Control Centre.
+
+Founding Beta history is retained separately from active capacity. A withdrawn
+participant keeps the historical normalized-email claim restriction. A PCC
+release for an already anonymised participant marks the enrollment released and
+clears that normalized email association; it does not restore the account or
+retain a reversible mapping solely to enforce the previous restriction. The
+enrollment, Home, legal and administrative evidence remain retained.

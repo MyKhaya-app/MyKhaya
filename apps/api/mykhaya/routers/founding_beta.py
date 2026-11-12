@@ -10,6 +10,7 @@ from mykhaya.audit import audit
 from mykhaya.config import Settings, get_settings
 from mykhaya.db import get_db
 from mykhaya.dependencies import AuthContext, auth_context, require_adult_session
+from mykhaya.entitlements import resolve_effective_plan, revoke_complimentary_access
 from mykhaya.founding_beta import (
     FOUNDING_BETA_SLUG,
     FOUNDING_BETA_SOURCE,
@@ -49,6 +50,7 @@ from mykhaya.legal import current_published_version, user_document_status
 from mykhaya.legal_evidence import queue_acceptance_evidence
 from mykhaya.models import (
     BetaEnrollment,
+    BetaEnrollmentStatus,
     BetaInvitation,
     BetaInvitationStatus,
     BetaPendingRegistration,
@@ -66,12 +68,14 @@ from mykhaya.models import (
     LegalRecordType,
     PlatformRole,
     SubscriptionPlan,
+    SubscriptionProvider,
     User,
 )
 from mykhaya.notifications.engine import notify
 from mykhaya.notifications.templates import render_notification_email
 from mykhaya.platform_audit import platform_audit
 from mykhaya.platform_runtime import evaluate_signup_policy, registration_invitation_required
+from mykhaya.platform_schemas import SensitiveActionRequest
 from mykhaya.platform_security import PlatformContext, require_recent_auth, require_roles
 from mykhaya.rate_limit import enforce_rate_limit
 from mykhaya.security import derived_token, normalise_email, resolve_client_ip
@@ -269,6 +273,22 @@ async def _pending_registration(
 
 
 async def _eligibility(db: AsyncSession, user_id: uuid.UUID) -> BetaEligibilityResponse:
+    user_email = await db.scalar(select(User.email).where(User.id == user_id))
+    if user_email:
+        programme = await current_programme(db)
+        prior = await db.scalar(
+            select(BetaEnrollment.id).where(
+                BetaEnrollment.programme_id == programme.id,
+                BetaEnrollment.normalized_email.is_not(None),
+                BetaEnrollment.normalized_email == normalise_email(user_email),
+                BetaEnrollment.status != BetaEnrollmentStatus.released,
+            )
+        )
+        if prior is not None:
+            return BetaEligibilityResponse(
+                eligible=False,
+                reason="This account is not eligible for another Founding Beta place.",
+            )
     owned = list(
         await db.scalars(
             select(Group).where(Group.created_by == user_id, Group.is_active.is_(True))
@@ -898,3 +918,141 @@ async def set_capacity_exemption(
         new={"capacity_exempt": body.exempt},
     )
     await db.commit()
+
+
+async def _change_beta_enrollment_status(
+    *,
+    user_id: uuid.UUID,
+    target: BetaEnrollmentStatus,
+    body: SensitiveActionRequest,
+    request: Request,
+    context: PlatformContext,
+    db: AsyncSession,
+    settings: Settings,
+) -> dict[str, object]:
+    require_recent_auth(context, settings)
+    programme = await programme_for_admin(db, for_update=True)
+    await lock_programme(db, programme)
+    user = await db.get(User, user_id, with_for_update=True)
+    if user is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That user could not be found.")
+    enrollment = await db.scalar(
+        select(BetaEnrollment)
+        .where(
+            BetaEnrollment.programme_id == programme.id,
+            BetaEnrollment.joined_user_id == user_id,
+        )
+        .with_for_update()
+    )
+    if enrollment is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That user has no Founding Beta enrolment.")
+    if enrollment.status != BetaEnrollmentStatus.active:
+        if enrollment.status != target:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                f"Founding Beta enrolment is already {enrollment.status.value}.",
+            )
+        return {
+            "changed": False,
+            "status": enrollment.status.value,
+            "capacity_released": True,
+            "message": f"Founding Beta enrolment is already {enrollment.status.value}.",
+        }
+    if target == BetaEnrollmentStatus.released and user.anonymised_at is None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "Only an anonymised user can release this place."
+        )
+    if target == BetaEnrollmentStatus.withdrawn and (
+        user.anonymised_at is not None or user.archived_at is not None or not user.is_active
+    ):
+        raise HTTPException(status.HTTP_409_CONFLICT, "Only an active user can withdraw from Beta.")
+    subscription = await db.scalar(
+        select(HomeSubscription)
+        .where(HomeSubscription.group_id == enrollment.home_id)
+        .with_for_update()
+    )
+    entitlement_revoked = False
+    if subscription is not None and subscription.provider == SubscriptionProvider.complimentary:
+        if subscription.complimentary_source != FOUNDING_BETA_SOURCE:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "The Home has an ambiguous complimentary entitlement source.",
+            )
+        entitlement_revoked = await revoke_complimentary_access(
+            db, subscription, actor_administrator_id=context.administrator.id, reason=body.reason
+        )
+    now = datetime.now(UTC)
+    enrollment.status = target
+    enrollment.status_changed_at = now
+    enrollment.status_changed_by = context.administrator.id
+    enrollment.status_reason = body.reason
+    if target == BetaEnrollmentStatus.released:
+        enrollment.normalized_email = None
+    platform_audit(
+        db,
+        request,
+        context,
+        f"beta.enrollment_{target.value}",
+        "beta_enrollment",
+        enrollment.id,
+        reason=body.reason,
+        new={"status": target.value, "entitlement_revoked": entitlement_revoked},
+    )
+    await db.commit()
+    return {
+        "changed": True,
+        "message": (
+            "Founding Beta place released."
+            if target == BetaEnrollmentStatus.released
+            else "Founding Beta withdrawal completed."
+        ),
+        "status": target.value,
+        "capacity_released": True,
+        "entitlement_revoked": entitlement_revoked,
+        "effective_plan": resolve_effective_plan(subscription).value if subscription else "free",
+        "status_changed_at": now.isoformat(),
+    }
+
+
+@platform_router.post("/users/{user_id}/release", response_model=dict[str, object])
+async def release_anonymised_beta_place(
+    user_id: uuid.UUID,
+    body: SensitiveActionRequest,
+    request: Request,
+    context: PlatformContext = Depends(
+        require_roles(PlatformRole.owner, PlatformRole.administrator)
+    ),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, object]:
+    return await _change_beta_enrollment_status(
+        user_id=user_id,
+        target=BetaEnrollmentStatus.released,
+        body=body,
+        request=request,
+        context=context,
+        db=db,
+        settings=settings,
+    )
+
+
+@platform_router.post("/users/{user_id}/withdraw", response_model=dict[str, object])
+async def withdraw_beta_place(
+    user_id: uuid.UUID,
+    body: SensitiveActionRequest,
+    request: Request,
+    context: PlatformContext = Depends(
+        require_roles(PlatformRole.owner, PlatformRole.administrator)
+    ),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, object]:
+    return await _change_beta_enrollment_status(
+        user_id=user_id,
+        target=BetaEnrollmentStatus.withdrawn,
+        body=body,
+        request=request,
+        context=context,
+        db=db,
+        settings=settings,
+    )

@@ -85,6 +85,7 @@ from mykhaya.entitlements import (
     require_within_limit,
     resolve_effective_plan,
     resolve_effective_state,
+    revoke_complimentary_access,
 )
 from mykhaya.external_identities import (
     ExternalIdentityNotFound,
@@ -2865,6 +2866,14 @@ def _lifecycle_state(is_active: bool, archived_at: datetime | None) -> str:
     return "active" if is_active else "disabled"
 
 
+def _beta_subscription_summary(
+    subscription: HomeSubscription | None,
+) -> tuple[str | None, str]:
+    if subscription is None:
+        return None, "free"
+    return subscription.complimentary_source, resolve_effective_plan(subscription).value
+
+
 def _user_presentation_lifecycle(user: User) -> str:
     """PCC display only (Slice 5B §20) — never used for filtering/
     notification-eligibility, which stay exactly Active/Disabled/Archived
@@ -3129,11 +3138,44 @@ async def user_detail(
                 BetaEnrollment.home_id,
                 BetaEnrollment.terms_version,
                 BetaEnrollment.joined_at,
+                BetaEnrollment.status,
+                BetaEnrollment.status_changed_at,
+                BetaEnrollment.status_reason,
+                BetaEnrollment.capacity_exempt,
             )
             .join(BetaEnrollment, BetaEnrollment.programme_id == BetaProgramme.id)
             .where(BetaEnrollment.joined_user_id == user_id)
         )
     ).all()
+    beta_home_ids = [row[1] for row in beta_participation]
+    beta_subscriptions = (
+        {
+            row.group_id: row
+            for row in await db.scalars(
+                select(HomeSubscription).where(HomeSubscription.group_id.in_(beta_home_ids))
+            )
+        }
+        if beta_home_ids
+        else {}
+    )
+    founding_beta = []
+    for row in beta_participation:
+        subscription = beta_subscriptions.get(row[1])
+        entitlement_source, effective_plan = _beta_subscription_summary(subscription)
+        founding_beta.append(
+            {
+                "programme": row[0],
+                "home_id": row[1],
+                "terms_version": row[2],
+                "joined_at": row[3],
+                "status": row[4].value,
+                "status_changed_at": row[5],
+                "status_reason": row[6],
+                "capacity_exempt": row[7],
+                "entitlement_source": entitlement_source,
+                "effective_plan": effective_plan,
+            }
+        )
     return {
         "id": user.id,
         "email": user.email,
@@ -3151,6 +3193,7 @@ async def user_detail(
             for membership, group in memberships
         ],
         "founding_beta_participant": bool(beta_participation),
+        "founding_beta": founding_beta,
         "sessions": [
             {
                 "id": row.id,
@@ -3193,6 +3236,7 @@ def _user_viewer_permissions(context: PlatformContext) -> dict[str, bool]:
         "disconnect_sign_in_methods": role in OPERATORS,
         "cleanup_anonymised_sign_in_methods": role
         in (PlatformRole.owner, PlatformRole.administrator, PlatformRole.security),
+        "manage_founding_beta_places": role in OPERATORS,
         "revoke_sessions": role in SUPPORT,
     }
 
@@ -4897,29 +4941,11 @@ async def revoke_complimentary(
         raise HTTPException(
             status.HTTP_409_CONFLICT, "This Home does not have complimentary access."
         )
-    from_plan, from_provider, from_status = (
-        subscription.plan,
-        subscription.provider,
-        subscription.status,
-    )
     # This row represents complimentary-only access. Paid Stripe Homes are
     # rejected above and therefore retain their commercial state unchanged.
-    subscription.plan = SubscriptionPlan.free
-    subscription.provider = SubscriptionProvider.free
-    subscription.status = SubscriptionStatus.active
-    subscription.complimentary_reason = None
-    subscription.complimentary_note = None
-    subscription.complimentary_expires_at = None
-    await record_subscription_event(
+    await revoke_complimentary_access(
         db,
-        group_id,
-        event_type="downgraded",
-        from_plan=from_plan,
-        to_plan=subscription.plan,
-        from_provider=from_provider,
-        to_provider=subscription.provider,
-        from_status=from_status,
-        to_status=subscription.status,
+        subscription,
         actor_administrator_id=context.administrator.id,
         reason=body.reason,
     )

@@ -1505,6 +1505,12 @@ class BetaInvitationStatus(StrEnum):
     cancelled = "cancelled"
 
 
+class BetaEnrollmentStatus(StrEnum):
+    active = "active"
+    withdrawn = "withdrawn"
+    released = "released"
+
+
 class BetaPendingRegistration(UuidTimeMixin, Base):
     __tablename__ = "beta_pending_registrations"
     __table_args__ = (
@@ -1615,8 +1621,12 @@ class BetaEnrollment(UuidTimeMixin, Base):
         UniqueConstraint(
             "programme_id", "joined_user_id", name="uq_beta_enrollment_programme_user"
         ),
-        UniqueConstraint(
-            "programme_id", "normalized_email", name="uq_beta_enrollment_programme_email"
+        Index(
+            "uq_beta_enrollment_programme_email_retained",
+            "programme_id",
+            "normalized_email",
+            unique=True,
+            postgresql_where=text("normalized_email IS NOT NULL"),
         ),
         Index("ix_beta_enrollment_programme_counted", "programme_id", "capacity_exempt"),
     )
@@ -1629,7 +1639,7 @@ class BetaEnrollment(UuidTimeMixin, Base):
     joined_user_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("users.id", ondelete="RESTRICT"), index=True
     )
-    normalized_email: Mapped[str] = mapped_column(String(320), index=True)
+    normalized_email: Mapped[str | None] = mapped_column(String(320), index=True)
     joined_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     joined_by_user_id: Mapped[uuid.UUID] = mapped_column(
         ForeignKey("users.id", ondelete="RESTRICT")
@@ -1639,6 +1649,17 @@ class BetaEnrollment(UuidTimeMixin, Base):
         ForeignKey("beta_invitations.id", ondelete="SET NULL")
     )
     capacity_exempt: Mapped[bool] = mapped_column(Boolean, server_default="false")
+    status: Mapped[BetaEnrollmentStatus] = mapped_column(
+        Enum(BetaEnrollmentStatus, name="beta_enrollment_status"),
+        default=BetaEnrollmentStatus.active,
+        server_default=BetaEnrollmentStatus.active.value,
+        index=True,
+    )
+    status_changed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    status_changed_by: Mapped[uuid.UUID | None] = mapped_column(
+        ForeignKey("platform_administrators.id", ondelete="SET NULL")
+    )
+    status_reason: Mapped[str | None] = mapped_column(String(500))
 
 
 class FeatureFlag(UuidTimeMixin, Base):

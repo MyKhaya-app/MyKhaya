@@ -52,12 +52,24 @@ type UserDetail = {
   notes: { id: string; body: string; created_at: string }[];
   authentication_mfa: UserMfaState;
   founding_beta_participant?: boolean;
+  founding_beta?: Array<{
+    programme: string;
+    home_id: string;
+    status: "active" | "withdrawn" | "released";
+    joined_at: string;
+    status_changed_at: string | null;
+    status_reason: string | null;
+    capacity_exempt: boolean;
+    entitlement_source: string | null;
+    effective_plan: string;
+  }>;
   // Server-derived from the administrator's role. Hides controls only; each
   // route still enforces its own role.
   viewer_permissions?: {
     change_mfa_policy: boolean;
     disconnect_sign_in_methods: boolean;
     cleanup_anonymised_sign_in_methods: boolean;
+    manage_founding_beta_places: boolean;
     revoke_sessions: boolean;
   };
 };
@@ -138,6 +150,7 @@ export default function PlatformUserDetail() {
   const [authSummary, setAuthSummary] = useState<UserAuthenticationSummary | null>(null);
   const [authError, setAuthError] = useState("");
   const [disconnectTarget, setDisconnectTarget] = useState<{ provider: SignInProvider; name: string; anonymised: boolean } | null>(null);
+  const [betaAction, setBetaAction] = useState<"release" | "withdraw" | null>(null);
   const { guarded, modal } = useReauthGuard();
 
   // Loaded only on the Authentication tab, so other tabs pay nothing for it.
@@ -192,6 +205,25 @@ export default function PlatformUserDetail() {
     } catch (cause) {
       if (cause instanceof ApiError && cause.status === 403) throw cause;
       setError(safeError(cause, `Unable to complete this action.`));
+    } finally {
+      setBusy("");
+    }
+  });
+
+  const runBetaAction = guarded(async (action: "release" | "withdraw", formData: FormData) => {
+    setBetaAction(null);
+    setBusy(`beta-${action}`);
+    setError("");
+    try {
+      const result = await platformApi.post<{ message: string }>(`/beta/users/${encodeURIComponent(id)}/${action}`, {
+        reason: formData.get("audit_reason"),
+        confirmed: true,
+      });
+      setMessage(result.message);
+      await load();
+    } catch (cause) {
+      if (cause instanceof ApiError && cause.status === 403) throw cause;
+      setError(safeError(cause, "Unable to update the Founding Beta place."));
     } finally {
       setBusy("");
     }
@@ -466,7 +498,7 @@ export default function PlatformUserDetail() {
         <nav className="cc-user-profile-tabs" aria-label="User detail sections"><a className="is-active" href="#overview"><Clock3 size={17} /> Overview</a><a href="#account"><UserRoundCog size={17} /> Account</a><a href="#authentication"><Shield size={17} /> Authentication</a><a href="#homes"><Home size={17} /> Homes</a><a href="#permissions"><UsersRound size={17} /> Permissions</a><a href="#activity"><Clock3 size={17} /> Activity</a><a href="#notes"><FileText size={17} /> Notes</a></nav>
         <section className="cc-user-summary" id="overview"><div className="cc-user-summary-person"><span className="cc-user-summary-avatar">{initials(data.display_name)}</span><div><strong>{data.display_name}</strong><span>{data.email}</span></div></div><div className="cc-user-summary-item"><span>Status</span><strong><CcBadge tone={statusTone}>{statusLabel}</CcBadge></strong></div><div className="cc-user-summary-item"><span>Email</span><strong><Mail size={16} /><CcBadge tone={data.verified ? "success" : "warning"}>{data.verified ? "Verified" : "Unverified"}</CcBadge></strong></div><div className="cc-user-summary-item"><span>MFA</span><strong><Shield size={16} /><CcBadge tone="info">{methodLabel(data.authentication_mfa.effective)}</CcBadge></strong></div><div className="cc-user-summary-item"><span>Homes</span><strong><Home size={16} /> {data.homes.length}</strong></div><div className="cc-user-summary-item"><span>Member since</span><strong><CalendarDays size={16} /> {detailDate(data.created_at)}</strong></div></section>
         {legal && <section className="cc-user-profile-card cc-user-legal-card"><div className="cc-user-profile-card-heading"><span className="cc-user-profile-card-icon"><FileText size={19} /></span><h2>Legal &amp; Privacy</h2><Link className="cc-user-profile-link-button" href={`/legal/acceptance/${data.id}`}>View history</Link></div><div className="cc-user-legal-body"><p className="muted">{legal.account_type === "managed_child" ? "Managed-child privacy notice status. Contractual Terms are not applied to this account." : "Current legal document status for this user."}</p>{legal.current_status.map((item) => <div className="cc-user-legal-row" key={item.display_name}><strong>{item.display_name}</strong><span className="cc-user-legal-status"><span>{legalStatusDetail(item)}</span><CcBadge tone={item.satisfied ? "success" : "warning"}>{item.satisfied ? "Current" : "Action required"}</CcBadge></span></div>)}</div></section>}
-        {data.founding_beta_participant && <section className="cc-user-profile-card cc-beta-provenance-user"><div className="cc-user-profile-card-heading"><span className="cc-user-profile-card-icon"><FlaskConical size={19} /></span><h2>Founding Beta participant</h2></div><p className="muted">This informational association comes from the existing Home/programme record. It is not a transferable personal entitlement.</p></section>}
+        {data.founding_beta_participant && <section className="cc-user-profile-card cc-beta-provenance-user"><div className="cc-user-profile-card-heading"><span className="cc-user-profile-card-icon"><FlaskConical size={19} /></span><h2>Founding Beta place</h2></div>{data.founding_beta?.map((place) => <div key={`${place.programme}-${place.home_id}`}><p className="muted">Historical participation remains recorded separately from active capacity.</p><dl className="cc-user-profile-list"><div><dt>Status</dt><dd><CcBadge tone={place.status === "active" ? "success" : "neutral"}>{place.status}</CcBadge></dd></div><div><dt>Capacity</dt><dd>{place.status === "active" && !place.capacity_exempt ? "Occupied" : "Not occupied"}</dd></div><div><dt>Entitlement</dt><dd>{place.entitlement_source === "founding_beta_lifetime" ? `Founding Beta · ${place.effective_plan}` : `Independent · ${place.effective_plan}`}</dd></div>{place.status_changed_at && <div><dt>Changed</dt><dd>{detailDate(place.status_changed_at)}</dd></div>}</dl>{place.status === "active" && data.viewer_permissions?.manage_founding_beta_places && (data.lifecycle === "anonymised" || data.lifecycle === "active") && <button type="button" className="destructive" disabled={Boolean(busy)} onClick={() => setBetaAction(data.lifecycle === "anonymised" ? "release" : "withdraw")}>{data.lifecycle === "anonymised" ? "Release Founding Beta place" : "Withdraw from Founding Beta"}</button>}</div>)}</section>}
         <nav className="cc-user-profile-tabs-route" aria-label="User detail sections"><a className={activeTab === "overview" ? "is-active" : undefined} href={`/users/${id}`}><Clock3 size={17} /> Overview</a><a className={activeTab === "account" ? "is-active" : undefined} href={`/users/${id}/account`}><UserRoundCog size={17} /> Account</a><a className={activeTab === "authentication" ? "is-active" : undefined} href={`/users/${id}/authentication`}><Shield size={17} /> Authentication</a><a className={activeTab === "homes" ? "is-active" : undefined} href={`/users/${id}/homes`}><Home size={17} /> Homes</a><a className={activeTab === "permissions" ? "is-active" : undefined} href={`/users/${id}/permissions`}><UsersRound size={17} /> Permissions</a><a className={activeTab === "activity" ? "is-active" : undefined} href={`/users/${id}/activity`}><Clock3 size={17} /> Activity</a><a className={activeTab === "notes" ? "is-active" : undefined} href={`/users/${id}/notes`}><FileText size={17} /> Notes</a></nav>
         <div className="cc-user-detail-grid">
           <section className="cc-user-profile-card" id="account"><div className="cc-user-profile-card-heading"><span className="cc-user-profile-card-icon"><UserRoundCog size={19} /></span><h2>Account Details</h2><button type="button" className="cc-user-profile-link-button" disabled>Edit</button></div><dl className="cc-user-profile-list"><div><dt>Full name</dt><dd>{data.display_name}</dd></div><div><dt>Email address</dt><dd>{data.email} <CcBadge tone={data.verified ? "success" : "warning"}>{data.verified ? "Verified" : "Unverified"}</CcBadge></dd></div><div><dt>Phone number</dt><dd className="is-muted">Not provided</dd></div><div><dt>Date of birth</dt><dd className="is-muted">Not provided</dd></div><div><dt>Account created</dt><dd>{detailDate(data.created_at)}</dd></div><div><dt>Last login</dt><dd>{detailDate(data.last_login_at)}</dd></div><div><dt>Last active</dt><dd>{detailDate(data.last_activity_at)}</dd></div><div><dt>Status</dt><dd><CcBadge tone={statusTone}>{statusLabel}</CcBadge></dd></div></dl></section>
@@ -520,6 +552,18 @@ export default function PlatformUserDetail() {
               : runDisconnect(disconnectTarget.provider, formData));
           }
         }}
+      />
+
+      <CcConfirmDialog
+        open={betaAction !== null}
+        onClose={() => setBetaAction(null)}
+        title={betaAction === "release" ? "Release Founding Beta place" : "Withdraw from Founding Beta"}
+        description={betaAction === "release"
+          ? "The historical enrolment will remain recorded, its former email association will be released, the place will return to capacity, and any remaining Beta-derived complimentary access will be removed. The anonymised account will remain anonymised."
+          : "The account and Home will remain, but the Founding Beta place and Beta-derived complimentary access will end. Historical participation remains recorded and repeat lifetime claiming is not restored."}
+        confirmLabel={betaAction === "release" ? "Release place" : "Withdraw from Beta"}
+        variant="destructive"
+        onConfirm={(formData) => { if (betaAction) void runBetaAction(betaAction, formData); }}
       />
 
       {data && (

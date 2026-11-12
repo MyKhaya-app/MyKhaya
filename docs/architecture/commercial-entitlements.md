@@ -62,6 +62,14 @@ Complimentary Family access is a first-class MyKhaya concept — `plan=family, p
 
 A commercial downgrade — expiry, cancellation, or an operator revoking complimentary access — **never deletes Home data**. `revoke_complimentary` resets `plan`/`provider`/`status` to Free/free/active and clears the complimentary-specific fields; it does not touch the Home, its members, its calendar, or anything else the Home has created. Free is fully functional by design (one Home, one calendar, useful indefinitely), so a downgrade is a capability change, never a data-loss event.
 
+Founding Beta place withdrawal and anonymised-place release use the shared
+entitlement transition service, but remain distinct lifecycle operations. The
+transition is allowed only when the Home's complimentary source is explicitly
+`founding_beta_lifetime`; paid Stripe or other independent entitlement state is
+preserved. Ambiguous complimentary state fails closed. The Beta enrollment is
+updated in the same database transaction and the commercial event records the
+operator and reason.
+
 ## Plan definitions
 
 `mykhaya.entitlements.PLAN_DEFINITIONS` is the one place plan capability is defined:
