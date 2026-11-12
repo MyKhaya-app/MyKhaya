@@ -143,6 +143,7 @@ from mykhaya.models import (
     Meal,
     MealPlanEntry,
     Membership,
+    MfaEmailChallenge,
     MonitorComponent,
     NativePushDevice,
     NativePushDisabledSource,
@@ -3110,6 +3111,9 @@ async def user_detail(
         )
     ).all()
     consumer_policy = await resolve_consumer_mfa_policy(db, user_id, settings)
+    password_available = await db.scalar(
+        select(AuthIdentity.id).where(AuthIdentity.user_id == user_id)
+    )
     mfa_methods = (
         await db.execute(
             select(UserMfaMethodRecord.method, UserMfaMethodRecord.enabled).where(
@@ -3137,6 +3141,7 @@ async def user_detail(
         "active": user.is_active,
         "lifecycle": _user_presentation_lifecycle(user),
         "anonymised_at": user.anonymised_at,
+        "password_available": password_available is not None,
         "created_at": user.created_at,
         "last_login_at": user.last_login_at,
         "last_activity_at": user.last_activity_at,
@@ -3210,6 +3215,7 @@ _USER_AUTH_EVENT_LABELS: dict[str, tuple[str, str]] = {
     "session.revoked": ("Signed out of a session", "info"),
     "trusted_device.others_revoked": ("Signed out of other devices", "info"),
     "password.reset": ("Password reset", "info"),
+    "password.setup": ("Password set up", "info"),
     "MFA_TOTP_ENROLLED": ("Authenticator app enrolled", "info"),
     "MFA_TOTP_REMOVED": ("Authenticator app removed", "info"),
     "MFA_TOTP_RESET": ("Authenticator app reset", "info"),
@@ -3218,6 +3224,8 @@ _USER_AUTH_EVENT_LABELS: dict[str, tuple[str, str]] = {
 _ADMIN_AUTH_EVENT_LABELS: dict[str, str] = {
     "user.sessions_revoked": "All sessions revoked by an administrator",
     "user.password_reset_sent": "Password-reset email sent by an administrator",
+    "user.password_setup_sent": "Password-setup email sent by an administrator",
+    "user.anonymised_auth_cleanup": "Terminal authentication cleanup completed by an administrator",
     "user.suspended": "Suspended by an administrator",
     "user.reactivated": "Reactivated by an administrator",
     "user.external_identity_disconnected": "Sign-in provider disconnected by an administrator",
@@ -3248,6 +3256,7 @@ async def user_authentication_summary(
     if user is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That user could not be found.")
     now = datetime.now(UTC)
+    terminal = user.anonymised_at is not None
     identities = {
         row.provider: row
         for row in await db.scalars(
@@ -3366,6 +3375,8 @@ async def user_authentication_summary(
     events.sort(key=lambda item: item["occurred_at"], reverse=True)
 
     return {
+        "account_lifecycle": _user_presentation_lifecycle(user),
+        "authentication_disabled": terminal,
         "providers": [
             {
                 "provider": provider.value,
@@ -3745,6 +3756,29 @@ async def _user_anonymise_blockers(db: AsyncSession, user: User) -> list[str]:
     return blockers
 
 
+async def _cleanup_terminal_user_auth(db: AsyncSession, user_id: uuid.UUID, now: datetime) -> None:
+    """Idempotently remove or revoke every terminal user's auth artefact."""
+    await db.execute(delete(AuthIdentity).where(AuthIdentity.user_id == user_id))
+    await db.execute(delete(ExternalIdentity).where(ExternalIdentity.user_id == user_id))
+    await db.execute(delete(UserMfaMethodRecord).where(UserMfaMethodRecord.user_id == user_id))
+    await db.execute(delete(MfaEmailChallenge).where(MfaEmailChallenge.user_id == user_id))
+    await db.execute(delete(UserPasskey).where(UserPasskey.user_id == user_id))
+    await db.execute(delete(PushSubscription).where(PushSubscription.user_id == user_id))
+    await db.execute(delete(NativePushDevice).where(NativePushDevice.user_id == user_id))
+    await db.execute(delete(ProductUsageEvent).where(ProductUsageEvent.user_id == user_id))
+    await db.execute(delete(ActionToken).where(ActionToken.user_id == user_id))
+    await db.execute(
+        update(Session)
+        .where(Session.user_id == user_id, Session.revoked_at.is_(None))
+        .values(revoked_at=now)
+    )
+    await db.execute(
+        update(TrustedDevice)
+        .where(TrustedDevice.user_id == user_id, TrustedDevice.revoked_at.is_(None))
+        .values(revoked_at=now)
+    )
+
+
 async def _apply_user_anonymise(db: AsyncSession, user: User) -> tuple[str, int, str | None]:
     """Mutates `user` and its dependent rows in place. Returns
     (previous_lifecycle, memberships_removed_count, previous_avatar_key —
@@ -3768,22 +3802,7 @@ async def _apply_user_anonymise(db: AsyncSession, user: User) -> tuple[str, int,
     # token), revoked using the existing suspend/archive mechanism where
     # one already exists (Session/TrustedDevice) rather than inventing a
     # second one.
-    await db.execute(delete(AuthIdentity).where(AuthIdentity.user_id == user.id))
-    await db.execute(delete(UserPasskey).where(UserPasskey.user_id == user.id))
-    await db.execute(delete(PushSubscription).where(PushSubscription.user_id == user.id))
-    await db.execute(delete(NativePushDevice).where(NativePushDevice.user_id == user.id))
-    await db.execute(delete(ProductUsageEvent).where(ProductUsageEvent.user_id == user.id))
-    await db.execute(delete(ActionToken).where(ActionToken.user_id == user.id))
-    await db.execute(
-        update(Session)
-        .where(Session.user_id == user.id, Session.revoked_at.is_(None))
-        .values(revoked_at=now)
-    )
-    await db.execute(
-        update(TrustedDevice)
-        .where(TrustedDevice.user_id == user.id, TrustedDevice.revoked_at.is_(None))
-        .values(revoked_at=now)
-    )
+    await _cleanup_terminal_user_auth(db, user.id, now)
 
     # PII — overwritten, never fabricated; the tombstone email format
     # mirrors the existing mykhaya.routers.children.anonymise_child
@@ -3890,6 +3909,42 @@ async def anonymise_user(
             await log.awarning("avatar_cleanup_failed", user_id=str(user_id))
 
     return {"message": "User anonymised."}
+
+
+@router.post("/users/{user_id}/anonymised-auth-cleanup")
+async def cleanup_anonymised_user_auth(
+    user_id: uuid.UUID,
+    body: SensitiveActionRequest,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, str]:
+    """Repair auth artefacts left by anonymisations before the full cleanup."""
+    require_recent_auth(context, settings)
+    user = await db.get(User, user_id, with_for_update=True)
+    if user is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That user could not be found.")
+    if user.anonymised_at is None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Authentication cleanup is only available for anonymised users.",
+        )
+    now = datetime.now(UTC)
+    await _cleanup_terminal_user_auth(db, user.id, now)
+    platform_audit(
+        db,
+        request,
+        context,
+        "user.anonymised_auth_cleanup",
+        "user",
+        user.id,
+        reason=body.reason,
+        previous={"lifecycle": "anonymised"},
+        new={"authentication_cleanup": "completed"},
+    )
+    await db.commit()
+    return {"message": "Anonymised-user authentication cleanup completed."}
 
 
 @router.post("/users/bulk-lifecycle", response_model=BulkLifecycleResponse)
@@ -4240,9 +4295,36 @@ async def _enqueue_user_mail(
     settings: Settings,
 ) -> dict[str, str]:
     require_recent_auth(context, settings)
+    if purpose in {TokenPurpose.reset_password, TokenPurpose.setup_password}:
+        await enforce_rate_limit(request, settings, f"platform-password-recovery:{user_id}", 3, 900)
     user = await db.get(User, user_id)
     if user is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That user could not be found.")
+    if purpose in {TokenPurpose.reset_password, TokenPurpose.setup_password}:
+        if not user.is_active or user.archived_at is not None or user.anonymised_at is not None:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "Password recovery is unavailable for this account.",
+            )
+        if user.email_verified_at is None:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "Password recovery requires a verified email address.",
+            )
+        identity = await db.scalar(select(AuthIdentity).where(AuthIdentity.user_id == user.id))
+        if (
+            identity is not None
+            and identity.locked_until
+            and identity.locked_until > datetime.now(UTC)
+        ):
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "Password recovery is unavailable while this account is security-locked.",
+            )
+        if purpose == TokenPurpose.reset_password and identity is None:
+            raise HTTPException(status.HTTP_409_CONFLICT, "This account needs password setup.")
+        if purpose == TokenPurpose.setup_password and identity is not None:
+            raise HTTPException(status.HTTP_409_CONFLICT, "This account already has a password.")
     if purpose == TokenPurpose.verify_email and user.email_verified_at is not None:
         raise HTTPException(status.HTTP_409_CONFLICT, "That email address is already verified.")
     await db.execute(
@@ -4259,6 +4341,9 @@ async def _enqueue_user_mail(
     if purpose == TokenPurpose.verify_email:
         notification_type = "email_verification"
         link = f"{settings.public_web_url}/verify-email?token={raw}"
+    elif purpose == TokenPurpose.setup_password:
+        notification_type = "password_setup"
+        link = f"{settings.public_web_url}/setup-password?token={raw}"
     else:
         notification_type = "password_reset"
         link = f"{settings.public_web_url}/reset-password?token={raw}"
@@ -4277,7 +4362,13 @@ async def _enqueue_user_mail(
     )
     platform_audit(db, request, context, action, "user", user.id, reason=body.reason)
     await db.commit()
-    return {"message": "The email was queued safely."}
+    return {
+        "message": (
+            "The password setup email was queued safely."
+            if purpose == TokenPurpose.setup_password
+            else "The password reset email was queued safely."
+        )
+    }
 
 
 @router.post("/users/{user_id}/resend-verification")
@@ -4306,14 +4397,27 @@ async def send_password_reset(
     user_id: uuid.UUID,
     body: SensitiveActionRequest,
     request: Request,
-    context: PlatformContext = Depends(require_roles(*SUPPORT)),
+    context: PlatformContext = Depends(
+        require_roles(PlatformRole.owner, PlatformRole.administrator, PlatformRole.security)
+    ),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> dict[str, str]:
+    user = await db.get(User, user_id)
+    purpose = TokenPurpose.setup_password
+    if user is not None:
+        identity = await db.scalar(select(AuthIdentity).where(AuthIdentity.user_id == user.id))
+        purpose = (
+            TokenPurpose.reset_password if identity is not None else TokenPurpose.setup_password
+        )
     return await _enqueue_user_mail(
         user_id,
-        TokenPurpose.reset_password,
-        "user.password_reset_sent",
+        purpose,
+        (
+            "user.password_setup_sent"
+            if purpose == TokenPurpose.setup_password
+            else "user.password_reset_sent"
+        ),
         body,
         request,
         context,

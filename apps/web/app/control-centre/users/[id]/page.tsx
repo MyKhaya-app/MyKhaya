@@ -42,6 +42,7 @@ type UserDetail = {
   verified: boolean;
   active: boolean;
   lifecycle: Lifecycle;
+  password_available?: boolean;
   anonymised_at?: string | null;
   created_at: string;
   last_login_at: string | null;
@@ -375,7 +376,7 @@ export default function PlatformUserDetail() {
             : []),
           {
             key: "send-password-reset",
-            label: "Send password-reset email",
+            label: data.password_available ? "Send password-reset email" : "Send password setup email",
             icon: KeyRound,
             variant: "secondary",
             disabled: Boolean(busy),
@@ -407,9 +408,11 @@ export default function PlatformUserDetail() {
       confirmLabel: "Resend verification",
     },
     "send-password-reset": {
-      title: "Send password-reset email",
-      description: "Send a password-reset email to this user?",
-      confirmLabel: "Send reset email",
+      title: data?.password_available ? "Send password-reset email" : "Send password setup email",
+      description: data?.password_available
+        ? "Send a secure password reset email to the user's verified email address?"
+        : "Send a secure password setup email so this user can create a MyKhaya password?",
+      confirmLabel: data?.password_available ? "Send reset email" : "Send setup email",
     },
     archive: {
       title: "Archive user",

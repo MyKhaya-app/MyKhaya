@@ -14,7 +14,7 @@ from collections.abc import AsyncIterator, Awaitable, Callable
 from datetime import UTC, datetime, timedelta
 
 import pytest
-from httpx import AsyncClient
+from httpx import ASGITransport, AsyncClient
 from sqlalchemy import delete, select
 from test_platform_control_centre import admin_client, admin_factory, login, unsafe  # noqa: F401
 
@@ -22,6 +22,7 @@ from mykhaya.config import get_settings
 from mykhaya.db import SessionFactory
 from mykhaya.main import app
 from mykhaya.models import (
+    ActionToken,
     AdministrativeAuditEvent,
     AuditEvent,
     AuthIdentity,
@@ -32,10 +33,11 @@ from mykhaya.models import (
     PlatformAdministrator,
     PlatformRole,
     Session,
+    TokenPurpose,
     User,
 )
 from mykhaya.routers import platform as platform_router
-from mykhaya.security import password_hash
+from mykhaya.security import derived_token, password_hash
 
 APPLE_SUBJECT = "apple-subject-must-never-appear"
 APPLE_EMAIL = "relay-secret@privaterelay.appleid.com"
@@ -48,11 +50,12 @@ AdminFactory = Callable[[PlatformRole], Awaitable[PlatformAdministrator]]
 async def make_user() -> AsyncIterator[Callable[..., Awaitable[User]]]:
     created: list[uuid.UUID] = []
 
-    async def factory(*, password: bool = True, apple: bool = True) -> User:
+    async def factory(*, password: bool = True, apple: bool = True, verified: bool = False) -> User:
         async with SessionFactory() as db:
             user = User(
                 email=f"pcc-auth-{uuid.uuid4().hex}@example.com",
                 display_name="Support Subject",
+                email_verified_at=datetime.now(UTC) if verified else None,
             )
             db.add(user)
             await db.flush()
@@ -355,6 +358,94 @@ async def test_notification_failure_never_reverses_the_disconnection(
             )
         )
     assert audited is not None
+
+
+async def _recovery_token(user: User, purpose: TokenPurpose) -> str:
+    async with SessionFactory() as db:
+        row = await db.scalar(
+            select(ActionToken)
+            .where(ActionToken.user_id == user.id, ActionToken.purpose == purpose)
+            .order_by(ActionToken.created_at.desc())
+        )
+        assert row is not None
+        return derived_token(row.id, purpose.value, get_settings().secret_key.get_secret_value())
+
+
+@pytest.mark.asyncio
+async def test_pcc_provider_only_user_can_set_up_password_without_losing_provider(
+    admin_client: AsyncClient,  # noqa: F811
+    admin_factory: AdminFactory,  # noqa: F811
+    make_user: Callable[..., Awaitable[User]],
+) -> None:
+    user = await make_user(password=False, verified=True)
+    await login(admin_client, await admin_factory(PlatformRole.security))
+    response = await unsafe(
+        admin_client,
+        "POST",
+        _path(user, "/send-password-reset"),
+        json={"reason": "Customer requested secure password setup", "confirmed": True},
+    )
+    assert response.status_code == 200, response.text
+    assert "setup" in response.json()["message"].lower()
+
+    token = await _recovery_token(user, TokenPurpose.setup_password)
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://localhost:8080",
+        headers={"Origin": "http://localhost:8080"},
+    ) as consumer:
+        completed = await consumer.post(
+            "/api/v1/auth/setup-password",
+            json={"token": token, "password": "A new secure password!"},
+        )
+        assert completed.status_code == 200, completed.text
+        replay = await consumer.post(
+            "/api/v1/auth/setup-password",
+            json={"token": token, "password": "Another secure password!"},
+        )
+        assert replay.status_code == 400
+
+    async with SessionFactory() as db:
+        assert (
+            await db.scalar(select(AuthIdentity).where(AuthIdentity.user_id == user.id)) is not None
+        )
+        assert (
+            await db.scalar(select(ExternalIdentity).where(ExternalIdentity.user_id == user.id))
+            is not None
+        )
+
+
+@pytest.mark.asyncio
+async def test_pcc_password_recovery_roles_and_existing_password_reset(
+    admin_client: AsyncClient,  # noqa: F811
+    admin_factory: AdminFactory,  # noqa: F811
+    make_user: Callable[..., Awaitable[User]],
+) -> None:
+    user = await make_user(password=True, verified=True)
+    payload = {"reason": "Customer requested a password reset", "confirmed": True}
+    for role in (PlatformRole.support, PlatformRole.readonly):
+        await login(admin_client, await admin_factory(role))
+        response = await unsafe(
+            admin_client, "POST", _path(user, "/send-password-reset"), json=payload
+        )
+        assert response.status_code == 403
+
+    await login(admin_client, await admin_factory(PlatformRole.administrator))
+    response = await unsafe(admin_client, "POST", _path(user, "/send-password-reset"), json=payload)
+    assert response.status_code == 200, response.text
+    assert "reset" in response.json()["message"].lower()
+
+    token = await _recovery_token(user, TokenPurpose.reset_password)
+    async with AsyncClient(
+        transport=ASGITransport(app=app),
+        base_url="http://localhost:8080",
+        headers={"Origin": "http://localhost:8080"},
+    ) as consumer:
+        completed = await consumer.post(
+            "/api/v1/auth/reset-password",
+            json={"token": token, "password": "A replacement secure password!"},
+        )
+        assert completed.status_code == 200, completed.text
 
 
 @pytest.mark.asyncio

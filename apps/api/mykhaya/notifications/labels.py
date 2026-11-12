@@ -8,6 +8,7 @@ from __future__ import annotations
 NOTIFICATION_TYPE_LABELS: dict[str, str] = {
     "email_verification": "Email verification",
     "password_reset": "Password reset",
+    "password_setup": "Password setup",
     "household_invitation": "Household invitation",
     "calendar_share_invitation": "Calendar share invitation",
     "calendar_share_accepted": "Calendar share accepted",

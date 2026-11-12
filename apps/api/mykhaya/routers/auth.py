@@ -3987,10 +3987,20 @@ async def reset(
     settings: Settings = Depends(get_settings),
 ) -> MessageResponse:
     token = await consume_action_token(db, body.token, TokenPurpose.reset_password, settings)
+    user = await db.get(User, token.user_id, with_for_update=True)
+    if (
+        user is None
+        or not user.is_active
+        or user.archived_at is not None
+        or user.anonymised_at is not None
+    ):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This link is invalid or has expired.")
     identity = await db.scalar(
         select(AuthIdentity).where(AuthIdentity.user_id == token.user_id).with_for_update()
     )
-    if identity is None:
+    if identity is None or (
+        identity.locked_until is not None and identity.locked_until > datetime.now(UTC)
+    ):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "This link is invalid or has expired.")
     identity.password_hash = password_hash.hash(body.password)
     identity.password_changed_at = datetime.now(UTC)
@@ -4009,6 +4019,52 @@ async def reset(
     return MessageResponse(
         message="Your password has been changed. Sign in with your new password."
     )
+
+
+@router.post("/setup-password", response_model=MessageResponse)
+async def setup_password(
+    body: ResetRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> MessageResponse:
+    token = await consume_action_token(db, body.token, TokenPurpose.setup_password, settings)
+    user = await db.get(User, token.user_id, with_for_update=True)
+    if (
+        user is None
+        or not user.is_active
+        or user.archived_at is not None
+        or user.anonymised_at is not None
+    ):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This link is invalid or has expired.")
+    if user.email_verified_at is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This link is invalid or has expired.")
+    identity = await db.scalar(
+        select(AuthIdentity).where(AuthIdentity.user_id == token.user_id).with_for_update()
+    )
+    if identity is not None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This link is invalid or has expired.")
+    db.add(
+        AuthIdentity(
+            user_id=user.id,
+            password_hash=password_hash.hash(body.password),
+            password_changed_at=datetime.now(UTC),
+        )
+    )
+    now = datetime.now(UTC)
+    await db.execute(
+        update(Session)
+        .where(Session.user_id == token.user_id, Session.revoked_at.is_(None))
+        .values(revoked_at=now)
+    )
+    await db.execute(
+        update(TrustedDevice)
+        .where(TrustedDevice.user_id == token.user_id, TrustedDevice.revoked_at.is_(None))
+        .values(revoked_at=now)
+    )
+    audit(db, request, "password.setup", token.user_id, target_type="user", target_id=token.user_id)
+    await db.commit()
+    return MessageResponse(message="Your password has been set. Sign in with your new password.")
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)

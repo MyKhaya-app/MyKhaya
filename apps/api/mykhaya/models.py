@@ -102,6 +102,7 @@ class ChildTransitionStatus(StrEnum):
 class TokenPurpose(StrEnum):
     verify_email = "verify_email"
     reset_password = "reset_password"
+    setup_password = "setup_password"
 
 
 class ExternalIdentityProvider(StrEnum):

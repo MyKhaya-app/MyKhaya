@@ -19,7 +19,7 @@ from dataclasses import dataclass
 
 from mykhaya.models import NotificationChannel
 
-DEFAULT_TEMPLATE_VERSION = 6
+DEFAULT_TEMPLATE_VERSION = 7
 
 
 @dataclass(frozen=True)
@@ -204,6 +204,23 @@ TEMPLATES: dict[str, TemplateDefault] = {
         allowed_variables=frozenset({"link"}),
         required_variables=frozenset({"link"}),
         description="Sent when someone requests a password reset.",
+        module="account_security",
+        disableable=False,
+        security_critical=True,
+    ),
+    "password_setup": TemplateDefault(
+        subject="Set up your MyKhaya password",
+        body=(
+            "You or a MyKhaya support administrator requested a password setup link for your "
+            "account.\n\n"
+            "Use this secure link to create a password so you can sign in with your email address "
+            "as well as your existing connected sign-in methods:\n\n{{link}}\n\n"
+            "This link expires soon and can be used once. If you did not request this, you can "
+            "ignore this email. Your existing sign-in methods remain unchanged."
+        ),
+        allowed_variables=frozenset({"link"}),
+        required_variables=frozenset({"link"}),
+        description="Sent when an authorised PCC administrator initiates first-password setup.",
         module="account_security",
         disableable=False,
         security_critical=True,
@@ -820,6 +837,7 @@ SAMPLE_VARIABLES: dict[str, dict[str, str]] = {
         "expires_at": "2026-12-31",
     },
     "password_reset": {"link": "https://example.com/reset-password?token=SAMPLE-TOKEN"},
+    "password_setup": {"link": "https://example.com/setup-password?token=SAMPLE-TOKEN"},
     "account.sign_in_method_disconnected": {
         "user_first_name": "Jamie",
         "provider_name": "Apple",

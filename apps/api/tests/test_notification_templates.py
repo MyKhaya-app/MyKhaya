@@ -155,6 +155,7 @@ def test_registry_matches_migration_version() -> None:
         "founding_beta_waitlist_confirmation",
         "founding_beta_invitation",
         "password_reset",
+        "password_setup",
         "household_invitation",
         "calendar_share_invitation",
         "calendar_share_accepted",

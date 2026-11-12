@@ -25,6 +25,7 @@ const verifiedUser = {
   email: "jane@example.com",
   display_name: "Jane Smith",
   verified: true,
+  password_available: true,
   active: true,
   lifecycle: "active" as const,
   created_at: "2026-01-01T00:00:00Z",

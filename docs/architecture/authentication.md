@@ -26,6 +26,22 @@ Browser authentication uses Secure, HttpOnly, appropriately scoped cookies and C
 
 Reusable tokens are high entropy, expiring, revocable and stored only as hashes. Account status and Home membership are checked server-side for protected operations rather than trusted solely from long-lived token claims.
 
+An anonymised user is a terminal authentication state. Anonymisation removes
+password and external identities, MFA records and challenges, passkeys, push
+registrations and one-time action tokens, and revokes sessions and trusted
+devices. Pending provider and recovery ceremonies also re-check lifecycle
+state at redemption. The PCC exposes a recent-auth, Owner/Administrator-only,
+audited and idempotent cleanup action for records anonymised before this full
+cleanup was introduced; it never returns or logs credential material.
+
+PCC password recovery distinguishes first-password setup from a password
+reset. Verified, active Apple/Google-only users can receive a single-use,
+expiring setup link without losing their provider identity; users with an
+existing password receive the existing reset link. Both paths require recent
+PCC authentication, role authorization, rate limiting and existing notification
+templates. Migration `0128` adds the setup token purpose; its downgrade is
+intentionally a no-op because PostgreSQL enum values cannot be safely removed.
+
 Platform administration does not use this session. It has separate identities, `mk_admin_*` host-only cookies, idle and absolute deadlines, recent-auth state, revocation and mandatory-MFA enforcement as documented in `administrative-authentication.md`.
 
 The provider-neutral identity foundation stores optional Apple and Google

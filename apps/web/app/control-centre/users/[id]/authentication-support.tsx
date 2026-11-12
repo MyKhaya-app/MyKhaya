@@ -8,6 +8,8 @@ import { Fingerprint, History, KeyRound, Link2, MonitorSmartphone, ShieldOff, Sm
 export type SignInProvider = "apple" | "google";
 
 export type UserAuthenticationSummary = {
+  account_lifecycle: "active" | "disabled" | "archived" | "anonymised";
+  authentication_disabled: boolean;
   providers: {
     provider: SignInProvider;
     name: string;
@@ -65,6 +67,7 @@ type CardsProps = {
 
 /** "Connected Sign-in Methods": sits beside Authentication & MFA. */
 export function ConnectedSignInMethodsCard({ summary, error, canDisconnect, busy, onDisconnect }: CardsProps) {
+  const canDisconnectForAccount = canDisconnect && !summary?.authentication_disabled;
   const usable =
     summary &&
     (summary.password.available ||
@@ -82,13 +85,21 @@ export function ConnectedSignInMethodsCard({ summary, error, canDisconnect, busy
         <div className="cc-user-profile-card-body"><CcLoadingState label="Loading sign-in methods…" /></div>
       ) : (
         <>
+          {summary.authentication_disabled && (
+            <div className="cc-user-profile-card-body">
+              <CcNotice tone="warning">
+                <strong>Account anonymised</strong><br />
+                Authentication access has been permanently disabled. Historical associations are not active sign-in methods.
+              </CcNotice>
+            </div>
+          )}
           <ul className="cc-user-sign-in-list">
             {summary.providers.map((item) => (
               <li key={item.provider} className="cc-user-sign-in-item">
                 <span className="cc-user-sign-in-icon"><ProviderIcon provider={item.provider} /></span>
                 <div className="cc-user-sign-in-copy">
                   <strong>{item.name}</strong>
-                  {item.connected ? (
+                  {item.connected && !summary.authentication_disabled ? (
                     <small>Connected {when(item.connected_at)} · Last used {when(item.last_used_at, "not recorded")}</small>
                   ) : (
                     <small>No {item.name} account is connected.</small>
@@ -100,7 +111,7 @@ export function ConnectedSignInMethodsCard({ summary, error, canDisconnect, busy
                   )}
                 </div>
                 <CcBadge tone={item.connected ? "success" : "neutral"}>{item.connected ? "Connected" : "Not connected"}</CcBadge>
-                {item.connected && canDisconnect && (
+                {item.connected && canDisconnectForAccount && (
                   <button
                     type="button"
                     className="cc-user-sign-in-disconnect"
@@ -117,13 +128,15 @@ export function ConnectedSignInMethodsCard({ summary, error, canDisconnect, busy
               <div className="cc-user-sign-in-copy">
                 <strong>Password</strong>
                 <small>
-                  {summary.password.available
+                  {summary.authentication_disabled
+                    ? "Password sign-in is disabled for this account."
+                    : summary.password.available
                     ? `Password sign-in is available · Last changed ${when(summary.password.changed_at, "not recorded")}`
                     : "No password is set for this account."}
                 </small>
               </div>
               <CcBadge tone={summary.password.available ? "success" : "neutral"}>
-                {summary.password.available ? "Available" : "Not set"}
+                {summary.authentication_disabled ? "Disabled" : summary.password.available ? "Available" : "Not set"}
               </CcBadge>
             </li>
             <li className="cc-user-sign-in-item">
@@ -131,13 +144,15 @@ export function ConnectedSignInMethodsCard({ summary, error, canDisconnect, busy
               <div className="cc-user-sign-in-copy">
                 <strong>Passkeys</strong>
                 <small>
-                  {summary.passkeys.count
+                  {summary.authentication_disabled
+                    ? "Passkeys have been revoked."
+                    : summary.passkeys.count
                     ? `${summary.passkeys.count} registered · Last used ${when(summary.passkeys.last_used_at, "not recorded")}`
                     : "No passkeys are registered."}
                 </small>
               </div>
               <CcBadge tone={summary.passkeys.count ? "success" : "neutral"}>
-                {summary.passkeys.count ? `${summary.passkeys.count} registered` : "None"}
+                {summary.authentication_disabled ? "Revoked" : summary.passkeys.count ? `${summary.passkeys.count} registered` : "None"}
               </CcBadge>
             </li>
           </ul>

@@ -73,6 +73,7 @@ function isPublicPath(path: string) {
     "/register",
     "/forgot-password",
     "/reset-password",
+    "/setup-password",
     "/verify-email",
     "/mfa",
     "/legal",
