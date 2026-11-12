@@ -49,6 +49,52 @@ legal-acceptance context and the same `BetaPendingRegistration` as web, so the
 app resumes the Beta continuation after sign-in. The registration request
 itself never carries Beta fields.
 
+### Follow-up: Apple "Hide My Email" and email-bound invitations
+
+**Status:** open. Logged 2026-11-12. Behaviour unchanged.
+
+A Beta invitation is bound to the email it was sent to, and every invited
+registration checks the provider email against it (web and native, Apple and
+Google). If an invited person chooses **Hide My Email** in the Apple sheet,
+Apple returns a private-relay address (`…@privaterelay.appleid.com`). That
+address never matches the invitation, so the choose step offers only "I
+already have an account" with the generic copy:
+
+> New account creation is currently unavailable for this Apple sign-in. You
+> can still link Apple to an existing MyKhaya account.
+
+That copy does not tell the person what went wrong or what to do instead.
+
+**Proposed user-facing copy (not implemented).** Show it only when the
+sign-in carried a Beta invitation and the provider email is an Apple
+private-relay address. Showing it needs a reason from the API (for example
+`registration_unavailable_reason: "invitation_email_mismatch"`), so it is a
+behaviour change for a later, reviewed task.
+
+> **Your invitation is for a different email**
+>
+> You chose to hide your email from MyKhaya, so we can't match this Apple
+> sign-in to your Founding Beta invitation.
+>
+> To join, go back and sign in with Apple again, choosing **Share My Email**
+> and the address your invitation was sent to. You can also create your
+> account with that email address and a password.
+>
+> [Try Apple again] [Use email instead]
+
+The copy deliberately does not reveal which address the invitation was sent
+to. The secondary action returns to `/register?beta=1` with the invitation, so
+the email form can be used.
+
+**Options for the behaviour change, for the Owner to decide:**
+
+1. Copy only, as above. Lowest risk; the person must share their real email.
+2. Let a signed-in relay account redeem an invitation by proving it can read
+   the invited address (an emailed code). This keeps relay addresses for
+   everyone else and does not weaken the email binding.
+3. Bind invitations to a one-time token alone. This weakens the current
+   control and is not recommended.
+
 ### Physical-device check (native Beta sign-up)
 
 Automated tests mock the providers, so run this on DEV with a physical iPhone
