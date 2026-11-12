@@ -16,17 +16,22 @@ async function readLatestMfaCode(page: Page, ignoredMessageIds = new Set<string>
     try {
       const messagesResponse = await page.request.get(`http://127.0.0.1:${mailpitPort}/api/v1/messages`);
       if (messagesResponse.ok()) {
-        const payload = await messagesResponse.json() as { messages?: Array<{ ID?: string; Created?: string }> };
+        const payload = await messagesResponse.json() as { messages?: Array<{ ID?: string; Created?: string; Subject?: string }> };
         const messages = [...(payload.messages ?? [])].sort((left, right) =>
           String(right.Created ?? "").localeCompare(String(left.Created ?? "")),
         );
         for (const message of messages) {
           if (!message.ID || ignoredMessageIds.has(message.ID)) continue;
+          // Only the code email counts: other emails the worker sends meanwhile
+          // (a new sign-in notice, for example) have six-digit values of their
+          // own, such as CSS colours in the HTML, that must never be typed.
+          if (!/verification code/i.test(message.Subject ?? "")) continue;
           const detailResponse = await page.request.get(`http://127.0.0.1:${mailpitPort}/api/v1/message/${message.ID}`);
           if (!detailResponse.ok()) continue;
           const detail = await detailResponse.json() as { Text?: string; HTML?: string };
-          const messageBody = `${detail.Text ?? ""}\n${detail.HTML ?? ""}`;
-          const match = messageBody.match(/\b\d{6}\b/);
+          // Prefer the plain-text part; strip tags before looking in the HTML.
+          const match = (detail.Text ?? "").match(/\b\d{6}\b/)
+            ?? (detail.HTML ?? "").replace(/<[^>]*>/g, " ").match(/\b\d{6}\b/);
           if (match) return match[0];
         }
       }
