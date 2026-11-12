@@ -823,8 +823,9 @@ export default function Login() {
             <section className="notice" aria-labelledby="apple-recovery-heading">
               <h2 id="apple-recovery-heading">Continue with Apple</h2>
               <p>
-                Apple sign-in is ready. Choose whether to connect it to an existing MyKhaya
-                account or create a new account. We will not merge accounts automatically.
+                {appleRecovery?.can_register
+                  ? `Apple sign-in is ready. Choose whether to connect it to an existing MyKhaya account or create ${beta ? "your Beta account" : "a new account"}. We will not merge accounts automatically.`
+                  : "New account creation is currently unavailable for this Apple sign-in. You can still link Apple to an existing MyKhaya account."}
               </p>
               <div className="signin-recovery-actions">
                 <button
@@ -842,7 +843,7 @@ export default function Login() {
                     onClick={() => setAppleRegistrationRequested(true)}
                     disabled={busy}
                   >
-                    Create a new account
+                    {beta ? "Create your Beta account" : "Create a new account"}
                   </button>
                 )}
               </div>
@@ -908,10 +909,14 @@ export default function Login() {
           {googleResult === "choose" && googleTransaction && (
             <section className="notice" aria-labelledby="google-recovery-heading">
               <h2 id="google-recovery-heading">Continue with Google</h2>
-              <p>Google sign-in is ready. Choose an existing MyKhaya account or create a new one. We will not merge accounts automatically.</p>
+              <p>
+                {googleRecovery?.can_register
+                  ? `Google sign-in is ready. Choose an existing MyKhaya account or create ${beta ? "your Beta account" : "a new one"}. We will not merge accounts automatically.`
+                  : "New account creation is currently unavailable for this Google sign-in. You can still link Google to an existing MyKhaya account."}
+              </p>
               <div className="signin-recovery-actions">
                 <button type="button" className="secondary" onClick={() => { setGoogleLinking(true); setError(""); }} disabled={busy}>Link to an existing account</button>
-                {googleRecovery?.can_register && <button type="button" className="tertiary" onClick={() => setGoogleRegistrationRequested(true)} disabled={busy}>Create a new account</button>}
+                {googleRecovery?.can_register && <button type="button" className="tertiary" onClick={() => setGoogleRegistrationRequested(true)} disabled={busy}>{beta ? "Create your Beta account" : "Create a new account"}</button>}
               </div>
               {googleRegistrationRequested && googleRecovery?.can_register && (
                 <div className="auth-legal-consent">

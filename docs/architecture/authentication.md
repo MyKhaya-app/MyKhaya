@@ -38,7 +38,12 @@ platform-administrator authentication remain separate. Apple identities are
 never linked from an email match alone. An unlinked Apple callback creates a
 short-lived, single-use recovery transaction containing verified provider
 metadata only; the browser must explicitly choose existing-account linking or
-new registration before a `User` row is created.
+new registration before a `User` row is created. Provider registration preserves
+only the approved internal Beta entry paths (`/register?beta=1` and
+`/onboarding?beta=1`) through the short-lived OAuth flow. An invitation is
+rechecked against the verified provider email and the central signup policy both
+before the account-choice option is shown and again at final registration; the
+Beta marker alone never authorises account creation.
 The account-choice screen is exclusive until that choice is made. New Apple
 and Google registrations must confirm a server-normalized display name;
 provider metadata is only an initial value and missing provider names never

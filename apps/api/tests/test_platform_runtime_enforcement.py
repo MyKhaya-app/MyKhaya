@@ -821,6 +821,7 @@ async def _apple_register(client: AsyncClient, transaction: str):
         "/api/v1/auth/apple/recovery/register",
         json={
             "transaction_id": transaction,
+            "display_name": "Apple Test User",
             "legal_acceptances": await _current_adult_acceptances(client),
         },
     )

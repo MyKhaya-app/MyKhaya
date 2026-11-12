@@ -815,14 +815,27 @@ def _google_redirect(settings: Settings, suffix: str) -> RedirectResponse:
     )
 
 
-def _social_registration_context(return_path: str | None) -> str:
-    """Carry only the signed-in registration intent through provider choice."""
-    if not return_path or not return_path.startswith("/register?"):
-        return ""
-    query = parse_qs(return_path.split("?", 1)[1], keep_blank_values=False)
+def _social_registration_details(return_path: str | None) -> tuple[bool, str | None]:
+    """Extract the small set of validated Beta intent accepted by provider sign-in."""
+    safe_path = _safe_return_path(return_path)
+    if not safe_path or "?" not in safe_path:
+        return False, None
+    path, raw_query = safe_path.split("?", 1)
+    if path not in {"/register", "/onboarding"}:
+        return False, None
+    query = parse_qs(raw_query, keep_blank_values=False)
     if query.get("beta") != ["1"]:
+        return False, None
+    invitation_key = "beta_invitation" if path == "/register" else "invitation"
+    invitation = query.get(invitation_key, [None])[0]
+    return True, invitation
+
+
+def _social_registration_context(return_path: str | None) -> str:
+    """Carry only the validated Beta intent through provider choice."""
+    beta, invitation = _social_registration_details(return_path)
+    if not beta:
         return ""
-    invitation = query.get("beta_invitation", [None])[0]
     suffix = "&beta=1"
     if invitation:
         suffix += f"&beta_invitation={quote(invitation, safe='')}"
@@ -1309,7 +1322,9 @@ async def _apple_callback(
             if not provider_email:
                 raise AppleAuthenticationError("Apple did not provide an email for this account.")
             policy = await evaluate_signup_policy(db, settings)
-            beta_registration = bool(_social_registration_context(flow.return_path))
+            beta_registration, beta_invitation_token = _social_registration_details(
+                flow.return_path
+            )
             pending_transaction = secrets.token_urlsafe(32)
             await store_pending_identity(
                 settings,
@@ -1322,11 +1337,15 @@ async def _apple_callback(
                     display_name=_apple_name(user),
                     can_register=(
                         existing is None
-                        and (
-                            (policy.beta_path if beta_registration else policy.normal_path)
-                            and (beta_registration or not policy.invitation_required)
-                        )
                         and policy.domain_allowed(provider_email)
+                        and await _social_registration_allowed(
+                            db,
+                            settings,
+                            policy,
+                            beta=beta_registration,
+                            invitation_token=beta_invitation_token,
+                            email=provider_email,
+                        )
                     ),
                     return_path=flow.return_path,
                 ),
@@ -1802,7 +1821,9 @@ async def google_callback(
         else:
             existing = await db.scalar(select(User).where(User.email == provider_email))
             policy = await evaluate_signup_policy(db, settings)
-            beta_registration = bool(_social_registration_context(flow.return_path))
+            beta_registration, beta_invitation_token = _social_registration_details(
+                flow.return_path
+            )
             transaction_id = secrets.token_urlsafe(32)
             await store_google_pending_identity(
                 settings,
@@ -1813,12 +1834,18 @@ async def google_callback(
                     provider_email=provider_email,
                     email_verified=True,
                     display_name=_google_name(claims),
-                    can_register=existing is None
-                    and (
-                        (policy.beta_path if beta_registration else policy.normal_path)
-                        and (beta_registration or not policy.invitation_required)
-                    )
-                    and policy.domain_allowed(provider_email),
+                    can_register=(
+                        existing is None
+                        and policy.domain_allowed(provider_email)
+                        and await _social_registration_allowed(
+                            db,
+                            settings,
+                            policy,
+                            beta=beta_registration,
+                            invitation_token=beta_invitation_token,
+                            email=provider_email,
+                        )
+                    ),
                     return_path=flow.return_path,
                 ),
             )
@@ -2187,6 +2214,21 @@ async def _beta_signup_allowed(
     elif not await registration_enabled(db) or policy.mode == SignupMode.closed:
         return False
     return bool(invitation_token and await beta_invitation_valid(db, invitation_token, email))
+
+
+async def _social_registration_allowed(
+    db: AsyncSession,
+    settings: Settings,
+    policy: SignupPolicy,
+    *,
+    beta: bool,
+    invitation_token: str | None,
+    email: str,
+) -> bool:
+    """Resolve provider-registration eligibility through the central policy."""
+    if beta:
+        return await _beta_signup_allowed(db, settings, policy, invitation_token, email)
+    return policy.normal_path and not policy.invitation_required
 
 
 @router.post("/register", response_model=RegistrationResponse, status_code=status.HTTP_202_ACCEPTED)

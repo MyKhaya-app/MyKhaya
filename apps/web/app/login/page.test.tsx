@@ -174,6 +174,22 @@ describe("Login — Apple recovery choice", () => {
       platform: "web",
     });
   });
+
+  it("does not promise new registration when Apple eligibility is denied", async () => {
+    searchParams = new URLSearchParams("apple=choose&transaction=tx-3&beta=1");
+    (api.appleRecoveryOptions as ReturnType<typeof vi.fn>).mockResolvedValue({
+      can_register: false,
+      provider_email: "relay@privaterelay.appleid.com",
+      display_name: "Apple User",
+    });
+    (api.publicLegalDocuments as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    render(<Login />);
+
+    await screen.findByRole("heading", { name: "Continue with Apple" });
+    expect(screen.getByText(/new account creation is currently unavailable/i)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /create your beta account/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /link to an existing account/i })).toBeInTheDocument();
+  });
 });
 
 describe("Login — Google recovery choice", () => {
@@ -198,6 +214,22 @@ describe("Login — Google recovery choice", () => {
 
     expect(api.googleRecoveryLink).toHaveBeenCalledWith("google-tx-1");
     expect(api.googleRecoveryRegister).not.toHaveBeenCalled();
+  });
+
+  it("does not promise new registration when Google eligibility is denied", async () => {
+    searchParams = new URLSearchParams("google=choose&transaction=google-tx-2&beta=1");
+    (api.googleRecoveryOptions as ReturnType<typeof vi.fn>).mockResolvedValue({
+      can_register: false,
+      provider_email: "person@gmail.com",
+      display_name: "Google User",
+    });
+    (api.publicLegalDocuments as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+    render(<Login />);
+
+    await screen.findByRole("heading", { name: "Continue with Google" });
+    expect(screen.getByText(/new account creation is currently unavailable/i)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /create your beta account/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /link to an existing account/i })).toBeInTheDocument();
   });
 });
 

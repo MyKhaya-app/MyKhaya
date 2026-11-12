@@ -44,10 +44,13 @@ export function BetaEnrolment() {
   const [homeName, setHomeName] = useState("");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
+  const loginPath = `/login?next=${encodeURIComponent(
+    `/onboarding?beta=1${invitation ? `&invitation=${encodeURIComponent(invitation)}` : ""}`,
+  )}`;
 
   useEffect(() => {
-    if (status === "signed_out") router.replace("/login?next=/onboarding%3Fbeta%3D1");
-  }, [router, status]);
+    if (status === "signed_out") router.replace(loginPath);
+  }, [loginPath, router, status]);
 
   const load = useCallback(async () => {
     try {
@@ -55,10 +58,10 @@ export function BetaEnrolment() {
       setState(signupState);
       setContinuation(next);
     } catch (reason) {
-      if (reason instanceof ApiError && reason.status === 401) router.replace("/login?next=/onboarding%3Fbeta%3D1");
+      if (reason instanceof ApiError && reason.status === 401) router.replace(loginPath);
       else setError(reason instanceof ApiError ? reason.message : "We couldn’t load your Founding Beta details.");
     }
-  }, [router]);
+  }, [loginPath, router]);
 
   useEffect(() => {
     if (status !== "ready") return;
