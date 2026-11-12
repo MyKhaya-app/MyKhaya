@@ -89,6 +89,7 @@ from mykhaya.entitlements import (
 from mykhaya.external_identities import (
     ExternalIdentityNotFound,
     LastAuthenticationMethodError,
+    unlink_anonymised_external_identity,
     unlink_external_identity,
 )
 from mykhaya.founding_beta_schemas import SignupStateResponse
@@ -3190,6 +3191,8 @@ def _user_viewer_permissions(context: PlatformContext) -> dict[str, bool]:
     return {
         "change_mfa_policy": role in OPERATORS,
         "disconnect_sign_in_methods": role in OPERATORS,
+        "cleanup_anonymised_sign_in_methods": role
+        in (PlatformRole.owner, PlatformRole.administrator, PlatformRole.security),
         "revoke_sessions": role in SUPPORT,
     }
 
@@ -3226,6 +3229,9 @@ _ADMIN_AUTH_EVENT_LABELS: dict[str, str] = {
     "user.password_reset_sent": "Password-reset email sent by an administrator",
     "user.password_setup_sent": "Password-setup email sent by an administrator",
     "user.anonymised_auth_cleanup": "Terminal authentication cleanup completed by an administrator",
+    "user.anonymised_external_identity_cleanup": (
+        "Historical sign-in association removed by an administrator"
+    ),
     "user.suspended": "Suspended by an administrator",
     "user.reactivated": "Reactivated by an administrator",
     "user.external_identity_disconnected": "Sign-in provider disconnected by an administrator",
@@ -3245,7 +3251,7 @@ SIGN_IN_METHOD_DISCONNECTED = "account.sign_in_method_disconnected"
 @router.get("/users/{user_id}/authentication")
 async def user_authentication_summary(
     user_id: uuid.UUID,
-    _: PlatformContext = Depends(require_roles(*SUPPORT)),
+    _: PlatformContext = Depends(require_roles(*SUPPORT, PlatformRole.security)),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
@@ -3357,12 +3363,14 @@ async def user_authentication_summary(
     for row in admin_events:
         label = _ADMIN_AUTH_EVENT_LABELS[row.action]
         provider_value = (row.new_values or {}).get("provider")
-        if row.action == "user.external_identity_disconnected" and provider_value in {
-            item.value for item in _PROVIDER_NAMES
-        }:
-            label = (
-                f"{_PROVIDER_NAMES[ExternalIdentityProvider(provider_value)]} "
-                "disconnected by an administrator"
+        if row.action in {
+            "user.external_identity_disconnected",
+            "user.anonymised_external_identity_cleanup",
+        } and provider_value in {item.value for item in _PROVIDER_NAMES}:
+            label = f"{_PROVIDER_NAMES[ExternalIdentityProvider(provider_value)]} " + (
+                "historical association removed by an administrator"
+                if row.action == "user.anonymised_external_identity_cleanup"
+                else "disconnected by an administrator"
             )
         events.append(
             {
@@ -3407,6 +3415,63 @@ async def user_authentication_summary(
         "native_apps": native_apps,
         "web_push_subscriptions": web_push_active or 0,
         "recent_events": events[:RECENT_AUTH_EVENT_LIMIT],
+    }
+
+
+@router.post("/users/{user_id}/anonymised-auth-cleanup/{provider}")
+async def cleanup_anonymised_user_provider(
+    user_id: uuid.UUID,
+    provider: ExternalIdentityProvider,
+    body: SensitiveActionRequest,
+    request: Request,
+    context: PlatformContext = Depends(
+        require_roles(PlatformRole.owner, PlatformRole.administrator, PlatformRole.security)
+    ),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    """Remove one Apple/Google link from an already-anonymised account.
+
+    This terminal-account exception is intentionally not routed through the
+    normal provider unlink endpoint, whose last-usable-sign-in protection must
+    continue to apply to active and archived accounts.
+    """
+    require_recent_auth(context, settings)
+    removed = await unlink_anonymised_external_identity(
+        db, request, user_id=user_id, provider=provider
+    )
+    provider_name = _PROVIDER_NAMES[provider]
+    if removed is None:
+        user = await db.get(User, user_id)
+        if user is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "That user could not be found.")
+        if user.anonymised_at is None:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "Historical provider cleanup is only available for anonymised users.",
+            )
+        return {
+            "message": (
+                f"{provider_name} sign-in is not connected to this anonymised account. "
+                "Nothing was changed."
+            ),
+            "changed": False,
+        }
+    platform_audit(
+        db,
+        request,
+        context,
+        "user.anonymised_external_identity_cleanup",
+        "user",
+        user_id,
+        reason=body.reason,
+        previous={"provider": provider.value, "connected": True},
+        new={"provider": provider.value, "connected": False},
+    )
+    await db.commit()
+    return {
+        "message": f"{provider_name} historical sign-in association was removed.",
+        "changed": True,
     }
 
 

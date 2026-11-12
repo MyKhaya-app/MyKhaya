@@ -61,13 +61,24 @@ type CardsProps = {
   summary: UserAuthenticationSummary | null;
   error: string;
   canDisconnect: boolean;
+  canCleanupAnonymised: boolean;
   busy: boolean;
   onDisconnect: (provider: SignInProvider, name: string) => void;
+  onCleanupAnonymised: (provider: SignInProvider, name: string) => void;
 };
 
 /** "Connected Sign-in Methods": sits beside Authentication & MFA. */
-export function ConnectedSignInMethodsCard({ summary, error, canDisconnect, busy, onDisconnect }: CardsProps) {
+export function ConnectedSignInMethodsCard({
+  summary,
+  error,
+  canDisconnect,
+  canCleanupAnonymised,
+  busy,
+  onDisconnect,
+  onCleanupAnonymised,
+}: CardsProps) {
   const canDisconnectForAccount = canDisconnect && !summary?.authentication_disabled;
+  const canCleanupForAccount = canCleanupAnonymised && summary?.authentication_disabled;
   const usable =
     summary &&
     (summary.password.available ||
@@ -101,6 +112,8 @@ export function ConnectedSignInMethodsCard({ summary, error, canDisconnect, busy
                   <strong>{item.name}</strong>
                   {item.connected && !summary.authentication_disabled ? (
                     <small>Connected {when(item.connected_at)} · Last used {when(item.last_used_at, "not recorded")}</small>
+                  ) : item.connected && summary.authentication_disabled ? (
+                    <small>Connected historically · Authentication disabled</small>
                   ) : (
                     <small>No {item.name} account is connected.</small>
                   )}
@@ -117,6 +130,16 @@ export function ConnectedSignInMethodsCard({ summary, error, canDisconnect, busy
                     className="cc-user-sign-in-disconnect"
                     disabled={busy}
                     onClick={() => onDisconnect(item.provider, item.name)}
+                  >
+                    Disconnect<span className="cc-visually-hidden"> {item.name}</span>
+                  </button>
+                )}
+                {item.connected && canCleanupForAccount && (
+                  <button
+                    type="button"
+                    className="cc-user-sign-in-disconnect"
+                    disabled={busy}
+                    onClick={() => onCleanupAnonymised(item.provider, item.name)}
                   >
                     Disconnect<span className="cc-visually-hidden"> {item.name}</span>
                   </button>
@@ -165,7 +188,8 @@ export function ConnectedSignInMethodsCard({ summary, error, canDisconnect, busy
           )}
           <small className="cc-user-security-note">
             Disconnecting removes the link between the provider account and MyKhaya. It does not revoke access at
-            Apple or Google. Provider account identifiers and email addresses are never shown here.
+            Apple or Google. For anonymised accounts, this is historical authentication cleanup only and does not
+            change the tombstone or account lifecycle. Provider account identifiers and email addresses are never shown here.
           </small>
         </>
       )}

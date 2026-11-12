@@ -34,6 +34,14 @@ state at redemption. The PCC exposes a recent-auth, Owner/Administrator-only,
 audited and idempotent cleanup action for records anonymised before this full
 cleanup was introduced; it never returns or logs credential material.
 
+PCC also exposes a separate terminal-only cleanup action for a remaining Apple
+or Google association on an anonymised user. It locks and removes only the
+selected external identity, preserves the tombstone and all historical Home,
+billing and legal records, and does not reactivate the account. It requires
+recent privileged authentication, administrator MFA, an explicit reason and
+confirmation, and is limited to Owner, Administrator and Security roles.
+Active and archived users continue to use the normal provider unlink rules.
+
 PCC password recovery distinguishes first-password setup from a password
 reset. Verified, active Apple/Google-only users can receive a single-use,
 expiring setup link without losing their provider identity; users with an

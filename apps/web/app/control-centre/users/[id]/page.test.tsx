@@ -560,6 +560,43 @@ describe("User detail — Authentication tab", () => {
     expect(document.querySelector(".is-tab-authentication")).toBeInTheDocument();
   });
 
+  it("offers terminal provider cleanup only for an anonymised account", async () => {
+    const anonymisedOperator = {
+      ...anonymisedUser,
+      viewer_permissions: {
+        change_mfa_policy: true,
+        disconnect_sign_in_methods: true,
+        cleanup_anonymised_sign_in_methods: true,
+        revoke_sessions: true,
+      },
+    };
+    const anonymisedSummary = {
+      ...summary,
+      account_lifecycle: "anonymised" as const,
+      authentication_disabled: true,
+      providers: [
+        summary.providers[0],
+        { ...summary.providers[1], connected: true, connected_at: "2026-10-02T09:00:00Z" },
+      ],
+    };
+    serve(anonymisedOperator, anonymisedSummary);
+    post.mockResolvedValue({ message: "Apple historical sign-in association was removed.", changed: true });
+    render(<DetailPage />);
+    const card = (await screen.findByRole("heading", { name: "Connected Sign-in Methods" })).closest("section")!;
+    expect(within(card).getAllByRole("button", { name: /Disconnect/ })).toHaveLength(2);
+    await userEvent.click(within(card).getByRole("button", { name: "Disconnect Apple" }));
+    const dialog = await findDialog(/Remove historical Apple association/i);
+    expect(within(dialog).getByText(/historical Apple sign-in association/)).toBeInTheDocument();
+    await userEvent.type(within(dialog).getByLabelText(/reason for this administrative action/i), "Release stale DEV identity");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Disconnect" }));
+    await waitFor(() =>
+      expect(post).toHaveBeenCalledWith("/users/user-1/anonymised-auth-cleanup/apple", {
+        reason: "Release stale DEV identity",
+        confirmed: true,
+      }),
+    );
+  });
+
   it("hides administrative controls a Support operator cannot use", async () => {
     serve(supportViewer);
     render(<DetailPage />);

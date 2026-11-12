@@ -57,6 +57,7 @@ type UserDetail = {
   viewer_permissions?: {
     change_mfa_policy: boolean;
     disconnect_sign_in_methods: boolean;
+    cleanup_anonymised_sign_in_methods: boolean;
     revoke_sessions: boolean;
   };
 };
@@ -136,7 +137,7 @@ export default function PlatformUserDetail() {
   const [anonymiseBlockers, setAnonymiseBlockers] = useState<string[] | null>(null);
   const [authSummary, setAuthSummary] = useState<UserAuthenticationSummary | null>(null);
   const [authError, setAuthError] = useState("");
-  const [disconnectTarget, setDisconnectTarget] = useState<{ provider: SignInProvider; name: string } | null>(null);
+  const [disconnectTarget, setDisconnectTarget] = useState<{ provider: SignInProvider; name: string; anonymised: boolean } | null>(null);
   const { guarded, modal } = useReauthGuard();
 
   // Loaded only on the Authentication tab, so other tabs pay nothing for it.
@@ -264,6 +265,25 @@ export default function PlatformUserDetail() {
     } catch (cause) {
       if (cause instanceof ApiError && cause.status === 403) throw cause;
       setError(safeError(cause, "Unable to disconnect this sign-in method."));
+    } finally {
+      setBusy("");
+      await loadAuthSummary();
+    }
+  });
+
+  const runAnonymisedCleanup = guarded(async (provider: SignInProvider, formData: FormData) => {
+    setDisconnectTarget(null);
+    setBusy("disconnect");
+    setError("");
+    try {
+      const result = await platformApi.post<{ message: string }>(
+        `/users/${encodeURIComponent(id)}/anonymised-auth-cleanup/${provider}`,
+        { reason: formData.get("audit_reason"), confirmed: true },
+      );
+      setMessage(result.message);
+    } catch (cause) {
+      if (cause instanceof ApiError && cause.status === 403) throw cause;
+      setError(safeError(cause, "Unable to remove this historical sign-in association."));
     } finally {
       setBusy("");
       await loadAuthSummary();
@@ -450,7 +470,7 @@ export default function PlatformUserDetail() {
         <nav className="cc-user-profile-tabs-route" aria-label="User detail sections"><a className={activeTab === "overview" ? "is-active" : undefined} href={`/users/${id}`}><Clock3 size={17} /> Overview</a><a className={activeTab === "account" ? "is-active" : undefined} href={`/users/${id}/account`}><UserRoundCog size={17} /> Account</a><a className={activeTab === "authentication" ? "is-active" : undefined} href={`/users/${id}/authentication`}><Shield size={17} /> Authentication</a><a className={activeTab === "homes" ? "is-active" : undefined} href={`/users/${id}/homes`}><Home size={17} /> Homes</a><a className={activeTab === "permissions" ? "is-active" : undefined} href={`/users/${id}/permissions`}><UsersRound size={17} /> Permissions</a><a className={activeTab === "activity" ? "is-active" : undefined} href={`/users/${id}/activity`}><Clock3 size={17} /> Activity</a><a className={activeTab === "notes" ? "is-active" : undefined} href={`/users/${id}/notes`}><FileText size={17} /> Notes</a></nav>
         <div className="cc-user-detail-grid">
           <section className="cc-user-profile-card" id="account"><div className="cc-user-profile-card-heading"><span className="cc-user-profile-card-icon"><UserRoundCog size={19} /></span><h2>Account Details</h2><button type="button" className="cc-user-profile-link-button" disabled>Edit</button></div><dl className="cc-user-profile-list"><div><dt>Full name</dt><dd>{data.display_name}</dd></div><div><dt>Email address</dt><dd>{data.email} <CcBadge tone={data.verified ? "success" : "warning"}>{data.verified ? "Verified" : "Unverified"}</CcBadge></dd></div><div><dt>Phone number</dt><dd className="is-muted">Not provided</dd></div><div><dt>Date of birth</dt><dd className="is-muted">Not provided</dd></div><div><dt>Account created</dt><dd>{detailDate(data.created_at)}</dd></div><div><dt>Last login</dt><dd>{detailDate(data.last_login_at)}</dd></div><div><dt>Last active</dt><dd>{detailDate(data.last_activity_at)}</dd></div><div><dt>Status</dt><dd><CcBadge tone={statusTone}>{statusLabel}</CcBadge></dd></div></dl></section>
-          <section className="cc-user-profile-card" id="authentication"><div className="cc-user-profile-card-heading"><span className="cc-user-profile-card-icon"><Shield size={19} /></span><h2>Authentication &amp; MFA</h2><button type="button" className="cc-user-profile-link-button" disabled>Edit</button></div><dl className="cc-user-profile-list"><div><dt>MFA requirement</dt><dd><CcBadge tone={data.authentication_mfa.effective === "required" ? "info" : "neutral"}>{methodLabel(data.authentication_mfa.effective)}</CcBadge>{enrolledMfa.length === 0 && <small>{data.authentication_mfa.effective === "required" ? "MFA is required, but no MFA method is enrolled yet." : "No MFA method is enrolled."}</small>}</dd></div><div><dt>Requirement source</dt><dd>{MFA_SOURCE_LABELS[data.authentication_mfa.source] ?? methodLabel(data.authentication_mfa.source)}</dd></div><div><dt>Policy override</dt><dd>{data.authentication_mfa.configured === "inherit" ? "Inherit from Home" : methodLabel(data.authentication_mfa.configured)}</dd></div><div><dt>Allowed methods</dt><dd><span className="cc-user-chip-list">{data.authentication_mfa.allowed_methods.map((method) => <span className="cc-user-chip" key={method}>{mfaMethodLabel(method)}</span>)}</span></dd></div><div><dt>Enrolled methods</dt><dd>{enrolledMfa.join(", ") || "None"}</dd></div></dl>{canChangeMfa && <form className="cc-user-mfa-form" onSubmit={updateMfaPolicy}><CcField label="User policy override"><select name="policy" defaultValue={data.authentication_mfa.configured}><option value="inherit">Inherit</option><option value="optional">Optional</option><option value="required">Force MFA</option></select></CcField><CcField label="Reason for this change"><input name="reason" minLength={10} maxLength={500} required /></CcField><button disabled={Boolean(busy)}><Mail size={16} /> Save MFA policy</button></form>}<small className="cc-user-security-note">Authenticator secrets and verification codes are never shown here. TOTP reset/removal is intentionally unavailable.{canChangeMfa ? "" : " Changing the MFA policy requires a Platform Owner or Administrator."}</small></section>{activeTab === "authentication" && <ConnectedSignInMethodsCard summary={authSummary} error={authError} canDisconnect={Boolean(data.viewer_permissions?.disconnect_sign_in_methods)} busy={Boolean(busy)} onDisconnect={(provider, name) => setDisconnectTarget({ provider, name })} />}
+          <section className="cc-user-profile-card" id="authentication"><div className="cc-user-profile-card-heading"><span className="cc-user-profile-card-icon"><Shield size={19} /></span><h2>Authentication &amp; MFA</h2><button type="button" className="cc-user-profile-link-button" disabled>Edit</button></div><dl className="cc-user-profile-list"><div><dt>MFA requirement</dt><dd><CcBadge tone={data.authentication_mfa.effective === "required" ? "info" : "neutral"}>{methodLabel(data.authentication_mfa.effective)}</CcBadge>{enrolledMfa.length === 0 && <small>{data.authentication_mfa.effective === "required" ? "MFA is required, but no MFA method is enrolled yet." : "No MFA method is enrolled."}</small>}</dd></div><div><dt>Requirement source</dt><dd>{MFA_SOURCE_LABELS[data.authentication_mfa.source] ?? methodLabel(data.authentication_mfa.source)}</dd></div><div><dt>Policy override</dt><dd>{data.authentication_mfa.configured === "inherit" ? "Inherit from Home" : methodLabel(data.authentication_mfa.configured)}</dd></div><div><dt>Allowed methods</dt><dd><span className="cc-user-chip-list">{data.authentication_mfa.allowed_methods.map((method) => <span className="cc-user-chip" key={method}>{mfaMethodLabel(method)}</span>)}</span></dd></div><div><dt>Enrolled methods</dt><dd>{enrolledMfa.join(", ") || "None"}</dd></div></dl>{canChangeMfa && <form className="cc-user-mfa-form" onSubmit={updateMfaPolicy}><CcField label="User policy override"><select name="policy" defaultValue={data.authentication_mfa.configured}><option value="inherit">Inherit</option><option value="optional">Optional</option><option value="required">Force MFA</option></select></CcField><CcField label="Reason for this change"><input name="reason" minLength={10} maxLength={500} required /></CcField><button disabled={Boolean(busy)}><Mail size={16} /> Save MFA policy</button></form>}<small className="cc-user-security-note">Authenticator secrets and verification codes are never shown here. TOTP reset/removal is intentionally unavailable.{canChangeMfa ? "" : " Changing the MFA policy requires a Platform Owner or Administrator."}</small></section>{activeTab === "authentication" && <ConnectedSignInMethodsCard summary={authSummary} error={authError} canDisconnect={Boolean(data.viewer_permissions?.disconnect_sign_in_methods)} canCleanupAnonymised={Boolean(data.viewer_permissions?.cleanup_anonymised_sign_in_methods)} busy={Boolean(busy)} onDisconnect={(provider, name) => setDisconnectTarget({ provider, name, anonymised: false })} onCleanupAnonymised={(provider, name) => setDisconnectTarget({ provider, name, anonymised: true })} />}
           <div className="cc-user-profile-side-column"><section className="cc-user-profile-card" id="homes"><div className="cc-user-profile-card-heading"><span className="cc-user-profile-card-icon"><Home size={19} /></span><h2>Homes &amp; Memberships</h2><button type="button" className="cc-user-profile-link-button" disabled>Manage</button></div><div className="cc-user-profile-card-body"><strong>{data.homes.length} {data.homes.length === 1 ? "home" : "homes"}</strong>{data.homes.length ? data.homes.map((home) => <div className="cc-user-home-item" key={home.id}><Home size={19} /><span><strong>{home.name}</strong><small>{methodLabel(home.role)}</small></span><CcBadge tone="info">{home.role.replaceAll("_", " ")}</CcBadge></div>) : <p className="is-muted">Not a member of any Home.</p>}</div></section><section className="cc-user-profile-card" id="permissions"><div className="cc-user-profile-card-heading"><span className="cc-user-profile-card-icon"><UsersRound size={19} /></span><h2>Roles &amp; Permissions</h2><button type="button" className="cc-user-profile-link-button" disabled>Manage</button></div><dl className="cc-user-profile-list cc-user-permissions-list"><div><dt>Home role</dt><dd>{data.homes[0] ? methodLabel(data.homes[0].role) : "None"}</dd></div><div><dt>Home memberships</dt><dd>{data.homes.length}</dd></div><div><dt>Platform access</dt><dd>Not part of this user record</dd></div></dl></section></div>
         </div>
         {activeTab === "authentication" && <AuthenticationSupportCards summary={authSummary} canRevokeSessions={Boolean(data.viewer_permissions?.revoke_sessions)} busy={Boolean(busy)} onRevokeSessions={() => setOpenDialog("revoke-sessions")} />}
@@ -483,16 +503,22 @@ export default function PlatformUserDetail() {
       <CcConfirmDialog
         open={disconnectTarget !== null}
         onClose={() => setDisconnectTarget(null)}
-        title={`Disconnect ${disconnectTarget?.name ?? ""} sign-in`}
+        title={disconnectTarget?.anonymised ? `Remove historical ${disconnectTarget.name} association` : `Disconnect ${disconnectTarget?.name ?? ""} sign-in`}
         description={
           disconnectTarget
-            ? `This removes the connection between the user's ${disconnectTarget.name} account and MyKhaya, so they can no longer sign in with ${disconnectTarget.name} until they reconnect it. It does not change or delete their ${disconnectTarget.name} account, revoke access at ${disconnectTarget.name}, sign them out, or affect their Homes, data or subscription. It is refused if ${disconnectTarget.name} is their only way to sign in.`
+            ? disconnectTarget.anonymised
+              ? `This permanently removes the historical ${disconnectTarget.name} sign-in association from this anonymised MyKhaya account. The anonymised tombstone, Homes, historical data and lifecycle will not change.`
+              : `This removes the connection between the user's ${disconnectTarget.name} account and MyKhaya, so they can no longer sign in with ${disconnectTarget.name} until they reconnect it. It does not change or delete their ${disconnectTarget.name} account, revoke access at ${disconnectTarget.name}, sign them out, or affect their Homes, data or subscription. It is refused if ${disconnectTarget.name} is their only way to sign in.`
             : undefined
         }
         confirmLabel="Disconnect"
         variant="destructive"
         onConfirm={(formData) => {
-          if (disconnectTarget) void runDisconnect(disconnectTarget.provider, formData);
+          if (disconnectTarget) {
+            void (disconnectTarget.anonymised
+              ? runAnonymisedCleanup(disconnectTarget.provider, formData)
+              : runDisconnect(disconnectTarget.provider, formData));
+          }
         }}
       />
 

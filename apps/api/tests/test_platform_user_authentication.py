@@ -159,20 +159,22 @@ async def test_summary_shows_status_without_provider_identity_data(
     assert detail["viewer_permissions"] == {
         "change_mfa_policy": False,
         "disconnect_sign_in_methods": False,
+        "cleanup_anonymised_sign_in_methods": False,
         "revoke_sessions": True,
     }
 
 
 @pytest.mark.asyncio
-async def test_readonly_and_security_roles_cannot_read_the_summary(
+async def test_readonly_cannot_read_the_summary_but_security_can(
     admin_client: AsyncClient,  # noqa: F811
     admin_factory: AdminFactory,  # noqa: F811
     make_user: Callable[..., Awaitable[User]],
 ) -> None:
     user = await make_user()
-    for role in (PlatformRole.readonly, PlatformRole.security):
-        await login(admin_client, await admin_factory(role))
-        assert (await admin_client.get(_path(user, "/authentication"))).status_code == 403
+    await login(admin_client, await admin_factory(PlatformRole.readonly))
+    assert (await admin_client.get(_path(user, "/authentication"))).status_code == 403
+    await login(admin_client, await admin_factory(PlatformRole.security))
+    assert (await admin_client.get(_path(user, "/authentication"))).status_code == 200
 
 
 @pytest.mark.asyncio
@@ -284,6 +286,114 @@ async def test_disconnect_requires_operator_role_reason_and_confirmation(
         json={"reason": REASON, "confirmed": True},
     )
     assert missing.status_code == 404
+    assert len(await _identities(user)) == 1
+
+
+async def _mark_anonymised(user: User) -> None:
+    async with SessionFactory() as db:
+        row = await db.get(User, user.id)
+        assert row is not None
+        now = datetime.now(UTC)
+        row.is_active = False
+        row.suspended_at = now
+        row.archived_at = now
+        row.anonymised_at = now
+        await db.commit()
+
+
+async def _terminal_cleanup(
+    client: AsyncClient, user: User, provider: str = "apple", **body: object
+):
+    payload: dict[str, object] = {"reason": REASON, "confirmed": True, **body}
+    return await unsafe(
+        client,
+        "POST",
+        _path(user, f"/anonymised-auth-cleanup/{provider}"),
+        json=payload,
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ["apple", "google"])
+async def test_terminal_cleanup_removes_selected_provider_only(
+    admin_client: AsyncClient,  # noqa: F811
+    admin_factory: AdminFactory,  # noqa: F811
+    make_user: Callable[..., Awaitable[User]],
+    provider: str,
+) -> None:
+    user = await make_user()
+    async with SessionFactory() as db:
+        db.add(
+            ExternalIdentity(
+                user_id=user.id,
+                provider=ExternalIdentityProvider.google,
+                provider_subject=f"google-{user.id}",
+                provider_email="hidden@example.com",
+                provider_email_verified=True,
+            )
+        )
+        await db.commit()
+    await _mark_anonymised(user)
+    await login(admin_client, await admin_factory(PlatformRole.security))
+
+    response = await _terminal_cleanup(admin_client, user, provider)
+    assert response.status_code == 200, response.text
+    assert response.json()["changed"] is True
+
+    identities = await _identities(user)
+    assert all(identity.provider.value != provider for identity in identities)
+    if provider == "apple":
+        assert [identity.provider.value for identity in identities] == ["google"]
+    else:
+        assert [identity.provider.value for identity in identities] == ["apple"]
+    async with SessionFactory() as db:
+        row = await db.get(User, user.id)
+        assert row is not None and row.anonymised_at is not None and row.is_active is False
+        event = await db.scalar(
+            select(AdministrativeAuditEvent).where(
+                AdministrativeAuditEvent.target_id == user.id,
+                AdministrativeAuditEvent.action == "user.anonymised_external_identity_cleanup",
+            )
+        )
+    assert event is not None
+    assert event.new_values == {"provider": provider, "connected": False}
+    assert provider not in response.text
+
+
+@pytest.mark.asyncio
+async def test_terminal_cleanup_allows_final_provider_and_is_idempotent(
+    admin_client: AsyncClient,  # noqa: F811
+    admin_factory: AdminFactory,  # noqa: F811
+    make_user: Callable[..., Awaitable[User]],
+) -> None:
+    user = await make_user(password=False)
+    await _mark_anonymised(user)
+    await login(admin_client, await admin_factory(PlatformRole.administrator))
+    first = await _terminal_cleanup(admin_client, user)
+    assert first.status_code == 200 and first.json()["changed"] is True
+    again = await _terminal_cleanup(admin_client, user)
+    assert again.status_code == 200 and again.json()["changed"] is False
+    assert await _identities(user) == []
+
+
+@pytest.mark.asyncio
+async def test_terminal_cleanup_rejects_active_and_archived_users(
+    admin_client: AsyncClient,  # noqa: F811
+    admin_factory: AdminFactory,  # noqa: F811
+    make_user: Callable[..., Awaitable[User]],
+) -> None:
+    user = await make_user()
+    await login(admin_client, await admin_factory(PlatformRole.owner))
+    active = await _terminal_cleanup(admin_client, user)
+    assert active.status_code == 409
+    async with SessionFactory() as db:
+        row = await db.get(User, user.id)
+        assert row is not None
+        row.archived_at = datetime.now(UTC)
+        row.is_active = False
+        await db.commit()
+    archived = await _terminal_cleanup(admin_client, user)
+    assert archived.status_code == 409
     assert len(await _identities(user)) == 1
 
 
