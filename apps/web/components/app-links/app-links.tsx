@@ -11,13 +11,14 @@ import { androidLinkKind, iosLinkKind } from "./app-link-kind";
 // and the in-app Founding Beta confirmation card; styles in ./app-links.css.
 
 const IMG = "/images/marketing";
+export const LIVE_IOS_APP_STORE_URL = "https://apps.apple.com/gb/app/mykhaya/id6819078653";
 
 /**
- * - "beta": the Founding Beta page. TestFlight and Play-testing/other links
- *   get custom buttons; store listings get the official badges; an empty
- *   iPhone link is hidden and an empty Android link is a muted placeholder.
- * - "homepage": only real store listings are linked. Otherwise the official
- *   badges stay as plain artwork, and Google Play carries a "Coming soon" pill.
+ * - "beta": the Founding Beta page. Any configured iPhone distribution link
+ *   is rendered as the live App Store badge; Play-testing/other Android links
+ *   get custom buttons, and an empty Android link is a muted placeholder.
+ * - "homepage": the live iOS App Store badge is always linked. Google Play
+ *   carries a "Coming soon" pill until a real listing is configured.
  */
 export type AppLinksSurface = "beta" | "homepage";
 
@@ -88,16 +89,8 @@ function CustomButton({ href, label, sub }: { href: string; label: string; sub?:
 /** The iPhone half. Returns null when nothing should be shown. */
 export function IosAppLink({ url, surface }: { url: string | null | undefined; surface: AppLinksSurface }) {
   const kind = iosLinkKind(url);
-  if (kind === "app-store") return <StoreBadge store="app-store" href={url!.trim()} />;
-  if (surface === "homepage") return <StoreBadge store="app-store" />;
-  if (kind === "testflight") {
-    return (
-      <span className="mk-applink-stack">
-        <CustomButton href={url!.trim()} label="Install on iPhone" sub="via TestFlight" />
-        <span className="mk-applink-note">You&apos;ll need Apple&apos;s free TestFlight app.</span>
-      </span>
-    );
-  }
+  if (surface === "homepage") return <StoreBadge store="app-store" href={LIVE_IOS_APP_STORE_URL} />;
+  if (kind === "app-store" || kind === "testflight") return <StoreBadge store="app-store" href={LIVE_IOS_APP_STORE_URL} />;
   return null;
 }
 

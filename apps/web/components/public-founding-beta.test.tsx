@@ -233,16 +233,21 @@ describe("Founding Beta page — Get the beta app (PCC app links)", () => {
     expect(member.compareDocumentPosition(apps) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  it("TestFlight: Install on iPhone via TestFlight, with the TestFlight note", async () => {
+  it("converts a stale TestFlight setting to the live App Store badge", async () => {
     const region = await block(TESTFLIGHT, null);
-    expect(region.getByRole("link", { name: /Install on iPhone/ })).toHaveAttribute("href", TESTFLIGHT);
-    expect(region.getByText("You'll need Apple's free TestFlight app.")).toBeInTheDocument();
-    expect(region.queryByAltText("Download on the App Store")).not.toBeInTheDocument();
+    expect(region.getByAltText("Download on the App Store").closest("a")).toHaveAttribute(
+      "href",
+      "https://apps.apple.com/gb/app/mykhaya/id6819078653",
+    );
+    expect(region.queryByText(/TestFlight|Install on iPhone/)).not.toBeInTheDocument();
   });
 
   it("App Store: the official badge linking to the listing", async () => {
     const region = await block(APP_STORE, null);
-    expect(region.getByAltText("Download on the App Store").closest("a")).toHaveAttribute("href", APP_STORE);
+    expect(region.getByAltText("Download on the App Store").closest("a")).toHaveAttribute(
+      "href",
+      "https://apps.apple.com/gb/app/mykhaya/id6819078653",
+    );
     expect(region.queryByText(/TestFlight/)).not.toBeInTheDocument();
   });
 

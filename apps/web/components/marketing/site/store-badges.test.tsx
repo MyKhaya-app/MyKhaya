@@ -32,27 +32,26 @@ beforeEach(() => {
 });
 
 describe("Homepage StoreBadges (PCC app links)", () => {
-  it("shows both badges unlinked, Google Play with its pill, before the links are known", () => {
+  const LIVE_IOS_APP_STORE_URL = "https://apps.apple.com/gb/app/mykhaya/id6819078653";
+
+  it("shows the live iOS badge and Google Play with its pill before the links are known", () => {
     render(<StoreBadges />);
-    expect(screen.getByAltText("Download on the App Store").closest("a")).toBeNull();
+    expect(screen.getByAltText("Download on the App Store").closest("a")).toHaveAttribute("href", LIVE_IOS_APP_STORE_URL);
     expect(screen.getByAltText("Get it on Google Play, coming soon").closest("a")).toBeNull();
     expect(screen.getByText("Coming soon")).toBeInTheDocument();
   });
 
-  it("keeps both badges visible but unlinked when the links are empty", () => {
+  it("keeps both badges visible and preserves the Google Play coming-soon state when links are empty", () => {
     withLinks(null, null);
     render(<StoreBadges />);
-    expect(screen.getByAltText("Download on the App Store").closest("a")).toBeNull();
+    expect(screen.getByAltText("Download on the App Store").closest("a")).toHaveAttribute("href", LIVE_IOS_APP_STORE_URL);
     expect(screen.getByAltText("Get it on Google Play, coming soon").closest("a")).toBeNull();
   });
 
   it("links the App Store listing and the Google Play listing", () => {
     withLinks("https://apps.apple.com/gb/app/mykhaya/id1", "https://play.google.com/store/apps/details?id=app.mykhaya");
     render(<StoreBadges />);
-    expect(screen.getByAltText("Download on the App Store").closest("a")).toHaveAttribute(
-      "href",
-      "https://apps.apple.com/gb/app/mykhaya/id1",
-    );
+    expect(screen.getByAltText("Download on the App Store").closest("a")).toHaveAttribute("href", LIVE_IOS_APP_STORE_URL);
     expect(screen.getByAltText("Get it on Google Play").closest("a")).toHaveAttribute(
       "href",
       "https://play.google.com/store/apps/details?id=app.mykhaya",
@@ -60,10 +59,10 @@ describe("Homepage StoreBadges (PCC app links)", () => {
     expect(screen.queryByText("Coming soon")).not.toBeInTheDocument();
   });
 
-  it("does not link a TestFlight or Play testing link on the homepage", () => {
+  it("uses the live App Store link even when PCC still has a TestFlight value", () => {
     withLinks("https://testflight.apple.com/join/AbCdEf12", "https://play.google.com/apps/testing/app.mykhaya");
     render(<StoreBadges />);
-    expect(screen.getByAltText("Download on the App Store").closest("a")).toBeNull();
+    expect(screen.getByAltText("Download on the App Store").closest("a")).toHaveAttribute("href", LIVE_IOS_APP_STORE_URL);
     expect(screen.getByAltText("Get it on Google Play, coming soon").closest("a")).toBeNull();
     expect(screen.queryByText(/Install on iPhone|Get the Android beta/)).not.toBeInTheDocument();
   });
