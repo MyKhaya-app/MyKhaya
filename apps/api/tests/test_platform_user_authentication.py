@@ -160,6 +160,7 @@ async def test_summary_shows_status_without_provider_identity_data(
         "change_mfa_policy": False,
         "disconnect_sign_in_methods": False,
         "cleanup_anonymised_sign_in_methods": False,
+        "manage_founding_beta_places": False,
         "revoke_sessions": True,
     }
 
