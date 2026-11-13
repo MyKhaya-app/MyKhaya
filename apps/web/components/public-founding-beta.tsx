@@ -140,7 +140,7 @@ function BetaAppLinks({ ios, android }: { ios: string | null | undefined; androi
   return (
     <section className="mk-beta-apps" aria-labelledby="beta-apps-heading">
       <p className="eyebrow mk-beta-apps-eyebrow" id="beta-apps-heading">
-        Get the beta app
+        Get the app
       </p>
       <p className="mk-beta-apps-copy">Prefer your phone? You can join and use MyKhaya from the app too.</p>
       <AppLinks ios={ios} android={android} surface="beta" label="Get the beta app" />
