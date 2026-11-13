@@ -3642,19 +3642,22 @@
 .pcc-root .cc-user-profile-breadcrumb a:hover { color: var(--cc-primary); }
 .pcc-root .cc-user-profile-header { align-items: flex-start; display: flex; gap: 32px; justify-content: space-between; margin-bottom: 20px; }
 .pcc-root .cc-user-profile-identity { align-items: flex-start; display: flex; gap: 16px; min-width: 0; }
+.pcc-root .cc-user-profile-identity-copy { min-width: 0; }
 .pcc-root .cc-user-profile-icon { align-items: center; background: #ecf3ff; border: 1px solid #dbe7ff; border-radius: 14px; color: var(--cc-primary); display: inline-flex; flex: 0 0 56px; height: 56px; justify-content: center; }
 .pcc-root .cc-user-profile-name { align-items: center; display: flex; flex-wrap: wrap; gap: 10px; }
 .pcc-root .cc-user-profile-name h1 { color: #101828; font-size: 30px; font-weight: 600; letter-spacing: -0.025em; line-height: 38px; margin: 0; }
 .pcc-root .cc-user-profile-identity p { color: #475467; font-size: 14px; margin: 2px 0 7px; }
+.pcc-root .cc-user-profile-email { display: grid; gap: 2px; overflow-wrap: anywhere; }
+.pcc-root .cc-user-profile-email small { color: #667085; font-size: 11px; line-height: 1.35; }
 .pcc-root .cc-user-profile-id { align-items: center; color: #667085; display: flex; font-size: 13px; gap: 8px; }
 .pcc-root .cc-user-profile-id button { align-items: center; background: transparent; border: 0; color: #344054; display: inline-flex; min-height: 24px; padding: 2px; }
 .pcc-root .cc-user-profile-header-side { display: grid; gap: 20px; justify-items: end; }
 .pcc-root .cc-user-profile-secondary { align-items: center; background: #fff; border: 1px solid #d0d5dd; border-radius: 8px; color: #344054; display: inline-flex; font-size: 13px; font-weight: 600; padding: 10px 16px; text-decoration: none; }
-.pcc-root .cc-user-profile-meta { display: flex; margin: 0; }
-.pcc-root .cc-user-profile-meta > div { min-width: 128px; padding: 0 16px; }
+.pcc-root .cc-user-profile-meta { display: flex; flex-wrap: wrap; gap: 10px 0; margin: 0; }
+.pcc-root .cc-user-profile-meta > div { min-width: 118px; padding: 0 14px; }
 .pcc-root .cc-user-profile-meta > div + div { border-left: 1px solid #eaecf0; }
 .pcc-root .cc-user-profile-meta dt { color: #667085; font-size: 12px; margin-bottom: 5px; }
-.pcc-root .cc-user-profile-meta dd { color: #101828; font-size: 13px; font-weight: 600; margin: 0; white-space: nowrap; }
+.pcc-root .cc-user-profile-meta dd { color: #101828; font-size: 13px; font-weight: 600; margin: 0; overflow-wrap: anywhere; }
 .pcc-root .cc-user-profile-tabs { border-bottom: 1px solid #eaecf0; display: flex; gap: 3px; margin-top: 8px; overflow-x: auto; }
 .pcc-root .cc-user-profile-tabs a { align-items: center; border-bottom: 2px solid transparent; color: #475467; display: inline-flex; font-size: 14px; gap: 8px; padding: 12px 15px 11px; text-decoration: none; white-space: nowrap; }
 .pcc-root .cc-user-profile-tabs a:hover, .pcc-root .cc-user-profile-tabs a.is-active { border-bottom-color: var(--cc-primary); color: var(--cc-primary); }
@@ -3726,6 +3729,27 @@
 .pcc-root .cc-user-profile-page.is-tab-homes .cc-user-detail-grid, .pcc-root .cc-user-profile-page.is-tab-permissions .cc-user-detail-grid { grid-template-columns: minmax(0, 1fr); }
 .pcc-root .cc-user-profile-page.is-tab-activity .cc-user-bottom-grid > #notes, .pcc-root .cc-user-profile-page.is-tab-notes .cc-user-bottom-grid > #activity { display: none; }
 .pcc-root .cc-user-profile-page.is-tab-activity .cc-user-bottom-grid, .pcc-root .cc-user-profile-page.is-tab-notes .cc-user-bottom-grid { grid-template-columns: minmax(0, 1fr); }
+
+/* Founding Beta place: keep historical provenance distinct from the current
+   account state, with lifecycle actions isolated from the read-only details. */
+.pcc-root .cc-beta-place-panel { overflow: hidden; }
+.pcc-root .cc-beta-place { padding: 14px 16px 16px; }
+.pcc-root .cc-beta-place + .cc-beta-place { border-top: 1px solid #eaecf0; }
+.pcc-root .cc-beta-place-heading { align-items: flex-start; display: flex; gap: 12px; justify-content: space-between; }
+.pcc-root .cc-beta-place-heading > div { min-width: 0; }
+.pcc-root .cc-beta-place-heading strong { color: #101828; font-size: 14px; }
+.pcc-root .cc-beta-place-heading p { margin: 3px 0 0; }
+.pcc-root .cc-beta-place-status { flex: 0 0 auto; }
+.pcc-root .cc-beta-place-details { padding: 8px 0 0; }
+.pcc-root .cc-beta-place-details > div { grid-template-columns: minmax(105px, .65fr) minmax(0, 1.35fr); padding-inline: 0; }
+.pcc-root .cc-beta-place-action { border-top: 1px solid #f2f4f7; display: flex; justify-content: flex-end; margin-top: 4px; padding-top: 12px; }
+.pcc-root .cc-beta-place-action-button { min-height: 38px; padding: 8px 12px; }
+.pcc-root .cc-user-legal-body { min-width: 0; padding: 12px 16px 14px; }
+.pcc-root .cc-user-legal-body > p { line-height: 1.45; margin: 0 0 10px; }
+.pcc-root .cc-user-legal-row { align-items: center; border-top: 1px solid #f2f4f7; display: flex; gap: 12px; justify-content: space-between; padding: 10px 2px; }
+.pcc-root .cc-user-legal-row > strong { color: #344054; font-size: 13px; min-width: 0; }
+.pcc-root .cc-user-legal-status { align-items: center; display: flex; flex-wrap: wrap; gap: 8px; justify-content: flex-end; text-align: right; }
+.pcc-root .cc-user-legal-status > span:first-child { color: #667085; font-size: 12px; }
 
 /* PCC user Authentication tab: Authentication & MFA beside Connected Sign-in
    Methods, then sessions/app registrations and recent authentication
@@ -3979,8 +4003,8 @@
 .pcc-root .cc-section-body, .pcc-root .cc-card-body { min-width: 0; }
 .pcc-root .cc-section-body > .cc-table-scroll, .pcc-root .cc-card-body > .cc-table-scroll { width: 100%; }
 @media (max-width: 1200px) { .pcc-root .cc-user-summary { grid-template-columns: repeat(3, minmax(0, 1fr)); } .pcc-root .cc-user-summary-person { grid-column: 1 / -1; } .pcc-root .cc-user-summary-item:nth-child(2n) { border-left: 0; } .pcc-root .cc-user-detail-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); } .pcc-root .cc-user-profile-side-column { grid-column: 1 / -1; grid-template-columns: repeat(2, minmax(0, 1fr)); } }
-@media (max-width: 900px) { .pcc-root .cc-user-profile-header { display: grid; } .pcc-root .cc-user-profile-header-side { justify-items: start; } .pcc-root .cc-user-detail-grid, .pcc-root .cc-user-profile-side-column, .pcc-root .cc-user-bottom-grid { grid-template-columns: 1fr; } .pcc-root .cc-user-profile-side-column { grid-column: auto; } }
-@media (max-width: 600px) { .pcc-root .cc-user-profile-page { padding: 20px 16px 32px; } .pcc-root .cc-user-profile-name h1 { font-size: 25px; line-height: 32px; } .pcc-root .cc-user-profile-meta { flex-wrap: wrap; gap: 12px 0; } .pcc-root .cc-user-profile-meta > div { padding-left: 0; } .pcc-root .cc-user-profile-meta > div + div { border-left: 0; padding-left: 12px; } .pcc-root .cc-user-summary { grid-template-columns: 1fr; } .pcc-root .cc-user-summary-person { grid-column: auto; } .pcc-root .cc-user-summary-item { border-left: 0; border-top: 1px solid #eaecf0; } }
+@media (max-width: 900px) { .pcc-root .cc-user-profile-header { display: grid; gap: 18px; } .pcc-root .cc-user-profile-header-side { justify-items: start; } .pcc-root .cc-user-profile-meta { justify-content: flex-start; } .pcc-root .cc-user-detail-grid, .pcc-root .cc-user-profile-side-column, .pcc-root .cc-user-bottom-grid { grid-template-columns: 1fr; } .pcc-root .cc-user-profile-side-column { grid-column: auto; } }
+@media (max-width: 600px) { .pcc-root .cc-user-profile-page { padding: 20px 16px 32px; } .pcc-root .cc-user-profile-name h1 { font-size: 25px; line-height: 32px; } .pcc-root .cc-user-profile-meta { display: grid; gap: 10px; grid-template-columns: repeat(2, minmax(0, 1fr)); width: 100%; } .pcc-root .cc-user-profile-meta > div, .pcc-root .cc-user-profile-meta > div + div { border-left: 0; min-width: 0; padding: 0; } .pcc-root .cc-user-summary { grid-template-columns: 1fr; } .pcc-root .cc-user-summary-person { grid-column: auto; } .pcc-root .cc-user-summary-item { border-left: 0; border-top: 1px solid #eaecf0; } .pcc-root .cc-user-profile-list > div, .pcc-root .cc-beta-place-details > div { grid-template-columns: minmax(90px, .75fr) minmax(0, 1.25fr); } .pcc-root .cc-user-legal-row { align-items: flex-start; flex-direction: column; } .pcc-root .cc-user-legal-status { justify-content: flex-start; text-align: left; } .pcc-root .cc-beta-place-heading { flex-direction: column; } .pcc-root .cc-beta-place-action { justify-content: stretch; } .pcc-root .cc-beta-place-action-button { width: 100%; min-height: 44px; } }
 
 /* Support (Phase 2B): PCC-scoped equivalent of the consumer stylesheet's
    .text-wrap-anywhere utility — apps/control-centre/layout.tsx never
