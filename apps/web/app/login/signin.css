@@ -23,7 +23,11 @@
   min-height: 100dvh;
 }
 
-.signin {
+/* Scoped to the sign-in page: signin.css stays loaded after an in-app
+   navigation away from /login, so a bare ".signin" would also style any
+   other route's element with that class (it once turned the marketing
+   header's Sign in link into a full-height block). */
+.signin-page > .signin {
   box-sizing: border-box;
   display: flex;
   min-height: 100vh;
@@ -322,7 +326,7 @@
     display: grid;
     grid-template-columns: minmax(300px, 1fr) minmax(420px, 1fr);
   }
-  .signin {
+  .signin-page > .signin {
     padding: 48px;
   }
   .signin-column {

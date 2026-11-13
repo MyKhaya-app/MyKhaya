@@ -80,14 +80,14 @@ html:has(.mks-home){scroll-behavior:smooth}
 .mks .nav-links a{padding:8px 14px;border-radius:999px;text-decoration:none;font-weight:600;font-size:.95rem;color:var(--muted)}
 .mks .nav-links a:hover{background:var(--tint);color:var(--ink)}
 .mks .nav-cta{display:flex;gap:10px;align-items:center}
-.mks .nav-cta .signin{font-weight:600;text-decoration:none;padding:8px 12px}
+.mks .nav-cta .nav-signin{font-weight:600;text-decoration:none;padding:8px 12px}
 .mks .nav-cta .btn{padding:10px 18px;font-size:.95rem}
 .mks .menu-btn{display:none;background:var(--surface);border:1px solid var(--line);border-radius:12px;width:44px;height:44px;color:var(--ink);font-size:1.2rem;cursor:pointer}
 .mks .mobile-menu{border-top:1px solid var(--line);padding-block:12px}
 .mks .mobile-menu a{display:block;padding:12px 4px;font-weight:600;text-decoration:none;border-bottom:1px solid var(--line)}
 .mks .mobile-menu a:last-child{border:0}
 @media (max-width:920px){
-  .mks .nav-links,.mks .nav-cta .signin{display:none}
+  .mks .nav-links,.mks .nav-cta .nav-signin{display:none}
   .mks .menu-btn{display:inline-grid;place-items:center}
   .mks .nav-cta{margin-left:auto}
 }

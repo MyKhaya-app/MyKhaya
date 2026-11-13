@@ -26,7 +26,7 @@ export function SiteNav({ signupState, onHome }: { signupState: SignupStateValue
         </nav>
         <div className="nav-cta">
           {showSignIn && (
-            <Link className="signin" href="/login">
+            <Link className="nav-signin" href="/login">
               Sign in
             </Link>
           )}
