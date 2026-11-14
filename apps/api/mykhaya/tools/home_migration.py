@@ -17,6 +17,7 @@ import secrets
 import sys
 import uuid
 from collections import defaultdict
+from collections.abc import Sequence
 from datetime import UTC, date, datetime, time
 from pathlib import Path
 from typing import Any, Literal
@@ -886,7 +887,7 @@ async def inspect_import(package: dict[str, Any], settings: Settings) -> dict[st
             )
         holiday_sources = _table("platform_holiday_sources")
         for mapping in package.get("environment_mappings", {}).get("holiday_sources", []):
-            matches = (
+            matches: Sequence[uuid.UUID] = (
                 (
                     await db.execute(
                         select(holiday_sources.c.id).where(
@@ -1094,7 +1095,7 @@ async def import_home(
             target_holiday_sources = _table("platform_holiday_sources")
             for mapping in package.get("environment_mappings", {}).get("holiday_sources", []):
                 source_id = str(mapping.get("source_id"))
-                matches = (
+                matches: Sequence[uuid.UUID] = (
                     (
                         await db.execute(
                             select(target_holiday_sources.c.id).where(
