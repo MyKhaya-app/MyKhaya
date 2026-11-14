@@ -39,7 +39,7 @@ from mykhaya.models import (
     SecurityEvent,
 )
 from mykhaya.routers import platform as platform_router
-from mykhaya.tools.home_migration import MigrationError
+from mykhaya.tools.home_migration import VERSION, MigrationError
 
 
 @pytest_asyncio.fixture
@@ -96,7 +96,7 @@ def test_home_migration_is_default_off_without_a_platform_setting() -> None:
 def test_package_summary_and_checksum_exclude_no_personal_payload_from_state() -> None:
     package = {
         "format": "mykhaya-home-migration",
-        "version": 1,
+        "version": VERSION,
         "migration_id": "11111111-1111-1111-1111-111111111111",
         "source_environment": "development",
         "source_home_id": "22222222-2222-2222-2222-222222222222",
@@ -106,6 +106,12 @@ def test_package_summary_and_checksum_exclude_no_personal_payload_from_state() -
         ],
         "data": {"todos": [{"id": "44444444-4444-4444-4444-444444444444"}]},
         "files": [{"kind": "avatar", "key": "avatar.jpg", "content": "bytes"}],
+        "environment_mappings": {"holiday_sources": []},
+        "manifest": {
+            "record_counts": {"todos": 1},
+            "asset_count": 1,
+            "assets": [{}],
+        },
         "integrity_sha256": "ignored-by-canonical-checksum",
     }
     summary = package_summary(package)
@@ -152,7 +158,7 @@ async def test_package_storage_failure_is_reported_without_exposing_filesystem_d
     storage_root.write_text("not a directory", encoding="utf-8")
     package = {
         "format": "mykhaya-home-migration",
-        "version": 1,
+        "version": VERSION,
         "migration_id": "11111111-1111-1111-1111-111111111111",
         "source_environment": "development",
         "source_home_id": "22222222-2222-2222-2222-222222222222",
@@ -163,6 +169,8 @@ async def test_package_storage_failure_is_reported_without_exposing_filesystem_d
         ],
         "data": {"todos": []},
         "files": [],
+        "environment_mappings": {"holiday_sources": []},
+        "manifest": {"record_counts": {"todos": 0}, "asset_count": 0, "assets": []},
     }
     package["integrity_sha256"] = package_checksum(package)
     settings = get_settings().model_copy(update={"home_migration_storage_dir": str(storage_root)})
@@ -254,7 +262,7 @@ async def test_setting_is_enforced_through_the_authenticated_pcc_api(
 def _minimal_package(migration_id: uuid.UUID) -> dict:
     package = {
         "format": "mykhaya-home-migration",
-        "version": 1,
+        "version": VERSION,
         "migration_id": str(migration_id),
         "source_environment": "development",
         "source_home_id": str(uuid.uuid4()),
@@ -263,6 +271,8 @@ def _minimal_package(migration_id: uuid.UUID) -> dict:
         "members": [{"id": str(uuid.uuid4()), "email": "redacted@example.test"}],
         "data": {"todos": []},
         "files": [],
+        "environment_mappings": {"holiday_sources": []},
+        "manifest": {"record_counts": {"todos": 0}, "asset_count": 0, "assets": []},
     }
     package["integrity_sha256"] = package_checksum(package)
     return package

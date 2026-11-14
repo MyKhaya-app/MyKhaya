@@ -17,11 +17,12 @@ import secrets
 import sys
 import uuid
 from collections import defaultdict
+from collections.abc import Sequence
 from datetime import UTC, date, datetime, time
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
-from sqlalchemy import Column, Date, DateTime, String, Table, Time, Uuid, insert, select
+from sqlalchemy import Column, Date, DateTime, String, Table, Time, Uuid, func, insert, select
 
 from mykhaya import models as _models  # noqa: F401 - register ORM tables in Base.metadata
 from mykhaya.avatars.storage import get_avatar_storage
@@ -50,7 +51,7 @@ from mykhaya.security import (
 from mykhaya.vehicle_photo_storage import get_vehicle_photo_storage
 
 FORMAT = "mykhaya-home-migration"
-VERSION = 1
+VERSION = 2
 MAX_FILE_BYTES = 52_428_800
 
 TABLE_ORDER = (
@@ -103,6 +104,7 @@ TABLE_ORDER = (
     "notification_preferences",
     "feature_overrides",
     "home_calendar_highlight_settings",
+    "home_holiday_subscriptions",
     "home_entitlement_grants",
     "home_subscriptions",
 )
@@ -149,6 +151,62 @@ EXCLUDED_TABLES = {
     # lookups; the target re-fetches it (see PROVIDER_CACHE_COLUMNS).
     "vehicle_mot_tests",
     "vehicle_mot_defects",
+}
+
+# Every persistent SQLAlchemy table must be classified here.  This registry is
+# deliberately explicit: a new model table is a review blocker until its
+# migration treatment is chosen and the drift test is updated.
+CoverageClass = Literal["MIGRATE", "REMAP", "RECREATE", "ENVIRONMENT_LOCAL", "FORBIDDEN"]
+ENVIRONMENT_LOCAL_TABLES = {
+    "admin_recovery_codes",
+    "admin_webauthn_credentials",
+    "administrative_notes",
+    "backup_runs",
+    "beta_programmes",
+    "beta_waitlist_entries",
+    "feature_flags",
+    "legal_acceptance_evidence",
+    "legal_acceptances",
+    "legal_document_versions",
+    "legal_documents",
+    "monitor_alerts",
+    "monitor_components",
+    "monitor_observations",
+    "monitor_overrides",
+    "monitor_transitions",
+    "notification_template_revisions",
+    "notification_templates",
+    "operational_heartbeats",
+    "platform_administrator_invitations",
+    "platform_holiday_dates",
+    "platform_holiday_sources",
+    "platform_push_settings",
+    "platform_smtp_settings",
+    "platform_stripe_settings",
+    "privacy_requests",
+    "product_usage_daily_aggregates",
+    "public_incidents",
+    "status_incident_services",
+    "status_incident_updates",
+    "stripe_webhook_ip_security_settings",
+    "subprocessors",
+    "home_migration_ledger",
+}
+FORBIDDEN_TABLES = EXCLUDED_TABLES | {"wishlist_guest_sessions"}
+TABLE_CLASSIFICATIONS: dict[str, CoverageClass] = {
+    **{name: "MIGRATE" for name in TABLE_ORDER if name != "home_holiday_subscriptions"},
+    "home_holiday_subscriptions": "REMAP",
+    **{name: "FORBIDDEN" for name in FORBIDDEN_TABLES},
+    **{name: "ENVIRONMENT_LOCAL" for name in ENVIRONMENT_LOCAL_TABLES},
+}
+
+FILE_STORE_CLASSIFICATIONS = {
+    "avatars": "MIGRATE",
+    "vehicle_photos": "MIGRATE",
+    "meal_images": "MIGRATE",
+    "support_attachments": "ENVIRONMENT_LOCAL",
+    "legal_evidence": "ENVIRONMENT_LOCAL",
+    "home_migration_packages": "ENVIRONMENT_LOCAL",
 }
 
 SECRET_COLUMNS = {
@@ -239,6 +297,8 @@ def validate_package(package: dict[str, Any]) -> None:
         "members",
         "data",
         "files",
+        "environment_mappings",
+        "manifest",
         "integrity_sha256",
     }
     if set(package) < required or package["format"] != FORMAT or package["version"] != VERSION:
@@ -249,6 +309,10 @@ def validate_package(package: dict[str, Any]) -> None:
     _uuid(package["source_home_id"])
     if not isinstance(package["members"], list) or not isinstance(package["data"], dict):
         raise MigrationError("Migration package members/data have invalid shapes.")
+    if not isinstance(package.get("environment_mappings", {}), dict) or not isinstance(
+        package.get("manifest", {}), dict
+    ):
+        raise MigrationError("Migration package environment mappings have an invalid shape.")
     expected = hashlib.sha256(_canonical_payload(package)).hexdigest()
     if not secrets.compare_digest(expected, str(package["integrity_sha256"])):
         raise MigrationError("Migration package integrity check failed.")
@@ -277,10 +341,25 @@ def validate_package(package: dict[str, Any]) -> None:
         if not isinstance(asset.get("content"), str):
             raise MigrationError("Migration package asset content is malformed.")
         try:
-            if len(base64.b64decode(asset["content"], validate=True)) > MAX_FILE_BYTES:
+            decoded = base64.b64decode(asset["content"], validate=True)
+            if len(decoded) > MAX_FILE_BYTES:
                 raise MigrationError("Migration package asset exceeds the safe limit.")
+            if asset.get("size_bytes") is not None and asset["size_bytes"] != len(decoded):
+                raise MigrationError("Migration asset size does not match its manifest.")
+            if asset.get("sha256") is not None and not secrets.compare_digest(
+                asset["sha256"], hashlib.sha256(decoded).hexdigest()
+            ):
+                raise MigrationError("Migration asset checksum does not match its manifest.")
         except ValueError as exc:
             raise MigrationError("Migration package asset content is not valid base64.") from exc
+    manifest = package["manifest"]
+    expected_counts = {name: len(rows) for name, rows in package["data"].items()}
+    if manifest.get("record_counts") != expected_counts:
+        raise MigrationError("Migration manifest record counts do not match package data.")
+    if manifest.get("asset_count") != len(package["files"]):
+        raise MigrationError("Migration manifest asset count does not match package data.")
+    if len(manifest.get("assets", [])) != len(package["files"]):
+        raise MigrationError("Migration manifest asset entries are incomplete.")
 
 
 def _table(name: str) -> Table:
@@ -288,6 +367,27 @@ def _table(name: str) -> Table:
     if table is None:
         raise MigrationError(f"Expected model table is not present: {name}")
     return table
+
+
+def validate_schema_coverage() -> None:
+    """Fail closed when the model schema grows without migration policy."""
+    model_tables = set(Base.metadata.tables)
+    covered = set(TABLE_CLASSIFICATIONS) | {"home_migration_ledger", "home_migration_packages"}
+    missing = sorted(model_tables - covered)
+    unknown = sorted(
+        set(TABLE_CLASSIFICATIONS)
+        - model_tables
+        - {"home_migration_ledger", "home_migration_packages"}
+    )
+    if missing or unknown:
+        details = []
+        if missing:
+            details.append("unclassified tables: " + ", ".join(missing))
+        if unknown:
+            details.append("stale classifications: " + ", ".join(unknown))
+        raise MigrationError(
+            "Migration schema coverage is incomplete (" + "; ".join(details) + ")."
+        )
 
 
 def _row_matches_home(row: dict[str, Any], home_id: uuid.UUID, member_ids: set[uuid.UUID]) -> bool:
@@ -409,6 +509,7 @@ async def _read_asset(settings: Settings, kind: str, key: str) -> str:
 async def export_home(home_id: uuid.UUID, output: Path, settings: Settings) -> dict[str, Any]:
     if settings.environment != "development":
         raise MigrationError("Export is permitted only from development.")
+    validate_schema_coverage()
     async with SessionFactory() as db:
         home_table = _table("groups")
         home = (
@@ -444,6 +545,8 @@ async def export_home(home_id: uuid.UUID, output: Path, settings: Settings) -> d
             "members": [],
             "data": {},
             "files": [],
+            "environment_mappings": {"holiday_sources": []},
+            "manifest": {},
         }
         users = _table("users")
         for user_id in member_ids:
@@ -521,6 +624,49 @@ async def export_home(home_id: uuid.UUID, output: Path, settings: Settings) -> d
                         "content": await _read_asset(settings, "meal_image", row["image_key"]),
                     }
                 )
+        for asset in package["files"]:
+            raw_asset = base64.b64decode(asset["content"], validate=True)
+            asset["size_bytes"] = len(raw_asset)
+            asset["sha256"] = hashlib.sha256(raw_asset).hexdigest()
+        holiday_source_ids = {
+            _uuid(row["source_id"]) for row in package["data"].get("home_holiday_subscriptions", [])
+        }
+        if holiday_source_ids:
+            holiday_sources = _table("platform_holiday_sources")
+            source_rows = (
+                (
+                    await db.execute(
+                        select(holiday_sources).where(holiday_sources.c.id.in_(holiday_source_ids))
+                    )
+                )
+                .mappings()
+                .all()
+            )
+            if len(source_rows) != len(holiday_source_ids):
+                raise MigrationError("A Home holiday catalogue source is missing from DEV.")
+            package["environment_mappings"]["holiday_sources"] = [
+                {
+                    "source_id": str(row["id"]),
+                    "country_code": row["country_code"],
+                    "region_code": row["region_code"],
+                }
+                for row in source_rows
+            ]
+    package["manifest"] = {
+        "record_counts": {name: len(rows) for name, rows in package["data"].items()},
+        "asset_count": len(package["files"]),
+        "assets": [
+            {
+                "kind": asset["kind"],
+                "owner_id": asset.get("owner_id"),
+                "size_bytes": asset.get("size_bytes"),
+                "sha256": asset.get("sha256"),
+            }
+            for asset in package["files"]
+        ],
+        "classified_tables": len(TABLE_CLASSIFICATIONS),
+        "excluded_tables": sorted(FORBIDDEN_TABLES | ENVIRONMENT_LOCAL_TABLES),
+    }
     package["integrity_sha256"] = hashlib.sha256(_canonical_payload(package)).hexdigest()
     await asyncio.to_thread(output.parent.mkdir, parents=True, exist_ok=True)
     await asyncio.to_thread(
@@ -573,7 +719,17 @@ def _report(
     reasons: list[str],
     matched: int = 0,
     created: int = 0,
+    account_readiness: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
+    asset_manifest = [
+        {
+            "kind": asset["kind"],
+            "owner_id": asset.get("owner_id"),
+            "size_bytes": asset.get("size_bytes"),
+            "sha256": asset.get("sha256"),
+        }
+        for asset in package.get("files", [])
+    ]
     return {
         "migration_id": package["migration_id"],
         "source_home_id": package["source_home_id"],
@@ -582,7 +738,15 @@ def _report(
         "counts": {name: len(rows) for name, rows in package["data"].items()},
         "matched_existing_users": matched,
         "new_users": created,
+        "account_readiness": account_readiness or [],
         "warnings": reasons,
+        "manifest": {
+            "record_counts": {name: len(rows) for name, rows in package["data"].items()},
+            "asset_count": len(asset_manifest),
+            "assets": asset_manifest,
+            "classified_tables": len(TABLE_CLASSIFICATIONS),
+            "excluded_tables": sorted(FORBIDDEN_TABLES | ENVIRONMENT_LOCAL_TABLES),
+        },
     }
 
 
@@ -604,6 +768,7 @@ def _human_report(report: dict[str, Any]) -> str:
             "",
             f"Matched existing users: {report['matched_existing_users']}",
             f"New accounts: {report['new_users']}",
+            f"Account readiness entries: {len(report.get('account_readiness', []))}",
             "Warnings:",
         ]
     )
@@ -642,6 +807,7 @@ async def _write_reports(report: dict[str, Any], report_dir: Path | None) -> Non
 
 async def inspect_import(package: dict[str, Any], settings: Settings) -> dict[str, Any]:
     validate_package(package)
+    validate_schema_coverage()
     migration_id = _uuid(package["migration_id"])
     async with SessionFactory() as db:
         done = (
@@ -652,9 +818,89 @@ async def inspect_import(package: dict[str, Any], settings: Settings) -> dict[st
         if done is not None:
             return _report(package, target_home_id=None, status="ALREADY_COMPLETED", reasons=[])
         existing = await _existing_users_by_normalized_email(db)
+        auth_identities = _table("auth_identities")
+        external_identities = _table("external_identities")
+        memberships = _table("group_memberships")
+        account_readiness: list[dict[str, Any]] = []
         matched = sum(normalise_email(member["email"]) in existing for member in package["members"])
         created = len(package["members"]) - matched
         reasons = [] if settings.environment == "production" else ["Target is not production."]
+        source_emails: dict[str, str] = {}
+        for member in package["members"]:
+            email = normalise_email(member["email"])
+            previous = source_emails.get(email)
+            if previous is not None and previous != str(member["id"]):
+                reasons.append("The package contains an ambiguous duplicate member identity.")
+            source_emails[email] = str(member["id"])
+            target_id = existing.get(email)
+            auth_count = 0
+            external_count = 0
+            membership_count = 0
+            if target_id is not None:
+                auth_count = int(
+                    (
+                        await db.execute(
+                            select(func.count())
+                            .select_from(auth_identities)
+                            .where(auth_identities.c.user_id == target_id)
+                        )
+                    ).scalar_one()
+                )
+                external_count = int(
+                    (
+                        await db.execute(
+                            select(func.count())
+                            .select_from(external_identities)
+                            .where(external_identities.c.user_id == target_id)
+                        )
+                    ).scalar_one()
+                )
+                membership_count = int(
+                    (
+                        await db.execute(
+                            select(func.count())
+                            .select_from(memberships)
+                            .where(memberships.c.user_id == target_id)
+                        )
+                    ).scalar_one()
+                )
+                if auth_count == 0:
+                    reasons.append(
+                        "An existing PROD member has no password identity; resolve the account "
+                        "through the existing account-linking or recovery process before import."
+                    )
+            provider_only = target_id is not None and auth_count == 0 and external_count > 0
+            account_readiness.append(
+                {
+                    "dev_member_id": str(member["id"]),
+                    "proposed_prod_user_id": str(target_id) if target_id else None,
+                    "existing_prod_account": target_id is not None,
+                    "new_account_required": target_id is None,
+                    "password_recovery_suitable": bool(email),
+                    "email_verification_required": await email_verification_required(db, settings),
+                    "provider_only_account": provider_only,
+                    "identity_conflict": target_id is not None and auth_count == 0,
+                    "existing_prod_home_memberships": membership_count,
+                    "profile_preserved": target_id is not None,
+                    "redacted_email": email[:1] + "***@" + email.split("@", 1)[1],
+                }
+            )
+        holiday_sources = _table("platform_holiday_sources")
+        for mapping in package.get("environment_mappings", {}).get("holiday_sources", []):
+            matches: Sequence[uuid.UUID] = (
+                (
+                    await db.execute(
+                        select(holiday_sources.c.id).where(
+                            holiday_sources.c.country_code == mapping.get("country_code"),
+                            holiday_sources.c.region_code == mapping.get("region_code"),
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            if len(matches) != 1:
+                reasons.append("A Home holiday catalogue source is missing or ambiguous in PROD.")
         return _report(
             package,
             target_home_id=None,
@@ -662,7 +908,70 @@ async def inspect_import(package: dict[str, Any], settings: Settings) -> dict[st
             reasons=reasons,
             matched=matched,
             created=created,
+            account_readiness=account_readiness,
         )
+
+
+async def _reconcile_import(
+    db: Any,
+    package: dict[str, Any],
+    maps: dict[str, dict[str, uuid.UUID]],
+    *,
+    target_home_id: uuid.UUID,
+    verified_assets: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Reconcile the committed logical dataset before writing the ledger."""
+    table_counts: dict[str, dict[str, int]] = {}
+    relationship_checks = 0
+    broken_relationships = 0
+    for name, rows in package["data"].items():
+        table = _table(name)
+        source_ids = [str(row["id"]) for row in rows if row.get("id") is not None]
+        target_ids = [maps[name][source_id] for source_id in source_ids if source_id in maps[name]]
+        destination_count = 0
+        if target_ids:
+            destination_count = int(
+                (
+                    await db.execute(
+                        select(func.count()).select_from(table).where(table.c.id.in_(target_ids))
+                    )
+                ).scalar_one()
+            )
+        table_counts[name] = {
+            "source": len(rows),
+            "destination": destination_count,
+        }
+        for row in rows:
+            for column in table.columns:
+                for foreign in column.foreign_keys:
+                    if foreign.column.table.name in maps and row.get(column.name) is not None:
+                        relationship_checks += 1
+                        if str(row[column.name]) not in maps[foreign.column.table.name]:
+                            broken_relationships += 1
+    source_records = sum(item["source"] for item in table_counts.values())
+    destination_records = sum(item["destination"] for item in table_counts.values())
+    status = (
+        "VERIFIED"
+        if (
+            source_records == destination_records
+            and broken_relationships == 0
+            and len(verified_assets) == len(package.get("files", []))
+        )
+        else "VERIFICATION_FAILED"
+    )
+    return {
+        "status": status,
+        "target_home_id": str(target_home_id),
+        "source_records": source_records,
+        "destination_records": destination_records,
+        "table_counts": table_counts,
+        "relationships_checked": relationship_checks,
+        "broken_relationships": broken_relationships,
+        "files_expected": len(package.get("files", [])),
+        "files_verified": len(verified_assets),
+        "assets": verified_assets,
+        "unexpected_exclusions": [],
+    }
 
 
 async def import_home(
@@ -674,6 +983,7 @@ async def import_home(
     confirm: bool,
 ) -> dict[str, Any]:
     validate_package(package)
+    validate_schema_coverage()
     if settings.environment != target_environment:
         raise MigrationError("Target flag does not match MYKHAYA_ENVIRONMENT.")
     if settings.environment == "production" and not confirm:
@@ -684,6 +994,7 @@ async def import_home(
         raise MigrationError("Real imports are permitted only into production.")
     migration_id = _uuid(package["migration_id"])
     created_files: list[tuple[str, str]] = []
+    verified_assets: list[dict[str, Any]] = []
     async with SessionFactory() as db:
         existing_ledger = (
             (
@@ -780,6 +1091,28 @@ async def import_home(
                 }
             )
             await db.execute(insert(groups).values(home_values))
+            holiday_source_map: dict[str, uuid.UUID] = {}
+            target_holiday_sources = _table("platform_holiday_sources")
+            for mapping in package.get("environment_mappings", {}).get("holiday_sources", []):
+                source_id = str(mapping.get("source_id"))
+                matches: Sequence[uuid.UUID] = (
+                    (
+                        await db.execute(
+                            select(target_holiday_sources.c.id).where(
+                                target_holiday_sources.c.country_code
+                                == mapping.get("country_code"),
+                                target_holiday_sources.c.region_code == mapping.get("region_code"),
+                            )
+                        )
+                    )
+                    .scalars()
+                    .all()
+                )
+                if len(matches) != 1:
+                    raise MigrationError(
+                        "A Home holiday catalogue source cannot be resolved uniquely in PROD."
+                    )
+                holiday_source_map[source_id] = matches[0]
             # Driveway reminders link to their vehicle through reminders.source_id,
             # which is not a foreign key (so _rewrite can't remap it) and is
             # imported before vehicles: allocate the new vehicle ids up front.
@@ -797,6 +1130,14 @@ async def import_home(
                                 continue
                         maps[name].setdefault(str(old_id), _new_id())
                     values = _rewrite(source, maps, table)
+                    if name == "home_holiday_subscriptions":
+                        source_id = str(values.get("source_id"))
+                        target_source_id = holiday_source_map.get(source_id)
+                        if target_source_id is None:
+                            raise MigrationError(
+                                "A Home holiday subscription has no safe PROD catalogue mapping."
+                            )
+                        values["source_id"] = target_source_id
                     if name == "reminders" and values.get("source_type") == "driveway":
                         vehicle_id = maps["vehicles"].get(str(values.get("source_id")))
                         if vehicle_id is None:
@@ -851,8 +1192,28 @@ async def import_home(
                 data = base64.b64decode(asset["content"], validate=True)
                 if len(data) > MAX_FILE_BYTES:
                     raise MigrationError("Asset exceeds the safe import limit.")
+                asset_sha256 = hashlib.sha256(data).hexdigest()
+                if asset.get("sha256") and not secrets.compare_digest(
+                    asset["sha256"], asset_sha256
+                ):
+                    raise MigrationError("Migration asset checksum validation failed.")
                 new_key = f"{uuid.uuid4()}.webp"
                 if asset["kind"] == "avatar":
+                    target_user = _table("users")
+                    target_user_id = maps["users"].get(str(asset["owner_id"]))
+                    if target_user_id is not None:
+                        existing_avatar = (
+                            await db.execute(
+                                select(target_user.c.avatar_key).where(
+                                    target_user.c.id == target_user_id
+                                )
+                            )
+                        ).scalar_one_or_none()
+                        if existing_avatar is not None:
+                            raise MigrationError(
+                                "An existing PROD profile picture would be overwritten; "
+                                "resolve the asset conflict before import."
+                            )
                     await get_avatar_storage(settings).save(new_key, data)
                     target_table_name, column = "users", "avatar_key"
                 elif asset["kind"] == "vehicle_photo":
@@ -873,6 +1234,25 @@ async def import_home(
                     await db.execute(
                         target_table.update().where(predicate).values({column: new_key})
                     )
+                else:
+                    raise MigrationError("Migration asset owner could not be remapped safely.")
+                verified_assets.append(
+                    {
+                        "kind": asset["kind"],
+                        "owner_id": asset.get("owner_id"),
+                        "size_bytes": len(data),
+                        "sha256": asset_sha256,
+                    }
+                )
+            reconciliation = await _reconcile_import(
+                db,
+                package,
+                maps,
+                target_home_id=target_home_id,
+                verified_assets=verified_assets,
+            )
+            if reconciliation["status"] != "VERIFIED":
+                raise MigrationError("Post-import reconciliation failed before completion.")
             await db.execute(
                 insert(LEDGER).values(
                     id=_new_id(),
@@ -884,7 +1264,9 @@ async def import_home(
                 )
             )
             await db.commit()
-            return _report(package, target_home_id=target_home_id, status="IMPORTED", reasons=[])
+            report = _report(package, target_home_id=target_home_id, status="IMPORTED", reasons=[])
+            report["reconciliation"] = reconciliation
+            return report
         except Exception:
             await db.rollback()
             cleanup_errors: list[str] = []
