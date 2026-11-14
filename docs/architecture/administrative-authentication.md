@@ -6,6 +6,16 @@ Admin sessions use opaque random tokens stored as keyed hashes. `mk_admin_sessio
 
 Sensitive actions require a session authenticated within `MYKHAYA_ADMIN_RECENT_AUTH_MINUTES`, an explicit `confirmed: true`, a meaningful reason, role permission and an audit event.
 
+Owners, Administrators and Security personnel can initiate password recovery
+for an active, verified user from PCC after recent authentication. The server
+selects password setup for verified provider-only accounts and password reset
+for accounts that already have a password; Support and Readonly roles cannot
+initiate either action. Links are hashed, expiring, single-use and delivered
+through the managed notification templates. Deleted, anonymised, inactive,
+unverified and locked accounts are rejected, and the action never exposes a
+token or signs the user in. The separate anonymised-auth cleanup is restricted
+to terminal users, is idempotent and audited for historical remediation.
+
 `mfa_enrolled` and `MYKHAYA_ADMIN_MFA_REQUIRED` form a fail-closed enforcement boundary. The bootstrap process deliberately creates the owner as unenrolled. Do not disable MFA in production; configuration validation rejects that state.
 
 ## Second factors

@@ -70,6 +70,21 @@ export function isPublicNativeEndpoint(path: string, method: string = "GET"): bo
 
 /** Native pre-authentication awaiting the consumer MFA policy. `provider` is
  * the completed primary factor; no session exists until MFA verification. */
+/** Founding Beta intent for a native provider sign-in started from
+ *  /register?beta=1. The API keeps only a hash of the invitation token. */
+export type NativeBetaIntent = { beta: true; invitationToken?: string | null };
+
+function nativeBetaFields(
+  intent: "login" | "link",
+  beta: NativeBetaIntent | undefined,
+): { beta?: true; beta_invitation_token?: string } {
+  // Linking an existing account never carries Beta intent.
+  if (intent !== "login" || !beta?.beta) return {};
+  return beta.invitationToken
+    ? { beta: true, beta_invitation_token: beta.invitationToken }
+    : { beta: true };
+}
+
 export type NativeMfaContinuation = {
   authentication_state: "additional_auth_required";
   transaction_id: string;
@@ -325,8 +340,9 @@ export class NativeMyKhayaClient {
     redemptionVerifier: string,
     intent: "login" | "link" = "login",
     requestId?: string,
+    beta?: NativeBetaIntent,
   ): Promise<{ transaction_id: string; nonce: string; provider: "apple" | "google"; client_id: string | null }> {
-    const body = { provider, platform, intent, redemption_verifier: redemptionVerifier };
+    const body = { provider, platform, intent, redemption_verifier: redemptionVerifier, ...nativeBetaFields(intent, beta) };
     if (intent === "link") {
       return this.request<{ transaction_id: string; nonce: string; provider: "apple" | "google"; client_id: string | null }>("/auth/mobile/external/start", {
         method: "POST",
@@ -337,8 +353,8 @@ export class NativeMyKhayaClient {
     return this.postUnauthenticated("/auth/mobile/external/start", body, requestId);
   }
 
-  externalBrowserStart(provider: "apple" | "google", platform: "ios" | "android", returnUri: string, redemptionVerifier: string, intent: "login" | "link" = "login") {
-    const body = { provider, platform, intent, return_uri: returnUri, redemption_verifier: redemptionVerifier };
+  externalBrowserStart(provider: "apple" | "google", platform: "ios" | "android", returnUri: string, redemptionVerifier: string, intent: "login" | "link" = "login", beta?: NativeBetaIntent) {
+    const body = { provider, platform, intent, return_uri: returnUri, redemption_verifier: redemptionVerifier, ...nativeBetaFields(intent, beta) };
     if (intent === "link") {
       return this.request<{ authorization_url: string; transaction_id: string }>(
         "/auth/mobile/external/browser/start",
@@ -353,21 +369,25 @@ export class NativeMyKhayaClient {
 
   async externalRedeem(transactionId: string, redemptionVerifier: string) {
     const body = { transaction_id: transactionId, redemption_verifier: redemptionVerifier };
-    const result = await (this.linkTransactions.has(transactionId)
+    const linking = this.linkTransactions.has(transactionId);
+    const result = await (linking
       ? this.request<
           (User & { session_token?: string; device_token?: string })
-          | { authentication_state: "account_choice"; transaction_id: string; provider: "apple" | "google"; provider_email: string | null; display_name: string; can_register: boolean }
+          | { authentication_state: "account_choice"; transaction_id: string; provider: "apple" | "google"; provider_email: string | null; display_name: string | null; can_register: boolean }
           | { authentication_state: "additional_auth_required"; transaction_id: string; provider: "apple" | "google" }
           | { message: string }
         >("/auth/mobile/external/redeem", { method: "POST", body: JSON.stringify(body) })
       : this.postUnauthenticated<
       (User & { session_token?: string; device_token?: string })
-      | { authentication_state: "account_choice"; transaction_id: string; provider: "apple" | "google"; provider_email: string | null; display_name: string; can_register: boolean }
+      | { authentication_state: "account_choice"; transaction_id: string; provider: "apple" | "google"; provider_email: string | null; display_name: string | null; can_register: boolean }
       | { authentication_state: "additional_auth_required"; transaction_id: string; provider: "apple" | "google" }
       | { message: string }
     >("/auth/mobile/external/redeem", body));
     this.linkTransactions.delete(transactionId);
     if ("session_token" in result && result.session_token) {
+      // A link only ever links the signed-in account. Never let it replace
+      // that account's session with another one (the API refuses this too).
+      if (linking) throw new Error("The provider link did not complete.");
       const { session_token, device_token, ...user } = result;
       await this.store.set({ token: session_token, deviceToken: device_token });
       return user;
@@ -382,7 +402,7 @@ export class NativeMyKhayaClient {
     requestId?: string,
   ): Promise<
     | User
-    | { authentication_state: "account_choice"; transaction_id: string; provider: "apple" | "google"; provider_email: string | null; display_name: string; can_register: boolean }
+    | { authentication_state: "account_choice"; transaction_id: string; provider: "apple" | "google"; provider_email: string | null; display_name: string | null; can_register: boolean }
     | { authentication_state: "additional_auth_required"; transaction_id: string; provider: "apple" | "google" }
     | { message: string }
   > {
@@ -399,7 +419,7 @@ export class NativeMyKhayaClient {
           transaction_id?: string;
           provider?: "apple" | "google";
           provider_email?: string | null;
-          display_name?: string;
+          display_name?: string | null;
           can_register?: boolean;
           message?: string;
         }>("/auth/mobile/external/exchange", {
@@ -414,7 +434,7 @@ export class NativeMyKhayaClient {
       transaction_id?: string;
       provider?: "apple" | "google";
       provider_email?: string | null;
-      display_name?: string;
+      display_name?: string | null;
       can_register?: boolean;
       message?: string;
     }>("/auth/mobile/external/exchange", body, requestId));

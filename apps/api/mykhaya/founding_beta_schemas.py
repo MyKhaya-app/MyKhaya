@@ -142,6 +142,9 @@ class BetaOverviewResponse(StrictModel):
     reserved: int
     waiting: int
     joinable: int
+    active: int
+    withdrawn: int
+    released: int
 
 
 class BetaProgrammeResponse(StrictModel):

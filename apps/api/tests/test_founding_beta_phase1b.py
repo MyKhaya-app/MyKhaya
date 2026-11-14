@@ -19,6 +19,7 @@ from mykhaya.founding_beta import (
 )
 from mykhaya.models import (
     BetaEnrollment,
+    BetaEnrollmentStatus,
     BetaInvitation,
     BetaInvitationStatus,
     BetaProgramme,
@@ -191,7 +192,16 @@ async def test_capacity_waitlist_expiry_and_explicit_exemption_counting():
         )
         await db.flush()
         state = await capacity(db, programme)
-        assert state == {"max_homes": 3, "joined": 1, "reserved": 0, "waiting": 0, "joinable": 2}
+        assert state == {
+            "max_homes": 3,
+            "joined": 1,
+            "active": 1,
+            "withdrawn": 0,
+            "released": 0,
+            "reserved": 0,
+            "waiting": 0,
+            "joinable": 2,
+        }
         await expire_invitations(db, programme)
         assert (await db.refresh(entry)) is None
         assert entry.status == BetaWaitlistStatus.expired
@@ -204,6 +214,45 @@ async def test_capacity_waitlist_expiry_and_explicit_exemption_counting():
         )
         enrollment.capacity_exempt = True
         assert (await capacity(db, programme))["joined"] == 0
+        await db.rollback()
+
+
+@pytest.mark.asyncio
+async def test_withdrawn_and_released_enrollments_reconcile_capacity_and_email_lock():
+    async with SessionFactory() as db:
+        programme = await _programme(db, cap=2)
+        user = await _user(db, email="lifecycle@example.com")
+        home = Group(name="Lifecycle Home", created_by=user.id)
+        db.add(home)
+        await db.flush()
+        enrollment = BetaEnrollment(
+            programme_id=programme.id,
+            home_id=home.id,
+            joined_user_id=user.id,
+            normalized_email=user.email,
+            joined_by_user_id=user.id,
+            terms_version="test-1",
+            capacity_exempt=False,
+        )
+        db.add(enrollment)
+        await db.flush()
+        assert (await capacity(db, programme))["joinable"] == 1
+
+        enrollment.status = BetaEnrollmentStatus.withdrawn
+        await db.flush()
+        state = await capacity(db, programme)
+        assert state["joined"] == 0
+        assert state["withdrawn"] == 1
+        assert state["joinable"] == 2
+        assert enrollment.normalized_email == "lifecycle@example.com"
+
+        enrollment.status = BetaEnrollmentStatus.released
+        enrollment.normalized_email = None
+        await db.flush()
+        state = await capacity(db, programme)
+        assert state["released"] == 1
+        assert state["joinable"] == 2
+        assert enrollment.normalized_email is None
         await db.rollback()
 
 

@@ -63,6 +63,7 @@ from mykhaya.external_identities import (
     unlink_external_identity,
 )
 from mykhaya.founding_beta import (
+    beta_invitation_hash_valid,
     beta_invitation_valid,
     current_programme,
     invitation_token_hash,
@@ -763,6 +764,14 @@ def _safe_return_path(value: str | None) -> str | None:
     return None
 
 
+def _post_auth_destination(return_path: str | None, has_home: bool) -> str:
+    """Choose a safe destination after an existing provider identity signs in."""
+    safe_path = _safe_return_path(return_path)
+    if safe_path and safe_path.split("?", 1)[0] != "/register":
+        return safe_path
+    return "/home" if has_home else "/onboarding"
+
+
 def _native_browser_return_uri(
     settings: Settings, provider: ExternalIdentityProvider, platform: str
 ) -> str:
@@ -807,14 +816,27 @@ def _google_redirect(settings: Settings, suffix: str) -> RedirectResponse:
     )
 
 
-def _social_registration_context(return_path: str | None) -> str:
-    """Carry only the signed-in registration intent through provider choice."""
-    if not return_path or not return_path.startswith("/register?"):
-        return ""
-    query = parse_qs(return_path.split("?", 1)[1], keep_blank_values=False)
+def _social_registration_details(return_path: str | None) -> tuple[bool, str | None]:
+    """Extract the small set of validated Beta intent accepted by provider sign-in."""
+    safe_path = _safe_return_path(return_path)
+    if not safe_path or "?" not in safe_path:
+        return False, None
+    path, raw_query = safe_path.split("?", 1)
+    if path not in {"/register", "/onboarding"}:
+        return False, None
+    query = parse_qs(raw_query, keep_blank_values=False)
     if query.get("beta") != ["1"]:
+        return False, None
+    invitation_key = "beta_invitation" if path == "/register" else "invitation"
+    invitation = query.get(invitation_key, [None])[0]
+    return True, invitation
+
+
+def _social_registration_context(return_path: str | None) -> str:
+    """Carry only the validated Beta intent through provider choice."""
+    beta, invitation = _social_registration_details(return_path)
+    if not beta:
         return ""
-    invitation = query.get("beta_invitation", [None])[0]
     suffix = "&beta=1"
     if invitation:
         suffix += f"&beta_invitation={quote(invitation, safe='')}"
@@ -836,7 +858,7 @@ def _apple_audit_failure(
 
 def _apple_name(raw: str | None) -> str:
     if not raw or len(raw) > 8192:
-        return "Apple user"
+        return ""
     try:
         parsed = json.loads(raw)
         name = parsed.get("name") if isinstance(parsed, dict) else None
@@ -851,14 +873,14 @@ def _apple_name(raw: str | None) -> str:
                 return value[:100]
     except (TypeError, ValueError, json.JSONDecodeError):
         pass
-    return "Apple user"
+    return ""
 
 
 def _google_name(claims: dict[str, object]) -> str:
     value = claims.get("name")
     if isinstance(value, str) and value.strip():
         return " ".join(value.split())[:100]
-    return "Google user"
+    return ""
 
 
 @router.get("/apple/start")
@@ -1033,6 +1055,8 @@ async def apple_recovery_register(
             status.HTTP_409_CONFLICT,
             "This Apple identity must be linked to an existing account.",
         )
+    if not body.display_name:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Your name is required.")
     provider_email = pending.provider_email
     if not provider_email:
         raise HTTPException(status.HTTP_409_CONFLICT, "This Apple identity has no usable email.")
@@ -1070,7 +1094,7 @@ async def apple_recovery_register(
         raise HTTPException(status.HTTP_409_CONFLICT, "This Apple identity is already linked.")
     user = User(
         email=normalise_email(provider_email),
-        display_name=pending.display_name,
+        display_name=body.display_name,
         email_verified_at=datetime.now(UTC) if pending.email_verified else None,
     )
     db.add(user)
@@ -1235,14 +1259,22 @@ async def _apple_callback(
                     email_verified=email_verified,
                     display_name=_apple_name(user),
                     can_register=identity is None
-                    and bool(provider_email)
-                    and policy.normal_path
-                    and not policy.invitation_required
-                    and policy.domain_allowed(provider_email or ""),
+                    and flow.intent != "link"
+                    and await _native_can_register(
+                        db,
+                        settings,
+                        policy,
+                        provider_email=provider_email,
+                        email_verified=email_verified,
+                        beta=flow.native_beta,
+                        beta_invitation_hash=flow.native_beta_invitation_hash,
+                    ),
                     platform=flow.native_platform,
                     redemption_verifier_hash=flow.native_redemption_verifier_hash,
                     intended_user_id=flow.user_id if flow.intent == "link" else None,
                     intent=flow.intent,
+                    beta=flow.native_beta,
+                    beta_invitation_hash=flow.native_beta_invitation_hash,
                 ),
             )
             await db.commit()
@@ -1299,7 +1331,9 @@ async def _apple_callback(
             if not provider_email:
                 raise AppleAuthenticationError("Apple did not provide an email for this account.")
             policy = await evaluate_signup_policy(db, settings)
-            beta_registration = bool(_social_registration_context(flow.return_path))
+            beta_registration, beta_invitation_token = _social_registration_details(
+                flow.return_path
+            )
             pending_transaction = secrets.token_urlsafe(32)
             await store_pending_identity(
                 settings,
@@ -1312,11 +1346,15 @@ async def _apple_callback(
                     display_name=_apple_name(user),
                     can_register=(
                         existing is None
-                        and (
-                            (policy.beta_path if beta_registration else policy.normal_path)
-                            and (beta_registration or not policy.invitation_required)
-                        )
                         and policy.domain_allowed(provider_email)
+                        and await _social_registration_allowed(
+                            db,
+                            settings,
+                            policy,
+                            beta=beta_registration,
+                            invitation_token=beta_invitation_token,
+                            email=provider_email,
+                        )
                     ),
                     return_path=flow.return_path,
                 ),
@@ -1331,7 +1369,7 @@ async def _apple_callback(
         has_home = await db.scalar(
             select(Membership.id).where(Membership.user_id == linked_user.id)
         )
-        destination = flow.return_path or ("/home" if has_home else "/onboarding")
+        destination = _post_auth_destination(flow.return_path, has_home is not None)
         session_response = RedirectResponse(
             f"{settings.public_web_url.rstrip('/')}{destination}",
             status_code=status.HTTP_303_SEE_OTHER,
@@ -1562,6 +1600,8 @@ async def google_recovery_register(
         raise HTTPException(
             status.HTTP_409_CONFLICT, "This Google identity must be linked to an existing account."
         )
+    if not body.display_name:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Your name is required.")
     provider_email = pending.provider_email
     if not provider_email:
         raise HTTPException(status.HTTP_409_CONFLICT, "This Google identity has no usable email.")
@@ -1597,7 +1637,7 @@ async def google_recovery_register(
         raise HTTPException(status.HTTP_409_CONFLICT, "This Google identity is already linked.")
     user = User(
         email=normalise_email(provider_email),
-        display_name=pending.display_name,
+        display_name=body.display_name,
         email_verified_at=datetime.now(UTC),
     )
     db.add(user)
@@ -1750,13 +1790,22 @@ async def google_callback(
                     email_verified=True,
                     display_name=_google_name(claims),
                     can_register=identity is None
-                    and policy.normal_path
-                    and not policy.invitation_required
-                    and policy.domain_allowed(provider_email),
+                    and flow.intent != "link"
+                    and await _native_can_register(
+                        db,
+                        settings,
+                        policy,
+                        provider_email=provider_email,
+                        email_verified=True,
+                        beta=flow.native_beta,
+                        beta_invitation_hash=flow.native_beta_invitation_hash,
+                    ),
                     platform=flow.native_platform,
                     redemption_verifier_hash=flow.native_redemption_verifier_hash,
                     intended_user_id=flow.user_id if flow.intent == "link" else None,
                     intent=flow.intent,
+                    beta=flow.native_beta,
+                    beta_invitation_hash=flow.native_beta_invitation_hash,
                 ),
             )
             await db.commit()
@@ -1790,7 +1839,9 @@ async def google_callback(
         else:
             existing = await db.scalar(select(User).where(User.email == provider_email))
             policy = await evaluate_signup_policy(db, settings)
-            beta_registration = bool(_social_registration_context(flow.return_path))
+            beta_registration, beta_invitation_token = _social_registration_details(
+                flow.return_path
+            )
             transaction_id = secrets.token_urlsafe(32)
             await store_google_pending_identity(
                 settings,
@@ -1801,12 +1852,18 @@ async def google_callback(
                     provider_email=provider_email,
                     email_verified=True,
                     display_name=_google_name(claims),
-                    can_register=existing is None
-                    and (
-                        (policy.beta_path if beta_registration else policy.normal_path)
-                        and (beta_registration or not policy.invitation_required)
-                    )
-                    and policy.domain_allowed(provider_email),
+                    can_register=(
+                        existing is None
+                        and policy.domain_allowed(provider_email)
+                        and await _social_registration_allowed(
+                            db,
+                            settings,
+                            policy,
+                            beta=beta_registration,
+                            invitation_token=beta_invitation_token,
+                            email=provider_email,
+                        )
+                    ),
                     return_path=flow.return_path,
                 ),
             )
@@ -1819,7 +1876,7 @@ async def google_callback(
         has_home = await db.scalar(
             select(Membership.id).where(Membership.user_id == linked_user.id)
         )
-        destination = flow.return_path or ("/home" if has_home else "/onboarding")
+        destination = _post_auth_destination(flow.return_path, has_home is not None)
         response = RedirectResponse(
             f"{settings.public_web_url.rstrip('/')}{destination}",
             status_code=status.HTTP_303_SEE_OTHER,
@@ -2159,11 +2216,15 @@ async def _beta_signup_allowed(
     policy: SignupPolicy,
     invitation_token: str | None,
     email: str,
+    *,
+    invitation_token_hash: str | None = None,
 ) -> bool:
     """Allow only a valid Beta invitation through deployment-closed signup.
 
     PCC registration disablement, closed signup mode, domain restrictions and
     all downstream verification, MFA and legal gates remain enforced.
+    Native provider sign-in holds only the invitation's hash (taken when the
+    sign-in started) and passes it as ``invitation_token_hash``.
     """
     if policy.open:
         if not policy.beta_path:
@@ -2174,7 +2235,63 @@ async def _beta_signup_allowed(
         return False
     elif not await registration_enabled(db) or policy.mode == SignupMode.closed:
         return False
-    return bool(invitation_token and await beta_invitation_valid(db, invitation_token, email))
+    if invitation_token:
+        return await beta_invitation_valid(db, invitation_token, email)
+    if invitation_token_hash:
+        return await beta_invitation_hash_valid(db, invitation_token_hash, email)
+    return False
+
+
+async def _social_registration_allowed(
+    db: AsyncSession,
+    settings: Settings,
+    policy: SignupPolicy,
+    *,
+    beta: bool,
+    invitation_token: str | None,
+    email: str,
+    invitation_token_hash: str | None = None,
+) -> bool:
+    """Resolve provider-registration eligibility through the central policy."""
+    if beta:
+        return await _beta_signup_allowed(
+            db,
+            settings,
+            policy,
+            invitation_token,
+            email,
+            invitation_token_hash=invitation_token_hash,
+        )
+    return policy.normal_path and not policy.invitation_required
+
+
+async def _native_can_register(
+    db: AsyncSession,
+    settings: Settings,
+    policy: SignupPolicy,
+    *,
+    provider_email: str | None,
+    email_verified: bool,
+    beta: bool,
+    beta_invitation_hash: str | None,
+) -> bool:
+    """Whether a native provider sign-in may offer and create a new account.
+
+    The same central policy as web provider registration: a verified provider
+    email, an allowed domain, and either the normal path or (with Beta intent)
+    the Founding Beta invitation check.
+    """
+    if not provider_email or not email_verified or not policy.domain_allowed(provider_email):
+        return False
+    return await _social_registration_allowed(
+        db,
+        settings,
+        policy,
+        beta=beta,
+        invitation_token=None,
+        email=provider_email,
+        invitation_token_hash=beta_invitation_hash,
+    )
 
 
 @router.post("/register", response_model=RegistrationResponse, status_code=status.HTTP_202_ACCEPTED)
@@ -2996,6 +3113,27 @@ async def mobile_login(
     )
 
 
+def _is_native_link(pending: NativeExternalPendingIdentity) -> bool:
+    """Whether a pending native identity came from a link request."""
+    return pending.intent == "link" or pending.intended_user_id is not None
+
+
+def _provider_linked_elsewhere(provider: ExternalIdentityProvider) -> str:
+    return f"That {provider.value.title()} account is already linked to another MyKhaya account."
+
+
+def _native_beta_invitation_hash(
+    body: NativeExternalStartRequest | NativeExternalBrowserStartRequest,
+) -> str | None:
+    """Hash the Beta invitation token as soon as it arrives.
+
+    Only this hash is stored with the sign-in; the raw token is never
+    persisted, returned or logged."""
+    if not body.beta or not body.beta_invitation_token:
+        return None
+    return invitation_token_hash(body.beta_invitation_token)
+
+
 @router.post("/mobile/external/start", response_model=NativeExternalStartResponse)
 async def mobile_external_start(
     body: NativeExternalStartRequest,
@@ -3049,6 +3187,8 @@ async def mobile_external_start(
         platform=body.platform,
         redemption_verifier=body.redemption_verifier,
         apple_nonce_hash=provider == ExternalIdentityProvider.apple,
+        beta=body.beta,
+        beta_invitation_hash=_native_beta_invitation_hash(body),
     )
     await store_native_external_transaction(settings, tx)
     return NativeExternalStartResponse(
@@ -3088,6 +3228,7 @@ async def mobile_external_browser_start(
     nonce = secrets.token_urlsafe(32)
     transaction_id = secrets.token_urlsafe(32)
     redemption_verifier_hash = hash_redemption_verifier(body.redemption_verifier)
+    beta_invitation_hash = _native_beta_invitation_hash(body)
     if body.provider == "apple":
         require_apple_configuration(settings)
         await store_flow_state(
@@ -3103,6 +3244,8 @@ async def mobile_external_browser_start(
                 native_environment=settings.environment,
                 native_transaction_id=transaction_id,
                 native_redemption_verifier_hash=redemption_verifier_hash,
+                native_beta=body.beta,
+                native_beta_invitation_hash=beta_invitation_hash,
             ),
         )
         url = authorization_url(settings, state, nonce)
@@ -3123,6 +3266,8 @@ async def mobile_external_browser_start(
                 native_environment=settings.environment,
                 native_transaction_id=transaction_id,
                 native_redemption_verifier_hash=redemption_verifier_hash,
+                native_beta=body.beta,
+                native_beta_invitation_hash=beta_invitation_hash,
             ),
         )
         url = google_authorization_url(settings, state, nonce, verifier)
@@ -3190,7 +3335,7 @@ async def mobile_external_exchange(
             email_verified = (
                 claims.get("email_verified") is True or claims.get("email_verified") == "true"
             )
-            display_name = str(claims.get("name") or claims.get("given_name") or "Apple user")
+            display_name = str(claims.get("name") or claims.get("given_name") or "")
         else:
             claims = await verify_google_identity_token(
                 settings,
@@ -3201,7 +3346,7 @@ async def mobile_external_exchange(
             subject = str(claims["sub"])
             provider_email = str(claims["email"])
             email_verified = True
-            display_name = str(claims.get("name") or "Google user")
+            display_name = str(claims.get("name") or "")
     except (
         AppleAuthenticationError,
         GoogleAuthenticationError,
@@ -3230,9 +3375,7 @@ async def mobile_external_exchange(
                 status.HTTP_403_FORBIDDEN, "This linking attempt belongs to another session."
             )
         if identity is not None and identity.user_id != auth.user.id:
-            raise HTTPException(
-                status.HTTP_409_CONFLICT, "This provider identity is already linked."
-            )
+            raise HTTPException(status.HTTP_409_CONFLICT, _provider_linked_elsewhere(tx.provider))
         try:
             await link_external_identity(
                 db,
@@ -3247,7 +3390,7 @@ async def mobile_external_exchange(
         except (ExternalIdentityOwnershipConflict, IntegrityError):
             await db.rollback()
             raise HTTPException(
-                status.HTTP_409_CONFLICT, "This provider identity is already linked."
+                status.HTTP_409_CONFLICT, _provider_linked_elsewhere(tx.provider)
             ) from None
         return MessageResponse(
             message=f"{tx.provider.value.title()} sign-in has been linked to your account."
@@ -3290,12 +3433,14 @@ async def mobile_external_exchange(
         )
 
     signup_policy = await evaluate_signup_policy(db, settings)
-    can_register = bool(
-        provider_email
-        and email_verified
-        and signup_policy.normal_path
-        and not signup_policy.invitation_required
-        and signup_policy.domain_allowed(provider_email)
+    can_register = await _native_can_register(
+        db,
+        settings,
+        signup_policy,
+        provider_email=provider_email,
+        email_verified=email_verified,
+        beta=tx.beta,
+        beta_invitation_hash=tx.beta_invitation_hash,
     )
     await store_native_external_pending(
         settings,
@@ -3309,6 +3454,8 @@ async def mobile_external_exchange(
             can_register=can_register,
             platform=tx.platform,
             redemption_verifier_hash=tx.redemption_verifier_hash,
+            beta=tx.beta,
+            beta_invitation_hash=tx.beta_invitation_hash,
         ),
     )
     return NativeExternalRecoveryResponse(
@@ -3349,7 +3496,12 @@ async def mobile_external_redeem(
             status.HTTP_400_BAD_REQUEST, "This sign-in attempt is invalid or has expired."
         )
     identity = await find_external_identity(db, pending.provider, pending.subject, for_update=True)
-    if pending.intended_user_id is not None:
+    if _is_native_link(pending):
+        # A link request only ever links, to the account that started it. It
+        # must never fall through to the sign-in handling below, which would
+        # issue a session for whoever already owns the provider identity.
+        if not pending.intended_user_id:
+            raise HTTPException(status.HTTP_400_BAD_REQUEST, "This linking attempt is invalid.")
         auth = await auth_context(request, db, settings)
         require_adult_session(auth)
         if str(auth.user.id) != pending.intended_user_id:
@@ -3357,8 +3509,9 @@ async def mobile_external_redeem(
                 status.HTTP_403_FORBIDDEN, "This linking attempt belongs to another session."
             )
         if identity is not None and identity.user_id != auth.user.id:
+            await consume_native_external_pending(settings, body.transaction_id)
             raise HTTPException(
-                status.HTTP_409_CONFLICT, "This provider identity is already linked."
+                status.HTTP_409_CONFLICT, _provider_linked_elsewhere(pending.provider)
             )
         consumed = await consume_native_external_pending(settings, body.transaction_id)
         if consumed is None:
@@ -3377,7 +3530,7 @@ async def mobile_external_redeem(
         except (ExternalIdentityOwnershipConflict, IntegrityError):
             await db.rollback()
             raise HTTPException(
-                status.HTTP_409_CONFLICT, "This provider identity is already linked."
+                status.HTTP_409_CONFLICT, _provider_linked_elsewhere(pending.provider)
             ) from None
         return MessageResponse(
             message=f"{pending.provider.value.title()} sign-in has been linked to your account."
@@ -3446,7 +3599,7 @@ async def mobile_external_recovery_link(
     pending = await load_native_external_pending(settings, body.transaction_id)
     if pending is None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "This sign-in attempt has expired.")
-    if pending.intent == "link":
+    if _is_native_link(pending):
         if not pending.intended_user_id:
             raise HTTPException(status.HTTP_400_BAD_REQUEST, "This linking attempt is invalid.")
         if pending.intended_user_id != str(auth.user.id):
@@ -3474,7 +3627,7 @@ async def mobile_external_recovery_link(
     except (ExternalIdentityOwnershipConflict, IntegrityError):
         await db.rollback()
         raise HTTPException(
-            status.HTTP_409_CONFLICT, "This provider identity is already linked."
+            status.HTTP_409_CONFLICT, _provider_linked_elsewhere(pending.provider)
         ) from None
     return MessageResponse(
         message=f"{pending.provider.value.title()} sign-in has been linked to your account."
@@ -3494,10 +3647,37 @@ async def mobile_external_recovery_register(
 ) -> MobileSessionResponse | NativeMfaContinuationResponse:
     require_secure_transport(request, settings)
     pending = await load_native_external_pending(settings, body.transaction_id)
-    if pending is None or not pending.can_register or not pending.provider_email:
+    if pending is not None and _is_native_link(pending):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "This sign-in was started to link an account, not create one."
+        )
+    if (
+        pending is None
+        or not pending.can_register
+        or not pending.provider_email
+        or not pending.email_verified
+    ):
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             "This provider identity must be linked to an existing account.",
+        )
+    if not body.display_name:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, "Your name is required.")
+    signup_policy = await evaluate_signup_policy(db, settings)
+    # Re-checked at registration: the policy or the invitation may have
+    # changed since the sign-in recorded can_register.
+    if not await _native_can_register(
+        db,
+        settings,
+        signup_policy,
+        provider_email=pending.provider_email,
+        email_verified=pending.email_verified,
+        beta=pending.beta,
+        beta_invitation_hash=pending.beta_invitation_hash,
+    ):
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN,
+            "New accounts cannot be created with this provider right now.",
         )
     if not verify_redemption_verifier(body.redemption_verifier, pending.redemption_verifier_hash):
         raise HTTPException(
@@ -3527,7 +3707,7 @@ async def mobile_external_recovery_register(
     assert pending.provider_email is not None
     user = User(
         email=normalise_email(pending.provider_email),
-        display_name=body.display_name or pending.display_name,
+        display_name=body.display_name,
         email_verified_at=datetime.now(UTC) if pending.email_verified else None,
     )
     db.add(user)
@@ -3542,7 +3722,11 @@ async def mobile_external_recovery_register(
             ),
             document_version_id=item.version.id,
             user_id=user.id,
-            context=LegalAcceptanceContext.signup,
+            context=(
+                LegalAcceptanceContext.beta_registration
+                if pending.beta
+                else LegalAcceptanceContext.signup
+            ),
             platform=body.platform,
             ip_address=resolve_client_ip(request, settings),
             user_agent=request.headers.get("user-agent", "")[:300] or None,
@@ -3560,6 +3744,21 @@ async def mobile_external_recovery_register(
         provider_email=pending.provider_email,
         provider_email_verified=pending.email_verified,
     )
+    if pending.beta:
+        # The same Beta intent record web provider registration creates; the
+        # authenticated Beta continuation (GET /beta/continuation) resumes it.
+        programme = await current_programme(db)
+        db.add(
+            BetaPendingRegistration(
+                user_id=user.id,
+                programme_id=programme.id,
+                token_hash=hash_secret(
+                    secrets.token_urlsafe(32), settings.secret_key.get_secret_value()
+                ),
+                invitation_token_hash=pending.beta_invitation_hash,
+                expires_at=datetime.now(UTC) + timedelta(days=BETA_INTENT_TTL_DAYS),
+            )
+        )
     policy = await _resolve_browser_mfa_policy(db, user.id, settings)
     if policy.enforcement_enabled and policy.required:
         continuation = await _native_mfa_continuation(
@@ -3921,10 +4120,20 @@ async def reset(
     settings: Settings = Depends(get_settings),
 ) -> MessageResponse:
     token = await consume_action_token(db, body.token, TokenPurpose.reset_password, settings)
+    user = await db.get(User, token.user_id, with_for_update=True)
+    if (
+        user is None
+        or not user.is_active
+        or user.archived_at is not None
+        or user.anonymised_at is not None
+    ):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This link is invalid or has expired.")
     identity = await db.scalar(
         select(AuthIdentity).where(AuthIdentity.user_id == token.user_id).with_for_update()
     )
-    if identity is None:
+    if identity is None or (
+        identity.locked_until is not None and identity.locked_until > datetime.now(UTC)
+    ):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "This link is invalid or has expired.")
     identity.password_hash = password_hash.hash(body.password)
     identity.password_changed_at = datetime.now(UTC)
@@ -3943,6 +4152,52 @@ async def reset(
     return MessageResponse(
         message="Your password has been changed. Sign in with your new password."
     )
+
+
+@router.post("/setup-password", response_model=MessageResponse)
+async def setup_password(
+    body: ResetRequest,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> MessageResponse:
+    token = await consume_action_token(db, body.token, TokenPurpose.setup_password, settings)
+    user = await db.get(User, token.user_id, with_for_update=True)
+    if (
+        user is None
+        or not user.is_active
+        or user.archived_at is not None
+        or user.anonymised_at is not None
+    ):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This link is invalid or has expired.")
+    if user.email_verified_at is None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This link is invalid or has expired.")
+    identity = await db.scalar(
+        select(AuthIdentity).where(AuthIdentity.user_id == token.user_id).with_for_update()
+    )
+    if identity is not None:
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "This link is invalid or has expired.")
+    db.add(
+        AuthIdentity(
+            user_id=user.id,
+            password_hash=password_hash.hash(body.password),
+            password_changed_at=datetime.now(UTC),
+        )
+    )
+    now = datetime.now(UTC)
+    await db.execute(
+        update(Session)
+        .where(Session.user_id == token.user_id, Session.revoked_at.is_(None))
+        .values(revoked_at=now)
+    )
+    await db.execute(
+        update(TrustedDevice)
+        .where(TrustedDevice.user_id == token.user_id, TrustedDevice.revoked_at.is_(None))
+        .values(revoked_at=now)
+    )
+    audit(db, request, "password.setup", token.user_id, target_type="user", target_id=token.user_id)
+    await db.commit()
+    return MessageResponse(message="Your password has been set. Sign in with your new password.")
 
 
 @router.post("/logout", status_code=status.HTTP_204_NO_CONTENT)

@@ -290,20 +290,26 @@ describe("Founding Beta continuation", () => {
 describe("Founding Beta confirmation: get the app step", () => {
   const step = () => screen.queryByRole("region", { name: "Next: get MyKhaya on your phone" });
 
-  it("shows the heading, one line of copy and the TestFlight button with its note", async () => {
+  it("shows the heading and live App Store badge when the API has a stale TestFlight value", async () => {
     mock(api.publicSignupState).mockResolvedValue(signupState(TESTFLIGHT, null));
     await completeNewUserJourney();
     const region = within(step()!);
     expect(region.getByText(/Install the app and sign in with this account/)).toBeInTheDocument();
-    expect(region.getByRole("link", { name: /Install on iPhone/ })).toHaveAttribute("href", TESTFLIGHT);
-    expect(region.getByText("You'll need Apple's free TestFlight app.")).toBeInTheDocument();
+    expect(region.getByAltText("Download on the App Store").closest("a")).toHaveAttribute(
+      "href",
+      "https://apps.apple.com/gb/app/mykhaya/id6819078653",
+    );
+    expect(region.queryByText(/TestFlight|Install on iPhone/)).not.toBeInTheDocument();
     expect(region.getByText("Android coming soon").closest("a")).toBeNull();
   });
 
   it("App Store link: the official badge, linked", async () => {
     mock(api.publicSignupState).mockResolvedValue(signupState(APP_STORE, null));
     await completeNewUserJourney();
-    expect(within(step()!).getByAltText("Download on the App Store").closest("a")).toHaveAttribute("href", APP_STORE);
+    expect(within(step()!).getByAltText("Download on the App Store").closest("a")).toHaveAttribute(
+      "href",
+      "https://apps.apple.com/gb/app/mykhaya/id6819078653",
+    );
   });
 
   it("Play testing link: Get the Android beta", async () => {

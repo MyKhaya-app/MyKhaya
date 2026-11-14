@@ -142,15 +142,15 @@ describe("Welcome (public marketing homepage)", () => {
 
   it.each([
     ["App Store + Play listing", "https://apps.apple.com/gb/app/mykhaya/id1", "https://play.google.com/store/apps/details?id=app.mykhaya", true, true],
-    ["TestFlight + Play testing", "https://testflight.apple.com/join/AbCdEf12", "https://play.google.com/apps/testing/app.mykhaya", false, false],
-    ["empty", null, "https://downloads.mykhaya.app/android/beta.apk", false, false],
+    ["TestFlight + Play testing", "https://testflight.apple.com/join/AbCdEf12", "https://play.google.com/apps/testing/app.mykhaya", true, false],
+    ["empty", null, "https://downloads.mykhaya.app/android/beta.apk", true, false],
   ])("wires the PCC app links (%s) from signup-state into the hero badges", async (_label, ios, android, appleLinked, googleLinked) => {
     signupState.value = { ...NORMAL, ios_app_url: ios, android_app_url: android };
     render(<HomePage />);
     const badges = screen.getByRole("group", { name: "Get the app" });
     await waitFor(() =>
       expect(within(badges).getByAltText("Download on the App Store").closest("a")?.getAttribute("href") ?? null).toBe(
-        appleLinked ? ios : null,
+        appleLinked ? "https://apps.apple.com/gb/app/mykhaya/id6819078653" : null,
       ),
     );
     const google = within(badges).getByAltText(googleLinked ? "Get it on Google Play" : "Get it on Google Play, coming soon");
@@ -164,8 +164,11 @@ describe("Welcome (public marketing homepage)", () => {
     const google = within(badges).getByAltText("Get it on Google Play, coming soon");
     expect(apple).toHaveAttribute("height", "40");
     expect(google).toHaveAttribute("height", "40");
-    // No listing URLs yet: not links, and Google Play carries the pill.
-    expect(within(badges).queryAllByRole("link")).toHaveLength(0);
+    // iOS is live; Google Play remains unlinked and carries the pill.
+    expect(within(badges).getByAltText("Download on the App Store").closest("a")).toHaveAttribute(
+      "href",
+      "https://apps.apple.com/gb/app/mykhaya/id6819078653",
+    );
     expect(within(badges).getByText("Coming soon")).toHaveClass("mk-applink-pill");
     // Sits after the ticks within the hero copy.
     const ticks = screen.getByText("Set up in minutes").closest("ul")!;
@@ -197,6 +200,7 @@ describe("Welcome (public marketing homepage)", () => {
       "/legal/children",
       "/legal/cookies",
       "https://status.mykhaya.app/",
+      "https://apps.apple.com/gb/app/mykhaya/id6819078653",
     ]);
     for (const link of container.querySelectorAll("a")) {
       const href = link.getAttribute("href")!;

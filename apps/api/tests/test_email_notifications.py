@@ -112,6 +112,7 @@ def test_mandatory_email_types_are_registered() -> None:
     assert {
         "email_verification",
         "password_reset",
+        "password_setup",
         "household_invitation",
         "calendar_share_invitation",
         "platform_administrator_invitation",

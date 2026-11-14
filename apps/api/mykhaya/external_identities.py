@@ -188,3 +188,40 @@ async def unlink_external_identity(
     else:
         audit(db, request, "external_identity.unlinked", user_id, target_type="external_identity")
     return identity
+
+
+async def unlink_anonymised_external_identity(
+    db: AsyncSession,
+    request: Request,
+    *,
+    user_id: UUID,
+    provider: ExternalIdentityProvider,
+) -> ExternalIdentity | None:
+    """Remove one provider identity from a terminal anonymised account.
+
+    This is deliberately separate from ``unlink_external_identity``: an
+    anonymised account has no usable consumer sign-in by design, so the normal
+    last-method protection must remain unchanged for active and archived users.
+    The caller owns the surrounding transaction and administrative audit.
+    """
+    user = await db.scalar(select(User).where(User.id == user_id).with_for_update())
+    if user is None or user.anonymised_at is None:
+        return None
+    identity = await db.scalar(
+        select(ExternalIdentity)
+        .where(ExternalIdentity.user_id == user_id, ExternalIdentity.provider == provider)
+        .with_for_update()
+    )
+    if identity is None:
+        return None
+    await db.delete(identity)
+    audit(
+        db,
+        request,
+        "external_identity.anonymised_cleanup",
+        None,
+        target_type="user",
+        target_id=user_id,
+        metadata={"initiated_by": "platform_administrator", "provider": provider.value},
+    )
+    return identity

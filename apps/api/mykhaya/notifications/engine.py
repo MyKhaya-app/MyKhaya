@@ -63,6 +63,7 @@ PREFERENCE_GATES: dict[str, str] = {
 MANDATORY_EMAIL_TYPES = {
     "email_verification",
     "password_reset",
+    "password_setup",
     "household_invitation",
     "platform_administrator_invitation",
     # An external calendar-share invitation is exactly as action-required as

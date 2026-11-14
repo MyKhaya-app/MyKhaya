@@ -27,8 +27,11 @@ from mykhaya.db import SessionFactory
 from mykhaya.entitlements import get_home_subscription
 from mykhaya.main import app
 from mykhaya.models import (
+    ActionToken,
     AdministrativeAuditEvent,
     AuthIdentity,
+    ExternalIdentity,
+    ExternalIdentityProvider,
     Group,
     HomeCalendar,
     HomeSubscriptionEvent,
@@ -38,6 +41,7 @@ from mykhaya.models import (
     ManagedDemoHome,
     ManagedDemoType,
     Membership,
+    MfaEmailChallenge,
     NativePushDevice,
     PermissionProfile,
     PlatformRole,
@@ -48,8 +52,11 @@ from mykhaya.models import (
     RoutineScope,
     Session,
     SubscriptionPlan,
+    TokenPurpose,
     TrustedDevice,
     User,
+    UserMfaMethod,
+    UserMfaMethodRecord,
     UserPasskey,
 )
 
@@ -182,6 +189,11 @@ async def test_archived_user_can_anonymise_and_becomes_deleted_user() -> None:
         assert detail["active"] is False
         assert detail["display_name"] == "Deleted user"
         assert detail["email"] == f"deleted-{user_id}@removed.mykhaya.invalid"
+        authentication = (
+            await admin.get(f"/api/v1/platform/users/{user_id}/authentication")
+        ).json()
+        assert authentication["authentication_disabled"] is True
+        assert authentication["account_lifecycle"] == "anonymised"
 
         async with SessionFactory() as db:
             row = await db.get(User, uuid.UUID(user_id))
@@ -245,6 +257,32 @@ async def test_anonymise_removes_auth_and_device_data() -> None:
             auth_identity = await db.scalar(select(AuthIdentity).where(AuthIdentity.user_id == uid))
             assert auth_identity is not None
             db.add(
+                ExternalIdentity(
+                    user_id=uid,
+                    provider=ExternalIdentityProvider.google,
+                    provider_subject=f"google-{suffix}",
+                    provider_email=email,
+                    provider_email_verified=True,
+                )
+            )
+            db.add(UserMfaMethodRecord(user_id=uid, method=UserMfaMethod.totp, enabled=True))
+            db.add(
+                MfaEmailChallenge(
+                    user_id=uid,
+                    transaction_reference_hash=f"mfa-ref-{suffix}",
+                    code_hash=f"mfa-code-{suffix}",
+                    expires_at=datetime.now(UTC) + timedelta(minutes=5),
+                )
+            )
+            db.add(
+                ActionToken(
+                    user_id=uid,
+                    purpose=TokenPurpose.reset_password,
+                    token_hash=f"action-{suffix}",
+                    expires_at=datetime.now(UTC) + timedelta(minutes=30),
+                )
+            )
+            db.add(
                 UserPasskey(
                     user_id=uid,
                     credential_id=f"cred-{suffix}",
@@ -288,6 +326,18 @@ async def test_anonymise_removes_auth_and_device_data() -> None:
             assert (
                 await db.scalar(select(AuthIdentity).where(AuthIdentity.user_id == uid))
             ) is None
+            assert (
+                await db.scalar(select(ExternalIdentity).where(ExternalIdentity.user_id == uid))
+            ) is None
+            assert (
+                await db.scalar(
+                    select(UserMfaMethodRecord).where(UserMfaMethodRecord.user_id == uid)
+                )
+            ) is None
+            assert (
+                await db.scalar(select(MfaEmailChallenge).where(MfaEmailChallenge.user_id == uid))
+            ) is None
+            assert (await db.scalar(select(ActionToken).where(ActionToken.user_id == uid))) is None
             assert (await db.scalar(select(UserPasskey).where(UserPasskey.user_id == uid))) is None
             assert (
                 await db.scalar(select(PushSubscription).where(PushSubscription.user_id == uid))

@@ -101,30 +101,52 @@ class AuthContinuationResponse(BaseModel):
 
 class AppleRecoveryRequest(StrictModel):
     transaction_id: str = Field(min_length=20, max_length=256)
+    display_name: str | None = Field(default=None, min_length=1, max_length=100)
     legal_acceptances: list[SignupLegalAcceptanceItem] = Field(default_factory=list)
     platform: LegalPlatform = LegalPlatform.web
     beta: bool = False
     beta_invitation_token: str | None = Field(default=None, min_length=32, max_length=500)
+
+    @field_validator("display_name")
+    @classmethod
+    def clean_display_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = " ".join(value.strip().split())
+        if not value:
+            raise ValueError("display_name must not be blank")
+        return value
 
 
 class AppleRecoveryOptionsResponse(BaseModel):
     can_register: bool
     provider_email: str | None = None
-    display_name: str
+    display_name: str | None = None
 
 
 class GoogleRecoveryRequest(StrictModel):
     transaction_id: str = Field(min_length=20, max_length=256)
+    display_name: str | None = Field(default=None, min_length=1, max_length=100)
     legal_acceptances: list[SignupLegalAcceptanceItem] = Field(default_factory=list)
     platform: LegalPlatform = LegalPlatform.web
     beta: bool = False
     beta_invitation_token: str | None = Field(default=None, min_length=32, max_length=500)
 
+    @field_validator("display_name")
+    @classmethod
+    def clean_display_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = " ".join(value.strip().split())
+        if not value:
+            raise ValueError("display_name must not be blank")
+        return value
+
 
 class GoogleRecoveryOptionsResponse(BaseModel):
     can_register: bool
     provider_email: EmailStr | None = None
-    display_name: str
+    display_name: str | None = None
 
 
 class MfaStartRequest(StrictModel):
@@ -304,7 +326,24 @@ class MobileDeviceRenewRequest(StrictModel):
     device_token: str = Field(min_length=30, max_length=500)
 
 
-class NativeExternalStartRequest(StrictModel):
+class NativeBetaIntent(StrictModel):
+    """Founding Beta intent carried from /register?beta=1 into native provider
+    sign-in. The API keeps only a hash of the invitation token in the
+    short-lived sign-in record, and never returns or logs the token."""
+
+    beta: bool = False
+    beta_invitation_token: str | None = Field(default=None, min_length=32, max_length=500)
+
+    @model_validator(mode="after")
+    def beta_intent_is_consistent(self) -> "NativeBetaIntent":
+        if self.beta_invitation_token is not None and not self.beta:
+            raise ValueError("beta_invitation_token requires beta")
+        if self.beta and getattr(self, "intent", "login") != "login":
+            raise ValueError("beta is only valid for sign-in")
+        return self
+
+
+class NativeExternalStartRequest(NativeBetaIntent):
     provider: Literal["apple", "google"]
     intent: Literal["login", "link"] = "login"
     platform: Literal["ios", "android"]
@@ -318,7 +357,7 @@ class NativeExternalStartResponse(BaseModel):
     client_id: str | None = None
 
 
-class NativeExternalBrowserStartRequest(StrictModel):
+class NativeExternalBrowserStartRequest(NativeBetaIntent):
     provider: Literal["apple", "google"]
     intent: Literal["login", "link"] = "login"
     platform: Literal["ios", "android"]
@@ -342,7 +381,7 @@ class NativeExternalRecoveryResponse(BaseModel):
     transaction_id: str
     provider: Literal["apple", "google"]
     provider_email: str | None = None
-    display_name: str
+    display_name: str | None = None
     can_register: bool
 
 
@@ -364,6 +403,16 @@ class NativeExternalRegisterRequest(StrictModel):
     legal_acceptances: list[SignupLegalAcceptanceItem] = Field(default_factory=list)
     platform: Literal["ios", "android"]
     redemption_verifier: str = Field(min_length=32, max_length=256)
+
+    @field_validator("display_name")
+    @classmethod
+    def clean_display_name(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        value = " ".join(value.strip().split())
+        if not value:
+            raise ValueError("display_name must not be blank")
+        return value
 
 
 class GroupCreate(StrictModel):

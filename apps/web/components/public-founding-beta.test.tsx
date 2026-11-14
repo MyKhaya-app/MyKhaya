@@ -212,7 +212,7 @@ describe("Founding Beta page — registration closed with the waitlist open", ()
   });
 });
 
-describe("Founding Beta page — Get the beta app (PCC app links)", () => {
+describe("Founding Beta page — Get the app (PCC app links)", () => {
   const TESTFLIGHT = "https://testflight.apple.com/join/AbCdEf12";
   const APP_STORE = "https://apps.apple.com/gb/app/mykhaya/id1234567890";
   const PLAY_TESTING = "https://play.google.com/apps/testing/app.mykhaya";
@@ -222,27 +222,32 @@ describe("Founding Beta page — Get the beta app (PCC app links)", () => {
   async function block(ios: string | null, android: string | null) {
     signupState.mockResolvedValue(state({ ios_app_url: ios, android_app_url: android }));
     render(<PublicFoundingBeta />);
-    return within(await screen.findByRole("region", { name: "Get the beta app" }));
+    return within(await screen.findByRole("region", { name: "Get the app" }));
   }
 
   it("sits under the member/terms lines with its own label and copy", async () => {
     const region = await block(TESTFLIGHT, null);
     expect(region.getByText(/You can join and use MyKhaya from the app too/)).toBeInTheDocument();
     const member = screen.getByText(/Already a member\?/);
-    const apps = screen.getByRole("region", { name: "Get the beta app" });
+    const apps = screen.getByRole("region", { name: "Get the app" });
     expect(member.compareDocumentPosition(apps) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
-  it("TestFlight: Install on iPhone via TestFlight, with the TestFlight note", async () => {
+  it("converts a stale TestFlight setting to the live App Store badge", async () => {
     const region = await block(TESTFLIGHT, null);
-    expect(region.getByRole("link", { name: /Install on iPhone/ })).toHaveAttribute("href", TESTFLIGHT);
-    expect(region.getByText("You'll need Apple's free TestFlight app.")).toBeInTheDocument();
-    expect(region.queryByAltText("Download on the App Store")).not.toBeInTheDocument();
+    expect(region.getByAltText("Download on the App Store").closest("a")).toHaveAttribute(
+      "href",
+      "https://apps.apple.com/gb/app/mykhaya/id6819078653",
+    );
+    expect(region.queryByText(/TestFlight|Install on iPhone/)).not.toBeInTheDocument();
   });
 
   it("App Store: the official badge linking to the listing", async () => {
     const region = await block(APP_STORE, null);
-    expect(region.getByAltText("Download on the App Store").closest("a")).toHaveAttribute("href", APP_STORE);
+    expect(region.getByAltText("Download on the App Store").closest("a")).toHaveAttribute(
+      "href",
+      "https://apps.apple.com/gb/app/mykhaya/id6819078653",
+    );
     expect(region.queryByText(/TestFlight/)).not.toBeInTheDocument();
   });
 
@@ -275,7 +280,7 @@ describe("Founding Beta page — Get the beta app (PCC app links)", () => {
     render(<PublicFoundingBeta />);
     await waitFor(() => expect(signupState).toHaveBeenCalled());
     await screen.findByRole("button", { name: /Join the Beta/ });
-    expect(screen.queryByRole("region", { name: "Get the beta app" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Get the app" })).not.toBeInTheDocument();
   });
 
   it("hides the block inside the native app", async () => {
@@ -283,6 +288,6 @@ describe("Founding Beta page — Get the beta app (PCC app links)", () => {
     signupState.mockResolvedValue(state({ ios_app_url: TESTFLIGHT, android_app_url: PLAY_TESTING }));
     render(<PublicFoundingBeta />);
     await screen.findByRole("button", { name: /Join the Beta/ });
-    expect(screen.queryByRole("region", { name: "Get the beta app" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Get the app" })).not.toBeInTheDocument();
   });
 });

@@ -85,10 +85,12 @@ from mykhaya.entitlements import (
     require_within_limit,
     resolve_effective_plan,
     resolve_effective_state,
+    revoke_complimentary_access,
 )
 from mykhaya.external_identities import (
     ExternalIdentityNotFound,
     LastAuthenticationMethodError,
+    unlink_anonymised_external_identity,
     unlink_external_identity,
 )
 from mykhaya.founding_beta_schemas import SignupStateResponse
@@ -143,6 +145,7 @@ from mykhaya.models import (
     Meal,
     MealPlanEntry,
     Membership,
+    MfaEmailChallenge,
     MonitorComponent,
     NativePushDevice,
     NativePushDisabledSource,
@@ -2863,6 +2866,14 @@ def _lifecycle_state(is_active: bool, archived_at: datetime | None) -> str:
     return "active" if is_active else "disabled"
 
 
+def _beta_subscription_summary(
+    subscription: HomeSubscription | None,
+) -> tuple[str | None, str]:
+    if subscription is None:
+        return None, "free"
+    return subscription.complimentary_source, resolve_effective_plan(subscription).value
+
+
 def _user_presentation_lifecycle(user: User) -> str:
     """PCC display only (Slice 5B §20) — never used for filtering/
     notification-eligibility, which stay exactly Active/Disabled/Archived
@@ -3110,6 +3121,9 @@ async def user_detail(
         )
     ).all()
     consumer_policy = await resolve_consumer_mfa_policy(db, user_id, settings)
+    password_available = await db.scalar(
+        select(AuthIdentity.id).where(AuthIdentity.user_id == user_id)
+    )
     mfa_methods = (
         await db.execute(
             select(UserMfaMethodRecord.method, UserMfaMethodRecord.enabled).where(
@@ -3124,11 +3138,44 @@ async def user_detail(
                 BetaEnrollment.home_id,
                 BetaEnrollment.terms_version,
                 BetaEnrollment.joined_at,
+                BetaEnrollment.status,
+                BetaEnrollment.status_changed_at,
+                BetaEnrollment.status_reason,
+                BetaEnrollment.capacity_exempt,
             )
             .join(BetaEnrollment, BetaEnrollment.programme_id == BetaProgramme.id)
             .where(BetaEnrollment.joined_user_id == user_id)
         )
     ).all()
+    beta_home_ids = [row[1] for row in beta_participation]
+    beta_subscriptions = (
+        {
+            row.group_id: row
+            for row in await db.scalars(
+                select(HomeSubscription).where(HomeSubscription.group_id.in_(beta_home_ids))
+            )
+        }
+        if beta_home_ids
+        else {}
+    )
+    founding_beta = []
+    for row in beta_participation:
+        subscription = beta_subscriptions.get(row[1])
+        entitlement_source, effective_plan = _beta_subscription_summary(subscription)
+        founding_beta.append(
+            {
+                "programme": row[0],
+                "home_id": row[1],
+                "terms_version": row[2],
+                "joined_at": row[3],
+                "status": row[4].value,
+                "status_changed_at": row[5],
+                "status_reason": row[6],
+                "capacity_exempt": row[7],
+                "entitlement_source": entitlement_source,
+                "effective_plan": effective_plan,
+            }
+        )
     return {
         "id": user.id,
         "email": user.email,
@@ -3137,6 +3184,7 @@ async def user_detail(
         "active": user.is_active,
         "lifecycle": _user_presentation_lifecycle(user),
         "anonymised_at": user.anonymised_at,
+        "password_available": password_available is not None,
         "created_at": user.created_at,
         "last_login_at": user.last_login_at,
         "last_activity_at": user.last_activity_at,
@@ -3145,6 +3193,7 @@ async def user_detail(
             for membership, group in memberships
         ],
         "founding_beta_participant": bool(beta_participation),
+        "founding_beta": founding_beta,
         "sessions": [
             {
                 "id": row.id,
@@ -3185,6 +3234,9 @@ def _user_viewer_permissions(context: PlatformContext) -> dict[str, bool]:
     return {
         "change_mfa_policy": role in OPERATORS,
         "disconnect_sign_in_methods": role in OPERATORS,
+        "cleanup_anonymised_sign_in_methods": role
+        in (PlatformRole.owner, PlatformRole.administrator, PlatformRole.security),
+        "manage_founding_beta_places": role in OPERATORS,
         "revoke_sessions": role in SUPPORT,
     }
 
@@ -3210,6 +3262,7 @@ _USER_AUTH_EVENT_LABELS: dict[str, tuple[str, str]] = {
     "session.revoked": ("Signed out of a session", "info"),
     "trusted_device.others_revoked": ("Signed out of other devices", "info"),
     "password.reset": ("Password reset", "info"),
+    "password.setup": ("Password set up", "info"),
     "MFA_TOTP_ENROLLED": ("Authenticator app enrolled", "info"),
     "MFA_TOTP_REMOVED": ("Authenticator app removed", "info"),
     "MFA_TOTP_RESET": ("Authenticator app reset", "info"),
@@ -3218,6 +3271,11 @@ _USER_AUTH_EVENT_LABELS: dict[str, tuple[str, str]] = {
 _ADMIN_AUTH_EVENT_LABELS: dict[str, str] = {
     "user.sessions_revoked": "All sessions revoked by an administrator",
     "user.password_reset_sent": "Password-reset email sent by an administrator",
+    "user.password_setup_sent": "Password-setup email sent by an administrator",
+    "user.anonymised_auth_cleanup": "Terminal authentication cleanup completed by an administrator",
+    "user.anonymised_external_identity_cleanup": (
+        "Historical sign-in association removed by an administrator"
+    ),
     "user.suspended": "Suspended by an administrator",
     "user.reactivated": "Reactivated by an administrator",
     "user.external_identity_disconnected": "Sign-in provider disconnected by an administrator",
@@ -3237,7 +3295,7 @@ SIGN_IN_METHOD_DISCONNECTED = "account.sign_in_method_disconnected"
 @router.get("/users/{user_id}/authentication")
 async def user_authentication_summary(
     user_id: uuid.UUID,
-    _: PlatformContext = Depends(require_roles(*SUPPORT)),
+    _: PlatformContext = Depends(require_roles(*SUPPORT, PlatformRole.security)),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> dict[str, Any]:
@@ -3248,6 +3306,7 @@ async def user_authentication_summary(
     if user is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That user could not be found.")
     now = datetime.now(UTC)
+    terminal = user.anonymised_at is not None
     identities = {
         row.provider: row
         for row in await db.scalars(
@@ -3348,12 +3407,14 @@ async def user_authentication_summary(
     for row in admin_events:
         label = _ADMIN_AUTH_EVENT_LABELS[row.action]
         provider_value = (row.new_values or {}).get("provider")
-        if row.action == "user.external_identity_disconnected" and provider_value in {
-            item.value for item in _PROVIDER_NAMES
-        }:
-            label = (
-                f"{_PROVIDER_NAMES[ExternalIdentityProvider(provider_value)]} "
-                "disconnected by an administrator"
+        if row.action in {
+            "user.external_identity_disconnected",
+            "user.anonymised_external_identity_cleanup",
+        } and provider_value in {item.value for item in _PROVIDER_NAMES}:
+            label = f"{_PROVIDER_NAMES[ExternalIdentityProvider(provider_value)]} " + (
+                "historical association removed by an administrator"
+                if row.action == "user.anonymised_external_identity_cleanup"
+                else "disconnected by an administrator"
             )
         events.append(
             {
@@ -3366,6 +3427,8 @@ async def user_authentication_summary(
     events.sort(key=lambda item: item["occurred_at"], reverse=True)
 
     return {
+        "account_lifecycle": _user_presentation_lifecycle(user),
+        "authentication_disabled": terminal,
         "providers": [
             {
                 "provider": provider.value,
@@ -3396,6 +3459,63 @@ async def user_authentication_summary(
         "native_apps": native_apps,
         "web_push_subscriptions": web_push_active or 0,
         "recent_events": events[:RECENT_AUTH_EVENT_LIMIT],
+    }
+
+
+@router.post("/users/{user_id}/anonymised-auth-cleanup/{provider}")
+async def cleanup_anonymised_user_provider(
+    user_id: uuid.UUID,
+    provider: ExternalIdentityProvider,
+    body: SensitiveActionRequest,
+    request: Request,
+    context: PlatformContext = Depends(
+        require_roles(PlatformRole.owner, PlatformRole.administrator, PlatformRole.security)
+    ),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    """Remove one Apple/Google link from an already-anonymised account.
+
+    This terminal-account exception is intentionally not routed through the
+    normal provider unlink endpoint, whose last-usable-sign-in protection must
+    continue to apply to active and archived accounts.
+    """
+    require_recent_auth(context, settings)
+    removed = await unlink_anonymised_external_identity(
+        db, request, user_id=user_id, provider=provider
+    )
+    provider_name = _PROVIDER_NAMES[provider]
+    if removed is None:
+        user = await db.get(User, user_id)
+        if user is None:
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "That user could not be found.")
+        if user.anonymised_at is None:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "Historical provider cleanup is only available for anonymised users.",
+            )
+        return {
+            "message": (
+                f"{provider_name} sign-in is not connected to this anonymised account. "
+                "Nothing was changed."
+            ),
+            "changed": False,
+        }
+    platform_audit(
+        db,
+        request,
+        context,
+        "user.anonymised_external_identity_cleanup",
+        "user",
+        user_id,
+        reason=body.reason,
+        previous={"provider": provider.value, "connected": True},
+        new={"provider": provider.value, "connected": False},
+    )
+    await db.commit()
+    return {
+        "message": f"{provider_name} historical sign-in association was removed.",
+        "changed": True,
     }
 
 
@@ -3745,6 +3865,29 @@ async def _user_anonymise_blockers(db: AsyncSession, user: User) -> list[str]:
     return blockers
 
 
+async def _cleanup_terminal_user_auth(db: AsyncSession, user_id: uuid.UUID, now: datetime) -> None:
+    """Idempotently remove or revoke every terminal user's auth artefact."""
+    await db.execute(delete(AuthIdentity).where(AuthIdentity.user_id == user_id))
+    await db.execute(delete(ExternalIdentity).where(ExternalIdentity.user_id == user_id))
+    await db.execute(delete(UserMfaMethodRecord).where(UserMfaMethodRecord.user_id == user_id))
+    await db.execute(delete(MfaEmailChallenge).where(MfaEmailChallenge.user_id == user_id))
+    await db.execute(delete(UserPasskey).where(UserPasskey.user_id == user_id))
+    await db.execute(delete(PushSubscription).where(PushSubscription.user_id == user_id))
+    await db.execute(delete(NativePushDevice).where(NativePushDevice.user_id == user_id))
+    await db.execute(delete(ProductUsageEvent).where(ProductUsageEvent.user_id == user_id))
+    await db.execute(delete(ActionToken).where(ActionToken.user_id == user_id))
+    await db.execute(
+        update(Session)
+        .where(Session.user_id == user_id, Session.revoked_at.is_(None))
+        .values(revoked_at=now)
+    )
+    await db.execute(
+        update(TrustedDevice)
+        .where(TrustedDevice.user_id == user_id, TrustedDevice.revoked_at.is_(None))
+        .values(revoked_at=now)
+    )
+
+
 async def _apply_user_anonymise(db: AsyncSession, user: User) -> tuple[str, int, str | None]:
     """Mutates `user` and its dependent rows in place. Returns
     (previous_lifecycle, memberships_removed_count, previous_avatar_key —
@@ -3768,22 +3911,7 @@ async def _apply_user_anonymise(db: AsyncSession, user: User) -> tuple[str, int,
     # token), revoked using the existing suspend/archive mechanism where
     # one already exists (Session/TrustedDevice) rather than inventing a
     # second one.
-    await db.execute(delete(AuthIdentity).where(AuthIdentity.user_id == user.id))
-    await db.execute(delete(UserPasskey).where(UserPasskey.user_id == user.id))
-    await db.execute(delete(PushSubscription).where(PushSubscription.user_id == user.id))
-    await db.execute(delete(NativePushDevice).where(NativePushDevice.user_id == user.id))
-    await db.execute(delete(ProductUsageEvent).where(ProductUsageEvent.user_id == user.id))
-    await db.execute(delete(ActionToken).where(ActionToken.user_id == user.id))
-    await db.execute(
-        update(Session)
-        .where(Session.user_id == user.id, Session.revoked_at.is_(None))
-        .values(revoked_at=now)
-    )
-    await db.execute(
-        update(TrustedDevice)
-        .where(TrustedDevice.user_id == user.id, TrustedDevice.revoked_at.is_(None))
-        .values(revoked_at=now)
-    )
+    await _cleanup_terminal_user_auth(db, user.id, now)
 
     # PII — overwritten, never fabricated; the tombstone email format
     # mirrors the existing mykhaya.routers.children.anonymise_child
@@ -3890,6 +4018,42 @@ async def anonymise_user(
             await log.awarning("avatar_cleanup_failed", user_id=str(user_id))
 
     return {"message": "User anonymised."}
+
+
+@router.post("/users/{user_id}/anonymised-auth-cleanup")
+async def cleanup_anonymised_user_auth(
+    user_id: uuid.UUID,
+    body: SensitiveActionRequest,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*OPERATORS)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, str]:
+    """Repair auth artefacts left by anonymisations before the full cleanup."""
+    require_recent_auth(context, settings)
+    user = await db.get(User, user_id, with_for_update=True)
+    if user is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That user could not be found.")
+    if user.anonymised_at is None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "Authentication cleanup is only available for anonymised users.",
+        )
+    now = datetime.now(UTC)
+    await _cleanup_terminal_user_auth(db, user.id, now)
+    platform_audit(
+        db,
+        request,
+        context,
+        "user.anonymised_auth_cleanup",
+        "user",
+        user.id,
+        reason=body.reason,
+        previous={"lifecycle": "anonymised"},
+        new={"authentication_cleanup": "completed"},
+    )
+    await db.commit()
+    return {"message": "Anonymised-user authentication cleanup completed."}
 
 
 @router.post("/users/bulk-lifecycle", response_model=BulkLifecycleResponse)
@@ -4240,9 +4404,36 @@ async def _enqueue_user_mail(
     settings: Settings,
 ) -> dict[str, str]:
     require_recent_auth(context, settings)
+    if purpose in {TokenPurpose.reset_password, TokenPurpose.setup_password}:
+        await enforce_rate_limit(request, settings, f"platform-password-recovery:{user_id}", 3, 900)
     user = await db.get(User, user_id)
     if user is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That user could not be found.")
+    if purpose in {TokenPurpose.reset_password, TokenPurpose.setup_password}:
+        if not user.is_active or user.archived_at is not None or user.anonymised_at is not None:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "Password recovery is unavailable for this account.",
+            )
+        if user.email_verified_at is None:
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "Password recovery requires a verified email address.",
+            )
+        identity = await db.scalar(select(AuthIdentity).where(AuthIdentity.user_id == user.id))
+        if (
+            identity is not None
+            and identity.locked_until
+            and identity.locked_until > datetime.now(UTC)
+        ):
+            raise HTTPException(
+                status.HTTP_409_CONFLICT,
+                "Password recovery is unavailable while this account is security-locked.",
+            )
+        if purpose == TokenPurpose.reset_password and identity is None:
+            raise HTTPException(status.HTTP_409_CONFLICT, "This account needs password setup.")
+        if purpose == TokenPurpose.setup_password and identity is not None:
+            raise HTTPException(status.HTTP_409_CONFLICT, "This account already has a password.")
     if purpose == TokenPurpose.verify_email and user.email_verified_at is not None:
         raise HTTPException(status.HTTP_409_CONFLICT, "That email address is already verified.")
     await db.execute(
@@ -4259,6 +4450,9 @@ async def _enqueue_user_mail(
     if purpose == TokenPurpose.verify_email:
         notification_type = "email_verification"
         link = f"{settings.public_web_url}/verify-email?token={raw}"
+    elif purpose == TokenPurpose.setup_password:
+        notification_type = "password_setup"
+        link = f"{settings.public_web_url}/setup-password?token={raw}"
     else:
         notification_type = "password_reset"
         link = f"{settings.public_web_url}/reset-password?token={raw}"
@@ -4277,7 +4471,13 @@ async def _enqueue_user_mail(
     )
     platform_audit(db, request, context, action, "user", user.id, reason=body.reason)
     await db.commit()
-    return {"message": "The email was queued safely."}
+    return {
+        "message": (
+            "The password setup email was queued safely."
+            if purpose == TokenPurpose.setup_password
+            else "The password reset email was queued safely."
+        )
+    }
 
 
 @router.post("/users/{user_id}/resend-verification")
@@ -4306,14 +4506,27 @@ async def send_password_reset(
     user_id: uuid.UUID,
     body: SensitiveActionRequest,
     request: Request,
-    context: PlatformContext = Depends(require_roles(*SUPPORT)),
+    context: PlatformContext = Depends(
+        require_roles(PlatformRole.owner, PlatformRole.administrator, PlatformRole.security)
+    ),
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> dict[str, str]:
+    user = await db.get(User, user_id)
+    purpose = TokenPurpose.setup_password
+    if user is not None:
+        identity = await db.scalar(select(AuthIdentity).where(AuthIdentity.user_id == user.id))
+        purpose = (
+            TokenPurpose.reset_password if identity is not None else TokenPurpose.setup_password
+        )
     return await _enqueue_user_mail(
         user_id,
-        TokenPurpose.reset_password,
-        "user.password_reset_sent",
+        purpose,
+        (
+            "user.password_setup_sent"
+            if purpose == TokenPurpose.setup_password
+            else "user.password_reset_sent"
+        ),
         body,
         request,
         context,
@@ -4728,29 +4941,11 @@ async def revoke_complimentary(
         raise HTTPException(
             status.HTTP_409_CONFLICT, "This Home does not have complimentary access."
         )
-    from_plan, from_provider, from_status = (
-        subscription.plan,
-        subscription.provider,
-        subscription.status,
-    )
     # This row represents complimentary-only access. Paid Stripe Homes are
     # rejected above and therefore retain their commercial state unchanged.
-    subscription.plan = SubscriptionPlan.free
-    subscription.provider = SubscriptionProvider.free
-    subscription.status = SubscriptionStatus.active
-    subscription.complimentary_reason = None
-    subscription.complimentary_note = None
-    subscription.complimentary_expires_at = None
-    await record_subscription_event(
+    await revoke_complimentary_access(
         db,
-        group_id,
-        event_type="downgraded",
-        from_plan=from_plan,
-        to_plan=subscription.plan,
-        from_provider=from_provider,
-        to_provider=subscription.provider,
-        from_status=from_status,
-        to_status=subscription.status,
+        subscription,
         actor_administrator_id=context.administrator.id,
         reason=body.reason,
     )

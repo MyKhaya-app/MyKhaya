@@ -129,7 +129,7 @@ export function PublicFoundingBeta() {
   );
 }
 
-/** "Get the beta app": the PCC iPhone/Android app links. Hidden when neither
+/** "Get the app": the PCC iPhone/Android app links. Hidden when neither
  *  link is set, and inside the native app. A new account can be created in
  *  the app while sign-ups are Beta-only (Create an account → Continue to
  *  Founding Beta → Join the Beta), so this is offered as an alternative way
@@ -140,10 +140,10 @@ function BetaAppLinks({ ios, android }: { ios: string | null | undefined; androi
   return (
     <section className="mk-beta-apps" aria-labelledby="beta-apps-heading">
       <p className="eyebrow mk-beta-apps-eyebrow" id="beta-apps-heading">
-        Get the beta app
+        Get the app
       </p>
       <p className="mk-beta-apps-copy">Prefer your phone? You can join and use MyKhaya from the app too.</p>
-      <AppLinks ios={ios} android={android} surface="beta" label="Get the beta app" />
+      <AppLinks ios={ios} android={android} surface="beta" label="Get the app" />
     </section>
   );
 }

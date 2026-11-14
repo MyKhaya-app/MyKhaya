@@ -44,6 +44,10 @@ class GoogleFlowState:
     native_environment: str | None = None
     native_transaction_id: str | None = None
     native_redemption_verifier_hash: str | None = None
+    # Founding Beta intent from a native start request; only the invitation
+    # token's SHA-256 is kept, never the token.
+    native_beta: bool = False
+    native_beta_invitation_hash: str | None = None
 
 
 @dataclass(frozen=True)
@@ -52,7 +56,7 @@ class GooglePendingIdentity:
     subject: str
     provider_email: str
     email_verified: bool
-    display_name: str
+    display_name: str | None
     can_register: bool
     return_path: str | None
 
@@ -148,6 +152,10 @@ async def consume_flow_state(settings: Settings, state: str) -> GoogleFlowState:
             else None,
             native_redemption_verifier_hash=str(data["native_redemption_verifier_hash"])
             if data.get("native_redemption_verifier_hash")
+            else None,
+            native_beta=data.get("native_beta") is True,
+            native_beta_invitation_hash=str(data["native_beta_invitation_hash"])
+            if data.get("native_beta") is True and data.get("native_beta_invitation_hash")
             else None,
         )
     except (KeyError, TypeError, ValueError, json.JSONDecodeError) as exc:
@@ -264,7 +272,7 @@ async def load_pending_identity(
             subject=str(data["subject"]),
             provider_email=str(data["provider_email"]),
             email_verified=bool(data.get("email_verified", False)),
-            display_name=str(data.get("display_name") or "Google user"),
+            display_name=str(data["display_name"]) if data.get("display_name") else None,
             can_register=bool(data.get("can_register", False)),
             return_path=str(data["return_path"]) if data.get("return_path") else None,
         )
@@ -291,7 +299,7 @@ async def consume_pending_identity(
             subject=str(data["subject"]),
             provider_email=str(data["provider_email"]),
             email_verified=bool(data.get("email_verified", False)),
-            display_name=str(data.get("display_name") or "Google user"),
+            display_name=str(data["display_name"]) if data.get("display_name") else None,
             can_register=bool(data.get("can_register", False)),
             return_path=str(data["return_path"]) if data.get("return_path") else None,
         )

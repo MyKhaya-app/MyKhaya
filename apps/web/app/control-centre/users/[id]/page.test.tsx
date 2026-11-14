@@ -25,6 +25,7 @@ const verifiedUser = {
   email: "jane@example.com",
   display_name: "Jane Smith",
   verified: true,
+  password_available: true,
   active: true,
   lifecycle: "active" as const,
   created_at: "2026-01-01T00:00:00Z",
@@ -559,6 +560,43 @@ describe("User detail — Authentication tab", () => {
     expect(document.querySelector(".is-tab-authentication")).toBeInTheDocument();
   });
 
+  it("offers terminal provider cleanup only for an anonymised account", async () => {
+    const anonymisedOperator = {
+      ...anonymisedUser,
+      viewer_permissions: {
+        change_mfa_policy: true,
+        disconnect_sign_in_methods: true,
+        cleanup_anonymised_sign_in_methods: true,
+        revoke_sessions: true,
+      },
+    };
+    const anonymisedSummary = {
+      ...summary,
+      account_lifecycle: "anonymised" as const,
+      authentication_disabled: true,
+      providers: [
+        summary.providers[0],
+        { ...summary.providers[1], connected: true, connected_at: "2026-10-02T09:00:00Z" },
+      ],
+    };
+    serve(anonymisedOperator, anonymisedSummary);
+    post.mockResolvedValue({ message: "Apple historical sign-in association was removed.", changed: true });
+    render(<DetailPage />);
+    const card = (await screen.findByRole("heading", { name: "Connected Sign-in Methods" })).closest("section")!;
+    expect(within(card).getAllByRole("button", { name: /Disconnect/ })).toHaveLength(2);
+    await userEvent.click(within(card).getByRole("button", { name: "Disconnect Apple" }));
+    const dialog = await findDialog(/Remove historical Apple association/i);
+    expect(within(dialog).getByText(/historical Apple sign-in association/)).toBeInTheDocument();
+    await userEvent.type(within(dialog).getByLabelText(/reason for this administrative action/i), "Release stale DEV identity");
+    await userEvent.click(within(dialog).getByRole("button", { name: "Disconnect" }));
+    await waitFor(() =>
+      expect(post).toHaveBeenCalledWith("/users/user-1/anonymised-auth-cleanup/apple", {
+        reason: "Release stale DEV identity",
+        confirmed: true,
+      }),
+    );
+  });
+
   it("hides administrative controls a Support operator cannot use", async () => {
     serve(supportViewer);
     render(<DetailPage />);
@@ -630,5 +668,76 @@ describe("User detail — Legal & Privacy", () => {
     expect(within(card).getByText("Needs to accept version 1.1")).toBeInTheDocument();
     expect(within(card).getByText("Current")).toBeInTheDocument();
     expect(within(card).getAllByText("Action required")).toHaveLength(2);
+  });
+
+  it("distinguishes anonymised historical acceptance from current account status", async () => {
+    get.mockImplementation((path: string) => {
+      if (path === "/compliance/acceptance/user-1") {
+        return Promise.resolve({
+          account_type: "adult",
+          history: [],
+          current_status: [{ display_name: "Terms & Conditions", action_verb: "accept", current_version: "1.4", satisfied: true, last_version: "1.4" }],
+        });
+      }
+      return Promise.resolve(anonymisedUser);
+    });
+    render(<DetailPage />);
+    const card = (await screen.findByRole("heading", { name: /Legal & Privacy/ })).closest("section")!;
+    expect(within(card).getByText("Historical acceptance records are preserved. This account cannot sign in or accept new documents.")).toBeInTheDocument();
+    expect(within(card).queryByText("Action required")).not.toBeInTheDocument();
+    expect(screen.getByText("Historical email · sign-in unavailable")).toBeInTheDocument();
+  });
+});
+
+describe("User detail — Founding Beta place", () => {
+  it("shows capacity and entitlement provenance while keeping the release action gated", async () => {
+    const betaUser = {
+      ...anonymisedUser,
+      founding_beta_participant: true,
+      founding_beta: [{
+        programme: "Founding Beta",
+        home_id: "home-1",
+        status: "active" as const,
+        joined_at: "2026-01-05T00:00:00Z",
+        status_changed_at: null,
+        status_reason: null,
+        capacity_exempt: false,
+        entitlement_source: "founding_beta_lifetime",
+        effective_plan: "free",
+      }],
+      viewer_permissions: { manage_founding_beta_places: true },
+    };
+    get.mockResolvedValue(betaUser);
+    render(<DetailPage />);
+    const card = (await screen.findByRole("heading", { name: "Founding Beta place" })).closest("section")!;
+    expect(within(card).getByText("This place counts toward Founding Beta capacity.")).toBeInTheDocument();
+    expect(within(card).getByText("Occupied")).toBeInTheDocument();
+    expect(within(card).getByText("Founding Beta lifetime")).toBeInTheDocument();
+    expect(within(card).getByText("Free")).toBeInTheDocument();
+    expect(within(card).getByRole("button", { name: "Release Founding Beta place" })).toBeInTheDocument();
+  });
+
+  it("does not offer a lifecycle action for a historical released place", async () => {
+    const betaUser = {
+      ...anonymisedUser,
+      founding_beta_participant: true,
+      founding_beta: [{
+        programme: "Founding Beta",
+        home_id: "home-1",
+        status: "released" as const,
+        joined_at: "2026-01-05T00:00:00Z",
+        status_changed_at: "2026-02-01T00:00:00Z",
+        status_reason: "Removed on request",
+        capacity_exempt: false,
+        entitlement_source: "founding_beta_lifetime",
+        effective_plan: "free",
+      }],
+      viewer_permissions: { manage_founding_beta_places: true },
+    };
+    get.mockResolvedValue(betaUser);
+    render(<DetailPage />);
+    const card = (await screen.findByRole("heading", { name: "Founding Beta place" })).closest("section")!;
+    expect(within(card).getByText("Released")).toBeInTheDocument();
+    expect(within(card).queryByRole("button", { name: /Founding Beta place|Withdraw from Founding Beta/ })).not.toBeInTheDocument();
   });
 });

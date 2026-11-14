@@ -73,6 +73,7 @@ function isPublicPath(path: string) {
     "/register",
     "/forgot-password",
     "/reset-password",
+    "/setup-password",
     "/verify-email",
     "/mfa",
     "/legal",
@@ -254,7 +255,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       || (runtimeNative === false && path === "/")
     ) {
       setInitialSessionLoading(false);
-      if (status !== "ready") setStatus("signed_out");
+      // Decide from the latest status, not the one this effect captured: a
+      // sign-in that completes on a public route (setAuthenticatedUser on
+      // /mfa) re-runs this effect with the stale "signed_out", and on a slow
+      // device that stale write could otherwise land after "ready".
+      setStatus((current) => (current === "ready" ? current : "signed_out"));
       return;
     }
     // This guard is intentionally independent of pathname. Authenticated

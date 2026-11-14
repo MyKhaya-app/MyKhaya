@@ -5,7 +5,7 @@ import { androidLinkKind, iosLinkKind } from "./app-link-kind";
 const native = vi.hoisted(() => ({ value: false }));
 vi.mock("@/components/native-runtime", () => ({ isNativeShell: () => native.value }));
 
-const { AppLinks, hasAnyAppLink } = await import("./app-links");
+const { AppLinks, hasAnyAppLink, LIVE_IOS_APP_STORE_URL } = await import("./app-links");
 
 export const LINKS = {
   testflight: "https://testflight.apple.com/join/AbCdEf12",
@@ -47,21 +47,18 @@ describe("link kinds", () => {
 const group = () => screen.getByRole("group");
 
 describe("AppLinks on the Founding Beta page", () => {
-  it("TestFlight: custom Install on iPhone button and the TestFlight note, never Apple's badge", () => {
+  it("converts a stale TestFlight setting to the live App Store badge", () => {
     render(<AppLinks ios={LINKS.testflight} android="" surface="beta" />);
-    const button = within(group()).getByRole("link", { name: /Install on iPhone\s*via TestFlight/ });
-    expect(button).toHaveAttribute("href", LINKS.testflight);
-    expect(button).toHaveAttribute("target", "_blank");
-    expect(screen.getByText("You'll need Apple's free TestFlight app.")).toBeInTheDocument();
-    expect(screen.queryByAltText("Download on the App Store")).not.toBeInTheDocument();
+    expect(screen.getByAltText("Download on the App Store").closest("a")).toHaveAttribute("href", LIVE_IOS_APP_STORE_URL);
+    expect(screen.queryByText(/TestFlight|Install on iPhone/)).not.toBeInTheDocument();
   });
 
-  it("App Store: Apple's official badge linking to the listing, no TestFlight note", () => {
+  it("uses the exact live App Store URL for an App Store setting", () => {
     render(<AppLinks ios={LINKS.appStore} android="" surface="beta" />);
     const badge = screen.getByAltText("Download on the App Store");
     expect(badge).toHaveAttribute("height", "40");
     expect(badge).toHaveAttribute("src", "/images/marketing/app-store-badge.png");
-    expect(badge.closest("a")).toHaveAttribute("href", LINKS.appStore);
+    expect(badge.closest("a")).toHaveAttribute("href", LIVE_IOS_APP_STORE_URL);
     expect(screen.queryByText(/TestFlight/)).not.toBeInTheDocument();
   });
 
@@ -99,18 +96,14 @@ describe("AppLinks on the Founding Beta page", () => {
 });
 
 describe("AppLinks on the homepage", () => {
-  it("links the App Store badge only for an App Store listing", () => {
-    render(<AppLinks ios={LINKS.appStore} android="" surface="homepage" />);
-    expect(screen.getByAltText("Download on the App Store").closest("a")).toHaveAttribute("href", LINKS.appStore);
+  it("always links the App Store badge to the live listing", () => {
+    render(<AppLinks ios={LINKS.testflight} android="" surface="homepage" />);
+    expect(screen.getByAltText("Download on the App Store").closest("a")).toHaveAttribute("href", LIVE_IOS_APP_STORE_URL);
   });
 
-  it.each([
-    ["TestFlight", LINKS.testflight],
-    ["empty", ""],
-  ])("keeps the App Store badge unlinked for a %s iPhone link", (_label, ios) => {
-    render(<AppLinks ios={ios} android="" surface="homepage" />);
-    expect(screen.getByAltText("Download on the App Store").closest("a")).toBeNull();
-    expect(screen.queryByText(/Install on iPhone/)).not.toBeInTheDocument();
+  it("links the App Store badge even before signup settings load", () => {
+    render(<AppLinks ios="" android="" surface="homepage" />);
+    expect(screen.getByAltText("Download on the App Store").closest("a")).toHaveAttribute("href", LIVE_IOS_APP_STORE_URL);
   });
 
   it("links the Google Play badge, without the pill, only for a Play listing", () => {

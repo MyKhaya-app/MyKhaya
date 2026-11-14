@@ -42,6 +42,7 @@ type UserDetail = {
   verified: boolean;
   active: boolean;
   lifecycle: Lifecycle;
+  password_available?: boolean;
   anonymised_at?: string | null;
   created_at: string;
   last_login_at: string | null;
@@ -51,11 +52,24 @@ type UserDetail = {
   notes: { id: string; body: string; created_at: string }[];
   authentication_mfa: UserMfaState;
   founding_beta_participant?: boolean;
+  founding_beta?: Array<{
+    programme: string;
+    home_id: string;
+    status: "active" | "withdrawn" | "released";
+    joined_at: string;
+    status_changed_at: string | null;
+    status_reason: string | null;
+    capacity_exempt: boolean;
+    entitlement_source: string | null;
+    effective_plan: string;
+  }>;
   // Server-derived from the administrator's role. Hides controls only; each
   // route still enforces its own role.
   viewer_permissions?: {
     change_mfa_policy: boolean;
     disconnect_sign_in_methods: boolean;
+    cleanup_anonymised_sign_in_methods: boolean;
+    manage_founding_beta_places: boolean;
     revoke_sessions: boolean;
   };
 };
@@ -107,6 +121,21 @@ function methodLabel(method: string) {
   return method.replaceAll("_", " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
 }
 
+function foundingBetaStatusLabel(status: "active" | "withdrawn" | "released") {
+  return status === "active" ? "Active" : status === "withdrawn" ? "Withdrawn" : "Released";
+}
+
+function foundingBetaEntitlementSourceLabel(source: string | null) {
+  return source === "founding_beta_lifetime" ? "Founding Beta lifetime" : source ? methodLabel(source) : "None recorded";
+}
+
+function foundingBetaPlaceExplanation(place: NonNullable<UserDetail["founding_beta"]>[number]) {
+  if (place.status === "active" && !place.capacity_exempt) return "This place counts toward Founding Beta capacity.";
+  if (place.status === "active") return "This active place is exempt from Founding Beta capacity.";
+  if (place.status === "released") return "This historical place no longer counts toward capacity; its former email association was removed.";
+  return "This historical place no longer counts toward capacity.";
+}
+
 export default function PlatformUserDetail() {
   const { id } = useParams<{ id: string }>();
   const pathname = usePathname();
@@ -135,7 +164,8 @@ export default function PlatformUserDetail() {
   const [anonymiseBlockers, setAnonymiseBlockers] = useState<string[] | null>(null);
   const [authSummary, setAuthSummary] = useState<UserAuthenticationSummary | null>(null);
   const [authError, setAuthError] = useState("");
-  const [disconnectTarget, setDisconnectTarget] = useState<{ provider: SignInProvider; name: string } | null>(null);
+  const [disconnectTarget, setDisconnectTarget] = useState<{ provider: SignInProvider; name: string; anonymised: boolean } | null>(null);
+  const [betaAction, setBetaAction] = useState<"release" | "withdraw" | null>(null);
   const { guarded, modal } = useReauthGuard();
 
   // Loaded only on the Authentication tab, so other tabs pay nothing for it.
@@ -190,6 +220,25 @@ export default function PlatformUserDetail() {
     } catch (cause) {
       if (cause instanceof ApiError && cause.status === 403) throw cause;
       setError(safeError(cause, `Unable to complete this action.`));
+    } finally {
+      setBusy("");
+    }
+  });
+
+  const runBetaAction = guarded(async (action: "release" | "withdraw", formData: FormData) => {
+    setBetaAction(null);
+    setBusy(`beta-${action}`);
+    setError("");
+    try {
+      const result = await platformApi.post<{ message: string }>(`/beta/users/${encodeURIComponent(id)}/${action}`, {
+        reason: formData.get("audit_reason"),
+        confirmed: true,
+      });
+      setMessage(result.message);
+      await load();
+    } catch (cause) {
+      if (cause instanceof ApiError && cause.status === 403) throw cause;
+      setError(safeError(cause, "Unable to update the Founding Beta place."));
     } finally {
       setBusy("");
     }
@@ -263,6 +312,25 @@ export default function PlatformUserDetail() {
     } catch (cause) {
       if (cause instanceof ApiError && cause.status === 403) throw cause;
       setError(safeError(cause, "Unable to disconnect this sign-in method."));
+    } finally {
+      setBusy("");
+      await loadAuthSummary();
+    }
+  });
+
+  const runAnonymisedCleanup = guarded(async (provider: SignInProvider, formData: FormData) => {
+    setDisconnectTarget(null);
+    setBusy("disconnect");
+    setError("");
+    try {
+      const result = await platformApi.post<{ message: string }>(
+        `/users/${encodeURIComponent(id)}/anonymised-auth-cleanup/${provider}`,
+        { reason: formData.get("audit_reason"), confirmed: true },
+      );
+      setMessage(result.message);
+    } catch (cause) {
+      if (cause instanceof ApiError && cause.status === 403) throw cause;
+      setError(safeError(cause, "Unable to remove this historical sign-in association."));
     } finally {
       setBusy("");
       await loadAuthSummary();
@@ -375,7 +443,7 @@ export default function PlatformUserDetail() {
             : []),
           {
             key: "send-password-reset",
-            label: "Send password-reset email",
+            label: data.password_available ? "Send password-reset email" : "Send password setup email",
             icon: KeyRound,
             variant: "secondary",
             disabled: Boolean(busy),
@@ -407,9 +475,11 @@ export default function PlatformUserDetail() {
       confirmLabel: "Resend verification",
     },
     "send-password-reset": {
-      title: "Send password-reset email",
-      description: "Send a password-reset email to this user?",
-      confirmLabel: "Send reset email",
+      title: data?.password_available ? "Send password-reset email" : "Send password setup email",
+      description: data?.password_available
+        ? "Send a secure password reset email to the user's verified email address?"
+        : "Send a secure password setup email so this user can create a MyKhaya password?",
+      confirmLabel: data?.password_available ? "Send reset email" : "Send setup email",
     },
     archive: {
       title: "Archive user",
@@ -435,19 +505,19 @@ export default function PlatformUserDetail() {
       <>
         <div className="cc-user-profile-breadcrumb"><a href="/users"><span aria-hidden="true">←</span> Users</a><ChevronRight aria-hidden="true" size={15} /><span>{data.display_name}</span></div>
         <header className="cc-user-profile-header">
-          <div className="cc-user-profile-identity"><div className="cc-user-profile-icon" aria-hidden="true"><UserRound size={27} /></div><div><div className="cc-user-profile-name"><h1>{data.display_name}</h1><CcBadge tone={statusTone}>{statusLabel}</CcBadge></div><p>{data.email}</p><div className="cc-user-profile-id"><span>User ID: {data.id}</span><button type="button" aria-label="Copy user ID" onClick={() => void navigator.clipboard?.writeText(data.id)}><Copy size={16} /></button></div></div></div>
+          <div className="cc-user-profile-identity"><div className="cc-user-profile-icon" aria-hidden="true"><UserRound size={27} /></div><div className="cc-user-profile-identity-copy"><div className="cc-user-profile-name"><h1>{data.display_name}</h1><CcBadge tone={statusTone}>{statusLabel}</CcBadge></div><p className="cc-user-profile-email"><span>{data.email}</span>{data.lifecycle === "anonymised" && <small>Historical email · sign-in unavailable</small>}</p><div className="cc-user-profile-id"><span>User ID: {data.id}</span><button type="button" aria-label="Copy user ID" onClick={() => void navigator.clipboard?.writeText(data.id)}><Copy size={16} /></button></div></div></div>
           <div className="cc-user-profile-header-side"><div className="cc-user-profile-actions"><a className="cc-user-profile-secondary" href="/users">←&nbsp; Back to Users</a></div><dl className="cc-user-profile-meta"><div><dt>Created</dt><dd>{detailDate(data.created_at)}</dd></div><div><dt>Last login</dt><dd>{detailDate(data.last_login_at)}</dd></div><div><dt>Last active</dt><dd>{detailDate(data.last_activity_at)}</dd></div></dl></div>
         </header>
         {message && <CcNotice tone="success">{message}</CcNotice>}{error && <CcNotice tone="error">{error}</CcNotice>}
         <nav className="cc-user-profile-tabs-route-top" aria-label="User detail sections"><a className={activeTab === "overview" ? "is-active" : undefined} href={`/users/${id}`}><Clock3 size={17} /> Overview</a><a className={activeTab === "account" ? "is-active" : undefined} href={`/users/${id}/account`}><UserRoundCog size={17} /> Account</a><a className={activeTab === "authentication" ? "is-active" : undefined} href={`/users/${id}/authentication`}><Shield size={17} /> Authentication</a><a className={activeTab === "homes" ? "is-active" : undefined} href={`/users/${id}/homes`}><Home size={17} /> Homes</a><a className={activeTab === "permissions" ? "is-active" : undefined} href={`/users/${id}/permissions`}><UsersRound size={17} /> Permissions</a><a className={activeTab === "activity" ? "is-active" : undefined} href={`/users/${id}/activity`}><Clock3 size={17} /> Activity</a><a className={activeTab === "notes" ? "is-active" : undefined} href={`/users/${id}/notes`}><FileText size={17} /> Notes</a></nav>
         <nav className="cc-user-profile-tabs" aria-label="User detail sections"><a className="is-active" href="#overview"><Clock3 size={17} /> Overview</a><a href="#account"><UserRoundCog size={17} /> Account</a><a href="#authentication"><Shield size={17} /> Authentication</a><a href="#homes"><Home size={17} /> Homes</a><a href="#permissions"><UsersRound size={17} /> Permissions</a><a href="#activity"><Clock3 size={17} /> Activity</a><a href="#notes"><FileText size={17} /> Notes</a></nav>
         <section className="cc-user-summary" id="overview"><div className="cc-user-summary-person"><span className="cc-user-summary-avatar">{initials(data.display_name)}</span><div><strong>{data.display_name}</strong><span>{data.email}</span></div></div><div className="cc-user-summary-item"><span>Status</span><strong><CcBadge tone={statusTone}>{statusLabel}</CcBadge></strong></div><div className="cc-user-summary-item"><span>Email</span><strong><Mail size={16} /><CcBadge tone={data.verified ? "success" : "warning"}>{data.verified ? "Verified" : "Unverified"}</CcBadge></strong></div><div className="cc-user-summary-item"><span>MFA</span><strong><Shield size={16} /><CcBadge tone="info">{methodLabel(data.authentication_mfa.effective)}</CcBadge></strong></div><div className="cc-user-summary-item"><span>Homes</span><strong><Home size={16} /> {data.homes.length}</strong></div><div className="cc-user-summary-item"><span>Member since</span><strong><CalendarDays size={16} /> {detailDate(data.created_at)}</strong></div></section>
-        {legal && <section className="cc-user-profile-card cc-user-legal-card"><div className="cc-user-profile-card-heading"><span className="cc-user-profile-card-icon"><FileText size={19} /></span><h2>Legal &amp; Privacy</h2><Link className="cc-user-profile-link-button" href={`/legal/acceptance/${data.id}`}>View history</Link></div><div className="cc-user-legal-body"><p className="muted">{legal.account_type === "managed_child" ? "Managed-child privacy notice status. Contractual Terms are not applied to this account." : "Current legal document status for this user."}</p>{legal.current_status.map((item) => <div className="cc-user-legal-row" key={item.display_name}><strong>{item.display_name}</strong><span className="cc-user-legal-status"><span>{legalStatusDetail(item)}</span><CcBadge tone={item.satisfied ? "success" : "warning"}>{item.satisfied ? "Current" : "Action required"}</CcBadge></span></div>)}</div></section>}
-        {data.founding_beta_participant && <section className="cc-user-profile-card cc-beta-provenance-user"><div className="cc-user-profile-card-heading"><span className="cc-user-profile-card-icon"><FlaskConical size={19} /></span><h2>Founding Beta participant</h2></div><p className="muted">This informational association comes from the existing Home/programme record. It is not a transferable personal entitlement.</p></section>}
+        {legal && <section className="cc-user-profile-card cc-user-legal-card" aria-labelledby="legal-privacy-heading"><div className="cc-user-profile-card-heading"><span className="cc-user-profile-card-icon"><FileText size={19} /></span><h2 id="legal-privacy-heading">Legal &amp; Privacy</h2><Link className="cc-user-profile-link-button" href={`/legal/acceptance/${data.id}`}>View history</Link></div><div className="cc-user-legal-body"><p className="muted">{data.lifecycle === "anonymised" ? "Historical acceptance records are preserved. This account cannot sign in or accept new documents." : legal.account_type === "managed_child" ? "Managed-child privacy notice status. Contractual Terms are not applied to this account." : "Current legal document status for this user."}</p>{legal.current_status.map((item) => <div className="cc-user-legal-row" key={item.display_name}><strong>{item.display_name}</strong><span className="cc-user-legal-status"><span>{legalStatusDetail(item)}</span><CcBadge tone={item.satisfied ? "success" : "warning"}>{item.satisfied ? "Current" : "Action required"}</CcBadge></span></div>)}</div></section>}
+        {data.founding_beta_participant && <section className="cc-user-profile-card cc-beta-provenance-user cc-beta-place-panel" aria-labelledby="founding-beta-place-heading"><div className="cc-user-profile-card-heading"><span className="cc-user-profile-card-icon"><FlaskConical size={19} /></span><h2 id="founding-beta-place-heading">Founding Beta place</h2></div>{data.founding_beta?.map((place) => <div className="cc-beta-place" key={`${place.programme}-${place.home_id}`}><div className="cc-beta-place-heading"><div><strong>{place.programme}</strong><p className="muted">{foundingBetaPlaceExplanation(place)}</p></div><span className="cc-beta-place-status"><CcBadge tone={place.status === "active" ? "success" : "neutral"}>{foundingBetaStatusLabel(place.status)}</CcBadge></span></div><dl className="cc-user-profile-list cc-beta-place-details"><div><dt>Capacity</dt><dd>{place.status === "active" && !place.capacity_exempt ? "Occupied" : "Not occupied"}</dd></div><div><dt>Entitlement source</dt><dd>{foundingBetaEntitlementSourceLabel(place.entitlement_source)}</dd></div><div><dt>Current effective plan</dt><dd>{methodLabel(place.effective_plan)}</dd></div>{place.status_changed_at && <div><dt>Status changed</dt><dd>{detailDate(place.status_changed_at)}</dd></div>}</dl>{place.status === "active" && data.viewer_permissions?.manage_founding_beta_places && (data.lifecycle === "anonymised" || data.lifecycle === "active") && <div className="cc-beta-place-action"><button type="button" className="destructive cc-beta-place-action-button" aria-label={data.lifecycle === "anonymised" ? "Release Founding Beta place" : "Withdraw from Founding Beta"} disabled={Boolean(busy)} onClick={() => setBetaAction(data.lifecycle === "anonymised" ? "release" : "withdraw")}>{data.lifecycle === "anonymised" ? "Release Founding Beta place" : "Withdraw from Founding Beta"}</button></div>}</div>)}</section>}
         <nav className="cc-user-profile-tabs-route" aria-label="User detail sections"><a className={activeTab === "overview" ? "is-active" : undefined} href={`/users/${id}`}><Clock3 size={17} /> Overview</a><a className={activeTab === "account" ? "is-active" : undefined} href={`/users/${id}/account`}><UserRoundCog size={17} /> Account</a><a className={activeTab === "authentication" ? "is-active" : undefined} href={`/users/${id}/authentication`}><Shield size={17} /> Authentication</a><a className={activeTab === "homes" ? "is-active" : undefined} href={`/users/${id}/homes`}><Home size={17} /> Homes</a><a className={activeTab === "permissions" ? "is-active" : undefined} href={`/users/${id}/permissions`}><UsersRound size={17} /> Permissions</a><a className={activeTab === "activity" ? "is-active" : undefined} href={`/users/${id}/activity`}><Clock3 size={17} /> Activity</a><a className={activeTab === "notes" ? "is-active" : undefined} href={`/users/${id}/notes`}><FileText size={17} /> Notes</a></nav>
         <div className="cc-user-detail-grid">
           <section className="cc-user-profile-card" id="account"><div className="cc-user-profile-card-heading"><span className="cc-user-profile-card-icon"><UserRoundCog size={19} /></span><h2>Account Details</h2><button type="button" className="cc-user-profile-link-button" disabled>Edit</button></div><dl className="cc-user-profile-list"><div><dt>Full name</dt><dd>{data.display_name}</dd></div><div><dt>Email address</dt><dd>{data.email} <CcBadge tone={data.verified ? "success" : "warning"}>{data.verified ? "Verified" : "Unverified"}</CcBadge></dd></div><div><dt>Phone number</dt><dd className="is-muted">Not provided</dd></div><div><dt>Date of birth</dt><dd className="is-muted">Not provided</dd></div><div><dt>Account created</dt><dd>{detailDate(data.created_at)}</dd></div><div><dt>Last login</dt><dd>{detailDate(data.last_login_at)}</dd></div><div><dt>Last active</dt><dd>{detailDate(data.last_activity_at)}</dd></div><div><dt>Status</dt><dd><CcBadge tone={statusTone}>{statusLabel}</CcBadge></dd></div></dl></section>
-          <section className="cc-user-profile-card" id="authentication"><div className="cc-user-profile-card-heading"><span className="cc-user-profile-card-icon"><Shield size={19} /></span><h2>Authentication &amp; MFA</h2><button type="button" className="cc-user-profile-link-button" disabled>Edit</button></div><dl className="cc-user-profile-list"><div><dt>MFA requirement</dt><dd><CcBadge tone={data.authentication_mfa.effective === "required" ? "info" : "neutral"}>{methodLabel(data.authentication_mfa.effective)}</CcBadge>{enrolledMfa.length === 0 && <small>{data.authentication_mfa.effective === "required" ? "MFA is required, but no MFA method is enrolled yet." : "No MFA method is enrolled."}</small>}</dd></div><div><dt>Requirement source</dt><dd>{MFA_SOURCE_LABELS[data.authentication_mfa.source] ?? methodLabel(data.authentication_mfa.source)}</dd></div><div><dt>Policy override</dt><dd>{data.authentication_mfa.configured === "inherit" ? "Inherit from Home" : methodLabel(data.authentication_mfa.configured)}</dd></div><div><dt>Allowed methods</dt><dd><span className="cc-user-chip-list">{data.authentication_mfa.allowed_methods.map((method) => <span className="cc-user-chip" key={method}>{mfaMethodLabel(method)}</span>)}</span></dd></div><div><dt>Enrolled methods</dt><dd>{enrolledMfa.join(", ") || "None"}</dd></div></dl>{canChangeMfa && <form className="cc-user-mfa-form" onSubmit={updateMfaPolicy}><CcField label="User policy override"><select name="policy" defaultValue={data.authentication_mfa.configured}><option value="inherit">Inherit</option><option value="optional">Optional</option><option value="required">Force MFA</option></select></CcField><CcField label="Reason for this change"><input name="reason" minLength={10} maxLength={500} required /></CcField><button disabled={Boolean(busy)}><Mail size={16} /> Save MFA policy</button></form>}<small className="cc-user-security-note">Authenticator secrets and verification codes are never shown here. TOTP reset/removal is intentionally unavailable.{canChangeMfa ? "" : " Changing the MFA policy requires a Platform Owner or Administrator."}</small></section>{activeTab === "authentication" && <ConnectedSignInMethodsCard summary={authSummary} error={authError} canDisconnect={Boolean(data.viewer_permissions?.disconnect_sign_in_methods)} busy={Boolean(busy)} onDisconnect={(provider, name) => setDisconnectTarget({ provider, name })} />}
+          <section className="cc-user-profile-card" id="authentication"><div className="cc-user-profile-card-heading"><span className="cc-user-profile-card-icon"><Shield size={19} /></span><h2>Authentication &amp; MFA</h2><button type="button" className="cc-user-profile-link-button" disabled>Edit</button></div><dl className="cc-user-profile-list"><div><dt>MFA requirement</dt><dd><CcBadge tone={data.authentication_mfa.effective === "required" ? "info" : "neutral"}>{methodLabel(data.authentication_mfa.effective)}</CcBadge>{enrolledMfa.length === 0 && <small>{data.authentication_mfa.effective === "required" ? "MFA is required, but no MFA method is enrolled yet." : "No MFA method is enrolled."}</small>}</dd></div><div><dt>Requirement source</dt><dd>{MFA_SOURCE_LABELS[data.authentication_mfa.source] ?? methodLabel(data.authentication_mfa.source)}</dd></div><div><dt>Policy override</dt><dd>{data.authentication_mfa.configured === "inherit" ? "Inherit from Home" : methodLabel(data.authentication_mfa.configured)}</dd></div><div><dt>Allowed methods</dt><dd><span className="cc-user-chip-list">{data.authentication_mfa.allowed_methods.map((method) => <span className="cc-user-chip" key={method}>{mfaMethodLabel(method)}</span>)}</span></dd></div><div><dt>Enrolled methods</dt><dd>{enrolledMfa.join(", ") || "None"}</dd></div></dl>{canChangeMfa && <form className="cc-user-mfa-form" onSubmit={updateMfaPolicy}><CcField label="User policy override"><select name="policy" defaultValue={data.authentication_mfa.configured}><option value="inherit">Inherit</option><option value="optional">Optional</option><option value="required">Force MFA</option></select></CcField><CcField label="Reason for this change"><input name="reason" minLength={10} maxLength={500} required /></CcField><button disabled={Boolean(busy)}><Mail size={16} /> Save MFA policy</button></form>}<small className="cc-user-security-note">Authenticator secrets and verification codes are never shown here. TOTP reset/removal is intentionally unavailable.{canChangeMfa ? "" : " Changing the MFA policy requires a Platform Owner or Administrator."}</small></section>{activeTab === "authentication" && <ConnectedSignInMethodsCard summary={authSummary} error={authError} canDisconnect={Boolean(data.viewer_permissions?.disconnect_sign_in_methods)} canCleanupAnonymised={Boolean(data.viewer_permissions?.cleanup_anonymised_sign_in_methods)} busy={Boolean(busy)} onDisconnect={(provider, name) => setDisconnectTarget({ provider, name, anonymised: false })} onCleanupAnonymised={(provider, name) => setDisconnectTarget({ provider, name, anonymised: true })} />}
           <div className="cc-user-profile-side-column"><section className="cc-user-profile-card" id="homes"><div className="cc-user-profile-card-heading"><span className="cc-user-profile-card-icon"><Home size={19} /></span><h2>Homes &amp; Memberships</h2><button type="button" className="cc-user-profile-link-button" disabled>Manage</button></div><div className="cc-user-profile-card-body"><strong>{data.homes.length} {data.homes.length === 1 ? "home" : "homes"}</strong>{data.homes.length ? data.homes.map((home) => <div className="cc-user-home-item" key={home.id}><Home size={19} /><span><strong>{home.name}</strong><small>{methodLabel(home.role)}</small></span><CcBadge tone="info">{home.role.replaceAll("_", " ")}</CcBadge></div>) : <p className="is-muted">Not a member of any Home.</p>}</div></section><section className="cc-user-profile-card" id="permissions"><div className="cc-user-profile-card-heading"><span className="cc-user-profile-card-icon"><UsersRound size={19} /></span><h2>Roles &amp; Permissions</h2><button type="button" className="cc-user-profile-link-button" disabled>Manage</button></div><dl className="cc-user-profile-list cc-user-permissions-list"><div><dt>Home role</dt><dd>{data.homes[0] ? methodLabel(data.homes[0].role) : "None"}</dd></div><div><dt>Home memberships</dt><dd>{data.homes.length}</dd></div><div><dt>Platform access</dt><dd>Not part of this user record</dd></div></dl></section></div>
         </div>
         {activeTab === "authentication" && <AuthenticationSupportCards summary={authSummary} canRevokeSessions={Boolean(data.viewer_permissions?.revoke_sessions)} busy={Boolean(busy)} onRevokeSessions={() => setOpenDialog("revoke-sessions")} />}
@@ -480,17 +550,35 @@ export default function PlatformUserDetail() {
       <CcConfirmDialog
         open={disconnectTarget !== null}
         onClose={() => setDisconnectTarget(null)}
-        title={`Disconnect ${disconnectTarget?.name ?? ""} sign-in`}
+        title={disconnectTarget?.anonymised ? `Remove historical ${disconnectTarget.name} association` : `Disconnect ${disconnectTarget?.name ?? ""} sign-in`}
         description={
           disconnectTarget
-            ? `This removes the connection between the user's ${disconnectTarget.name} account and MyKhaya, so they can no longer sign in with ${disconnectTarget.name} until they reconnect it. It does not change or delete their ${disconnectTarget.name} account, revoke access at ${disconnectTarget.name}, sign them out, or affect their Homes, data or subscription. It is refused if ${disconnectTarget.name} is their only way to sign in.`
+            ? disconnectTarget.anonymised
+              ? `This permanently removes the historical ${disconnectTarget.name} sign-in association from this anonymised MyKhaya account. The anonymised tombstone, Homes, historical data and lifecycle will not change.`
+              : `This removes the connection between the user's ${disconnectTarget.name} account and MyKhaya, so they can no longer sign in with ${disconnectTarget.name} until they reconnect it. It does not change or delete their ${disconnectTarget.name} account, revoke access at ${disconnectTarget.name}, sign them out, or affect their Homes, data or subscription. It is refused if ${disconnectTarget.name} is their only way to sign in.`
             : undefined
         }
         confirmLabel="Disconnect"
         variant="destructive"
         onConfirm={(formData) => {
-          if (disconnectTarget) void runDisconnect(disconnectTarget.provider, formData);
+          if (disconnectTarget) {
+            void (disconnectTarget.anonymised
+              ? runAnonymisedCleanup(disconnectTarget.provider, formData)
+              : runDisconnect(disconnectTarget.provider, formData));
+          }
         }}
+      />
+
+      <CcConfirmDialog
+        open={betaAction !== null}
+        onClose={() => setBetaAction(null)}
+        title={betaAction === "release" ? "Release Founding Beta place" : "Withdraw from Founding Beta"}
+        description={betaAction === "release"
+          ? "The historical enrolment will remain recorded, its former email association will be released, the place will return to capacity, and any remaining Beta-derived complimentary access will be removed. The anonymised account will remain anonymised."
+          : "The account and Home will remain, but the Founding Beta place and Beta-derived complimentary access will end. Historical participation remains recorded and repeat lifetime claiming is not restored."}
+        confirmLabel={betaAction === "release" ? "Release place" : "Withdraw from Beta"}
+        variant="destructive"
+        onConfirm={(formData) => { if (betaAction) void runBetaAction(betaAction, formData); }}
       />
 
       {data && (

@@ -230,7 +230,7 @@
   color: var(--colour-muted);
   margin: 0 0 0.5rem;
 }
-/* "Get the beta app" block (PCC app links, see components/app-links). */
+/* "Get the app" block (PCC app links, see components/app-links). */
 .mk-beta-apps {
   border-top: 1px solid #ece6db;
   display: grid;
@@ -571,6 +571,14 @@ textarea {
 .notice.warning {
   background: var(--cc-warning-bg, #fff2d8);
   color: var(--cc-warning, #8a5a12);
+}
+.provider-auth-success {
+  align-items: center;
+  color: var(--colour-sage-dark);
+  display: inline-flex;
+  font-size: var(--font-small);
+  gap: 0.35rem;
+  margin: 0.35rem 0 0;
 }
 .consumer-toast-region {
   bottom: calc(var(--bottom-nav-height) + var(--safe-bottom) + 5.25rem);

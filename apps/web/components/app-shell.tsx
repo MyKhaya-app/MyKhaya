@@ -223,6 +223,7 @@ const PUBLIC_PATH_PREFIXES = [
   "/register",
   "/forgot-password",
   "/reset-password",
+  "/setup-password",
   "/verify-email",
   // Browser MFA is a short-lived pre-auth route. It must render without the
   // normal application shell/session while the handoff is completed.

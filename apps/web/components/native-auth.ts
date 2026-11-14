@@ -7,6 +7,7 @@ import {
   type NativeMfaContinuation,
   type NativeSessionStore,
 } from "@mykhaya/api-client";
+import type { NativeBetaIntent } from "@mykhaya/api-client";
 import { isNativeShell, nativePlatform } from "./native-runtime";
 import { KeychainNativeSessionStore } from "./keychain-native-session-store";
 import { setBiometricSignInEnabled } from "./native-biometric-preference";
@@ -276,11 +277,12 @@ export async function nativeExternalStart(
   provider: "apple" | "google",
   intent: "login" | "link" = "login",
   correlationId?: string,
+  beta?: NativeBetaIntent,
 ): Promise<{ transaction_id: string; nonce: string; provider: "apple" | "google"; client_id: string | null }> {
   const platform = nativePlatform();
   if (platform !== "ios" && platform !== "android") throw new Error("Native provider sign-in is unavailable.");
   const verifier = newNativeRedemptionVerifier();
-  const result = await client().startExternal(provider, platform, verifier, intent, correlationId);
+  const result = await client().startExternal(provider, platform, verifier, intent, correlationId, beta);
   retainNativeRedemptionVerifier(result.transaction_id, verifier);
   return result;
 }
@@ -322,7 +324,11 @@ export async function nativeExternalRecoveryRegister(body: {
   return result;
 }
 
-export async function nativeExternalBrowserStart(provider: "apple" | "google", intent: "login" | "link" = "login") {
+export async function nativeExternalBrowserStart(
+  provider: "apple" | "google",
+  intent: "login" | "link" = "login",
+  beta?: NativeBetaIntent,
+) {
   const platform = nativePlatform();
   if (platform !== "ios" && platform !== "android") throw new Error("Native provider sign-in is unavailable.");
   const host = typeof window === "undefined" ? "" : window.location.hostname;
@@ -331,7 +337,7 @@ export async function nativeExternalBrowserStart(provider: "apple" | "google", i
     ? `${production ? "mykhaya-prod" : "mykhaya"}://auth/callback`
     : `${production ? "app.mykhaya.mobile.prod" : "app.mykhaya.mobile"}://auth/callback`;
   const verifier = newNativeRedemptionVerifier();
-  const result = await client().externalBrowserStart(provider, platform, returnUri, verifier, intent);
+  const result = await client().externalBrowserStart(provider, platform, returnUri, verifier, intent, beta);
   retainNativeRedemptionVerifier(result.transaction_id, verifier);
   return result;
 }

@@ -20,6 +20,7 @@ from mykhaya.entitlements import ensure_home_subscription, record_subscription_e
 from mykhaya.member_colours import assign_member_colour
 from mykhaya.models import (
     BetaEnrollment,
+    BetaEnrollmentStatus,
     BetaInvitation,
     BetaInvitationStatus,
     BetaProgramme,
@@ -85,11 +86,20 @@ async def beta_invitation_valid(db: AsyncSession, token: str, email: str) -> boo
     """Whether `token` is a live (reserved, unexpired) Beta invitation issued to
     `email` for the active programme. Read-only: the invitation is consumed
     later, inside join_beta, under the programme lock."""
+    return await beta_invitation_hash_valid(db, invitation_token_hash(token), email)
+
+
+async def beta_invitation_hash_valid(db: AsyncSession, token_hash: str, email: str) -> bool:
+    """`beta_invitation_valid` for a caller that holds only the token's hash.
+
+    Native provider sign-in hashes the invitation token when the sign-in
+    starts and keeps only the hash in its short-lived sign-in record, so the
+    raw token is never stored server-side."""
     invitation = await db.scalar(
         select(BetaInvitation)
         .join(BetaProgramme, BetaProgramme.id == BetaInvitation.programme_id)
         .where(
-            BetaInvitation.token_hash == invitation_token_hash(token),
+            BetaInvitation.token_hash == token_hash,
             BetaProgramme.slug == FOUNDING_BETA_SLUG,
             BetaProgramme.status == BetaProgrammeStatus.active,
         )
@@ -131,10 +141,23 @@ async def programme_for_admin(db: AsyncSession, *, for_update: bool = False) -> 
 
 async def capacity(db: AsyncSession, programme: BetaProgramme) -> dict[str, int]:
     now = datetime.now(UTC)
-    joined = await db.scalar(
+    active = await db.scalar(
         select(func.count(BetaEnrollment.id)).where(
             BetaEnrollment.programme_id == programme.id,
+            BetaEnrollment.status == BetaEnrollmentStatus.active,
             BetaEnrollment.capacity_exempt.is_(False),
+        )
+    )
+    withdrawn = await db.scalar(
+        select(func.count(BetaEnrollment.id)).where(
+            BetaEnrollment.programme_id == programme.id,
+            BetaEnrollment.status == BetaEnrollmentStatus.withdrawn,
+        )
+    )
+    released = await db.scalar(
+        select(func.count(BetaEnrollment.id)).where(
+            BetaEnrollment.programme_id == programme.id,
+            BetaEnrollment.status == BetaEnrollmentStatus.released,
         )
     )
     reserved = await db.scalar(
@@ -150,10 +173,13 @@ async def capacity(db: AsyncSession, programme: BetaProgramme) -> dict[str, int]
             BetaWaitlistEntry.status == BetaWaitlistStatus.waiting,
         )
     )
-    joinable = max(0, programme.max_homes - (joined or 0) - (reserved or 0))
+    joinable = max(0, programme.max_homes - (active or 0) - (reserved or 0))
     return {
         "max_homes": programme.max_homes,
-        "joined": joined or 0,
+        "joined": active or 0,
+        "active": active or 0,
+        "withdrawn": withdrawn or 0,
+        "released": released or 0,
         "reserved": reserved or 0,
         "waiting": waiting or 0,
         "joinable": joinable,
@@ -300,7 +326,10 @@ async def join_beta(
         select(BetaEnrollment.id).where(
             BetaEnrollment.programme_id == programme.id,
             (BetaEnrollment.joined_user_id == user.id)
-            | (BetaEnrollment.normalized_email == normalized),
+            | (
+                BetaEnrollment.normalized_email.is_not(None)
+                & (BetaEnrollment.normalized_email == normalized)
+            ),
         )
     )
     if prior is not None:
@@ -421,6 +450,7 @@ async def join_beta(
         terms_version=programme.terms_version,
         source_invitation_id=invitation.id if invitation else None,
         capacity_exempt=False,
+        status=BetaEnrollmentStatus.active,
     )
     db.add(enrollment)
     await db.flush()

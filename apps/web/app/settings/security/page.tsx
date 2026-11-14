@@ -175,6 +175,16 @@ function devicePlatformDetail(device: Device, label: string) {
   return label.toLowerCase().includes(device.platform.toLowerCase()) ? null : device.platform;
 }
 
+/** The provider account is already linked to a different MyKhaya account
+ *  (HTTP 409 from a native link). Shown instead of a generic failure. */
+function isLinkedElsewhere(cause: unknown): boolean {
+  return cause instanceof ApiError && cause.status === 409;
+}
+
+function linkedElsewhereMessage(provider: "apple" | "google"): string {
+  return `That ${provider === "apple" ? "Apple" : "Google"} account is already linked to another MyKhaya account.`;
+}
+
 export default function Security() {
   const params = useSearchParams();
   const [devices, setDevices] = useState<Device[]>([]);
@@ -209,6 +219,7 @@ export default function Security() {
   const [accountEmail, setAccountEmail] = useState<string | null>(null);
   const [identityBusy, setIdentityBusy] = useState(false);
   const nativeLinkTransaction = useRef<string | null>(null);
+  const nativeLinkProvider = useRef<"apple" | "google" | null>(null);
   const appleLinkTransaction = params.get("apple") === "link_required" ? params.get("transaction") : null;
 
   const native = isNativeShell();
@@ -270,8 +281,16 @@ export default function Security() {
           const refreshed = await api.externalIdentities();
           if (active) setIdentities(refreshed.identities);
         })
-        .catch((cause) => { if (active) setError(cause instanceof ApiError ? cause.message : "Could not connect the provider."); })
-        .finally(() => { if (active) { nativeLinkTransaction.current = null; setIdentityBusy(false); } });
+        .catch((cause) => {
+          if (!active) return;
+          const provider = nativeLinkProvider.current;
+          setError(
+            provider && isLinkedElsewhere(cause)
+              ? linkedElsewhereMessage(provider)
+              : cause instanceof ApiError ? cause.message : "Could not connect the provider.",
+          );
+        })
+        .finally(() => { if (active) { nativeLinkTransaction.current = null; nativeLinkProvider.current = null; setIdentityBusy(false); } });
     });
     return () => { active = false; void listener.then((handle) => handle.remove()); };
   }, [native]);
@@ -421,6 +440,7 @@ export default function Security() {
       if (useBrowser) {
         const result = await nativeExternalBrowserStart(provider, "link");
         nativeLinkTransaction.current = result.transaction_id;
+        nativeLinkProvider.current = provider;
         await Browser.open({ url: result.authorization_url });
         return;
       }
@@ -439,7 +459,8 @@ export default function Security() {
     } catch (cause) {
       const failure = classifyNativeProviderFailure(cause, provider, stage, "link");
       logNativeProviderFailure(provider, stage, correlationId, failure);
-      if (failure.userMessage) setError(failure.userMessage);
+      if (isLinkedElsewhere(cause)) setError(linkedElsewhereMessage(provider));
+      else if (failure.userMessage) setError(failure.userMessage);
       setIdentityBusy(false);
     }
   }

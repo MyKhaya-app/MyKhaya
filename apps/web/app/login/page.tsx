@@ -11,6 +11,7 @@ import type { User } from "@mykhaya/shared-types";
 import { Avatar } from "@/components/avatar";
 import { AuthBrandPanel, AuthCard } from "@/components/auth-card";
 import { FormStatus } from "@/components/form-status";
+import { ProviderAccountChoice } from "@/components/provider-account-choice";
 import {
   authenticateWithPasskey,
   biometricLabel,
@@ -47,6 +48,7 @@ import {
 import { recordLoginFailureDiagnostic } from "@/components/auth-diagnostics";
 import { useAuth } from "@/components/auth-provider";
 import type { SignupStateValue } from "@/components/public-signup";
+import { socialRegistrationStartUrl } from "../register/registration-urls";
 import { SignInCard, signInCard } from "./signin-card";
 import "@/app/brand-fonts.css";
 import "./signin.css";
@@ -115,10 +117,10 @@ export default function Login() {
     [appleRecovery, setAppleRecovery] = useState<{
       can_register: boolean;
       provider_email: string | null;
-      display_name: string;
+      display_name: string | null;
     } | null>(null),
     [appleLinking, setAppleLinking] = useState(false),
-    [appleRegistrationRequested, setAppleRegistrationRequested] = useState(false),
+    [appleDisplayName, setAppleDisplayName] = useState(""),
     [appleLegalDocuments, setAppleLegalDocuments] = useState<PublicLegalDocumentSummary[]>([]),
     [appleLegalChecked, setAppleLegalChecked] = useState<Record<string, boolean>>({}),
     [appleLegalLoading, setAppleLegalLoading] = useState(false),
@@ -127,10 +129,10 @@ export default function Login() {
     [googleRecovery, setGoogleRecovery] = useState<{
       can_register: boolean;
       provider_email: string | null;
-      display_name: string;
+      display_name: string | null;
     } | null>(null),
     [googleLinking, setGoogleLinking] = useState(false),
-    [googleRegistrationRequested, setGoogleRegistrationRequested] = useState(false),
+    [googleDisplayName, setGoogleDisplayName] = useState(""),
     [googleLegalDocuments, setGoogleLegalDocuments] = useState<PublicLegalDocumentSummary[]>([]),
     [googleLegalChecked, setGoogleLegalChecked] = useState<Record<string, boolean>>({}),
     [googleLegalLoading, setGoogleLegalLoading] = useState(false),
@@ -139,12 +141,15 @@ export default function Login() {
       transaction_id: string;
       provider: "apple" | "google";
       provider_email: string | null;
-      display_name: string;
+      display_name: string | null;
       can_register: boolean;
     } | null>(null),
+    [nativeDisplayName, setNativeDisplayName] = useState(""),
+    [nativeLinking, setNativeLinking] = useState(false),
     [nativeLegalDocuments, setNativeLegalDocuments] = useState<PublicLegalDocumentSummary[]>([]),
     [nativeLegalChecked, setNativeLegalChecked] = useState<Record<string, boolean>>({}),
-    [nativeRegistrationRequested, setNativeRegistrationRequested] = useState(false),
+    [nativeLegalLoading, setNativeLegalLoading] = useState(false),
+    [nativeLegalLoadFailed, setNativeLegalLoadFailed] = useState(false),
     [nativeMfaTransaction, setNativeMfaTransaction] = useState<string | null>(null),
     [nativeMfaMethods, setNativeMfaMethods] = useState<("totp" | "email")[]>([]),
     [nativeMfaMethod, setNativeMfaMethod] = useState<"totp" | "email">("email"),
@@ -160,6 +165,11 @@ export default function Login() {
   // the password form, provider buttons and recovery choices are hidden so a
   // second primary sign-in cannot be started underneath the challenge.
   const nativeMfaActive = isNativeShell() && nativeMfaTransaction !== null;
+  const providerChoiceActive = !nativeMfaActive && Boolean(
+    (appleResult === "choose" && appleTransaction) ||
+    (googleResult === "choose" && googleTransaction) ||
+    (isNativeShell() && nativeRecovery),
+  );
 
   useEffect(() => {
     if (!isNativeShell() || (social !== "apple" && social !== "google") || appleResult || googleResult) return;
@@ -212,6 +222,7 @@ export default function Login() {
     Promise.all([api.appleRecoveryOptions(appleTransaction), api.publicLegalDocuments()])
       .then(([options, documents]) => {
         setAppleRecovery(options);
+        setAppleDisplayName(options.display_name ?? "");
         setAppleLegalDocuments(documents);
       })
       .catch(() => {
@@ -227,6 +238,7 @@ export default function Login() {
     Promise.all([api.googleRecoveryOptions(googleTransaction), api.publicLegalDocuments()])
       .then(([options, documents]) => {
         setGoogleRecovery(options);
+        setGoogleDisplayName(options.display_name ?? "");
         setGoogleLegalDocuments(documents);
       })
       .catch(() => {
@@ -312,7 +324,11 @@ export default function Login() {
           if (disposed) return;
           if ("id" in result) await afterSignedIn(result);
           else if ("message" in result) throw new Error(result.message);
-          else if (result.authentication_state === "account_choice") setNativeRecovery(result);
+          else if (result.authentication_state === "account_choice") {
+            setNativeRecovery(result);
+            setNativeDisplayName(result.display_name ?? "");
+            setNativeLinking(false);
+          }
           else await enterNativeMfa(result.transaction_id);
         })().catch((cause) => setError(cause instanceof ApiError ? cause.message : "The provider callback could not be completed.")).finally(() => setBusy(false));
       } catch {
@@ -341,12 +357,15 @@ export default function Login() {
     const correlationId = newNativeAuthCorrelationId();
     try {
       const useBrowser = (provider === "google" && nativePlatform() === "ios") || (provider === "apple" && nativePlatform() === "android");
+      // /register?beta=1 hands the Beta intent (and any invitation) to this
+      // page; the API records it with the sign-in so registration is Beta.
+      const betaIntent = beta ? { beta: true as const, invitationToken: betaInvitation } : undefined;
       if (useBrowser) {
-        const started = await nativeExternalBrowserStart(provider);
+        const started = await nativeExternalBrowserStart(provider, "login", betaIntent);
         await Browser.open({ url: started.authorization_url });
         return;
       }
-      const started = await nativeExternalStart(provider, "login", correlationId);
+      const started = await nativeExternalStart(provider, "login", correlationId, betaIntent);
       stage = "provider";
       const assertion = await nativeExternalAssertion(provider, started.nonce, started.client_id);
       stage = "exchange";
@@ -358,6 +377,8 @@ export default function Login() {
         await enterNativeMfa(result.transaction_id);
       } else if ("authentication_state" in result) {
         setNativeRecovery(result);
+        setNativeDisplayName(result.display_name ?? "");
+        setNativeLinking(false);
       }
     } catch (cause) {
       const failure = classifyNativeProviderFailure(cause, provider, stage);
@@ -428,16 +449,24 @@ export default function Login() {
   }
 
   async function chooseNativeRegistration() {
-    setNativeRegistrationRequested(true);
+    setNativeLegalLoading(true);
+    setNativeLegalLoadFailed(false);
     try {
       setNativeLegalDocuments(await api.publicLegalDocuments());
     } catch {
+      setNativeLegalLoadFailed(true);
       setError("The current legal documents could not be loaded.");
+    } finally {
+      setNativeLegalLoading(false);
     }
   }
 
   async function registerNativeProvider() {
     if (!nativeRecovery) return;
+    if (!nativeDisplayName.trim()) {
+      setError("Please enter your name before continuing.");
+      return;
+    }
     const requiredLegal = nativeLegalDocuments.filter((document) =>
       document.audience === "adult" && document.acceptance_required && document.action_verb === "accept" && document.scope === "global",
     );
@@ -450,7 +479,7 @@ export default function Login() {
     try {
       const result = await nativeExternalRecoveryRegister({
         transaction_id: nativeRecovery.transaction_id,
-        display_name: nativeRecovery.display_name,
+        display_name: nativeDisplayName,
         legal_acceptances: requiredLegal.map((document) => ({ document_key: document.key, document_version_id: document.current_version_id! })),
         platform: nativePlatform() === "android" ? "android" : "ios",
       });
@@ -630,6 +659,10 @@ export default function Login() {
 
   async function registerWithApple() {
     if (!appleTransaction) return;
+    if (!appleDisplayName.trim()) {
+      setError("Please enter your name before continuing.");
+      return;
+    }
     const requiredLegal = appleLegalDocuments.filter(
       (document) =>
         document.audience === "adult" &&
@@ -649,6 +682,7 @@ export default function Login() {
     setError("");
     try {
       const result = await api.appleRecoveryRegister(appleTransaction, {
+        display_name: appleDisplayName,
         legal_acceptances: requiredLegal.map((document) => ({
           document_key: document.key,
           document_version_id: document.current_version_id!,
@@ -670,6 +704,10 @@ export default function Login() {
 
   async function registerWithGoogle() {
     if (!googleTransaction) return;
+    if (!googleDisplayName.trim()) {
+      setError("Please enter your name before continuing.");
+      return;
+    }
     const requiredLegal = googleLegalDocuments.filter(
       (document) => document.audience === "adult" && document.acceptance_required && document.action_verb === "accept" && document.scope === "global",
     );
@@ -681,6 +719,7 @@ export default function Login() {
     setError("");
     try {
       const result = await api.googleRecoveryRegister(googleTransaction, {
+        display_name: googleDisplayName,
         legal_acceptances: requiredLegal.map((document) => ({ document_key: document.key, document_version_id: document.current_version_id! })),
         platform: "web",
         ...(beta ? { beta: true, beta_invitation_token: betaInvitation } : {}),
@@ -695,6 +734,29 @@ export default function Login() {
     } finally {
       setBusy(false);
     }
+  }
+
+  function cancelWebProviderRecovery() {
+    router.replace("/login");
+  }
+
+  /** "Switch" on the web choice step: start the same provider again. A Beta
+   *  attempt restarts with its Beta context, as /register started it. */
+  function restartWebProvider(provider: "apple" | "google") {
+    if (beta) {
+      const context = `/register?beta=1${betaInvitation ? `&beta_invitation=${encodeURIComponent(betaInvitation)}` : ""}`;
+      window.location.assign(socialRegistrationStartUrl(provider, context));
+      return;
+    }
+    if (provider === "apple") startAppleSignIn();
+    else startGoogleSignIn();
+  }
+
+  function cancelNativeProviderRecovery() {
+    setNativeRecovery(null);
+    setNativeDisplayName("");
+    setNativeLinking(false);
+    setError("");
   }
 
   if (additionalAuth) {
@@ -748,6 +810,158 @@ export default function Login() {
     invitationValid: inviteContext !== null,
   });
 
+  const passwordForm = (
+    <form className="signin-form" onSubmit={submit}>
+      <div className="signin-field">
+        <label htmlFor="signin-email">Email</label>
+        <input
+          id="signin-email"
+          name="email"
+          type="email"
+          autoComplete="email"
+          placeholder="your@email.com"
+          required
+          maxLength={320}
+        />
+      </div>
+      <div className="signin-field">
+        <label htmlFor="signin-password">Password</label>
+        <div className="signin-password">
+          <input
+            id="signin-password"
+            name="password"
+            type={passwordVisible ? "text" : "password"}
+            autoComplete="current-password"
+            placeholder="Enter your password"
+            required
+            maxLength={128}
+          />
+          <button
+            type="button"
+            className="signin-password-toggle"
+            // Drawn inside the password field by design; the layout
+            // inspector checks it as that field's adornment.
+            data-input-adornment="password-visibility"
+            aria-controls="signin-password"
+            aria-label={passwordVisible ? "Hide password" : "Show password"}
+            onClick={() => setPasswordVisible((visible) => !visible)}
+          >
+            {passwordVisible ? (
+              <EyeOff size={20} strokeWidth={1.8} aria-hidden="true" />
+            ) : (
+              <Eye size={20} strokeWidth={1.8} aria-hidden="true" />
+            )}
+          </button>
+        </div>
+      </div>
+      <FormStatus error={error} />
+      {nativeDiagnostic && (
+        <p className="notice" role="status">Auth diagnostic: {nativeDiagnostic}</p>
+      )}
+      <button className="signin-submit" disabled={busy}>{busy ? "Signing in…" : "Sign in"}</button>
+    </form>
+  );
+
+  const forgotPasswordLink = (
+    <Link href="/forgot-password" className="signin-link signin-forgot">
+      Forgot password?
+    </Link>
+  );
+  const linkSignIn = (
+    <>
+      {passwordForm}
+      {forgotPasswordLink}
+    </>
+  );
+
+  if (providerChoiceActive) {
+    if (appleResult === "choose" && appleTransaction) {
+      return (
+        <ProviderAccountChoice
+          provider="apple"
+          idPrefix="apple"
+          recovery={appleRecovery}
+          beta={beta}
+          legalDocuments={appleLegalDocuments}
+          legalChecked={appleLegalChecked}
+          onLegalChange={(key, value) => setAppleLegalChecked((current) => ({ ...current, [key]: value }))}
+          legalLoading={appleLegalLoading}
+          legalLoadFailed={appleLegalLoadFailed}
+          displayName={appleDisplayName}
+          onDisplayNameChange={setAppleDisplayName}
+          busy={busy}
+          error={error}
+          linking={appleLinking}
+          onChooseExisting={() => { setAppleLinking(true); setError(""); }}
+          onLeaveExisting={() => setAppleLinking(false)}
+          onCreate={() => void registerWithApple()}
+          onBack={cancelWebProviderRecovery}
+          onSwitch={() => restartWebProvider("apple")}
+          signIn={linkSignIn}
+        />
+      );
+    }
+    if (googleResult === "choose" && googleTransaction) {
+      return (
+        <ProviderAccountChoice
+          provider="google"
+          idPrefix="google"
+          recovery={googleRecovery}
+          beta={beta}
+          legalDocuments={googleLegalDocuments}
+          legalChecked={googleLegalChecked}
+          onLegalChange={(key, value) => setGoogleLegalChecked((current) => ({ ...current, [key]: value }))}
+          legalLoading={googleLegalLoading}
+          legalLoadFailed={googleLegalLoadFailed}
+          displayName={googleDisplayName}
+          onDisplayNameChange={setGoogleDisplayName}
+          busy={busy}
+          error={error}
+          linking={googleLinking}
+          onChooseExisting={() => { setGoogleLinking(true); setError(""); }}
+          onLeaveExisting={() => setGoogleLinking(false)}
+          onCreate={() => void registerWithGoogle()}
+          onBack={cancelWebProviderRecovery}
+          onSwitch={() => restartWebProvider("google")}
+          signIn={linkSignIn}
+        />
+      );
+    }
+    if (nativeRecovery) {
+      const nativeProvider = nativeRecovery.provider;
+      return (
+        <ProviderAccountChoice
+          provider={nativeProvider}
+          idPrefix="native"
+          recovery={nativeRecovery}
+          // Beta intent travels with the native sign-in (startNativeProvider);
+          // the API re-checks eligibility when the account is created.
+          beta={beta}
+          legalDocuments={nativeLegalDocuments}
+          legalChecked={nativeLegalChecked}
+          onLegalChange={(key, value) => setNativeLegalChecked((current) => ({ ...current, [key]: value }))}
+          legalLoading={nativeLegalLoading}
+          legalLoadFailed={nativeLegalLoadFailed}
+          displayName={nativeDisplayName}
+          onDisplayNameChange={setNativeDisplayName}
+          busy={busy}
+          error={error}
+          linking={nativeLinking}
+          onChooseNew={() => void chooseNativeRegistration()}
+          onChooseExisting={() => { setNativeLinking(true); setError(""); }}
+          onLeaveExisting={() => setNativeLinking(false)}
+          onCreate={() => void registerNativeProvider()}
+          onBack={cancelNativeProviderRecovery}
+          onSwitch={() => {
+            cancelNativeProviderRecovery();
+            void startNativeProvider(nativeProvider);
+          }}
+          signIn={linkSignIn}
+        />
+      );
+    }
+  }
+
   return (
     <main className="signin-page">
       <AuthBrandPanel />
@@ -757,8 +971,12 @@ export default function Login() {
             <img src="/images/mykhaya-logo.png" alt="" aria-hidden="true" />
             <span>MyKhaya</span>
           </Link>
-          <h1>Welcome back</h1>
-          <p className="signin-intro">Sign in to see what’s happening at Home.</p>
+          {!providerChoiceActive && (
+            <>
+              <h1>Welcome back</h1>
+              <p className="signin-intro">Sign in to see what’s happening at Home.</p>
+              </>
+          )}
           {inviteContext && (
             <p className="notice success">
               Continue signing in to join {inviteContext.group_name}.
@@ -775,76 +993,6 @@ export default function Login() {
               Sign in with your existing account first. Apple can then be linked from your security settings.
             </p>
           )}
-          {appleResult === "choose" && appleTransaction && (
-            <section className="notice" aria-labelledby="apple-recovery-heading">
-              <h2 id="apple-recovery-heading">Continue with Apple</h2>
-              <p>
-                Apple sign-in is ready. Choose whether to connect it to an existing MyKhaya
-                account or create a new account. We will not merge accounts automatically.
-              </p>
-              <div className="signin-recovery-actions">
-                <button
-                  type="button"
-                  className="secondary"
-                  onClick={() => setAppleLinking(true)}
-                  disabled={busy}
-                >
-                  Link to an existing account
-                </button>
-                {appleRecovery?.can_register && (
-                  <button
-                    type="button"
-                    className="tertiary"
-                    onClick={() => setAppleRegistrationRequested(true)}
-                    disabled={busy}
-                  >
-                    Create a new account
-                  </button>
-                )}
-              </div>
-              {appleRegistrationRequested && appleRecovery?.can_register && (
-                <div className="auth-legal-consent">
-                  <p><strong>Before you create your account</strong></p>
-                  <p className="muted">Please review and accept the current Terms and Privacy documents.</p>
-                  {appleLegalDocuments
-                    .filter(
-                      (document) =>
-                        document.audience === "adult" &&
-                        document.acceptance_required &&
-                        document.action_verb === "accept" &&
-                        document.scope === "global",
-                    )
-                    .map((document) => (
-                      <label className="check-row" key={document.key}>
-                        <input
-                          type="checkbox"
-                          checked={appleLegalChecked[document.key] === true}
-                          onChange={(event) =>
-                            setAppleLegalChecked((current) => ({
-                              ...current,
-                              [document.key]: event.target.checked,
-                            }))
-                          }
-                        />
-                        <span>
-                          I accept the <Link href={`/legal/${document.key}`}>{document.display_name}</Link>{" "}
-                          (version {document.current_version ?? "current"})
-                        </span>
-                      </label>
-                    ))}
-                  <button type="button" onClick={() => void registerWithApple()} disabled={busy || appleLegalLoading}>
-                    {busy ? "Creating account…" : "Accept and create account"}
-                  </button>
-                </div>
-              )}
-              {appleLinking && (
-                <p>
-                  Sign in below with your existing MyKhaya email and password. Apple will be
-                  linked only after that authentication succeeds.
-                </p>
-              )}
-            </section>
-          )}
           {appleResult === "registration_unavailable" && (
             <p className="notice">
               New accounts can’t be created with Apple right now. If you already have a MyKhaya account, sign in with your password.
@@ -853,54 +1001,7 @@ export default function Login() {
           {appleResult === "error" && (
             <p className="notice">Apple sign-in could not be completed. Please try again or use your password.</p>
           )}
-          {googleResult === "choose" && googleTransaction && (
-            <section className="notice" aria-labelledby="google-recovery-heading">
-              <h2 id="google-recovery-heading">Continue with Google</h2>
-              <p>Google sign-in is ready. Choose an existing MyKhaya account or create a new one. We will not merge accounts automatically.</p>
-              <div className="signin-recovery-actions">
-                <button type="button" className="secondary" onClick={() => setGoogleLinking(true)} disabled={busy}>Link to an existing account</button>
-                {googleRecovery?.can_register && <button type="button" className="tertiary" onClick={() => setGoogleRegistrationRequested(true)} disabled={busy}>Create a new account</button>}
-              </div>
-              {googleRegistrationRequested && googleRecovery?.can_register && (
-                <div className="auth-legal-consent">
-                  <p><strong>Before you create your account</strong></p>
-                  <p className="muted">Please review and accept the current Terms and Privacy documents.</p>
-                  {googleLegalDocuments.filter((document) => document.audience === "adult" && document.acceptance_required && document.action_verb === "accept" && document.scope === "global").map((document) => (
-                    <label className="check-row" key={document.key}>
-                      <input type="checkbox" checked={googleLegalChecked[document.key] === true} onChange={(event) => setGoogleLegalChecked((current) => ({ ...current, [document.key]: event.target.checked }))} />
-                      <span>I accept the <Link href={`/legal/${document.key}`}>{document.display_name}</Link> (version {document.current_version ?? "current"})</span>
-                    </label>
-                  ))}
-                  <button type="button" onClick={() => void registerWithGoogle()} disabled={busy || googleLegalLoading}>{busy ? "Creating account…" : "Accept and create account"}</button>
-                </div>
-              )}
-              {googleLinking && <p>Sign in below with your existing MyKhaya email and password. Google will be linked only after that authentication succeeds.</p>}
-            </section>
-          )}
           {googleResult === "error" && <p className="notice">Google sign-in could not be completed. Please try again or use your password.</p>}
-          {isNativeShell() && nativeRecovery && !nativeMfaActive && (
-            <section className="notice" aria-labelledby="native-recovery-heading">
-              <h2 id="native-recovery-heading">Continue with {nativeRecovery.provider === "apple" ? "Apple" : "Google"}</h2>
-              <p>Choose whether to link this provider to an existing MyKhaya account or create a new one. Accounts are never merged automatically.</p>
-              <div className="signin-recovery-actions">
-                <button type="button" className="secondary" onClick={() => setError("Sign in with your existing password below. The provider will be linked after that authentication succeeds.")} disabled={busy}>Link to an existing account</button>
-                {nativeRecovery.can_register && <button type="button" className="tertiary" onClick={() => void chooseNativeRegistration()} disabled={busy}>Create a new account</button>}
-              </div>
-              {nativeRegistrationRequested && nativeRecovery.can_register && (
-                <div className="auth-legal-consent">
-                  <p><strong>Before you create your account</strong></p>
-                  <p className="muted">Please review and accept the current Terms and Privacy documents.</p>
-                  {nativeLegalDocuments.filter((document) => document.audience === "adult" && document.acceptance_required && document.action_verb === "accept" && document.scope === "global").map((document) => (
-                    <label className="check-row" key={document.key}>
-                      <input type="checkbox" checked={nativeLegalChecked[document.key] === true} onChange={(event) => setNativeLegalChecked((current) => ({ ...current, [document.key]: event.target.checked }))} />
-                      <span>I accept the <Link href={`/legal/${document.key}`}>{document.display_name}</Link> (version {document.current_version ?? "current"})</span>
-                    </label>
-                  ))}
-                  <button type="button" onClick={() => void registerNativeProvider()} disabled={busy}>Accept and create account</button>
-                </div>
-              )}
-            </section>
-          )}
           {nativeMfaActive && (
             <section className="notice" aria-labelledby="native-mfa-heading" data-testid="native-mfa-challenge">
               <h2 id="native-mfa-heading">Additional verification required</h2>
@@ -927,68 +1028,18 @@ export default function Login() {
             </section>
           )}
           {!nativeMfaActive && (<>
-          <form className="signin-form" onSubmit={submit}>
-            <div className="signin-field">
-              <label htmlFor="signin-email">Email</label>
-              <input
-                id="signin-email"
-                name="email"
-                type="email"
-                autoComplete="email"
-                placeholder="your@email.com"
-                required
-                maxLength={320}
-              />
-            </div>
-            <div className="signin-field">
-              <label htmlFor="signin-password">Password</label>
-              <div className="signin-password">
-                <input
-                  id="signin-password"
-                  name="password"
-                  type={passwordVisible ? "text" : "password"}
-                  autoComplete="current-password"
-                  placeholder="Enter your password"
-                  required
-                  maxLength={128}
-                />
-                <button
-                  type="button"
-                  className="signin-password-toggle"
-                  // Drawn inside the password field by design; the layout
-                  // inspector checks it as that field's adornment.
-                  data-input-adornment="password-visibility"
-                  aria-controls="signin-password"
-                  aria-label={passwordVisible ? "Hide password" : "Show password"}
-                  onClick={() => setPasswordVisible((visible) => !visible)}
-                >
-                  {passwordVisible ? (
-                    <EyeOff size={20} strokeWidth={1.8} aria-hidden="true" />
-                  ) : (
-                    <Eye size={20} strokeWidth={1.8} aria-hidden="true" />
-                  )}
-                </button>
-              </div>
-            </div>
-            <FormStatus error={error} />
-            {nativeDiagnostic && (
-              <p className="notice" role="status">Auth diagnostic: {nativeDiagnostic}</p>
-            )}
-            <button className="signin-submit" disabled={busy}>{busy ? "Signing in…" : "Sign in"}</button>
-          </form>
-          {(appleEnabled || isNativeShell()) && !nativeRecovery && (
+          {passwordForm}
+          {(appleEnabled || isNativeShell()) && !nativeRecovery && !providerChoiceActive && (
             <button type="button" className="apple-sign-in" onClick={() => isNativeShell() ? void startNativeProvider("apple") : startAppleSignIn()} disabled={busy}>
               Continue with Apple
             </button>
           )}
-          {(googleEnabled || isNativeShell()) && !nativeRecovery && (
+          {(googleEnabled || isNativeShell()) && !nativeRecovery && !providerChoiceActive && (
             <button type="button" className="google-sign-in" onClick={() => isNativeShell() ? void startNativeProvider("google") : startGoogleSignIn()} disabled={busy}>
               Continue with Google
             </button>
           )}
-          <Link href="/forgot-password" className="signin-link signin-forgot">
-            Forgot password?
-          </Link>
+          {forgotPasswordLink}
           {card === "beta" && <SignInCard variant="beta" href="/founding-beta" />}
           {card === "new" && <SignInCard variant="new" href={registerHref} />}
           <p className="signin-child">

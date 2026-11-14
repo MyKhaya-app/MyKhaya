@@ -16,17 +16,22 @@ async function readLatestMfaCode(page: Page, ignoredMessageIds = new Set<string>
     try {
       const messagesResponse = await page.request.get(`http://127.0.0.1:${mailpitPort}/api/v1/messages`);
       if (messagesResponse.ok()) {
-        const payload = await messagesResponse.json() as { messages?: Array<{ ID?: string; Created?: string }> };
+        const payload = await messagesResponse.json() as { messages?: Array<{ ID?: string; Created?: string; Subject?: string }> };
         const messages = [...(payload.messages ?? [])].sort((left, right) =>
           String(right.Created ?? "").localeCompare(String(left.Created ?? "")),
         );
         for (const message of messages) {
           if (!message.ID || ignoredMessageIds.has(message.ID)) continue;
+          // Only the code email counts: other emails the worker sends meanwhile
+          // (a new sign-in notice, for example) have six-digit values of their
+          // own, such as CSS colours in the HTML, that must never be typed.
+          if (!/verification code/i.test(message.Subject ?? "")) continue;
           const detailResponse = await page.request.get(`http://127.0.0.1:${mailpitPort}/api/v1/message/${message.ID}`);
           if (!detailResponse.ok()) continue;
           const detail = await detailResponse.json() as { Text?: string; HTML?: string };
-          const messageBody = `${detail.Text ?? ""}\n${detail.HTML ?? ""}`;
-          const match = messageBody.match(/\b\d{6}\b/);
+          // Prefer the plain-text part; strip tags before looking in the HTML.
+          const match = (detail.Text ?? "").match(/\b\d{6}\b/)
+            ?? (detail.HTML ?? "").replace(/<[^>]*>/g, " ").match(/\b\d{6}\b/);
           if (match) return match[0];
         }
       }
@@ -92,11 +97,20 @@ async function completeNewHome(page: Page, homeName: string, beta = false): Prom
   await page.waitForURL(/\/home$/);
 }
 
-async function completePasswordMfaIfShown(page: Page, name: string): Promise<void> {
+/** `previous` must be the Mailpit message ids taken *before* the click that
+ *  can send the code: the /mfa page requests the code as it loads, so a
+ *  snapshot taken after landing there can already contain the new email and
+ *  make the helper type a code from some other message. */
+async function completePasswordMfaIfShown(page: Page, name: string, previous: Set<string>): Promise<void> {
   if (page.url().includes("/mfa?transaction=")) {
-    const previous = await readMailpitMessageIds(page);
     await completeBrowserMfa(page, `test-results/${name}-mfa.png`, previous);
   }
+}
+
+async function fillProviderNameIfMissing(page: Page, provider: "Apple" | "Google"): Promise<void> {
+  // The synthetic providers may not return a name; "Your name" is required.
+  const name = page.getByLabel("Your name");
+  if (!(await name.inputValue()).trim()) await name.fill(`${provider} E2E Person`);
 }
 
 test("synthetic Google registration completes the browser security handoff", async ({ page }) => {
@@ -120,17 +134,20 @@ test("synthetic Google registration completes the browser security handoff", asy
   await page.getByRole("button", { name: "Continue with Google" }).click();
   await startRequest;
   await page.waitForURL(/\/login\?google=choose&transaction=/);
-  await expect(page.getByRole("heading", { name: "Continue with Google" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Welcome to MyKhaya" })).toBeVisible();
   await page.screenshot({ path: "test-results/google-register-choice.png", fullPage: true });
 
-  await page.getByRole("button", { name: "Create a new account" }).click();
-  const legal = page.locator(".auth-legal-consent input[type=checkbox]");
+  // "I'm new to MyKhaya" is selected by default when registration is allowed.
+  await expect(page.getByRole("radio", { name: /I’m new to MyKhaya/ })).toBeChecked();
+  const legal = page.locator(".signup-consent input[type=checkbox]");
   await expect(legal).toHaveCount(1);
   await legal.check();
-  await page.getByRole("button", { name: "Accept and create account" }).click();
+  await fillProviderNameIfMissing(page, "Google");
+  const registerMessages = await readMailpitMessageIds(page);
+  await page.getByRole("button", { name: "Create account", exact: true }).click();
   await page.waitForURL(/\/onboarding$|\/mfa\?transaction=/);
   if (page.url().includes("/mfa?transaction=")) {
-    await completeBrowserMfa(page, "test-results/google-register-mfa.png");
+    await completeBrowserMfa(page, "test-results/google-register-mfa.png", registerMessages);
     await page.waitForURL(/\/onboarding$/);
   }
   await expect(page.getByRole("heading", { name: "How would you like to use MyKhaya?" })).toBeVisible();
@@ -149,9 +166,9 @@ test("synthetic Google registration completes the browser security handoff", asy
   expect(logoutResponse.status()).toBe(204);
   await page.goto("/login");
   await expect(page.getByRole("button", { name: "Continue with Google" })).toBeVisible();
+  const previousMessages = await readMailpitMessageIds(page);
   await page.getByRole("button", { name: "Continue with Google" }).click();
   await page.waitForURL(/\/mfa\?transaction=/);
-  const previousMessages = await readMailpitMessageIds(page);
   await completeBrowserMfa(page, "test-results/google-returning-mfa.png", previousMessages);
   await page.waitForURL(/\/home$/);
   await expect(page.getByRole("heading", { name: "Google" })).toBeVisible();
@@ -164,23 +181,26 @@ test("synthetic Apple registration completes the browser security handoff", asyn
   await page.screenshot({ path: "test-results/apple-register-start.png", fullPage: true });
   await page.getByRole("button", { name: "Continue with Apple" }).click();
   await page.waitForURL(/\/login\?apple=choose&transaction=/);
-  await expect(page.getByRole("heading", { name: "Continue with Apple" })).toBeVisible();
-  await page.getByRole("button", { name: "Create a new account" }).click();
-  await page.locator(".auth-legal-consent input[type=checkbox]").all().then(async (boxes) => {
+  await expect(page.getByRole("heading", { name: "Welcome to MyKhaya" })).toBeVisible();
+  await expect(page.getByRole("radio", { name: /I’m new to MyKhaya/ })).toBeChecked();
+  await page.locator(".signup-consent input[type=checkbox]").all().then(async (boxes) => {
     for (const box of boxes) await box.check();
   });
-  await page.getByRole("button", { name: "Accept and create account" }).click();
+  await fillProviderNameIfMissing(page, "Apple");
+  const registerMessages = await readMailpitMessageIds(page);
+  await page.getByRole("button", { name: "Create account", exact: true }).click();
   await page.waitForURL(/\/onboarding$|\/mfa\?transaction=/);
-  await completePasswordMfaIfShown(page, "apple-register");
+  await completePasswordMfaIfShown(page, "apple-register", registerMessages);
   await completeNewHome(page, "Apple E2E Home");
   await page.screenshot({ path: "test-results/apple-register-home.png", fullPage: true });
 
   const csrf = await page.evaluate(() => document.cookie.match(/(?:^|; )mk_csrf=([^;]+)/)?.[1] ?? "");
   expect((await page.request.post("/api/v1/auth/logout", { headers: { "X-CSRF-Token": decodeURIComponent(csrf) } })).status()).toBe(204);
   await page.goto("/login");
+  const returningMessages = await readMailpitMessageIds(page);
   await page.getByRole("button", { name: "Continue with Apple" }).click();
   await page.waitForURL(/\/mfa\?transaction=/);
-  await completePasswordMfaIfShown(page, "apple-returning");
+  await completePasswordMfaIfShown(page, "apple-returning", returningMessages);
   await page.waitForURL(/\/home$/);
   await expect(page.getByRole("heading", { name: "Apple" })).toBeVisible();
   await page.screenshot({ path: "test-results/apple-returning-home.png", fullPage: true });
@@ -231,20 +251,23 @@ async function completeBetaSocial(page: Page, provider: "Apple" | "Google", invi
   await expect(page.getByRole("heading", { name: "Create your account" })).toBeVisible();
   await page.getByRole("button", { name: `Join Beta with ${provider}` }).click();
   await page.waitForURL(new RegExp(`\\/login\\?${provider.toLowerCase()}=choose&transaction=`));
-  await page.getByRole("button", { name: "Create a new account" }).click();
-  for (const box of await page.locator(".auth-legal-consent input[type=checkbox]").all()) await box.check();
-  await page.getByRole("button", { name: "Accept and create account" }).click();
+  await expect(page.getByRole("radio", { name: /I’m new to MyKhaya\s*Founding Beta/ })).toBeChecked();
+  for (const box of await page.locator(".signup-consent input[type=checkbox]").all()) await box.check();
+  await fillProviderNameIfMissing(page, provider);
+  const registerMessages = await readMailpitMessageIds(page);
+  await page.getByRole("button", { name: "Create account", exact: true }).click();
   await page.waitForURL(/\/onboarding(?:\?beta=1[^/]*)?$|\/mfa\?transaction=/);
-  await completePasswordMfaIfShown(page, `${provider.toLowerCase()}-beta-register`);
+  await completePasswordMfaIfShown(page, `${provider.toLowerCase()}-beta-register`, registerMessages);
   await completeNewHome(page, homeName, true);
   await page.screenshot({ path: `test-results/${provider.toLowerCase()}-beta-home.png`, fullPage: true });
 
   const csrf = await page.evaluate(() => document.cookie.match(/(?:^|; )mk_csrf=([^;]+)/)?.[1] ?? "");
   expect((await page.request.post("/api/v1/auth/logout", { headers: { "X-CSRF-Token": decodeURIComponent(csrf) } })).status()).toBe(204);
   await page.goto(`/login?beta=1&beta_invitation=${encodeURIComponent(invitation)}`);
+  const returningMessages = await readMailpitMessageIds(page);
   await page.getByRole("button", { name: `Continue with ${provider}` }).click();
   await page.waitForURL(/\/mfa\?transaction=/);
-  await completePasswordMfaIfShown(page, `${provider.toLowerCase()}-beta-returning`);
+  await completePasswordMfaIfShown(page, `${provider.toLowerCase()}-beta-returning`, returningMessages);
   await page.waitForURL(/\/home$/);
 }
 

@@ -586,7 +586,7 @@ export class MyKhayaClient {
     this.request<{
       can_register: boolean;
       provider_email: string | null;
-      display_name: string;
+      display_name: string | null;
     }>(`/auth/apple/recovery/options?transaction_id=${encodeURIComponent(transactionId)}`);
   appleRecoveryLink = (transactionId: string) =>
     this.request<{ message: string }>("/auth/apple/recovery/link", {
@@ -595,7 +595,7 @@ export class MyKhayaClient {
     });
   appleRecoveryRegister = (
     transactionId: string,
-    body: { legal_acceptances: SignupLegalAcceptanceItem[]; platform: LegalPlatform; beta?: boolean; beta_invitation_token?: string | null },
+    body: { display_name?: string; legal_acceptances: SignupLegalAcceptanceItem[]; platform: LegalPlatform; beta?: boolean; beta_invitation_token?: string | null },
   ) =>
     this.request<BrowserAuthResult>("/auth/apple/recovery/register", {
       method: "POST",
@@ -605,7 +605,7 @@ export class MyKhayaClient {
     this.request<{
       can_register: boolean;
       provider_email: string | null;
-      display_name: string;
+      display_name: string | null;
     }>(`/auth/google/recovery/options?transaction_id=${encodeURIComponent(transactionId)}`);
   googleRecoveryLink = (transactionId: string) =>
     this.request<{ message: string }>("/auth/google/recovery/link", {
@@ -614,7 +614,7 @@ export class MyKhayaClient {
     });
   googleRecoveryRegister = (
     transactionId: string,
-    body: { legal_acceptances: SignupLegalAcceptanceItem[]; platform: LegalPlatform; beta?: boolean; beta_invitation_token?: string | null },
+    body: { display_name?: string; legal_acceptances: SignupLegalAcceptanceItem[]; platform: LegalPlatform; beta?: boolean; beta_invitation_token?: string | null },
   ) =>
     this.request<BrowserAuthResult>("/auth/google/recovery/register", {
       method: "POST",
@@ -2233,7 +2233,7 @@ export { platformApi, PlatformClient } from "./platform";
 // rather than folded into MyKhayaClient, so nothing about the browser
 // client's cookie/CSRF/relative-path behaviour above this line is affected
 // by, or has to account for, native transport at all.
-export { NativeMyKhayaClient, type NativeMfaContinuation } from "./native-client";
+export { NativeMyKhayaClient, type NativeBetaIntent, type NativeMfaContinuation } from "./native-client";
 export type {
   NativeSession,
   NativeSessionStore,

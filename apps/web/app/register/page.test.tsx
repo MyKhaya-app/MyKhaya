@@ -236,8 +236,11 @@ describe("Founding Beta registration availability", () => {
     });
     render(<Register />);
 
-    expect(await screen.findByText(/You.re joining the Founding Beta/)).toBeInTheDocument();
-    expect(screen.getByText(/After you verify your email, you.ll finish enrolment/)).toBeInTheDocument();
+    // Phone card (benefits) and the wide one-line summary are both rendered;
+    // CSS shows one per layout.
+    expect(await screen.findByRole("region", { name: "Founding Beta" })).toBeInTheDocument();
+    expect(screen.getByText(/Verify your email to unlock complimentary Ultimate access/)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Create account and continue" })).toBeInTheDocument();
     expect(screen.queryByText(/can.t be created from this page/)).not.toBeInTheDocument();
   });
 });
@@ -292,7 +295,7 @@ describe("Founding Beta registration with a valid Beta invitation, past a non-em
       "correct horse battery staple",
     );
     await user.type(screen.getByLabelText("Confirm password"), "correct horse battery staple");
-    await user.click(screen.getByLabelText("I accept the MyKhaya Terms & Conditions (version 1.0)"));
+    await user.click(screen.getByLabelText("I agree to the MyKhaya Terms & Conditions (v1.0)."));
 
     expect(screen.queryByText(/invitation is required/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/using the waiting list/i)).not.toBeInTheDocument();
@@ -327,7 +330,7 @@ describe("registration legal acceptance", () => {
     searchParams.value = "beta=1";
     render(<Register />);
 
-    expect(await screen.findByRole("link", { name: /See other ways to join Other ways to join/ })).toHaveAttribute("href", "/signup-choice");
+    expect(await screen.findByRole("link", { name: "See other ways to join" })).toHaveAttribute("href", "/signup-choice");
   });
 
   it("Beta registration creates the account only: no Home name and no Founding Beta Terms", async () => {
@@ -337,7 +340,7 @@ describe("registration legal acceptance", () => {
 
     const submit = await screen.findByRole("button", { name: "Create account and continue" });
     expect(submit).toBeDisabled();
-    expect(screen.getByLabelText("I accept the MyKhaya Terms & Conditions (version 1.0)")).toBeInTheDocument();
+    expect(screen.getByLabelText("I agree to the MyKhaya Terms & Conditions (v1.0).")).toBeInTheDocument();
     // Beta Terms and Home details belong to the verified Beta continuation.
     expect(screen.getByText(/Founding Beta Terms/)).toBeInTheDocument();
     expect(screen.queryByLabelText("Home name")).not.toBeInTheDocument();
@@ -364,7 +367,7 @@ describe("registration legal acceptance", () => {
     const user = userEvent.setup();
     const submit = await screen.findByRole("button", { name: "Create account and continue" });
     expect(submit).toBeDisabled();
-    await user.click(screen.getByLabelText("I accept the MyKhaya Terms & Conditions (version 1.0)"));
+    await user.click(screen.getByLabelText("I agree to the MyKhaya Terms & Conditions (v1.0)."));
     expect(submit).toBeEnabled();
   });
 
@@ -391,7 +394,7 @@ describe("registration legal acceptance", () => {
       "correct horse battery staple",
     );
     await user.type(screen.getByLabelText("Confirm password"), "correct horse battery staple");
-    await user.click(screen.getByLabelText("I accept the MyKhaya Terms & Conditions (version 1.0)"));
+    await user.click(screen.getByLabelText("I agree to the MyKhaya Terms & Conditions (v1.0)."));
     await user.click(screen.getByRole("button", { name: "Create account and continue" }));
 
     await waitFor(() => expect(post).toHaveBeenCalled());
@@ -409,11 +412,11 @@ describe("registration legal acceptance", () => {
     publicLegalDocuments.mockResolvedValue([termsDocument, betaTermsDocument, ...informationalDocuments]);
     render(<Register />);
     const submit = await screen.findByRole("button", { name: "Create account" });
-    expect(screen.getByLabelText("I accept the MyKhaya Terms & Conditions (version 1.0)")).toBeInTheDocument();
-    expect(screen.queryByLabelText("I accept the Founding Beta Terms (version 1.1)")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("I agree to the MyKhaya Terms & Conditions (v1.0).")).toBeInTheDocument();
+    expect(screen.queryByLabelText("I agree to the Founding Beta Terms (v1.1).")).not.toBeInTheDocument();
     expect(screen.getAllByRole("checkbox")).toHaveLength(1);
     expect(submit).toBeDisabled();
-    await userEvent.click(screen.getByLabelText("I accept the MyKhaya Terms & Conditions (version 1.0)"));
+    await userEvent.click(screen.getByLabelText("I agree to the MyKhaya Terms & Conditions (v1.0)."));
     expect(submit).toBeEnabled();
   });
 });

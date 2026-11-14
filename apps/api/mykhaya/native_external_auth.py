@@ -32,6 +32,10 @@ class NativeExternalTransaction:
     platform: str
     redemption_verifier_hash: str
     intended_user_id: str | None = None
+    # Founding Beta intent from the start request. Only the SHA-256 of the
+    # invitation token is kept; the raw token is never stored.
+    beta: bool = False
+    beta_invitation_hash: str | None = None
 
 
 @dataclass(frozen=True)
@@ -41,12 +45,14 @@ class NativeExternalPendingIdentity:
     subject: str
     provider_email: str | None
     email_verified: bool
-    display_name: str
+    display_name: str | None
     can_register: bool
     platform: str
     redemption_verifier_hash: str
     intended_user_id: str | None = None
     intent: str = "login"
+    beta: bool = False
+    beta_invitation_hash: str | None = None
 
 
 NATIVE_MFA_PRIMARY_METHODS = frozenset({"apple", "google", "password"})
@@ -91,6 +97,8 @@ def new_native_external_transaction(
     platform: str,
     redemption_verifier: str,
     apple_nonce_hash: bool = False,
+    beta: bool = False,
+    beta_invitation_hash: str | None = None,
 ) -> NativeExternalTransaction:
     raw_nonce = secrets.token_urlsafe(32)
     nonce = hashlib.sha256(raw_nonce.encode("ascii")).hexdigest() if apple_nonce_hash else raw_nonce
@@ -106,7 +114,17 @@ def new_native_external_transaction(
         intended_user_id=user_id if intent == "link" else None,
         platform=platform,
         redemption_verifier_hash=hash_redemption_verifier(redemption_verifier),
+        beta=beta,
+        beta_invitation_hash=beta_invitation_hash if beta else None,
     )
+
+
+def _beta_hash(value: dict[str, object]) -> str | None:
+    """The stored invitation hash, only alongside Beta intent."""
+    raw = value.get("beta_invitation_hash")
+    if value.get("beta") is not True or not isinstance(raw, str) or len(raw) != 64:
+        return None
+    return raw
 
 
 def _key(transaction_id: str) -> str:
@@ -139,6 +157,8 @@ async def store_native_external_transaction(
                     "platform": value.platform,
                     "redemption_verifier_hash": value.redemption_verifier_hash,
                     "intended_user_id": value.intended_user_id,
+                    "beta": value.beta,
+                    "beta_invitation_hash": value.beta_invitation_hash,
                 }
             ),
             ex=TRANSACTION_TTL_SECONDS,
@@ -190,6 +210,8 @@ async def _read_native_external_transaction(
             intended_user_id=(
                 str(value["intended_user_id"]) if value.get("intended_user_id") else None
             ),
+            beta=value.get("beta") is True,
+            beta_invitation_hash=_beta_hash(value),
         )
     except (KeyError, TypeError, ValueError, json.JSONDecodeError):
         return None
@@ -214,6 +236,8 @@ async def store_native_external_pending(
                     "redemption_verifier_hash": value.redemption_verifier_hash,
                     "intended_user_id": value.intended_user_id,
                     "intent": value.intent,
+                    "beta": value.beta,
+                    "beta_invitation_hash": value.beta_invitation_hash,
                 }
             ),
             ex=TRANSACTION_TTL_SECONDS,
@@ -221,6 +245,40 @@ async def store_native_external_pending(
         )
     finally:
         await redis.aclose()
+
+
+def _parse_native_external_pending(
+    transaction_id: str, raw: str | None
+) -> NativeExternalPendingIdentity | None:
+    """The single parser for a stored pending identity.
+
+    Both load and consume use it, so every stored field (including the link
+    binding: ``intent`` and ``intended_user_id``) is always read back. A
+    separate copy in the loader once dropped those two fields, which disabled
+    the link checks that depend on them."""
+    if not raw:
+        return None
+    try:
+        value = json.loads(raw)
+        return NativeExternalPendingIdentity(
+            transaction_id=transaction_id,
+            provider=ExternalIdentityProvider(str(value["provider"])),
+            subject=str(value["subject"]),
+            provider_email=str(value["provider_email"]) if value.get("provider_email") else None,
+            email_verified=bool(value.get("email_verified", False)),
+            display_name=str(value["display_name"]) if value.get("display_name") else None,
+            can_register=bool(value.get("can_register", False)),
+            platform=str(value["platform"]),
+            redemption_verifier_hash=str(value["redemption_verifier_hash"]),
+            intended_user_id=(
+                str(value["intended_user_id"]) if value.get("intended_user_id") else None
+            ),
+            intent=str(value.get("intent") or "login"),
+            beta=value.get("beta") is True,
+            beta_invitation_hash=_beta_hash(value),
+        )
+    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
+        return None
 
 
 async def consume_native_external_pending(
@@ -233,27 +291,7 @@ async def consume_native_external_pending(
         raw = await redis.getdel(_pending_key(transaction_id))
     finally:
         await redis.aclose()
-    if not raw:
-        return None
-    try:
-        value = json.loads(raw)
-        return NativeExternalPendingIdentity(
-            transaction_id=transaction_id,
-            provider=ExternalIdentityProvider(str(value["provider"])),
-            subject=str(value["subject"]),
-            provider_email=str(value["provider_email"]) if value.get("provider_email") else None,
-            email_verified=bool(value.get("email_verified", False)),
-            display_name=str(value.get("display_name") or "MyKhaya user"),
-            can_register=bool(value.get("can_register", False)),
-            platform=str(value["platform"]),
-            redemption_verifier_hash=str(value["redemption_verifier_hash"]),
-            intended_user_id=(
-                str(value["intended_user_id"]) if value.get("intended_user_id") else None
-            ),
-            intent=str(value.get("intent") or "login"),
-        )
-    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
-        return None
+    return _parse_native_external_pending(transaction_id, raw)
 
 
 async def load_native_external_pending(
@@ -266,23 +304,7 @@ async def load_native_external_pending(
         raw = await redis.get(_pending_key(transaction_id))
     finally:
         await redis.aclose()
-    if not raw:
-        return None
-    try:
-        value = json.loads(raw)
-        return NativeExternalPendingIdentity(
-            transaction_id=transaction_id,
-            provider=ExternalIdentityProvider(str(value["provider"])),
-            subject=str(value["subject"]),
-            provider_email=str(value["provider_email"]) if value.get("provider_email") else None,
-            email_verified=bool(value.get("email_verified", False)),
-            display_name=str(value.get("display_name") or "MyKhaya user"),
-            can_register=bool(value.get("can_register", False)),
-            platform=str(value["platform"]),
-            redemption_verifier_hash=str(value["redemption_verifier_hash"]),
-        )
-    except (KeyError, TypeError, ValueError, json.JSONDecodeError):
-        return None
+    return _parse_native_external_pending(transaction_id, raw)
 
 
 async def store_native_mfa_transaction(settings: Settings, value: NativeMfaTransaction) -> None:

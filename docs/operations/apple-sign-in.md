@@ -151,6 +151,10 @@ Nonce contract: `/auth/mobile/external/start` returns a raw nonce and stores
 its SHA-256. The plugin passes `sha256(raw)` (hex) to Apple, and the API
 compares it with the token's `nonce` claim.
 
+A start request from the Founding Beta sign-up also carries `beta` and an
+optional `beta_invitation_token`. Only the token's SHA-256 is kept with the
+sign-in; see [Beta waitlist and invitations](beta-waitlist-and-invitations.md).
+
 ### Native diagnostics
 
 Each native attempt has a random correlation ID (`nauth-…`). It is sent as
