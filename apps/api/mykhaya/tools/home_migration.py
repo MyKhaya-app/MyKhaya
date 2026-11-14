@@ -628,17 +628,14 @@ async def export_home(home_id: uuid.UUID, output: Path, settings: Settings) -> d
             asset["size_bytes"] = len(raw_asset)
             asset["sha256"] = hashlib.sha256(raw_asset).hexdigest()
         holiday_source_ids = {
-            _uuid(row["source_id"])
-            for row in package["data"].get("home_holiday_subscriptions", [])
+            _uuid(row["source_id"]) for row in package["data"].get("home_holiday_subscriptions", [])
         }
         if holiday_source_ids:
             holiday_sources = _table("platform_holiday_sources")
             source_rows = (
                 (
                     await db.execute(
-                        select(holiday_sources).where(
-                            holiday_sources.c.id.in_(holiday_source_ids)
-                        )
+                        select(holiday_sources).where(holiday_sources.c.id.in_(holiday_source_ids))
                     )
                 )
                 .mappings()
@@ -890,13 +887,17 @@ async def inspect_import(package: dict[str, Any], settings: Settings) -> dict[st
         holiday_sources = _table("platform_holiday_sources")
         for mapping in package.get("environment_mappings", {}).get("holiday_sources", []):
             matches = (
-                await db.execute(
-                    select(holiday_sources.c.id).where(
-                        holiday_sources.c.country_code == mapping.get("country_code"),
-                        holiday_sources.c.region_code == mapping.get("region_code"),
+                (
+                    await db.execute(
+                        select(holiday_sources.c.id).where(
+                            holiday_sources.c.country_code == mapping.get("country_code"),
+                            holiday_sources.c.region_code == mapping.get("region_code"),
+                        )
                     )
                 )
-            ).scalars().all()
+                .scalars()
+                .all()
+            )
             if len(matches) != 1:
                 reasons.append("A Home holiday catalogue source is missing or ambiguous in PROD.")
         return _report(
@@ -948,11 +949,15 @@ async def _reconcile_import(
                             broken_relationships += 1
     source_records = sum(item["source"] for item in table_counts.values())
     destination_records = sum(item["destination"] for item in table_counts.values())
-    status = "VERIFIED" if (
-        source_records == destination_records
-        and broken_relationships == 0
-        and len(verified_assets) == len(package.get("files", []))
-    ) else "VERIFICATION_FAILED"
+    status = (
+        "VERIFIED"
+        if (
+            source_records == destination_records
+            and broken_relationships == 0
+            and len(verified_assets) == len(package.get("files", []))
+        )
+        else "VERIFICATION_FAILED"
+    )
     return {
         "status": status,
         "target_home_id": str(target_home_id),
@@ -1090,13 +1095,18 @@ async def import_home(
             for mapping in package.get("environment_mappings", {}).get("holiday_sources", []):
                 source_id = str(mapping.get("source_id"))
                 matches = (
-                    await db.execute(
-                        select(target_holiday_sources.c.id).where(
-                            target_holiday_sources.c.country_code == mapping.get("country_code"),
-                            target_holiday_sources.c.region_code == mapping.get("region_code"),
+                    (
+                        await db.execute(
+                            select(target_holiday_sources.c.id).where(
+                                target_holiday_sources.c.country_code
+                                == mapping.get("country_code"),
+                                target_holiday_sources.c.region_code == mapping.get("region_code"),
+                            )
                         )
                     )
-                ).scalars().all()
+                    .scalars()
+                    .all()
+                )
                 if len(matches) != 1:
                     raise MigrationError(
                         "A Home holiday catalogue source cannot be resolved uniquely in PROD."
