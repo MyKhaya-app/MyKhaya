@@ -160,34 +160,7 @@ async def test_summary_shows_status_without_provider_identity_data(
         "change_mfa_policy": False,
         "disconnect_sign_in_methods": False,
         "cleanup_anonymised_sign_in_methods": False,
-I approve the proposed dependency compatibility correction for MyKhaya PR #36.
-
-Update only `apps/api/pyproject.toml` to pin:
-
-`pyotp==2.10.0`
-
-This approval is strictly limited to the dependency correction identified in your investigation.
-
-Requirements:
-
-1. Do not modify authentication, MFA, TOTP, OAuth, account-linking or password-reset source code.
-2. Confirm the dependency resolves to exactly version 2.10.0 in the canonical CI environment.
-3. Check for any known security advisories affecting the pinned version before proceeding.
-4. Run the full MFA/TOTP regression suite, including all 22 previously failing tests.
-5. Run the complete backend test suite, Home Migration tests, Ruff, mypy and relevant frontend checks.
-6. Confirm no changes to TOTP behaviour, verification windows, replay protection or MFA policy.
-7. Preserve all existing unrelated working-tree changes.
-8. Work directly in the existing `dev` branch. Do not create worktrees.
-
-If the checks pass, commit and push only the approved dependency change to `dev`, updating PR #36.
-
-If any authentication regression or security advisory is identified, stop and report the issue before proceeding.
-
-Do not merge, deploy or execute any production migration.
-
-Report the final test results, commit SHA and GitHub Actions status.
-
-**PR #36 must remain unmerged until all required CI checks pass.**        "manage_founding_beta_places": False,
+        "manage_founding_beta_places": False,
         "revoke_sessions": True,
     }
 
