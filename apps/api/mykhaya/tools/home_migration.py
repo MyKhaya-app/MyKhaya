@@ -919,6 +919,7 @@ async def _reconcile_import(
     *,
     target_home_id: uuid.UUID,
     verified_assets: list[dict[str, Any]],
+    expected_exclusions: dict[str, set[str]],
 ) -> dict[str, Any]:
     """Reconcile the committed logical dataset before writing the ledger."""
     table_counts: dict[str, dict[str, int]] = {}
@@ -926,7 +927,9 @@ async def _reconcile_import(
     broken_relationships = 0
     for name, rows in package["data"].items():
         table = _table(name)
-        source_ids = [str(row["id"]) for row in rows if row.get("id") is not None]
+        excluded_ids = expected_exclusions.get(name, set())
+        reconciled_rows = [row for row in rows if str(row.get("id")) not in excluded_ids]
+        source_ids = [str(row["id"]) for row in reconciled_rows if row.get("id") is not None]
         target_ids = [maps[name][source_id] for source_id in source_ids if source_id in maps[name]]
         destination_count = 0
         if target_ids:
@@ -938,10 +941,10 @@ async def _reconcile_import(
                 ).scalar_one()
             )
         table_counts[name] = {
-            "source": len(rows),
+            "source": len(reconciled_rows),
             "destination": destination_count,
         }
-        for row in rows:
+        for row in reconciled_rows:
             for column in table.columns:
                 for foreign in column.foreign_keys:
                     if foreign.column.table.name in maps and row.get(column.name) is not None:
@@ -971,6 +974,9 @@ async def _reconcile_import(
         "files_verified": len(verified_assets),
         "assets": verified_assets,
         "unexpected_exclusions": [],
+        "expected_exclusions": {
+            name: sorted(ids) for name, ids in expected_exclusions.items() if ids
+        },
     }
 
 
@@ -1017,6 +1023,7 @@ async def import_home(
             users = _table("users")
             existing_users = await _existing_users_by_normalized_email(db)
             matched_user_ids: set[uuid.UUID] = set()
+            expected_exclusions: dict[str, set[str]] = defaultdict(set)
             for member in package["members"]:
                 email = normalise_email(member["email"])
                 target_id = existing_users.get(email, _new_id())
@@ -1127,6 +1134,7 @@ async def import_home(
                         if name == "notification_preferences":
                             source_user = maps["users"].get(str(source.get("user_id")))
                             if source_user in matched_user_ids:
+                                expected_exclusions[name].add(str(old_id))
                                 continue
                         maps[name].setdefault(str(old_id), _new_id())
                     values = _rewrite(source, maps, table)
@@ -1250,6 +1258,7 @@ async def import_home(
                 maps,
                 target_home_id=target_home_id,
                 verified_assets=verified_assets,
+                expected_exclusions=expected_exclusions,
             )
             if reconciliation["status"] != "VERIFIED":
                 raise MigrationError("Post-import reconciliation failed before completion.")
