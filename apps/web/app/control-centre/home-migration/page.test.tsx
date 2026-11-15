@@ -9,14 +9,15 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import userEvent from "@testing-library/user-event";
 import HomeMigrationPage from "./page";
 
-const { get, post, upload } = vi.hoisted(() => ({
+const { del, get, post, upload } = vi.hoisted(() => ({
+  del: vi.fn(),
   get: vi.fn(),
   post: vi.fn(),
   upload: vi.fn(),
 }));
 vi.mock("@mykhaya/api-client", () => ({
   ApiError: class ApiError extends Error {},
-  platformApi: { get, post, upload },
+  platformApi: { delete: del, get, post, upload },
 }));
 vi.mock("@/components/platform-shell", () => ({
   PlatformShell: ({ children }: { children: React.ReactNode }) => (
@@ -33,6 +34,43 @@ describe("Home Migration PCC page", () => {
       environment: "development",
       packages: [],
     });
+  });
+
+  it("shows migration history and requires confirmation before discarding an abandoned package", async () => {
+    const user = userEvent.setup();
+    get.mockResolvedValue({
+      enabled: true,
+      enabled_at: null,
+      environment: "production",
+      packages: [
+        {
+          id: "package-1",
+          migration_id: "migration-1",
+          package_checksum: "abcdef1234567890",
+          summary: { member_count: 4, asset_count: 2 },
+          status: "uploaded",
+          created_at: "2026-01-01T00:00:00Z",
+        },
+      ],
+    });
+    del.mockResolvedValue(undefined);
+    render(<HomeMigrationPage />);
+    await screen.findByText("Migration History");
+    expect(screen.getByText("migration-1")).toBeTruthy();
+    await user.click(screen.getByRole("button", { name: "Discard package" }));
+    expect(del).not.toHaveBeenCalled();
+    const dialog = screen.getByRole("dialog");
+    await user.type(
+      within(dialog).getByLabelText(/Reason for this administrative action/i),
+      "Abandon this test package",
+    );
+    await user.click(within(dialog).getByRole("button", { name: "Discard package" }));
+    await waitFor(() =>
+      expect(del).toHaveBeenCalledWith("/home-migration/packages/package-1", {
+        reason: "Abandon this test package",
+        confirmed: true,
+      }),
+    );
   });
 
   it("shows the safe disabled state and does not call migration operations", async () => {
