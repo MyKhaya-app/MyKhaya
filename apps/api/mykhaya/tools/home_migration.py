@@ -409,6 +409,11 @@ def _row_matches_home(row: dict[str, Any], home_id: uuid.UUID, member_ids: set[u
     return False
 
 
+def _is_migratable_home_row(table_name: str, row: dict[str, Any]) -> bool:
+    """Exclude historical Home memberships from a portable current Home."""
+    return table_name != "group_memberships" or row.get("removed_at") is None
+
+
 def _safe_user(row: dict[str, Any]) -> dict[str, Any]:
     allowed = {
         "id",
@@ -523,7 +528,10 @@ async def export_home(home_id: uuid.UUID, output: Path, settings: Settings) -> d
         memberships = (
             (
                 await db.execute(
-                    select(membership_table).where(membership_table.c.group_id == home_id)
+                    select(membership_table).where(
+                        membership_table.c.group_id == home_id,
+                        membership_table.c.removed_at.is_(None),
+                    )
                 )
             )
             .mappings()
@@ -568,6 +576,7 @@ async def export_home(home_id: uuid.UUID, output: Path, settings: Settings) -> d
                 )
                 for row in rows
                 if _row_matches_home(dict(row), home_id, member_ids)
+                and _is_migratable_home_row(name, dict(row))
             ]
             if selected:
                 package["data"][name] = selected

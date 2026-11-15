@@ -21,6 +21,7 @@ from mykhaya.tools.home_migration import (
     _canonical_payload,
     _existing_users_by_normalized_email,
     _export_row,
+    _is_migratable_home_row,
     _rewrite,
     _table,
     import_home,
@@ -130,6 +131,14 @@ def test_relationship_rewrite_uses_fresh_ids() -> None:
     assert row["id"] == str(maps["group_memberships"][str(old_membership)])
     assert row["group_id"] == str(maps["groups"][str(old_group)])
     assert row["user_id"] == str(maps["users"][str(old_user)])
+
+
+def test_removed_home_memberships_are_not_migratable() -> None:
+    assert _is_migratable_home_row("group_memberships", {"removed_at": None})
+    assert not _is_migratable_home_row(
+        "group_memberships", {"removed_at": "2026-01-01T00:00:00+00:00"}
+    )
+    assert _is_migratable_home_row("todos", {"removed_at": "not a membership"})
 
 
 @pytest.mark.asyncio

@@ -10,6 +10,7 @@ import pytest_asyncio
 from fastapi import HTTPException, UploadFile
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from test_platform_control_centre import (
     TEST_CLIENT_IP,
     TEST_PROXY_PEER,
@@ -148,6 +149,32 @@ async def test_oversized_package_returns_a_useful_bounded_limit_error(monkeypatc
 
     assert error.value.status_code == 413
     assert error.value.detail == "Migration package is too large. Maximum supported size is 3 MiB."
+
+
+@pytest.mark.asyncio
+async def test_duplicate_package_upload_returns_conflict(monkeypatch) -> None:
+    monkeypatch.setattr(
+        platform_router, "_home_migration_environment", lambda settings, expected: None
+    )
+    monkeypatch.setattr(platform_router, "_home_migration_guard", _allow_migration)
+
+    async def duplicate(*args, **kwargs):
+        raise IntegrityError("insert", {}, Exception("duplicate migration_id"))
+
+    monkeypatch.setattr(platform_router, "store_package", duplicate)
+    context = SimpleNamespace(administrator=SimpleNamespace(id=uuid.uuid4()))
+
+    with pytest.raises(HTTPException) as error:
+        await platform_router.home_migration_upload(
+            None,
+            UploadFile(file=io.BytesIO(b"{}")),
+            context,
+            None,
+            None,
+        )
+
+    assert error.value.status_code == 409
+    assert error.value.detail == "That migration package has already been uploaded."
 
 
 @pytest.mark.asyncio

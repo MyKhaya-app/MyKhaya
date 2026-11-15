@@ -9704,6 +9704,7 @@ async def home_migration_homes(
     await _home_migration_guard(db, settings)
     count_query = (
         select(Membership.group_id, func.count().label("member_count"))
+        .where(Membership.removed_at.is_(None))
         .group_by(Membership.group_id)
         .subquery()
     )
@@ -9806,6 +9807,11 @@ async def home_migration_upload(
         if not isinstance(candidate, dict):
             raise MigrationError("The migration package has an invalid shape.")
         row = await store_package(db, settings, candidate, created_by=context.administrator.id)
+    except IntegrityError as exc:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "That migration package has already been uploaded.",
+        ) from exc
     except (json.JSONDecodeError, MigrationError) as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
     platform_audit(
