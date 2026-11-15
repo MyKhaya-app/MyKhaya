@@ -248,6 +248,7 @@ function EventForm({
   initialDay,
   timeZone,
   personalCalendar,
+  calendarDataLoaded,
   writableShares = [],
   busy,
   sharedEventsEnabled,
@@ -284,6 +285,8 @@ function EventForm({
    *  Calendar preserved read-only after a Family-to-Free downgrade with
    *  multiple members must not be offered as a new target either. */
   personalCalendar: HomeCalendar | null;
+  /** True once the current Home's calendar request has settled. */
+  calendarDataLoaded: boolean;
   /** Externally shared calendars the signed-in user may create events on
    *  (permission "manage", accepted) — offered as extra targets in the
    *  Calendar picker only when creating a brand-new event (initial is
@@ -453,6 +456,32 @@ function EventForm({
     }
     return defaultCalendarTarget(homeCalendars, personalCalendar);
   });
+  const [calendarTargetError, setCalendarTargetError] = useState("");
+  const hasCalendarOptions =
+    homeCalendars.length > 0 || Boolean(personalCalendar) || writableShares.length > 0;
+  const targetIsAvailable = useCallback((target: string) => {
+    if (target === PERSONAL_CALENDAR_VALUE) return Boolean(personalCalendar);
+    if (target.startsWith(SHARE_VALUE_PREFIX)) {
+      return writableShares.some((share) => `${SHARE_VALUE_PREFIX}${share.id}` === target);
+    }
+    return homeCalendars.some((calendar) => calendar.id === target);
+  }, [homeCalendars, personalCalendar, writableShares]);
+
+  useEffect(() => {
+    if (initial || !calendarDataLoaded) return;
+    if ((!calendarTarget && !hasCalendarOptions) || targetIsAvailable(calendarTarget)) return;
+    setCalendarTarget(defaultCalendarTarget(homeCalendars, personalCalendar));
+    setCalendarTargetError("");
+  }, [
+    calendarDataLoaded,
+    calendarTarget,
+    hasCalendarOptions,
+    homeCalendars,
+    initial,
+    personalCalendar,
+    targetIsAvailable,
+    writableShares,
+  ]);
   // The Calendar Tag picker's value — a real CalendarEventLabel id, or ""
   // for "No tag". Entirely independent of calendarTarget: which calendar
   // contains the event never constrains which tag it can carry (or vice
@@ -550,6 +579,15 @@ function EventForm({
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    if (!initial && !calendarDataLoaded) {
+      setCalendarTargetError("Calendar options are still loading. Please try again.");
+      return;
+    }
+    if (!initial && hasCalendarOptions && (!calendarTarget || !targetIsAvailable(calendarTarget))) {
+      setCalendarTargetError("Select a calendar before saving this event.");
+      return;
+    }
+    setCalendarTargetError("");
     const data = new FormData(event.currentTarget);
     const title = formText(data, "title").trim();
 
@@ -863,21 +901,26 @@ function EventForm({
               ? "Only you can see events in this calendar."
               : calendarTarget.startsWith(SHARE_VALUE_PREFIX)
                 ? "This event will be created on a calendar shared with you — everyone it's shared with can see it."
-                : undefined
+              : undefined
           }
+          error={calendarTargetError || undefined}
         >
           {(control) => (
             <select
               {...control}
               name="calendar"
               value={calendarTarget}
-              onChange={(event) => setCalendarTarget(event.target.value)}
+              onChange={(event) => {
+                setCalendarTarget(event.target.value);
+                setCalendarTargetError("");
+              }}
               // Where an event lives is fixed at creation — matching the
               // backend's EventUpdate schema, which has no calendar_id field at
               // all (moving an existing event between calendars isn't
               // supported). Shown (not hidden) on edit so it's still clear
               // which calendar the event belongs to.
               disabled={Boolean(initial)}
+              required={!initial && hasCalendarOptions}
             >
               <optgroup label="Home calendars">
                 {homeCalendars.map((calendar) => {
@@ -1388,6 +1431,7 @@ export default function CalendarPage() {
   // toggles, same convention as member/label filters: fetch everything,
   // filter client-side (see visibleEvents/filterByVisibleCalendars).
   const [homeCalendars, setHomeCalendars] = useState<HomeCalendar[]>([]);
+  const [calendarDataLoaded, setCalendarDataLoaded] = useState(false);
   const [sharedCalendars, setSharedCalendars] = useState<CalendarShare[]>([]);
   const [calendarHighlights, setCalendarHighlights] = useState<CalendarHighlight[]>([]);
   const [hiddenCalendarIds, setHiddenCalendarIds] = useState<Set<string>>(new Set());
@@ -1629,6 +1673,7 @@ export default function CalendarPage() {
     if (primaryCalendar) setCalendarTimezone(primaryCalendar.timezone);
     setPersonalCalendarId(calendarRows?.personal_calendar?.id ?? null);
     setPersonalCalendar(calendarRows?.personal_calendar ?? null);
+    setCalendarDataLoaded(true);
     // Merge in every accepted external share's events for the same visible
     // range, tagged with where they came from — see EventOccurrence's
     // share_id/share_permission/shared_by_home_name docstring in
@@ -1733,9 +1778,14 @@ export default function CalendarPage() {
   }
 
   useEffect(() => {
+    setCalendarDataLoaded(false);
     setError("");
     load().catch((cause: Error) => setError(cause.message));
   }, [load]);
+
+  useEffect(() => {
+    setCalendarDataLoaded(false);
+  }, [activeHomeId]);
 
   // Calendars the signed-in user may create *new* events on, beyond their
   // own Home calendar/Personal calendar — offered in EventForm's Calendar
@@ -2576,6 +2626,7 @@ export default function CalendarPage() {
               initialDay={editorDay}
               timeZone={calendarTimezone}
               personalCalendar={personalCalendar}
+              calendarDataLoaded={calendarDataLoaded}
               writableShares={writableShares}
               busy={busy}
               sharedEventsEnabled={sharedEventsEnabled}
@@ -2671,6 +2722,7 @@ export default function CalendarPage() {
                   initialDay={new Date(selectedEvent.start_at)}
                   timeZone={calendarTimezone}
                   personalCalendar={personalCalendar}
+                  calendarDataLoaded={calendarDataLoaded}
                   busy={busy}
                   sharedEventsEnabled={sharedEventsEnabled}
                   onSubmit={update}
