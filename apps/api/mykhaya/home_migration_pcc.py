@@ -52,6 +52,7 @@ def package_checksum(package: dict[str, Any]) -> str:
 
 
 def package_summary(package: dict[str, Any]) -> dict[str, Any]:
+    manifest = package.get("manifest", {})
     return {
         "migration_id": package["migration_id"],
         "source_environment": package["source_environment"],
@@ -61,6 +62,8 @@ def package_summary(package: dict[str, Any]) -> dict[str, Any]:
         "asset_count": len(package["files"]),
         "counts": {name: len(rows) for name, rows in package["data"].items()},
         "version": package["version"],
+        "classified_tables": manifest.get("classified_tables"),
+        "environment_mappings": package.get("environment_mappings", {}),
     }
 
 

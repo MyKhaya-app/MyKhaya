@@ -283,6 +283,8 @@ async def test_home_migration_carries_the_driveway_category_plan_and_nudges(
     report = await import_home(
         package, target, dry_run=False, target_environment="production", confirm=True
     )
+    assert report["reconciliation"]["status"] == "VERIFIED"
+    assert report["reconciliation"]["expected_exclusions"]["notification_preferences"]
     imported_home = uuid.UUID(report["target_home_id"])
     async with SessionFactory() as db:
         categories = (

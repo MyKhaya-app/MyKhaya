@@ -100,6 +100,7 @@ from mykhaya.home_migration_pcc import (
     get_package,
     load_package,
     migration_enabled,
+    package_checksum,
     package_summary,
     storage_path,
     store_package,
@@ -9899,6 +9900,12 @@ async def home_migration_import(
     await db.commit()
     try:
         candidate = await load_package(settings, row["storage_key"])
+        # Bind the import to the exact bytes that passed the dry-run. The
+        # embedded integrity field protects the package from accidental
+        # corruption; this independent comparison protects the PCC workflow
+        # from a package being replaced after dry-run.
+        if package_checksum(candidate) != row["package_checksum"]:
+            raise MigrationError("The migration package changed after dry-run.")
         report = await import_home(
             candidate, settings, dry_run=False, target_environment="production", confirm=True
         )

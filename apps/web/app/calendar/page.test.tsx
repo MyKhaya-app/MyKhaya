@@ -2008,6 +2008,9 @@ describe("Calendar — event editor on the shared form layout", () => {
   it("submits the same payload as before the move", async () => {
     (api.createEvent as ReturnType<typeof vi.fn>).mockResolvedValue({});
     const dialog = await openAddEventSheet();
+    await waitFor(() =>
+      expect(within(dialog).getByLabelText<HTMLSelectElement>("Calendar").value).toBe("cal-1"),
+    );
     fireEvent.change(within(dialog).getByLabelText("Title"), { target: { value: "Swimming" } });
     fireEvent.change(within(dialog).getByLabelText("Date"), { target: { value: "2026-01-20" } });
     fireEvent.change(within(dialog).getByLabelText("Start time"), { target: { value: "09:00" } });
@@ -2040,6 +2043,47 @@ describe("Calendar — event editor on the shared form layout", () => {
       recurrence_count: null,
       description: "Bring goggles",
     });
+  });
+
+  it("does not submit before calendars load, then selects the loaded primary calendar", async () => {
+    const calendarsResponse = {
+      items: [{ id: "cal-1", is_primary: true, timezone: "UTC" }],
+      personal_calendar: null,
+    };
+    let releaseCalendars!: (value: typeof calendarsResponse) => void;
+    (api.listCalendars as ReturnType<typeof vi.fn>).mockReturnValue(
+      new Promise<typeof calendarsResponse>((resolve) => {
+        releaseCalendars = resolve;
+      }),
+    );
+    (api.createEvent as ReturnType<typeof vi.fn>).mockResolvedValue({});
+
+    const dialog = await openAddEventSheet();
+    fireEvent.change(within(dialog).getByLabelText("Title"), { target: { value: "Swimming" } });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save event" }));
+
+    await waitFor(() => {
+      expect(api.createEvent).not.toHaveBeenCalled();
+      expect(within(dialog).getByText("Calendar options are still loading. Please try again.")).toBeInTheDocument();
+    });
+
+    releaseCalendars(calendarsResponse);
+    await waitFor(() =>
+      expect(within(dialog).getByLabelText<HTMLSelectElement>("Calendar").value).toBe("cal-1"),
+    );
+    await waitFor(() =>
+      expect(
+        within(dialog).queryByText("Calendar options are still loading. Please try again."),
+      ).toBeNull(),
+    );
+
+    fireEvent.change(within(dialog).getByLabelText("Calendar"), {
+      target: { value: "cal-1" },
+    });
+    fireEvent.click(within(dialog).getByRole("button", { name: "Save event" }));
+    await waitFor(() => expect(api.createEvent).toHaveBeenCalled());
+    const [, payload] = (api.createEvent as ReturnType<typeof vi.fn>).mock.calls[0]! as [string, EventPayload];
+    expect(payload.calendar_id).toBe("cal-1");
   });
 
   it("cancels without saving, and locks every dismissal while a save is in flight", async () => {
