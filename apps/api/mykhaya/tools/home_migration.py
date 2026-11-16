@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any, Literal
 
 from sqlalchemy import Column, Date, DateTime, String, Table, Time, Uuid, func, insert, select
+from sqlalchemy.exc import IntegrityError
 
 from mykhaya import models as _models  # noqa: F401 - register ORM tables in Base.metadata
 from mykhaya.avatars.storage import get_avatar_storage
@@ -253,6 +254,15 @@ LEDGER = Table(
 
 class MigrationError(RuntimeError):
     """A safe-to-report validation or migration failure."""
+
+
+class MigrationReplayError(MigrationError):
+    """The package identity has already been committed or is being replayed."""
+
+
+def migration_lock_key(migration_id: uuid.UUID) -> int:
+    """Derive a stable positive PostgreSQL advisory-lock key from a UUID."""
+    return migration_id.int & ((1 << 63) - 1)
 
 
 def _json_value(value: Any) -> Any:
@@ -1011,6 +1021,10 @@ async def import_home(
     created_files: list[tuple[str, str]] = []
     verified_assets: list[dict[str, Any]] = []
     async with SessionFactory() as db:
+        # This transaction-scoped lock serialises imports for one package
+        # without adding another persisted lock record. The ledger uniqueness
+        # constraints remain the final replay-protection boundary.
+        await db.execute(select(func.pg_advisory_xact_lock(migration_lock_key(migration_id))))
         existing_ledger = (
             (
                 await db.execute(
@@ -1024,7 +1038,7 @@ async def import_home(
             .first()
         )
         if existing_ledger:
-            raise MigrationError(
+            raise MigrationReplayError(
                 f"Migration {migration_id} was already completed. No changes made."
             )
         maps: dict[str, dict[str, uuid.UUID]] = defaultdict(dict)
@@ -1271,17 +1285,23 @@ async def import_home(
             )
             if reconciliation["status"] != "VERIFIED":
                 raise MigrationError("Post-import reconciliation failed before completion.")
-            await db.execute(
-                insert(LEDGER).values(
-                    id=_new_id(),
-                    migration_id=migration_id,
-                    source_home_id=_uuid(package["source_home_id"]),
-                    target_home_id=target_home_id,
-                    package_checksum=package["integrity_sha256"],
-                    completed_at=datetime.now(UTC),
+            try:
+                await db.execute(
+                    insert(LEDGER).values(
+                        id=_new_id(),
+                        migration_id=migration_id,
+                        source_home_id=_uuid(package["source_home_id"]),
+                        target_home_id=target_home_id,
+                        package_checksum=package["integrity_sha256"],
+                        completed_at=datetime.now(UTC),
+                    )
                 )
-            )
-            await db.commit()
+                await db.commit()
+            except IntegrityError as exc:
+                raise MigrationReplayError(
+                    f"Migration {migration_id} was already completed or is being imported "
+                    "concurrently."
+                ) from exc
             report = _report(package, target_home_id=target_home_id, status="IMPORTED", reasons=[])
             report["reconciliation"] = reconciliation
             return report

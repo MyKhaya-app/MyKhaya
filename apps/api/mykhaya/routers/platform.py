@@ -95,7 +95,12 @@ from mykhaya.external_identities import (
 )
 from mykhaya.founding_beta_schemas import SignupStateResponse
 from mykhaya.home_migration_pcc import (
+    MIGRATION_STATUS_COMPLETED,
+    MIGRATION_STATUS_DISCARDED,
+    MIGRATION_STATUS_FAILED,
+    MIGRATION_STATUS_IMPORTING,
     PACKAGE_STORE,
+    classify_integrity_error,
     discard_package_file,
     get_package,
     load_package,
@@ -391,8 +396,10 @@ from mykhaya.syslog_forwarding import (
     syslog_config_from_platform_value,
 )
 from mykhaya.tools.home_migration import (
+    LEDGER,
     MAX_FILE_BYTES,
     MigrationError,
+    MigrationReplayError,
     export_home,
     import_home,
     inspect_import,
@@ -9652,6 +9659,7 @@ def _home_migration_environment(settings: Settings, expected: str) -> None:
 
 
 def _package_public(row: dict[str, Any]) -> dict[str, Any]:
+    report = row.get("completed_report") or {}
     return {
         "id": str(row["id"]),
         "migration_id": str(row["migration_id"]),
@@ -9662,7 +9670,55 @@ def _package_public(row: dict[str, Any]) -> dict[str, Any]:
         "dry_run_report": row.get("dry_run_report"),
         "completed_report": row.get("completed_report"),
         "completed_at": row.get("completed_at"),
+        "created_at": row.get("created_at"),
+        "failure_category": report.get("failure_category")
+        if isinstance(report, dict) and report.get("status") == "FAILED"
+        else None,
     }
+
+
+async def _record_migration_failure(
+    db: AsyncSession,
+    request: Request,
+    context: PlatformContext,
+    row: dict[str, Any],
+    *,
+    category: str,
+    message: str,
+    diagnostics: dict[str, str] | None = None,
+) -> None:
+    """Persist a safe failure report after the import transaction rolled back."""
+    report = {
+        "status": "FAILED",
+        "failure_category": category,
+        "message": message,
+        "diagnostics": diagnostics or {},
+    }
+    await db.execute(
+        PACKAGE_STORE.update()
+        .where(PACKAGE_STORE.c.id == row["id"])
+        .values(completed_report=report, status=MIGRATION_STATUS_FAILED)
+    )
+    platform_audit(
+        db,
+        request,
+        context,
+        "home_migration.import_failed",
+        "migration",
+        row["migration_id"],
+        outcome="failure",
+        new={"status": MIGRATION_STATUS_FAILED, "failure_category": category},
+        failure_category=category,
+    )
+    try:
+        await db.commit()
+    except Exception:
+        await db.rollback()
+        log.exception(
+            "home_migration.failure_report_persist_failed",
+            migration_id=str(row["migration_id"]),
+            failure_category=category,
+        )
 
 
 @router.get("/home-migration/status")
@@ -9678,7 +9734,7 @@ async def home_migration_status(
     packages = (
         (
             await db.execute(
-                select(PACKAGE_STORE).order_by(PACKAGE_STORE.c.created_at.desc()).limit(10)
+                select(PACKAGE_STORE).order_by(PACKAGE_STORE.c.created_at.desc()).limit(50)
             )
         )
         .mappings()
@@ -9808,10 +9864,9 @@ async def home_migration_upload(
             raise MigrationError("The migration package has an invalid shape.")
         row = await store_package(db, settings, candidate, created_by=context.administrator.id)
     except IntegrityError as exc:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            "That migration package has already been uploaded.",
-        ) from exc
+        category, message, diagnostics = classify_integrity_error(exc, context="upload")
+        log.error("home_migration.upload_integrity_failure", **diagnostics)
+        raise HTTPException(status.HTTP_409_CONFLICT, message) from exc
     except (json.JSONDecodeError, MigrationError) as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
     platform_audit(
@@ -9877,9 +9932,24 @@ async def home_migration_import(
     _home_migration_environment(settings, "production")
     await _home_migration_guard(db, settings)
     require_recent_auth(context, settings)
-    row = await get_package(db, body.package_id)
+    row = await get_package(db, body.package_id, for_update=True)
     if row is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "That migration package was not found.")
+    if row["status"] == MIGRATION_STATUS_COMPLETED:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "This migration was already completed. No changes were made.",
+        )
+    if row["status"] == MIGRATION_STATUS_DISCARDED:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "This migration package was discarded and cannot be imported.",
+        )
+    if row["status"] == MIGRATION_STATUS_IMPORTING:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "This migration is already being imported by another operator.",
+        )
     if body.confirmation != str(row["migration_id"]):
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -9894,6 +9964,10 @@ async def home_migration_import(
             status.HTTP_409_CONFLICT,
             "A successful dry-run for this exact package is required.",
         )
+    row_update = {"status": MIGRATION_STATUS_IMPORTING, "completed_report": None}
+    await db.execute(
+        PACKAGE_STORE.update().where(PACKAGE_STORE.c.id == body.package_id).values(**row_update)
+    )
     platform_audit(
         db,
         request,
@@ -9915,27 +9989,63 @@ async def home_migration_import(
         report = await import_home(
             candidate, settings, dry_run=False, target_environment="production", confirm=True
         )
-    except (MigrationError, IntegrityError) as exc:
-        if isinstance(exc, IntegrityError):
-            message = (
-                "This migration was already completed or is being imported by another operator."
-            )
-            failure_category = "duplicate_or_concurrent_import"
-        else:
-            message = str(exc)
-            failure_category = type(exc).__name__
-        platform_audit(
+    except MigrationReplayError as exc:
+        await _record_migration_failure(
             db,
             request,
             context,
-            "home_migration.import_failed",
-            "migration",
-            row["migration_id"],
-            outcome="failure",
-            failure_category=failure_category,
+            row,
+            category="duplicate_or_concurrent_import",
+            message=str(exc),
         )
-        await db.commit()
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    except IntegrityError as exc:
+        category, message, diagnostics = classify_integrity_error(exc, context="import")
+        log.error(
+            "home_migration.import_integrity_failure",
+            migration_id=str(row["migration_id"]),
+            **diagnostics,
+        )
+        await _record_migration_failure(
+            db,
+            request,
+            context,
+            row,
+            category=category,
+            message=message,
+            diagnostics=diagnostics,
+        )
         raise HTTPException(status.HTTP_409_CONFLICT, message) from exc
+    except MigrationError as exc:
+        failure_category = type(exc).__name__
+        await _record_migration_failure(
+            db,
+            request,
+            context,
+            row,
+            category=failure_category,
+            message=str(exc),
+        )
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    except Exception as exc:
+        log.exception(
+            "home_migration.import_unexpected_failure",
+            migration_id=str(row["migration_id"]),
+            failure_category="unexpected_import_failure",
+        )
+        message = (
+            "The migration failed unexpectedly. Review protected migration diagnostics "
+            "before retrying."
+        )
+        await _record_migration_failure(
+            db,
+            request,
+            context,
+            row,
+            category="unexpected_import_failure",
+            message=message,
+        )
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, message) from exc
     await db.execute(
         PACKAGE_STORE.update()
         .where(PACKAGE_STORE.c.id == body.package_id)
@@ -9956,6 +10066,92 @@ async def home_migration_import(
     # reports remain as the audit trail.
     await discard_package_file(settings, row["storage_key"])
     return {"report": report, "status": "completed"}
+
+
+@router.delete("/home-migration/packages/{package_id}")
+async def home_migration_discard(
+    package_id: uuid.UUID,
+    body: SensitiveActionRequest,
+    request: Request,
+    context: PlatformContext = Depends(require_roles(*HOME_MIGRATION_ROLES)),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, Any]:
+    """Discard an abandoned package without deleting its audit identity."""
+    _home_migration_environment(settings, "production")
+    await _home_migration_guard(db, settings)
+    require_recent_auth(context, settings)
+    row = await get_package(db, package_id, for_update=True)
+    if row is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That migration package was not found.")
+    if row["status"] == MIGRATION_STATUS_COMPLETED:
+        raise HTTPException(status.HTTP_409_CONFLICT, "Completed migrations cannot be discarded.")
+    if row["status"] == MIGRATION_STATUS_IMPORTING:
+        raise HTTPException(status.HTTP_409_CONFLICT, "An active import cannot be discarded.")
+    if row["status"] == MIGRATION_STATUS_DISCARDED:
+        return _package_public(row)
+    ledger_row = (
+        (
+            await db.execute(
+                select(LEDGER).where(
+                    (LEDGER.c.migration_id == row["migration_id"])
+                    | (LEDGER.c.source_home_id == row["source_home_id"])
+                )
+            )
+        )
+        .mappings()
+        .first()
+    )
+    if ledger_row is not None:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            "This migration has committed destination data and cannot be discarded.",
+        )
+    await db.execute(
+        PACKAGE_STORE.update()
+        .where(PACKAGE_STORE.c.id == package_id)
+        .values(status=MIGRATION_STATUS_DISCARDED)
+    )
+    row["status"] = MIGRATION_STATUS_DISCARDED
+    platform_audit(
+        db,
+        request,
+        context,
+        "home_migration.package_discarded",
+        "migration",
+        row["migration_id"],
+        reason=body.reason,
+        new={"status": MIGRATION_STATUS_DISCARDED, "package_checksum": row["package_checksum"]},
+    )
+    await db.commit()
+    cleanup_ok = await discard_package_file(settings, row["storage_key"])
+    if not cleanup_ok:
+        row["completed_report"] = {
+            "status": "DISCARDED",
+            "cleanup": "PENDING",
+            "message": (
+                "The package identity was discarded, but its retained file needs operator cleanup."
+            ),
+        }
+        await db.execute(
+            PACKAGE_STORE.update()
+            .where(PACKAGE_STORE.c.id == package_id)
+            .values(completed_report=row["completed_report"])
+        )
+        platform_audit(
+            db,
+            request,
+            context,
+            "home_migration.package_discard_cleanup_failed",
+            "migration",
+            row["migration_id"],
+            outcome="failure",
+            failure_category="package_file_cleanup_failed",
+        )
+        await db.commit()
+    else:
+        row["completed_report"] = {"status": "DISCARDED", "cleanup": "removed"}
+    return _package_public(row)
 
 
 @router.get("/home-migration/packages/{package_id}/download")

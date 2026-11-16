@@ -45,6 +45,8 @@ type Package = {
     classified_tables?: number;
   };
   status: string;
+  created_at?: string;
+  failure_category?: string | null;
   dry_run_report?: {
     status: string;
     matched_existing_users: number;
@@ -73,6 +75,22 @@ const memberLabel = (count: number) =>
   `${count} ${count === 1 ? "member" : "members"}`;
 const homeOptionLabel = (home: Home) =>
   `${home.name} \u00b7 ${memberLabel(home.member_count)}`;
+const packageStatusLabel = (status: string) =>
+  ({
+    uploaded: "Uploaded",
+    READY_TO_IMPORT: "Ready for import",
+    importing: "Importing",
+    completed: "Completed",
+    failed: "Failed",
+    discarded: "Discarded",
+    expired: "Expired",
+  })[status] ?? status;
+const packageCanBeDiscarded = (status: string) =>
+  !["completed", "importing", "discarded", "expired"].includes(status);
+const packageDateLabel = (value: unknown) =>
+  typeof value === "string"
+    ? new Date(value).toLocaleString("en-GB")
+    : "Date unavailable";
 
 export default function HomeMigrationPage() {
   const [status, setStatus] = useState<Status | null>(null),
@@ -85,6 +103,7 @@ export default function HomeMigrationPage() {
     [working, setWorking] = useState(false),
     [error, setError] = useState("");
   const [dryRunConfirmationOpen, setDryRunConfirmationOpen] = useState(false);
+  const [discardTarget, setDiscardTarget] = useState<Package | null>(null);
   const load = async () => {
     setLoading(true);
     setError("");
@@ -423,6 +442,64 @@ export default function HomeMigrationPage() {
                 />
               </CcSection>
             )}
+            <CcSection
+              title="Migration History"
+              description="Package identities and lifecycle results are retained for audit and replay protection."
+            >
+              {status.packages.length === 0 ? (
+                <p>No migration packages have been recorded.</p>
+              ) : (
+                <div className="cc-record-list">
+                  {status.packages.map((item) => (
+                    <div className="cc-record-list-row" key={item.id}>
+                      <div>
+                        <strong>{item.migration_id}</strong>
+                        <p>
+                          {packageDateLabel(item.created_at)}
+                          {" · "}
+                          {packageStatusLabel(item.status)}
+                        </p>
+                        <p>
+                          {item.summary.member_count} members · {item.summary.asset_count} assets · checksum {item.package_checksum.slice(0, 12)}…
+                        </p>
+                        <p>
+                          Dry-run: {item.dry_run_report?.status ?? "not run"} · Import: {item.completed_report?.reconciliation?.status ?? (item.status === "failed" ? item.failure_category ?? "failed" : item.status === "completed" ? "completed" : "not run")}
+                        </p>
+                      </div>
+                      {prod && packageCanBeDiscarded(item.status) && (
+                        <button
+                          className="danger"
+                          disabled={working}
+                          onClick={() => setDiscardTarget(item)}
+                        >
+                          Discard package
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </CcSection>
+            <CcConfirmDialog
+              open={discardTarget !== null}
+              onClose={() => setDiscardTarget(null)}
+              title="Discard migration package"
+              description="This preserves the migration identity and audit history, blocks future import, and removes only the retained plaintext package file when safe. Imported Homes and accounts are never deleted."
+              confirmLabel="Discard package"
+              variant="destructive"
+              onConfirm={async (formData) => {
+                if (!discardTarget) return;
+                const target = discardTarget;
+                const ok = await run(async () => {
+                  await platformApi.delete(`/home-migration/packages/${target.id}`, {
+                    reason: formData.get("audit_reason"),
+                    confirmed: true,
+                  });
+                  await load();
+                });
+                if (ok) setDiscardTarget(null);
+              }}
+            />
             {!dev && !prod && (
               <CcNotice tone="warning">
                 Home Migration is intentionally unavailable in this environment.

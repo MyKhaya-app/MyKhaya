@@ -23,6 +23,7 @@ from mykhaya.config import get_settings
 from mykhaya.db import SessionFactory
 from mykhaya.home_migration_pcc import (
     PACKAGE_STORE,
+    classify_integrity_error,
     discard_package_file,
     migration_enabled,
     package_checksum,
@@ -159,7 +160,12 @@ async def test_duplicate_package_upload_returns_conflict(monkeypatch) -> None:
     monkeypatch.setattr(platform_router, "_home_migration_guard", _allow_migration)
 
     async def duplicate(*args, **kwargs):
-        raise IntegrityError("insert", {}, Exception("duplicate migration_id"))
+        diagnostic = SimpleNamespace(
+            constraint_name="home_migration_packages_migration_id_key",
+            table_name="home_migration_packages",
+        )
+        original = SimpleNamespace(sqlstate="23505", diag=diagnostic)
+        raise IntegrityError("insert", {}, original)
 
     monkeypatch.setattr(platform_router, "store_package", duplicate)
     context = SimpleNamespace(administrator=SimpleNamespace(id=uuid.uuid4()))
@@ -175,6 +181,25 @@ async def test_duplicate_package_upload_returns_conflict(monkeypatch) -> None:
 
     assert error.value.status_code == 409
     assert error.value.detail == "That migration package has already been uploaded."
+
+
+def test_integrity_error_classification_does_not_treat_relationship_failures_as_replays() -> None:
+    diagnostic = SimpleNamespace(
+        constraint_name="todos_group_id_fkey",
+        table_name="todos",
+    )
+    original = SimpleNamespace(sqlstate="23503", diag=diagnostic)
+    category, message, diagnostics = classify_integrity_error(
+        IntegrityError("insert", {}, original), context="import"
+    )
+    assert category == "foreign_key_failure"
+    assert "relationship" in message
+    assert diagnostics == {
+        "sqlstate": "23503",
+        "constraint": "todos_group_id_fkey",
+        "table": "todos",
+        "context": "import",
+    }
 
 
 @pytest.mark.asyncio
@@ -404,6 +429,126 @@ async def test_package_download_requires_recent_authentication_and_is_audited(
     finally:
         app.dependency_overrides.pop(get_settings, None)
         await _delete_package_rows(created)
+
+
+@pytest.mark.asyncio
+async def test_abandoned_package_can_be_discarded_without_deleting_ledger_identity(
+    admin_client, admin_factory, monkeypatch, tmp_path
+) -> None:
+    monkeypatch.setattr(
+        platform_router, "_home_migration_environment", lambda settings, expected: None
+    )
+    monkeypatch.setattr(platform_router, "_home_migration_guard", _allow_migration)
+    settings = get_settings().model_copy(update={"home_migration_storage_dir": str(tmp_path)})
+    app.dependency_overrides[get_settings] = lambda: settings
+    admin = await admin_factory()
+    row: dict[str, str] | None = None
+    try:
+        await login(admin_client, admin)
+        row = await _store(settings, admin.id)
+        package_path = tmp_path / row["storage_key"]
+        assert package_path.is_file()
+        response = await unsafe(
+            admin_client,
+            "DELETE",
+            f"/api/v1/platform/home-migration/packages/{row['id']}",
+            json={"reason": "Abandon this unneeded test package", "confirmed": True},
+        )
+        assert response.status_code == 200, response.text
+        assert response.json()["status"] == "discarded"
+        assert not package_path.exists()
+        async with SessionFactory() as db:
+            stored = await db.execute(
+                select(PACKAGE_STORE.c.status).where(PACKAGE_STORE.c.id == uuid.UUID(row["id"]))
+            )
+            assert stored.scalar_one() == "discarded"
+            event = await db.scalar(
+                select(AdministrativeAuditEvent).where(
+                    AdministrativeAuditEvent.administrator_id == admin.id,
+                    AdministrativeAuditEvent.action == "home_migration.package_discarded",
+                )
+            )
+            assert event is not None
+            blocked = await unsafe(
+                admin_client,
+                "POST",
+                "/api/v1/platform/home-migration/import",
+                json={
+                    "package_id": row["id"],
+                    "confirmation": row["migration_id"],
+                    "reason": "Attempt a discarded package",
+                    "confirmed": True,
+                },
+            )
+        assert blocked.status_code == 409
+        assert "discarded" in blocked.json()["detail"]
+    finally:
+        app.dependency_overrides.pop(get_settings, None)
+        if row is not None:
+            await _delete_package_rows([row["id"]])
+
+
+@pytest.mark.asyncio
+async def test_import_integrity_failure_is_recorded_as_failed_not_duplicate(
+    admin_client, admin_factory, monkeypatch, tmp_path
+) -> None:
+    monkeypatch.setattr(
+        platform_router, "_home_migration_environment", lambda settings, expected: None
+    )
+    monkeypatch.setattr(platform_router, "_home_migration_guard", _allow_migration)
+    settings = get_settings().model_copy(update={"home_migration_storage_dir": str(tmp_path)})
+    app.dependency_overrides[get_settings] = lambda: settings
+    admin = await admin_factory()
+    row: dict[str, str] | None = None
+    try:
+        await login(admin_client, admin)
+        row = await _store(settings, admin.id)
+        async with SessionFactory() as db:
+            await db.execute(
+                PACKAGE_STORE.update()
+                .where(PACKAGE_STORE.c.id == uuid.UUID(row["id"]))
+                .values(
+                    status="READY_TO_IMPORT",
+                    dry_run_checksum=row["package_checksum"],
+                    dry_run_report={"status": "READY_TO_IMPORT"},
+                )
+            )
+            await db.commit()
+
+        diagnostic = SimpleNamespace(constraint_name="todos_group_id_fkey", table_name="todos")
+        original = SimpleNamespace(sqlstate="23503", diag=diagnostic)
+
+        async def fail_import(*args, **kwargs):
+            raise IntegrityError("insert", {}, original)
+
+        monkeypatch.setattr(platform_router, "import_home", fail_import)
+        response = await unsafe(
+            admin_client,
+            "POST",
+            "/api/v1/platform/home-migration/import",
+            json={
+                "package_id": row["id"],
+                "confirmation": row["migration_id"],
+                "reason": "Record the isolated relationship failure",
+                "confirmed": True,
+            },
+        )
+        assert response.status_code == 409
+        assert "relationship" in response.json()["detail"]
+        async with SessionFactory() as db:
+            stored = (
+                await db.execute(
+                    select(PACKAGE_STORE.c.status, PACKAGE_STORE.c.completed_report).where(
+                        PACKAGE_STORE.c.id == uuid.UUID(row["id"])
+                    )
+                )
+            ).one()
+            assert stored.status == "failed"
+            assert stored.completed_report["failure_category"] == "foreign_key_failure"
+    finally:
+        app.dependency_overrides.pop(get_settings, None)
+        if row is not None:
+            await _delete_package_rows([row["id"]])
 
 
 @pytest.mark.asyncio

@@ -1,5 +1,6 @@
 """Safety and package-format tests for the one-off Home migration utility."""
 
+import asyncio
 import hashlib
 import re
 import uuid
@@ -18,6 +19,7 @@ from mykhaya.tools.home_migration import (
     FORMAT,
     VERSION,
     MigrationError,
+    MigrationReplayError,
     _canonical_payload,
     _existing_users_by_normalized_email,
     _export_row,
@@ -263,3 +265,22 @@ async def test_two_home_rehearsal_and_migrated_account_password_recovery(
 
     async with SessionFactory() as db:
         assert await db.scalar(select(Group.id).where(Group.id == second_report["target_home_id"]))
+
+
+@pytest.mark.asyncio
+async def test_concurrent_imports_serialize_on_migration_identity() -> None:
+    settings = get_settings().model_copy(update={"environment": "production"})
+    candidate = _rehearsal_package(f"concurrent-{uuid.uuid4().hex}@example.com")
+
+    results = await asyncio.gather(
+        import_home(
+            candidate, settings, dry_run=False, target_environment="production", confirm=True
+        ),
+        import_home(
+            candidate, settings, dry_run=False, target_environment="production", confirm=True
+        ),
+        return_exceptions=True,
+    )
+
+    assert sum(isinstance(result, dict) for result in results) == 1
+    assert sum(isinstance(result, MigrationReplayError) for result in results) == 1

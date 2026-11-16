@@ -11,6 +11,7 @@ import asyncio
 import hashlib
 import json
 import os
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -19,6 +20,7 @@ from typing import Any
 
 import structlog
 from sqlalchemy import JSON, Column, DateTime, String, Table, Uuid, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from mykhaya.config import Settings
@@ -43,6 +45,102 @@ PACKAGE_STORE = Table(
     Column("completed_at", DateTime(timezone=True), nullable=True),
 )
 log = structlog.get_logger("home_migration")
+
+MIGRATION_STATUS_UPLOADED = "uploaded"
+MIGRATION_STATUS_IMPORTING = "importing"
+MIGRATION_STATUS_FAILED = "failed"
+MIGRATION_STATUS_DISCARDED = "discarded"
+MIGRATION_STATUS_COMPLETED = "completed"
+MIGRATION_STATUS_EXPIRED = "expired"
+MIGRATION_REPLAY_CONSTRAINTS = {
+    "home_migration_ledger_migration_id_key",
+    "home_migration_ledger_source_home_id_key",
+}
+MIGRATION_PACKAGE_IDENTITY_CONSTRAINTS = {
+    "home_migration_packages_migration_id_key",
+    "home_migration_packages_storage_key_key",
+}
+_SAFE_IDENTIFIER = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+
+
+def _integrity_details(error: IntegrityError) -> tuple[str | None, str | None, str | None]:
+    original = getattr(error, "orig", None)
+    diagnostic = getattr(original, "diag", None)
+    sqlstate = getattr(original, "sqlstate", None) or getattr(original, "pgcode", None)
+    constraint = getattr(diagnostic, "constraint_name", None)
+    table = getattr(diagnostic, "table_name", None)
+    return (
+        sqlstate if isinstance(sqlstate, str) else None,
+        constraint if isinstance(constraint, str) else None,
+        table if isinstance(table, str) else None,
+    )
+
+
+def classify_integrity_error(
+    error: IntegrityError, *, context: str
+) -> tuple[str, str, dict[str, str]]:
+    """Return a safe operator category/message and redacted diagnostics.
+
+    PostgreSQL diagnostics contain identifiers, not customer payload. Only
+    validated identifiers are retained in logs/audit metadata; raw exception
+    text is deliberately never returned to PCC.
+    """
+    sqlstate, constraint, table = _integrity_details(error)
+    safe_constraint = constraint if constraint and _SAFE_IDENTIFIER.fullmatch(constraint) else None
+    safe_table = table if table and _SAFE_IDENTIFIER.fullmatch(table) else None
+    diagnostics = {
+        key: value
+        for key, value in {
+            "sqlstate": sqlstate,
+            "constraint": safe_constraint,
+            "table": safe_table,
+            "context": context,
+        }.items()
+        if value is not None
+    }
+    if context == "ledger" and safe_constraint in MIGRATION_REPLAY_CONSTRAINTS:
+        return (
+            "duplicate_or_concurrent_import",
+            "This migration was already completed or is being imported by another operator.",
+            diagnostics,
+        )
+    if context == "upload" and safe_constraint in MIGRATION_PACKAGE_IDENTITY_CONSTRAINTS:
+        return (
+            "duplicate_package_upload",
+            "That migration package has already been uploaded.",
+            diagnostics,
+        )
+    if sqlstate == "23505":
+        return (
+            "unique_constraint_conflict",
+            "The migration conflicts with an existing production record. "
+            "Resolve the reported conflict before retrying.",
+            diagnostics,
+        )
+    if sqlstate == "23503":
+        return (
+            "foreign_key_failure",
+            "The migration contains a relationship that cannot be created safely in production.",
+            diagnostics,
+        )
+    if sqlstate == "23502":
+        return (
+            "required_field_failure",
+            "The migration is missing a required production field.",
+            diagnostics,
+        )
+    if sqlstate == "23514":
+        return (
+            "check_constraint_failure",
+            "The migration contains a value that violates a production data rule.",
+            diagnostics,
+        )
+    return (
+        "database_integrity_failure",
+        "Production rejected the migration data. "
+        "Review the protected migration diagnostics before retrying.",
+        diagnostics,
+    )
 
 
 def package_checksum(package: dict[str, Any]) -> str:
@@ -140,8 +238,13 @@ async def store_package(
     return {**row, "id": str(package_id), "migration_id": str(row["migration_id"])}
 
 
-async def get_package(db: AsyncSession, package_id: uuid.UUID) -> dict[str, Any] | None:
-    result = await db.execute(select(PACKAGE_STORE).where(PACKAGE_STORE.c.id == package_id))
+async def get_package(
+    db: AsyncSession, package_id: uuid.UUID, *, for_update: bool = False
+) -> dict[str, Any] | None:
+    query = select(PACKAGE_STORE).where(PACKAGE_STORE.c.id == package_id)
+    if for_update:
+        query = query.with_for_update()
+    result = await db.execute(query)
     row = result.mappings().one_or_none()
     return dict(row) if row is not None else None
 
@@ -181,12 +284,14 @@ class PackagePurgeResult:
         return self.removed_completed + self.removed_expired + self.removed_orphaned
 
 
-async def discard_package_file(settings: Settings, storage_key: str) -> None:
+async def discard_package_file(settings: Settings, storage_key: str) -> bool:
     """Best-effort removal; a leftover file is still caught by the TTL purge."""
     try:
         await asyncio.to_thread(storage_path(settings, storage_key).unlink, missing_ok=True)
+        return True
     except (OSError, MigrationError):
         log.warning("home_migration.package_discard_failed", storage_key=storage_key)
+        return False
 
 
 def _scan_package_files(root: Path) -> list[tuple[str, float]]:
