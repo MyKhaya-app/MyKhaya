@@ -19,10 +19,24 @@ import uuid
 from collections import defaultdict
 from collections.abc import Sequence
 from datetime import UTC, date, datetime, time
+from decimal import Decimal
 from pathlib import Path
 from typing import Any, Literal
 
-from sqlalchemy import Column, Date, DateTime, String, Table, Time, Uuid, func, insert, select
+from sqlalchemy import (
+    Column,
+    Date,
+    DateTime,
+    String,
+    Table,
+    Time,
+    UniqueConstraint,
+    Uuid,
+    func,
+    insert,
+    select,
+    update,
+)
 from sqlalchemy.exc import IntegrityError
 
 from mykhaya import models as _models  # noqa: F401 - register ORM tables in Base.metadata
@@ -207,6 +221,54 @@ TABLE_CLASSIFICATIONS: dict[str, CoverageClass] = {
 # They are deliberately excluded rather than converted into Home memberships.
 EXTERNAL_SHARE_TABLES = {"calendar_shares", "wishlist_shares"}
 
+# These children do not carry a direct Home key.  Their ownership is inherited
+# from an included parent; keep this map explicit so a new indirect hierarchy is
+# a review item rather than an accidental omission.
+INDIRECT_HOME_PARENT_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
+    "guardian_assignments": (
+        ("child_profile_id", "child_profiles"),
+        ("guardian_membership_id", "group_memberships"),
+    ),
+    "household_list_sections": (("list_id", "household_lists"),),
+    "household_list_items": (("list_id", "household_lists"),),
+    "household_routine_members": (("routine_id", "household_routines"),),
+    "household_routine_completions": (("routine_id", "household_routines"),),
+    "reminder_members": (("reminder_id", "reminders"),),
+    "reminder_completions": (("reminder_id", "reminders"),),
+    "todo_members": (("todo_id", "todos"),),
+    "meal_ingredients": (("meal_id", "meals"),),
+    "meal_plan_participants": (("meal_plan_entry_id", "meal_plan_entries"),),
+    "list_template_sections": (("template_id", "list_templates"),),
+    "list_template_items": (("section_id", "list_template_sections"),),
+    "wishlist_items": (("wishlist_id", "wishlists"),),
+    "wishlist_item_reservations": (("wishlist_item_id", "wishlist_items"),),
+    "budget_months": (("profile_id", "budget_profiles"),),
+    "budget_categories": (("profile_id", "budget_profiles"),),
+    "budget_income_sources": (("profile_id", "budget_profiles"),),
+    "budget_items": (("profile_id", "budget_profiles"),),
+    "budget_month_categories": (
+        ("month_id", "budget_months"),
+        ("category_id", "budget_categories"),
+    ),
+    "budget_month_income": (
+        ("month_id", "budget_months"),
+        ("source_id", "budget_income_sources"),
+    ),
+    "budget_month_items": (
+        ("month_id", "budget_months"),
+        ("category_id", "budget_categories"),
+        ("budget_item_id", "budget_items"),
+    ),
+    "budget_spending_entries": (
+        ("budget_month_item_id", "budget_month_items"),
+        ("month_category_id", "budget_month_categories"),
+    ),
+}
+
+# The target catalogue is environment-local and is resolved by semantic
+# mapping during import, not by carrying the source UUID.
+MAPPED_FOREIGN_KEYS = {("home_holiday_subscriptions", "source_id")}
+
 FILE_STORE_CLASSIFICATIONS = {
     "avatars": "MIGRATE",
     "vehicle_photos": "MIGRATE",
@@ -273,6 +335,8 @@ def migration_lock_key(migration_id: uuid.UUID) -> int:
 
 def _json_value(value: Any) -> Any:
     if isinstance(value, uuid.UUID):
+        return str(value)
+    if isinstance(value, Decimal):
         return str(value)
     if isinstance(value, datetime):
         return value.isoformat()
@@ -433,9 +497,12 @@ def _row_matches_home_hierarchy(
     selected_ids: dict[str, set[str]],
 ) -> bool:
     """Select Home-owned rows whose ownership is inherited through a parent."""
-    if table_name in {"household_list_sections", "household_list_items"}:
-        list_id = row.get("list_id")
-        return list_id is not None and str(list_id) in selected_ids["household_lists"]
+    parent_columns = INDIRECT_HOME_PARENT_COLUMNS.get(table_name, ())
+    if parent_columns:
+        return any(
+            row.get(column) is not None and str(row[column]) in selected_ids[parent]
+            for column, parent in parent_columns
+        )
     return _row_matches_home(row, home_id, member_ids)
 
 
@@ -471,7 +538,12 @@ def _relationship_issues(package: dict[str, Any]) -> list[str]:
                 foreign_keys = [foreign for foreign in column.foreign_keys]
                 for foreign in foreign_keys:
                     target_table = foreign.column.table.name
+                    if (name, column.name) in MAPPED_FOREIGN_KEYS:
+                        continue
+                    if column.name in ADMIN_COLUMNS:
+                        continue
                     if target_table not in known_ids:
+                        issues.append(f"{name}.{column.name}")
                         continue
                     if str(row[column.name]) not in known_ids[target_table]:
                         is_optional_user_reference = column.nullable and target_table == "users"
@@ -491,6 +563,72 @@ def _migration_policy_issues(package: dict[str, Any]) -> list[str]:
         for name in _relationship_issues(package)
     )
     return issues
+
+
+def _prepare_import_maps(
+    package: dict[str, Any],
+    user_ids: dict[str, uuid.UUID],
+    target_home_id: uuid.UUID,
+) -> dict[str, dict[str, uuid.UUID]]:
+    maps: dict[str, dict[str, uuid.UUID]] = defaultdict(dict)
+    maps["users"].update(user_ids)
+    maps["groups"][str(package["source_home_id"])] = target_home_id
+    for name, rows in package.get("data", {}).items():
+        for row in rows:
+            if row.get("id") is not None:
+                maps[name][str(row["id"])] = _new_id()
+    for vehicle_row in package.get("data", {}).get("vehicles", []):
+        if vehicle_row.get("id") is not None:
+            maps["vehicles"][str(vehicle_row["id"])] = _new_id()
+    return maps
+
+
+def _package_unique_issues(package: dict[str, Any]) -> list[str]:
+    issues: list[str] = []
+    for name, rows in package.get("data", {}).items():
+        table = _table(name)
+        constraints: list[tuple[str, tuple[str, ...]]] = []
+        for constraint in table.constraints:
+            if isinstance(constraint, UniqueConstraint):
+                constraints.append(
+                    (
+                        str(constraint.name or "unique constraint"),
+                        tuple(column.name for column in constraint.columns),
+                    )
+                )
+        for column in table.columns:
+            if column.unique:
+                constraints.append((column.name, (column.name,)))
+        for constraint_name, columns in constraints:
+            seen: dict[tuple[Any, ...], str] = {}
+            for row in rows:
+                values = tuple(row.get(column) for column in columns)
+                if any(value is None for value in values):
+                    continue
+                key = tuple(json.dumps(_json_value(value), sort_keys=True) for value in values)
+                previous = seen.get(key)
+                if previous is not None:
+                    issues.append(f"{name}.{constraint_name} contains duplicate unique values")
+                    break
+                seen[key] = str(row.get("id"))
+    return issues
+
+
+def _import_plan_issues(
+    package: dict[str, Any],
+    user_ids: dict[str, uuid.UUID],
+) -> list[str]:
+    issues = _migration_policy_issues(package)
+    issues.extend(_package_unique_issues(package))
+    maps = _prepare_import_maps(package, user_ids, _new_id())
+    for name, rows in package.get("data", {}).items():
+        table = _table(name)
+        for row in rows:
+            try:
+                _rewrite(row, maps, table)
+            except MigrationError as exc:
+                issues.append(str(exc))
+    return list(dict.fromkeys(issues))
 
 
 def _safe_user(row: dict[str, Any]) -> dict[str, Any]:
@@ -775,11 +913,15 @@ def _rewrite(
             continue
         if name in ADMIN_COLUMNS:
             result[name] = None
-        targets = [
-            maps[foreign.column.table.name]
-            for foreign in column.foreign_keys
-            if foreign.column.table.name in maps
-        ]
+        foreign_tables = {foreign.column.table.name for foreign in column.foreign_keys}
+        if (
+            result.get(name) is not None
+            and foreign_tables
+            and not any(target in maps for target in foreign_tables)
+        ):
+            if (table.name, name) not in MAPPED_FOREIGN_KEYS:
+                raise MigrationError(f"Unmapped foreign key {table.name}.{name}={result[name]}.")
+        targets = [maps[target] for target in foreign_tables if target in maps]
         if targets and result.get(name) is not None:
             target = targets[0]
             if str(result[name]) not in target:
@@ -918,7 +1060,11 @@ async def inspect_import(package: dict[str, Any], settings: Settings) -> dict[st
         matched = sum(normalise_email(member["email"]) in existing for member in package["members"])
         created = len(package["members"]) - matched
         reasons = [] if settings.environment == "production" else ["Target is not production."]
-        reasons.extend(_migration_policy_issues(package))
+        planned_user_ids = {
+            str(member["id"]): existing.get(normalise_email(member["email"]), _new_id())
+            for member in package["members"]
+        }
+        reasons.extend(_import_plan_issues(package, planned_user_ids))
         source_emails: dict[str, str] = {}
         for member in package["members"]:
             email = normalise_email(member["email"])
@@ -1124,10 +1270,18 @@ async def import_home(
             users = _table("users")
             existing_users = await _existing_users_by_normalized_email(db)
             matched_user_ids: set[uuid.UUID] = set()
+            created_user_ids: set[uuid.UUID] = set()
             expected_exclusions: dict[str, set[str]] = defaultdict(set)
+            planned_user_ids = {
+                str(member["id"]): existing_users.get(normalise_email(member["email"]), _new_id())
+                for member in package["members"]
+            }
+            plan_issues = _import_plan_issues(package, planned_user_ids)
+            if plan_issues:
+                raise MigrationError("; ".join(plan_issues))
             for member in package["members"]:
                 email = normalise_email(member["email"])
-                target_id = existing_users.get(email, _new_id())
+                target_id = planned_user_ids[str(member["id"])]
                 maps["users"][str(member["id"])] = target_id
                 if email not in existing_users:
                     values = {
@@ -1171,6 +1325,7 @@ async def import_home(
                             html_body=html,
                         )
                     existing_users[email] = target_id
+                    created_user_ids.add(target_id)
                 else:
                     matched_user_ids.add(target_id)
             groups = _table("groups")
@@ -1199,6 +1354,7 @@ async def import_home(
                 }
             )
             await db.execute(insert(groups).values(home_values))
+            maps = _prepare_import_maps(package, planned_user_ids, target_home_id)
             holiday_source_map: dict[str, uuid.UUID] = {}
             target_holiday_sources = _table("platform_holiday_sources")
             for mapping in package.get("environment_mappings", {}).get("holiday_sources", []):
@@ -1235,6 +1391,47 @@ async def import_home(
                         if name == "notification_preferences":
                             source_user = maps["users"].get(str(source.get("user_id")))
                             if source_user in matched_user_ids:
+                                expected_exclusions[name].add(str(old_id))
+                                continue
+                            if source_user in created_user_ids:
+                                existing_preferences = (
+                                    await db.execute(
+                                        select(table.c.id).where(table.c.user_id == source_user)
+                                    )
+                                ).scalar_one_or_none()
+                                if existing_preferences is not None:
+                                    maps[name][str(old_id)] = existing_preferences
+                                    values = _rewrite(source, maps, table)
+                                    values.pop("id", None)
+                                    values.pop("user_id", None)
+                                    values.pop("created_at", None)
+                                    values.pop("updated_at", None)
+                                    values = {
+                                        key: _restore_value(table.c[key], value)
+                                        for key, value in values.items()
+                                        if key in table.c
+                                    }
+                                    await db.execute(
+                                        update(table)
+                                        .where(table.c.id == existing_preferences)
+                                        .values(
+                                            {
+                                                key: value
+                                                for key, value in values.items()
+                                                if key in table.c
+                                            }
+                                        )
+                                    )
+                                    continue
+                        if name == "budget_profiles":
+                            source_owner = maps["users"].get(str(source.get("owner_user_id")))
+                            existing_profile = (
+                                await db.execute(
+                                    select(table.c.id).where(table.c.owner_user_id == source_owner)
+                                )
+                            ).scalar_one_or_none()
+                            if existing_profile is not None:
+                                maps[name][str(old_id)] = existing_profile
                                 expected_exclusions[name].add(str(old_id))
                                 continue
                         maps[name].setdefault(str(old_id), _new_id())
