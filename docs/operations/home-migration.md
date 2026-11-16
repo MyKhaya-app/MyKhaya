@@ -167,3 +167,18 @@ recovery process, and obtain explicit Owner approval for any destructive action.
 
 The original DEV Home remains intact until the Owner approves final retention or
 deletion separately.
+
+## Identity and sharing policy
+
+The package `members` list is exactly the set of current DEV memberships whose
+`group_memberships.removed_at IS NULL`. References from Home data never expand
+that list. Removed members, external share recipients and users referenced only
+by historical or attribution data are never created, matched, reserved or
+linked as PROD accounts.
+
+External access grants in `calendar_shares` and `wishlist_shares` are excluded
+from the package and are not recreated in PROD. Optional user foreign keys may
+become `NULL` when their source user is not an active member. A required user
+foreign key outside the active membership set is a migration blocker and must
+be reported by dry-run before any PROD write. The export manifest records the
+count of excluded sharing relationships for PCC review.
