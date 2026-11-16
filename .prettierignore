@@ -4,6 +4,7 @@ dist/
 coverage/
 playwright-report/
 test-results/
+.pytest_cache/
 backups/
 apps/api/
 docs/

@@ -201,6 +201,12 @@ TABLE_CLASSIFICATIONS: dict[str, CoverageClass] = {
     **{name: "ENVIRONMENT_LOCAL" for name in ENVIRONMENT_LOCAL_TABLES},
 }
 
+# These tables represent access granted to people outside the Home.  Their
+# rows contain recipient identity and token/lifecycle state, so copying them
+# would recreate PROD access or reserve an external person's email address.
+# They are deliberately excluded rather than converted into Home memberships.
+EXTERNAL_SHARE_TABLES = {"calendar_shares", "wishlist_shares"}
+
 FILE_STORE_CLASSIFICATIONS = {
     "avatars": "MIGRATE",
     "vehicle_photos": "MIGRATE",
@@ -424,6 +430,52 @@ def _is_migratable_home_row(table_name: str, row: dict[str, Any]) -> bool:
     return table_name != "group_memberships" or row.get("removed_at") is None
 
 
+def _relationship_issues(package: dict[str, Any]) -> list[str]:
+    """Return relationships that cannot be represented safely in PROD.
+
+    Optional references are intentionally handled by _rewrite: they become
+    NULL in the target when their source user is not an active member.  A
+    required reference cannot be fabricated or linked to a different person,
+    so it is a hard migration blocker.
+    """
+    known_ids: dict[str, set[str]] = {
+        "groups": {str(package["source_home_id"])},
+        "users": {str(member["id"]) for member in package.get("members", [])},
+    }
+    for name, rows in package.get("data", {}).items():
+        known_ids[name] = {str(row["id"]) for row in rows if row.get("id") is not None}
+    issues: list[str] = []
+    for name, rows in package.get("data", {}).items():
+        table = _table(name)
+        for row in rows:
+            for column in table.columns:
+                if row.get(column.name) is None:
+                    continue
+                foreign_keys = [foreign for foreign in column.foreign_keys]
+                for foreign in foreign_keys:
+                    target_table = foreign.column.table.name
+                    if target_table not in known_ids:
+                        continue
+                    if str(row[column.name]) not in known_ids[target_table]:
+                        is_optional_user_reference = column.nullable and target_table == "users"
+                        if not is_optional_user_reference:
+                            issues.append(f"{name}.{column.name}")
+    return issues
+
+
+def _migration_policy_issues(package: dict[str, Any]) -> list[str]:
+    issues = [
+        f"{name} contains external sharing grants that are not recreated"
+        for name in sorted(EXTERNAL_SHARE_TABLES)
+        if package.get("data", {}).get(name)
+    ]
+    issues.extend(
+        f"{name} contains a required user relationship outside active Home membership"
+        for name in _relationship_issues(package)
+    )
+    return issues
+
+
 def _safe_user(row: dict[str, Any]) -> dict[str, Any]:
     allowed = {
         "id",
@@ -566,6 +618,7 @@ async def export_home(home_id: uuid.UUID, output: Path, settings: Settings) -> d
             "environment_mappings": {"holiday_sources": []},
             "manifest": {},
         }
+        excluded_relationships: dict[str, int] = defaultdict(int)
         users = _table("users")
         for user_id in member_ids:
             row = (await db.execute(select(users).where(users.c.id == user_id))).mappings().one()
@@ -573,6 +626,13 @@ async def export_home(home_id: uuid.UUID, output: Path, settings: Settings) -> d
                 _safe_user({key: _json_value(value) for key, value in row.items()})
             )
         for name in TABLE_ORDER[2:]:
+            if name in EXTERNAL_SHARE_TABLES:
+                share_table = _table(name)
+                share_rows = (await db.execute(select(share_table))).mappings().all()
+                excluded_relationships[name] = sum(
+                    1 for row in share_rows if _row_matches_home(dict(row), home_id, member_ids)
+                )
+                continue
             table = _table(name)
             rows = (await db.execute(select(table))).mappings().all()
             selected = [
@@ -590,29 +650,13 @@ async def export_home(home_id: uuid.UUID, output: Path, settings: Settings) -> d
             ]
             if selected:
                 package["data"][name] = selected
-        referenced_user_ids = set(member_ids)
-        for name, rows in package["data"].items():
-            table = _table(name)
-            user_columns = {
-                column.name
-                for column in table.columns
-                if any(foreign.column.table.name == "users" for foreign in column.foreign_keys)
-            }
-            for row in rows:
-                referenced_user_ids.update(
-                    _uuid(row[column]) for column in user_columns if row.get(column) is not None
-                )
-        package_member_ids = {str(member["id"]) for member in package["members"]}
-        for user_id in referenced_user_ids - member_ids:
-            referenced_user = (
-                (await db.execute(select(users).where(users.c.id == user_id)))
-                .mappings()
-                .one_or_none()
+        relationship_issues = _relationship_issues(package)
+        if relationship_issues:
+            raise MigrationError(
+                "The Home contains required user relationships outside its active "
+                "membership set and cannot be migrated safely: "
+                + ", ".join(relationship_issues[:8])
             )
-            if referenced_user is not None and str(user_id) not in package_member_ids:
-                package["members"].append(
-                    _safe_user({key: _json_value(value) for key, value in referenced_user.items()})
-                )
         for member in package["members"]:
             if member.get("avatar_key"):
                 package["files"].append(
@@ -685,6 +729,7 @@ async def export_home(home_id: uuid.UUID, output: Path, settings: Settings) -> d
         ],
         "classified_tables": len(TABLE_CLASSIFICATIONS),
         "excluded_tables": sorted(FORBIDDEN_TABLES | ENVIRONMENT_LOCAL_TABLES),
+        "excluded_relationships": dict(excluded_relationships),
     }
     package["integrity_sha256"] = hashlib.sha256(_canonical_payload(package)).hexdigest()
     await asyncio.to_thread(output.parent.mkdir, parents=True, exist_ok=True)
@@ -718,11 +763,19 @@ def _rewrite(
         if targets and result.get(name) is not None:
             target = targets[0]
             if str(result[name]) not in target:
-                if name not in {"last_edited_by", "deleted_by", "actor_user_id", "completed_by"}:
+                is_optional_user_reference = column.nullable and any(
+                    foreign.column.table.name == "users" for foreign in column.foreign_keys
+                )
+                if is_optional_user_reference:
+                    # Optional historical attribution may refer to a removed
+                    # or external user. Never create or identify that user.
+                    result[name] = None
+                elif name not in {"last_edited_by", "deleted_by", "actor_user_id", "completed_by"}:
                     raise MigrationError(
                         f"Unmapped foreign key {table.name}.{name}={result[name]}."
                     )
-                result[name] = None
+                else:
+                    result[name] = None
             else:
                 result[name] = str(target[str(result[name])])
         if name == "id" and old_id is not None:
@@ -765,6 +818,7 @@ def _report(
             "assets": asset_manifest,
             "classified_tables": len(TABLE_CLASSIFICATIONS),
             "excluded_tables": sorted(FORBIDDEN_TABLES | ENVIRONMENT_LOCAL_TABLES),
+            "excluded_relationships": package.get("manifest", {}).get("excluded_relationships", {}),
         },
     }
 
@@ -844,6 +898,7 @@ async def inspect_import(package: dict[str, Any], settings: Settings) -> dict[st
         matched = sum(normalise_email(member["email"]) in existing for member in package["members"])
         created = len(package["members"]) - matched
         reasons = [] if settings.environment == "production" else ["Target is not production."]
+        reasons.extend(_migration_policy_issues(package))
         source_emails: dict[str, str] = {}
         for member in package["members"]:
             email = normalise_email(member["email"])
@@ -1015,6 +1070,9 @@ async def import_home(
         raise MigrationError("Production import requires --target-environment prod --confirm.")
     if dry_run:
         return await inspect_import(package, settings)
+    policy_issues = _migration_policy_issues(package)
+    if policy_issues:
+        raise MigrationError("; ".join(policy_issues))
     if settings.environment != "production":
         raise MigrationError("Real imports are permitted only into production.")
     migration_id = _uuid(package["migration_id"])

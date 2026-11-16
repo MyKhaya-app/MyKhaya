@@ -24,6 +24,7 @@ from mykhaya.tools.home_migration import (
     _existing_users_by_normalized_email,
     _export_row,
     _is_migratable_home_row,
+    _migration_policy_issues,
     _rewrite,
     _table,
     import_home,
@@ -141,6 +142,32 @@ def test_removed_home_memberships_are_not_migratable() -> None:
         "group_memberships", {"removed_at": "2026-01-01T00:00:00+00:00"}
     )
     assert _is_migratable_home_row("todos", {"removed_at": "not a membership"})
+
+
+def test_external_share_rows_are_rejected_by_migration_policy() -> None:
+    value = package()
+    value["data"] = {"calendar_shares": [{"id": str(uuid.uuid4())}]}
+    assert _migration_policy_issues(value) == [
+        "calendar_shares contains external sharing grants that are not recreated"
+    ]
+
+
+def test_optional_external_user_reference_is_nulled() -> None:
+    table = _table("calendar_events")
+    old_user = uuid.uuid4()
+    old_event = uuid.uuid4()
+    maps = {"calendar_events": {str(old_event): uuid.uuid4()}, "users": {}}
+    row = _rewrite({"id": str(old_event), "last_edited_by": str(old_user)}, maps, table)
+    assert row["last_edited_by"] is None
+
+
+def test_required_external_user_reference_is_blocked() -> None:
+    table = _table("vehicles")
+    old_user = uuid.uuid4()
+    old_vehicle = uuid.uuid4()
+    maps = {"vehicles": {str(old_vehicle): uuid.uuid4()}, "users": {}}
+    with pytest.raises(MigrationError, match="Unmapped foreign key vehicles.owner_user_id"):
+        _rewrite({"id": str(old_vehicle), "owner_user_id": str(old_user)}, maps, table)
 
 
 @pytest.mark.asyncio

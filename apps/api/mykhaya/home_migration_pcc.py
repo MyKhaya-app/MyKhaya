@@ -162,6 +162,7 @@ def package_summary(package: dict[str, Any]) -> dict[str, Any]:
         "version": package["version"],
         "classified_tables": manifest.get("classified_tables"),
         "environment_mappings": package.get("environment_mappings", {}),
+        "excluded_relationships": manifest.get("excluded_relationships", {}),
     }
 
 
