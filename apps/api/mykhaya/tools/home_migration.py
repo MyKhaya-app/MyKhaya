@@ -425,6 +425,20 @@ def _row_matches_home(row: dict[str, Any], home_id: uuid.UUID, member_ids: set[u
     return False
 
 
+def _row_matches_home_hierarchy(
+    table_name: str,
+    row: dict[str, Any],
+    home_id: uuid.UUID,
+    member_ids: set[uuid.UUID],
+    selected_ids: dict[str, set[str]],
+) -> bool:
+    """Select Home-owned rows whose ownership is inherited through a parent."""
+    if table_name in {"household_list_sections", "household_list_items"}:
+        list_id = row.get("list_id")
+        return list_id is not None and str(list_id) in selected_ids["household_lists"]
+    return _row_matches_home(row, home_id, member_ids)
+
+
 def _is_migratable_home_row(table_name: str, row: dict[str, Any]) -> bool:
     """Exclude historical Home memberships from a portable current Home."""
     return table_name != "group_memberships" or row.get("removed_at") is None
@@ -438,10 +452,13 @@ def _relationship_issues(package: dict[str, Any]) -> list[str]:
     required reference cannot be fabricated or linked to a different person,
     so it is a hard migration blocker.
     """
-    known_ids: dict[str, set[str]] = {
-        "groups": {str(package["source_home_id"])},
-        "users": {str(member["id"]) for member in package.get("members", [])},
-    }
+    known_ids: dict[str, set[str]] = {name: set() for name in TABLE_ORDER}
+    known_ids.update(
+        {
+            "groups": {str(package["source_home_id"])},
+            "users": {str(member["id"]) for member in package.get("members", [])},
+        }
+    )
     for name, rows in package.get("data", {}).items():
         known_ids[name] = {str(row["id"]) for row in rows if row.get("id") is not None}
     issues: list[str] = []
@@ -470,7 +487,7 @@ def _migration_policy_issues(package: dict[str, Any]) -> list[str]:
         if package.get("data", {}).get(name)
     ]
     issues.extend(
-        f"{name} contains a required user relationship outside active Home membership"
+        f"{name} contains an unresolved required relationship"
         for name in _relationship_issues(package)
     )
     return issues
@@ -619,6 +636,7 @@ async def export_home(home_id: uuid.UUID, output: Path, settings: Settings) -> d
             "manifest": {},
         }
         excluded_relationships: dict[str, int] = defaultdict(int)
+        selected_ids: dict[str, set[str]] = defaultdict(set)
         users = _table("users")
         for user_id in member_ids:
             row = (await db.execute(select(users).where(users.c.id == user_id))).mappings().one()
@@ -645,16 +663,18 @@ async def export_home(home_id: uuid.UUID, output: Path, settings: Settings) -> d
                     }
                 )
                 for row in rows
-                if _row_matches_home(dict(row), home_id, member_ids)
+                if _row_matches_home_hierarchy(name, dict(row), home_id, member_ids, selected_ids)
                 and _is_migratable_home_row(name, dict(row))
             ]
             if selected:
                 package["data"][name] = selected
+                selected_ids[name].update(
+                    str(row["id"]) for row in selected if row.get("id") is not None
+                )
         relationship_issues = _relationship_issues(package)
         if relationship_issues:
             raise MigrationError(
-                "The Home contains required user relationships outside its active "
-                "membership set and cannot be migrated safely: "
+                "The Home contains relationships that cannot be migrated safely: "
                 + ", ".join(relationship_issues[:8])
             )
         for member in package["members"]:
