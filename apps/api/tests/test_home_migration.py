@@ -2,14 +2,17 @@
 
 import asyncio
 import hashlib
+import json
 import re
 import uuid
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 from httpx import ASGITransport, AsyncClient
-from sqlalchemy import select
+from sqlalchemy import insert, select, text
+from sqlalchemy.exc import IntegrityError
 
 from mykhaya.config import get_settings
 from mykhaya.db import SessionFactory
@@ -26,7 +29,9 @@ from mykhaya.tools.home_migration import (
     _is_migratable_home_row,
     _migration_policy_issues,
     _rewrite,
+    _row_matches_home_hierarchy,
     _table,
+    export_home,
     import_home,
     validate_package,
 )
@@ -152,6 +157,45 @@ def test_external_share_rows_are_rejected_by_migration_policy() -> None:
     ]
 
 
+def test_household_list_children_follow_the_home_owned_list() -> None:
+    home_id = uuid.uuid4()
+    member_ids = {uuid.uuid4()}
+    own_list = uuid.uuid4()
+    other_list = uuid.uuid4()
+    selected = {"household_lists": {str(own_list)}}
+    assert _row_matches_home_hierarchy(
+        "household_list_sections",
+        {"list_id": str(own_list)},
+        home_id,
+        member_ids,
+        selected,
+    )
+    assert _row_matches_home_hierarchy(
+        "household_list_items",
+        {"list_id": str(own_list)},
+        home_id,
+        member_ids,
+        selected,
+    )
+    assert not _row_matches_home_hierarchy(
+        "household_list_sections",
+        {"list_id": str(other_list)},
+        home_id,
+        member_ids,
+        selected,
+    )
+
+
+def test_missing_required_household_list_section_is_not_safe() -> None:
+    value = package()
+    value["data"] = {
+        "household_list_items": [{"id": str(uuid.uuid4()), "section_id": str(uuid.uuid4())}]
+    }
+    assert _migration_policy_issues(value) == [
+        "household_list_items.section_id contains an unresolved required relationship"
+    ]
+
+
 def test_optional_external_user_reference_is_nulled() -> None:
     table = _table("calendar_events")
     old_user = uuid.uuid4()
@@ -234,6 +278,182 @@ def _rehearsal_package(email: str) -> dict[str, object]:
         _canonical_payload(package_value)
     ).hexdigest()
     return package_value
+
+
+def _list_hierarchy_package(email: str) -> dict[str, object]:
+    value = _rehearsal_package(email)
+    source_home_id = uuid.UUID(str(value["source_home_id"]))
+    source_user_id = uuid.UUID(str(value["members"][0]["id"]))
+    list_id = uuid.uuid4()
+    section_id = uuid.uuid4()
+    item_id = uuid.uuid4()
+    value["data"].update(
+        {
+            "household_lists": [
+                {
+                    "id": str(list_id),
+                    "group_id": str(source_home_id),
+                    "name": "Groceries",
+                    "icon": "cart",
+                    "created_by": str(source_user_id),
+                    "scope": "household",
+                    "deleted_at": None,
+                    "source_template_id": None,
+                    "source_template_name": None,
+                }
+            ],
+            "household_list_sections": [
+                {
+                    "id": str(section_id),
+                    "list_id": str(list_id),
+                    "name": "Fresh food",
+                    "position": 0,
+                }
+            ],
+            "household_list_items": [
+                {
+                    "id": str(item_id),
+                    "list_id": str(list_id),
+                    "section_id": str(section_id),
+                    "position": 0,
+                    "text": "Milk",
+                    "quantity": None,
+                    "note": None,
+                    "assigned_member_id": None,
+                    "is_checked": False,
+                    "completed_at": None,
+                    "completed_by": None,
+                    "created_by": str(source_user_id),
+                },
+                {
+                    "id": str(uuid.uuid4()),
+                    "list_id": str(list_id),
+                    "section_id": None,
+                    "position": 1,
+                    "text": "Unsectioned item",
+                    "quantity": None,
+                    "note": None,
+                    "assigned_member_id": None,
+                    "is_checked": False,
+                    "completed_at": None,
+                    "completed_by": None,
+                    "created_by": str(source_user_id),
+                },
+            ],
+        }
+    )
+    value["manifest"]["record_counts"] = {name: len(rows) for name, rows in value["data"].items()}
+    value["integrity_sha256"] = hashlib.sha256(_canonical_payload(value)).hexdigest()
+    return value
+
+
+@pytest.mark.asyncio
+async def test_household_list_section_fk_regression_and_import_remapping(
+    tmp_path: Path,
+) -> None:
+    settings = get_settings().model_copy(update={"environment": "production"})
+    complete = _list_hierarchy_package(f"lists-{uuid.uuid4().hex}@example.com")
+    missing = json.loads(json.dumps(complete))
+    missing["data"].pop("household_list_sections")
+    missing["manifest"]["record_counts"] = {
+        name: len(rows) for name, rows in missing["data"].items()
+    }
+    missing["integrity_sha256"] = hashlib.sha256(_canonical_payload(missing)).hexdigest()
+
+    dry_run = await import_home(
+        missing, settings, dry_run=True, target_environment="production", confirm=True
+    )
+    assert dry_run["status"] == "NOT_SAFE_TO_IMPORT"
+    assert any("household_list_items.section_id" in reason for reason in dry_run["warnings"])
+
+    imported = await import_home(
+        complete, settings, dry_run=False, target_environment="production", confirm=True
+    )
+    assert imported["status"] == "IMPORTED"
+    assert imported["reconciliation"]["status"] == "VERIFIED"
+
+    async with SessionFactory() as db:
+        lists = _table("household_lists")
+        sections = _table("household_list_sections")
+        items = _table("household_list_items")
+        users = _table("users")
+        target_user = await db.scalar(
+            select(users.c.id).where(users.c.email == complete["members"][0]["email"])
+        )
+        target_list = (
+            await db.execute(
+                select(lists.c.id).where(
+                    lists.c.group_id == uuid.UUID(imported["target_home_id"]),
+                    lists.c.name == "Groceries",
+                )
+            )
+        ).scalar_one()
+        target_section = (
+            await db.execute(select(sections.c.id).where(sections.c.list_id == target_list))
+        ).scalar_one()
+        target_item = (
+            (
+                await db.execute(
+                    select(items).where(
+                        items.c.list_id == target_list,
+                        items.c.text == "Milk",
+                    )
+                )
+            )
+            .mappings()
+            .one()
+        )
+        assert target_user is not None
+        assert str(target_list) != str(complete["data"]["household_lists"][0]["id"])
+        assert target_section != uuid.UUID(complete["data"]["household_list_sections"][0]["id"])
+        assert target_item["section_id"] == target_section
+        unsectioned_item = (
+            (
+                await db.execute(
+                    select(items).where(
+                        items.c.list_id == target_list,
+                        items.c.text == "Unsectioned item",
+                    )
+                )
+            )
+            .mappings()
+            .one()
+        )
+        assert unsectioned_item["section_id"] is None
+
+        with pytest.raises(IntegrityError) as error:
+            await db.execute(
+                insert(items).values(
+                    id=uuid.uuid4(),
+                    list_id=target_list,
+                    section_id=uuid.uuid4(),
+                    position=1,
+                    text="Broken section reference",
+                    is_checked=False,
+                    created_by=target_user,
+                )
+            )
+        await db.rollback()
+        original = error.value.orig
+        assert getattr(original, "sqlstate", None) == "23503"
+        constraint_name = (
+            await db.execute(
+                text(
+                    "SELECT conname FROM pg_constraint "
+                    "WHERE conname = 'fk_household_list_items_section'"
+                )
+            )
+        ).scalar_one()
+        assert constraint_name == "fk_household_list_items_section"
+
+    exported = await export_home(
+        uuid.UUID(imported["target_home_id"]),
+        tmp_path / "export.json",
+        settings.model_copy(update={"environment": "development"}),
+    )
+    assert len(exported["data"]["household_lists"]) == 1
+    assert len(exported["data"]["household_list_sections"]) == 1
+    assert len(exported["data"]["household_list_items"]) == 2
 
 
 @pytest.mark.asyncio
