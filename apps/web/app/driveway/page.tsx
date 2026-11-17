@@ -10,7 +10,7 @@ import { FormStatus } from "@/components/form-status";
 import { useActiveHome } from "@/components/use-active-home";
 import { useAuth } from "@/components/auth-provider";
 import { VehiclePhoto } from "@/components/vehicle-photo";
-import { MotPill, OwnerAvatar, PlateChip, VehicleLookupCard } from "./driveway-ui";
+import { MotPill, OwnerAvatar, PlateChip, VehicleLookupEntryCard } from "./driveway-ui";
 import {
   dayCount,
   firstName,
@@ -170,8 +170,6 @@ export default function DrivewayPage() {
 
         <FormStatus error={error} />
 
-        <VehicleLookupCard />
-
         {visible === null ? (
           !error && <p role="status">Loading vehicles…</p>
         ) : visible.length === 0 ? (
@@ -234,6 +232,8 @@ export default function DrivewayPage() {
             </ul>
           </div>
         )}
+
+        <VehicleLookupEntryCard />
 
         <Link className="button rr-fab drv-fab" href="/driveway/add">
           <Plus size={20} strokeWidth={2.4} aria-hidden="true" />

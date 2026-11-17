@@ -150,14 +150,25 @@ def _apply_dvla_lookup(vehicle: Vehicle, result: VehicleLookup, *, checked_at: d
     vehicle.last_successful_lookup = checked_at
     for field in (
         "make", "colour", "year", "fuel_type", "engine_size",
-        "first_registration_date", "tax_status", "tax_due_date",
+        "first_registration_date", "first_registration_precision",
+        "first_registration_with_dvla_date",
+        "first_registration_with_dvla_precision", "tax_status", "tax_due_date",
         "co2_emissions", "euro_status", "type_approval", "wheel_plan",
         "revenue_weight", "marked_for_export", "marked_as_scrapped",
         "date_of_last_v5c_issued", "real_driving_emissions", "vehicle_status",
         "automated_vehicle", "art_end_date",
     ):
         value = getattr(result, field, None)
-        if value is not None:
+        # Tax and DVLA supplementary fields are provider-owned. General
+        # vehicle details remain user-editable, so a refresh only fills a
+        # missing value and never replaces a user-entered value.
+        provider_owned = field in {
+            "tax_status", "tax_due_date", "co2_emissions", "euro_status", "type_approval",
+            "wheel_plan", "revenue_weight", "marked_for_export", "marked_as_scrapped",
+            "date_of_last_v5c_issued", "real_driving_emissions", "vehicle_status",
+            "automated_vehicle", "art_end_date",
+        }
+        if value is not None and (provider_owned or getattr(vehicle, field, None) is None):
             setattr(vehicle, field, value)
 
 
@@ -227,6 +238,9 @@ def _vehicle_response(
         country_code=vehicle.country_code,
         registration=registration,
         first_registration_date=vehicle.first_registration_date,
+        first_registration_precision=vehicle.first_registration_precision,
+        first_registration_with_dvla_date=vehicle.first_registration_with_dvla_date,
+        first_registration_with_dvla_precision=vehicle.first_registration_with_dvla_precision,
         vin=vin,
         lookup_provider=vehicle.lookup_provider,
         lookup_status=vehicle.lookup_status,
@@ -474,6 +488,9 @@ async def lookup_vehicle(
         fuel_type=result.fuel_type,
         engine_size=result.engine_size,
         first_registration_date=result.first_registration_date,
+        first_registration_precision=result.first_registration_precision,
+        first_registration_with_dvla_date=result.first_registration_with_dvla_date,
+        first_registration_with_dvla_precision=result.first_registration_with_dvla_precision,
         tax_status=result.tax_status,
         tax_due_date=result.tax_due_date,
         inspection_status=result.inspection_status,
@@ -576,6 +593,19 @@ async def create_vehicle(
         if mot_history and mot_history.first_registration_date is not None
         else body.first_registration_date
     )
+    first_registration_precision = (
+        dvla_result.first_registration_precision
+        if dvla_result and dvla_result.first_registration_precision is not None
+        else mot_history.first_registration_precision
+        if mot_history and mot_history.first_registration_precision is not None
+        else body.first_registration_precision
+    )
+    first_registration_with_dvla_date = (
+        dvla_result.first_registration_with_dvla_date if dvla_result else None
+    )
+    first_registration_with_dvla_precision = (
+        dvla_result.first_registration_with_dvla_precision if dvla_result else None
+    )
     # The id is assigned up front (not left to the flush-time default) because
     # the ciphertext's associated data binds it to this exact row.
     vehicle_id = new_vehicle_id()
@@ -598,6 +628,9 @@ async def create_vehicle(
         country_code=body.country_code.upper(),
         registration=registration,
         first_registration_date=first_registration_date,
+        first_registration_precision=first_registration_precision,
+        first_registration_with_dvla_date=first_registration_with_dvla_date,
+        first_registration_with_dvla_precision=first_registration_with_dvla_precision,
         vin=vin,
         lookup_provider="uk_dvla" if dvla_result is not None else None,
         lookup_status="success" if dvla_result is not None else None,

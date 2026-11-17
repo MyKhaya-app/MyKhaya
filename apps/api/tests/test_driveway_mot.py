@@ -402,6 +402,7 @@ def test_normaliser_keeps_dvsa_vehicle_fields_for_fallback_population() -> None:
     assert history.model == "FOCUS"
     assert history.engine_size == "1596"
     assert history.first_registration_date == date(2012, 4, 1)
+    assert history.first_registration_precision == "day"
 
 
 # =====================================================================================

@@ -37,6 +37,7 @@ from urllib.parse import quote
 import httpx
 
 from mykhaya.config import Settings
+from mykhaya.driveway_providers import normalize_fuel_type
 
 PROVIDER_NAME = "dvsa"
 _VRM_PATTERN = re.compile(r"^[A-Z0-9]{1,10}$")
@@ -82,6 +83,7 @@ class MotHistory:
     fuel_type: str | None = None
     engine_size: str | None = None
     first_registration_date: date | None = None
+    first_registration_precision: str | None = None
     year_of_manufacture: int | None = None
     provider: str = PROVIDER_NAME
 
@@ -291,6 +293,8 @@ def normalise_mot_response(payload: Any) -> MotHistory:
         else None
     )
     engine_value = first_value("engineSize", "engineCapacity")
+    first_registration_value = first_value("firstUsedDate", "registrationDate", "manufactureDate")
+    first_registration_date = _parse_date(first_registration_value)
     return MotHistory(
         tests=tuple(unique),
         first_mot_due_date=_parse_date(payload.get("motTestDueDate")),
@@ -298,11 +302,10 @@ def normalise_mot_response(payload: Any) -> MotHistory:
         make=first_value("make"),
         model=first_value("model"),
         colour=first_value("primaryColour", "colour"),
-        fuel_type=first_value("fuelType"),
+        fuel_type=normalize_fuel_type(first_value("fuelType")),
         engine_size=str(engine_value) if engine_value is not None else None,
-        first_registration_date=_parse_date(
-            first_value("firstUsedDate", "registrationDate", "manufactureDate")
-        ),
+        first_registration_date=first_registration_date,
+        first_registration_precision="day" if first_registration_date else None,
         year_of_manufacture=year,
     )
 

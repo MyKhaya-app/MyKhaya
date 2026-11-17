@@ -24,6 +24,18 @@ export function formatShortDate(iso: string | null | undefined): string | null {
   return `${date.getDate()} ${MONTHS[date.getMonth()]} ${date.getFullYear()}`;
 }
 
+export function formatRegistrationDate(
+  iso: string | null | undefined,
+  precision: "day" | "month" | "year" | null | undefined,
+): string | null {
+  if (!iso) return null;
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(iso);
+  if (!match) return null;
+  if (precision === "year") return match[1]!;
+  if (precision === "month") return `${MONTHS[Number(match[2]) - 1]} ${match[1]}`;
+  return formatShortDate(iso);
+}
+
 /** Whole days from `today` (local calendar date) to the ISO date. */
 export function daysUntil(iso: string, today: Date = new Date()): number | null {
   const date = localDate(iso);

@@ -142,6 +142,7 @@ describe("Driveway list — header and filters", () => {
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Megan" }));
     expect(screen.getByText("No vehicles for Megan yet")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Open vehicle lookup" })).toHaveAttribute("href", "/driveway/lookup");
     expect(screen.getByText("Add one with just the registration – we'll look up the MOT.")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Add a vehicle for Megan" })).toHaveAttribute("href", "/driveway/add?owner=u2");
     expect(screen.queryByText(/All MOTs in date/)).not.toBeInTheDocument();

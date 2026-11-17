@@ -22,6 +22,7 @@ import {
   firstName,
   formatMileage,
   formatPlate,
+  formatRegistrationDate,
   formatShortDate,
   lastMileage,
   motDaysText,
@@ -261,6 +262,8 @@ export default function VehicleDetailPage({ params }: { params: Promise<{ vehicl
 
   const facts = [
     { label: "Year", value: vehicle.year ? String(vehicle.year) : null },
+    { label: "First registration", value: formatRegistrationDate(vehicle.first_registration_date, vehicle.first_registration_precision ?? (vehicle.lookup_provider === "uk_dvla" ? "month" : "day")) },
+    { label: "First registered with DVLA", value: formatRegistrationDate(vehicle.first_registration_with_dvla_date, vehicle.first_registration_with_dvla_precision) },
     { label: "Fuel", value: vehicle.fuel_type },
     { label: "Colour", value: vehicle.colour },
     { label: "Last recorded mileage", value: mileage },

@@ -399,6 +399,7 @@ async def refresh_vehicle_mot(
                 "fuel_type",
                 "engine_size",
                 "first_registration_date",
+                "first_registration_precision",
                 "year",
             )
             for field in provider_fields:
@@ -409,6 +410,7 @@ async def refresh_vehicle_mot(
                     "fuel_type": history.fuel_type,
                     "engine_size": history.engine_size,
                     "first_registration_date": history.first_registration_date,
+                    "first_registration_precision": history.first_registration_precision,
                     "year": history.year_of_manufacture,
                 }[field]
                 if getattr(row, field) is None and value is not None:

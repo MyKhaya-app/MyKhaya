@@ -16,6 +16,8 @@ import {
   type VehicleFieldErrors,
   type VehicleFieldValues,
 } from "../vehicle-fields";
+import { consumeLookupHandoff } from "../lookup-handoff";
+import { formatRegistrationDate } from "../vehicle-display";
 
 // Never falls back to the registration: a nickname is shown and shared far
 // more widely than the registration itself (lists, reminders, notifications),
@@ -83,11 +85,26 @@ export default function AddVehiclePage() {
     const params = new URLSearchParams(window.location.search);
     const requested = params.get("owner");
     const requestedRegistration = params.get("registration");
+    const handoff = consumeLookupHandoff();
     if (requested && members.some((member) => member.user_id === requested)) {
       setValues((current) => ({ ...current, ownerUserId: requested }));
     }
     if (requestedRegistration) {
       setValues((current) => ({ ...current, registration: requestedRegistration }));
+    }
+    if (handoff?.found) {
+      setLookup(handoff);
+      setValues((current) => ({
+        ...current,
+        registration: handoff.registration ?? current.registration,
+        make: handoff.make ?? "",
+        model: handoff.model ?? "",
+        year: handoff.year ? String(handoff.year) : "",
+        fuelType: handoff.fuel_type ?? "",
+        colour: handoff.colour ?? "",
+        engineSize: handoff.engine_size ?? "",
+        firstRegistrationDate: handoff.first_registration_date ?? "",
+      }));
     }
   }, [members]);
 
@@ -159,6 +176,7 @@ export default function AddVehiclePage() {
       fuel_type: values.fuelType || null,
       engine_size: values.engineSize.trim() || null,
       first_registration_date: values.firstRegistrationDate || null,
+      first_registration_precision: lookup?.first_registration_precision ?? (values.firstRegistrationDate ? "day" : null),
       vin: values.vin.trim() || null,
     };
     try {
@@ -172,6 +190,7 @@ export default function AddVehiclePage() {
   }
 
   const showDetails = manual || Boolean(lookup?.found);
+  const legacyPreviewDisabled = false;
 
   return (
     <SettingsPage
@@ -215,6 +234,16 @@ export default function AddVehiclePage() {
                 </>
               )}
               {lookup?.found && <div className="driveway-lookup-result" role="status">
+                <div className="drv-lookup-section"><h3>Vehicle details</h3><dl className="drv-lookup-facts">
+                  {[["Registration", lookup.registration], ["Make", lookup.make], ["Model", lookup.model], ["Year", lookup.year], ["Fuel", lookup.fuel_type], ["Colour", lookup.colour], ["Engine", lookup.engine_size ? `${lookup.engine_size} cc` : null], ["First registration", formatRegistrationDate(lookup.first_registration_date, lookup.first_registration_precision)]].map(([label, value]) => value ? <div key={label}><dt>{label}</dt><dd>{value}</dd></div> : null)}
+                </dl></div>
+                <div className="drv-lookup-section"><h3>Tax</h3><dl className="drv-lookup-facts">
+                  {[['Status', lookup.tax_status], ['Due date', lookup.tax_due_date ? formatRegistrationDate(lookup.tax_due_date, "day") : null], ['Additional-rate end', lookup.art_end_date ? formatRegistrationDate(lookup.art_end_date, "day") : null], ['First registered with DVLA', formatRegistrationDate(lookup.first_registration_with_dvla_date, lookup.first_registration_with_dvla_precision)]].map(([label, value]) => value ? <div key={label}><dt>{label}</dt><dd>{value}</dd></div> : null)}
+                </dl></div>
+                {lookup.mot && <div className="drv-lookup-section"><h3>MOT</h3><p>{lookup.mot.status ?? "MOT information available"}{lookup.mot.due_date ? ` · due ${formatRegistrationDate(lookup.mot.due_date, "day")}` : ""}</p></div>}
+                {lookup.capabilities.map((capability) => <p className="drv-muted-small" key={capability}>{capability === "inspection" ? "MOT information available" : capability === "tax" ? "Tax information available" : "Vehicle specifications available"}</p>)}
+              </div>}
+              {lookup?.found && legacyPreviewDisabled && <div className="driveway-lookup-result" role="status">
                 <span className="more-icon-tile blue" aria-hidden="true">🚗</span>
                 <strong>{[lookup.make, lookup.model].filter(Boolean).join(" ") || lookup.registration}</strong>
                 <span>{lookup.registration}</span>

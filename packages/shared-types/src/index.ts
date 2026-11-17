@@ -1060,6 +1060,9 @@ export interface Vehicle {
   country_code: string;
   registration: string | null;
   first_registration_date: string | null;
+  first_registration_precision?: "day" | "month" | "year" | null;
+  first_registration_with_dvla_date?: string | null;
+  first_registration_with_dvla_precision?: "day" | "month" | "year" | null;
   // Omitted by the backend (not just null) for a viewer who isn't the
   // vehicle's own owner or a home_admin — see routers.driveway.
   vin: string | null;
@@ -1186,6 +1189,9 @@ export interface VehicleCreatePayload {
   country_code: string;
   registration?: string | null;
   first_registration_date?: string | null;
+  first_registration_precision?: "day" | "month" | "year" | null;
+  first_registration_with_dvla_date?: string | null;
+  first_registration_with_dvla_precision?: "day" | "month" | "year" | null;
   vin?: string | null;
 }
 
@@ -1417,6 +1423,9 @@ export interface VehicleLookupResult {
   fuel_type: string | null;
   engine_size: string | null;
   first_registration_date: string | null;
+  first_registration_precision?: "day" | "month" | "year" | null;
+  first_registration_with_dvla_date?: string | null;
+  first_registration_with_dvla_precision?: "day" | "month" | "year" | null;
   tax_status: string | null;
   tax_due_date: string | null;
   inspection_status: string | null;

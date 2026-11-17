@@ -29,6 +29,7 @@ class VehicleCreate(StrictModel):
     country_code: str = Field(min_length=2, max_length=2, pattern=r"^[A-Za-z]{2}$")
     registration: str | None = Field(default=None, max_length=20)
     first_registration_date: date | None = None
+    first_registration_precision: Literal["day", "month", "year"] | None = None
     # Sensitive — see Vehicle's model docstring. Never echoed into audit
     # metadata or logs (routers.driveway strips it before calling audit()).
     vin: str | None = Field(default=None, max_length=32)
@@ -52,6 +53,9 @@ class VehicleResponse(BaseModel):
     country_code: str
     registration: str | None
     first_registration_date: date | None
+    first_registration_precision: str | None
+    first_registration_with_dvla_date: date | None
+    first_registration_with_dvla_precision: str | None
     tax_status: str | None
     tax_due_date: date | None
     co2_emissions: int | None
@@ -113,6 +117,9 @@ class VehicleLookupResult(BaseModel):
     fuel_type: str | None = None
     engine_size: str | None = None
     first_registration_date: date | None = None
+    first_registration_precision: Literal["day", "month", "year"] | None = None
+    first_registration_with_dvla_date: date | None = None
+    first_registration_with_dvla_precision: str | None = None
     tax_status: str | None = None
     tax_due_date: date | None = None
     inspection_status: str | None = None

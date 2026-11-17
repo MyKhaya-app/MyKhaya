@@ -4,11 +4,31 @@ import httpx
 import pytest
 from pydantic import SecretStr
 
-from mykhaya.driveway_providers import UKDVLAProvider, VehicleLookupNotFound, normalize_registration
+from mykhaya.driveway_providers import (
+    UKDVLAProvider,
+    VehicleLookupNotFound,
+    normalize_fuel_type,
+    normalize_registration,
+)
 
 
 def test_registration_normalization() -> None:
     assert normalize_registration(" ap22 oo j ") == "AP22OOJ"
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("DIESEL", "Diesel"),
+        ("ELECTRICITY", "Electric"),
+        ("Hybrid Electric (Clean)", "Hybrid"),
+        ("Gas Bi-Fuel", "Gas Bi-Fuel"),
+    ],
+)
+def test_fuel_type_normalisation_preserves_supported_and_unknown_values(
+    value: str, expected: str
+) -> None:
+    assert normalize_fuel_type(value) == expected
 
 
 @pytest.mark.asyncio
@@ -78,6 +98,7 @@ async def test_dvla_maps_v12_specifications_and_year_month_registration() -> Non
     )
     result = await provider.lookup("AA19 AAA")
     assert result.first_registration_date.isoformat() == "2019-03-01"
+    assert result.first_registration_precision == "month"
     assert result.co2_emissions == 120
     assert result.wheel_plan == "2 AXLE RIGID BODY"
     assert result.inspection_due_date.isoformat() == "2026-03-30"

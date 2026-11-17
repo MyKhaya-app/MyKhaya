@@ -6,6 +6,7 @@ import {
   formatMake,
   formatMileage,
   formatPlate,
+  formatRegistrationDate,
   formatShortDate,
   joinWithAnd,
   milesBetweenTests,
@@ -77,6 +78,12 @@ describe("Driveway formatting", () => {
     expect(formatShortDate("2027-08-25")).toBe("25 Aug 2027");
     expect(formatShortDate("2026-09-04")).toBe("4 Sep 2026");
     expect(formatShortDate(null)).toBeNull();
+  });
+
+  it("preserves first-registration precision in display", () => {
+    expect(formatRegistrationDate("2021-02-01", "month")).toBe("Feb 2021");
+    expect(formatRegistrationDate("2021-01-01", "year")).toBe("2021");
+    expect(formatRegistrationDate("2021-02-14", "day")).toBe("14 Feb 2021");
   });
 
   it("spaces standard UK plates only", () => {

@@ -4615,6 +4615,11 @@ class Vehicle(UuidTimeMixin, Base):
     country_code: Mapped[str] = mapped_column(String(2))
     registration: Mapped[str | None] = mapped_column(String(20))
     first_registration_date: Mapped[date | None] = mapped_column(Date())
+    # day, month or year; nullable preserves existing rows whose provider
+    # response did not record the original precision.
+    first_registration_precision: Mapped[str | None] = mapped_column(String(10))
+    first_registration_with_dvla_date: Mapped[date | None] = mapped_column(Date())
+    first_registration_with_dvla_precision: Mapped[str | None] = mapped_column(String(10))
     # Sensitive — defaults to Personal visibility even on a Household-scoped
     # vehicle; never included in audit metadata/logs. See class docstring.
     vin: Mapped[str | None] = mapped_column(String(32))

@@ -7,6 +7,27 @@ import httpx
 from pydantic import SecretStr
 
 
+def normalize_fuel_type(value: object) -> str | None:
+    """Map provider fuel labels to stable Driveway labels without dropping
+    unfamiliar provider values."""
+    if value in (None, ""):
+        return None
+    raw = " ".join(str(value).strip().split())
+    key = raw.upper().replace("_", " ").replace("-", " ")
+    known = {
+        "PETROL": "Petrol",
+        "DIESEL": "Diesel",
+        "ELECTRIC": "Electric",
+        "ELECTRICITY": "Electric",
+        "HYBRID": "Hybrid",
+        "HYBRID ELECTRIC (CLEAN)": "Hybrid",
+        "PLUG IN HYBRID": "Plug-in hybrid",
+        "PLUGIN HYBRID": "Plug-in hybrid",
+        "LPG": "LPG",
+    }
+    return known.get(key, raw[:30])
+
+
 @dataclass(frozen=True)
 class VehicleLookup:
     registration: str
@@ -17,6 +38,9 @@ class VehicleLookup:
     fuel_type: str | None = None
     engine_size: str | None = None
     first_registration_date: date | None = None
+    first_registration_precision: str | None = None
+    first_registration_with_dvla_date: date | None = None
+    first_registration_with_dvla_precision: str | None = None
     tax_status: str | None = None
     tax_due_date: date | None = None
     inspection_status: str | None = None
@@ -97,22 +121,30 @@ class UKDVLAProvider:
             except ValueError:
                 return None
 
-        def parsed_first_registration() -> date | None:
+        def parsed_first_registration() -> tuple[date | None, str | None]:
             value = payload.get("monthOfFirstRegistration")
             year = payload.get("yearOfFirstRegistration")
             if isinstance(value, str) and len(value) == 7 and value[4] == "-":
                 try:
-                    return date.fromisoformat(f"{value}-01")
+                    return date.fromisoformat(f"{value}-01"), "month"
                 except ValueError:
-                    return None
+                    return None, None
             if isinstance(value, str) and value.isdigit():
                 value = int(value)
+            if isinstance(year, str) and year.isdigit():
+                year = int(year)
             if isinstance(year, int) and isinstance(value, int) and 1 <= value <= 12:
                 try:
-                    return date(year, value, 1)
+                    return date(year, value, 1), "month"
                 except ValueError:
-                    return None
-            return parsed_date("monthOfFirstRegistration")
+                    return None, None
+            if isinstance(year, int):
+                try:
+                    return date(year, 1, 1), "year"
+                except ValueError:
+                    return None, None
+            parsed = parsed_date("monthOfFirstRegistration")
+            return (parsed, "day") if parsed else (None, None)
 
         capabilities: list[str] = []
         if payload.get("taxStatus") or payload.get("taxDueDate"):
@@ -129,15 +161,35 @@ class UKDVLAProvider:
         )
         if any(payload.get(key) is not None for key in specification_keys):
             capabilities.append("specifications")
+        first_registration_date, first_registration_precision = parsed_first_registration()
+        with_dvla_year = payload.get("yearOfFirstRegistrationWithDVLA")
+        with_dvla_month = payload.get("monthOfFirstRegistrationWithDVLA")
+        if isinstance(with_dvla_year, str) and with_dvla_year.isdigit():
+            with_dvla_year = int(with_dvla_year)
+        if isinstance(with_dvla_month, str) and with_dvla_month.isdigit():
+            with_dvla_month = int(with_dvla_month)
+        with_dvla_date = None
+        with_dvla_precision = None
+        if (
+            isinstance(with_dvla_year, int)
+            and isinstance(with_dvla_month, int)
+            and 1 <= with_dvla_month <= 12
+        ):
+            with_dvla_date, with_dvla_precision = date(with_dvla_year, with_dvla_month, 1), "month"
+        elif isinstance(with_dvla_year, int):
+            with_dvla_date, with_dvla_precision = date(with_dvla_year, 1, 1), "year"
         return VehicleLookup(
             registration=payload.get("registrationNumber") or normalized,
             make=payload.get("make"),
             model=payload.get("model"),
             colour=payload.get("colour"),
             year=payload.get("yearOfManufacture"),
-            fuel_type=payload.get("fuelType"),
+            fuel_type=normalize_fuel_type(payload.get("fuelType")),
             engine_size=str(payload["engineCapacity"]) if payload.get("engineCapacity") else None,
-            first_registration_date=parsed_first_registration(),
+            first_registration_date=first_registration_date,
+            first_registration_precision=first_registration_precision,
+            first_registration_with_dvla_date=with_dvla_date,
+            first_registration_with_dvla_precision=with_dvla_precision,
             tax_status=payload.get("taxStatus"),
             tax_due_date=parsed_date("taxDueDate"),
             inspection_status=payload.get("motStatus"),

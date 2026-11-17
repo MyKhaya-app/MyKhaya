@@ -152,10 +152,15 @@ clears an existing value.
 | `vehicleStatus` | `vehicles.vehicle_status` | Details / lookup |
 | `automatedVehicle` | `vehicles.automated_vehicle` | Stored for future status presentation |
 | `artEndDate` | `vehicles.art_end_date` | Details / lookup |
+| `yearOfFirstRegistrationWithDVLA` + `monthOfFirstRegistrationWithDVLA` | `vehicles.first_registration_with_dvla_date` plus precision | Details / lookup |
 
 `yearOfManufacture` remains the primary stored vehicle year. First registration
-is normalised from the official year/month fields to the first day of the
-reported month because VES does not provide a full registration date.
+is stored with explicit `day`, `month` or `year` precision. When VES supplies
+only year/month, the database date uses day 1 as an internal anchor but the API
+and UI display only the precision actually returned. The separate
+`yearOfFirstRegistrationWithDVLA` / `monthOfFirstRegistrationWithDVLA` values
+are stored independently and are never presented as the vehicle's first
+registration date.
 
 DVSA vehicle-level fields are used only as a fallback for missing non-sensitive
 vehicle fields, with DVLA remaining authoritative wherever it supplies a

@@ -137,3 +137,13 @@ export function VehicleLookupCard() {
     </section>
   );
 }
+
+export function VehicleLookupEntryCard() {
+  return (
+    <section className="drv-lookup-card" aria-labelledby="drv-lookup-entry-heading">
+      <div className="drv-section-heading"><div><p className="drv-eyebrow">Considering a vehicle?</p><h2 id="drv-lookup-entry-heading">Vehicle lookup</h2></div></div>
+      <p className="drv-muted">Check a vehicle you might buy without adding it to your household vehicles.</p>
+      <Link className="drv-button drv-button-secondary" href="/driveway/lookup">Open vehicle lookup</Link>
+    </section>
+  );
+}
