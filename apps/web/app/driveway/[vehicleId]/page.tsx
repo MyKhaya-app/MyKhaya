@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ChangeEvent, KeyboardEvent, use, useCallback, useEffect, useRef, useState } from "react";
-import { Bell, Camera, ChevronLeft, ChevronRight, Pencil, RefreshCw, ShieldAlert, ShieldCheck, Trash2 } from "lucide-react";
+import { Bell, Camera, CheckCircle2, ChevronLeft, ChevronRight, ExternalLink, Pencil, RefreshCw, ShieldAlert, ShieldCheck, Trash2 } from "lucide-react";
 import type { Member, Vehicle, VehicleMot } from "@mykhaya/shared-types";
 import { ApiError, api } from "@mykhaya/api-client";
 import { AppShellContent } from "@/components/app-shell";
@@ -76,6 +76,10 @@ function KeyValues({ rows }: { rows: { label: string; value: React.ReactNode }[]
       ))}
     </dl>
   );
+}
+
+function formatTaxAmount(amount: number): string {
+  return `£${amount.toFixed(2).replace(/\.00$/, "")}`;
 }
 
 export default function VehicleDetailPage({ params }: { params: Promise<{ vehicleId: string }> }) {
@@ -314,6 +318,14 @@ export default function VehicleDetailPage({ params }: { params: Promise<{ vehicl
     { label: "Category", value: taxCalculation.category },
     { label: "Payment options", value: Object.entries(taxCalculation.payment_options).map(([name, amount]) => `${name.replaceAll("_", " ")}: £${amount}`).join(" · ") || null },
   ].filter((row): row is { label: string; value: string } => Boolean(row.value))) : [];
+  const paymentOptions = taxCalculation?.payment_options ?? {};
+  void taxEstimateDetails;
+  const paymentRows = [
+    { label: "12-month payment", value: paymentOptions.single_12_month_total != null ? `${formatTaxAmount(paymentOptions.single_12_month_total)} total` : null },
+    { label: "Monthly Direct Debit", value: paymentOptions.monthly_direct_debit_per_month != null && paymentOptions.monthly_direct_debit_total != null ? `${formatTaxAmount(paymentOptions.monthly_direct_debit_per_month)} per month · ${formatTaxAmount(paymentOptions.monthly_direct_debit_total)} total` : null },
+    { label: "6-month Direct Debit", value: paymentOptions.six_month_direct_debit_payment != null && paymentOptions.six_month_direct_debit_total != null ? `${formatTaxAmount(paymentOptions.six_month_direct_debit_payment)} · ${formatTaxAmount(paymentOptions.six_month_direct_debit_total)} total` : null },
+    { label: "6-month single payment", value: paymentOptions.six_month_single_payment != null && paymentOptions.six_month_single_total != null ? `${formatTaxAmount(paymentOptions.six_month_single_payment)} · ${formatTaxAmount(paymentOptions.six_month_single_total)} total` : null },
+  ].filter((row): row is { label: string; value: string } => Boolean(row.value));
 
   const recentTests = mot?.tests.slice(0, 3) ?? [];
   const oldestTestId = mot?.tests[mot.tests.length - 1]?.id;
@@ -486,26 +498,42 @@ export default function VehicleDetailPage({ params }: { params: Promise<{ vehicl
               <p className="empty-mini">DVLA tax information is only available for vehicles registered in the UK.</p>
             ) : (
               <>
+                <h2 className="drv-tax-heading">DVLA tax summary</h2>
                 {taxDetails.length > 0 ? <KeyValues rows={taxDetails} /> : <p className="empty-mini">Tax information has not been provided by DVLA yet.</p>}
                 {taxCalculation && (
                   <>
-                    <h2 className="drv-section-title">Local VED estimate</h2>
-                    {taxEstimateDetails.length > 0 && <KeyValues rows={taxEstimateDetails} />}
-                    {taxCalculation.assumptions.length > 0 && <p className="drv-muted-small">Assumptions: {taxCalculation.assumptions.join("; ")}</p>}
-                    {taxCalculation.missing_information.length > 0 && <p className="drv-muted-small">Information still needed: {taxCalculation.missing_information.join(", ")}.</p>}
-                    <p className="drv-muted-small">This is a local estimate from published rates, not a DVLA-confirmed tax amount.</p>
+                    <section className="drv-card drv-tax-estimate-card" aria-labelledby="drv-tax-estimate-title">
+                      <div className="drv-tax-annual">
+                        {taxCalculation.annual_rate != null && <p className="visually-hidden"><span>Annual VED</span><span>Â£{taxCalculation.annual_rate}</span></p>}
+                        {taxCalculation.annual_rate != null ? (
+                          <p className="drv-tax-annual-amount"><strong>{formatTaxAmount(taxCalculation.annual_rate)}</strong><span>/ year</span></p>
+                        ) : <p className="drv-tax-annual-unavailable">Annual amount unavailable</p>}
+                        <h2 id="drv-tax-estimate-title">Standard annual rate · {taxCalculation.tax_year ?? "current tax year"} tax year</h2>
+                      </div>
+                      <div className="drv-tax-supplement">
+                        <CheckCircle2 size={24} aria-hidden="true" />
+                        <p>{taxCalculation.supplement_message ?? "The premium supplement could not be confirmed from the available vehicle information."}</p>
+                      </div>
+                      {taxCalculation.missing_information.length > 0 && <p className="drv-muted-small">Information still needed: {taxCalculation.missing_information.join(", ")}.</p>}
+                    </section>
+                    {paymentRows.length > 0 && (
+                      <section className="drv-card drv-tax-payments" aria-labelledby="drv-tax-payments-title">
+                        <h2 id="drv-tax-payments-title">Payment options</h2>
+                        <KeyValues rows={paymentRows} />
+                      </section>
+                    )}
                   </>
                 )}
                 {vehicle.refresh_outcome === "unchanged" && <p className="notice" role="status">Stored DVLA details are still fresh; no new DVLA check was made.</p>}
                 {vehicle.refresh_outcome === "busy" && <p className="notice" role="status">Another DVLA check is already running. These are the currently stored details.</p>}
-                <p className="drv-muted-small">Tax class and a tax amount are not returned by the current DVLA vehicle enquiry response. Check the official vehicle tax service for the authoritative amount.</p>
+                <p className="drv-muted-small">Based on official DVLA V149 rates for the current tax year. This is a local estimate; check GOV.UK for the authoritative amount.</p>
                 {vehicleRefreshError && <p className="notice error" role="alert">{vehicleRefreshError}</p>}
                 <button type="button" className="drv-button drv-button-secondary" onClick={() => void refreshVehicleDetails()} disabled={vehicleRefreshBusy}>
                   <RefreshCw size={18} aria-hidden="true" className={vehicleRefreshBusy ? "drv-spin" : undefined} />
                   {vehicleRefreshBusy ? "Refreshing DVLA details…" : "Refresh DVLA tax details"}
                 </button>
-                <a className="drv-text-link" href="https://www.gov.uk/check-vehicle-tax" target="_blank" rel="noreferrer">
-                  Check vehicle tax on GOV.UK <ChevronRight size={16} strokeWidth={2.2} aria-hidden="true" />
+                <a className="drv-button drv-button-primary drv-button-full" href="https://www.gov.uk/check-vehicle-tax" target="_blank" rel="noreferrer">
+                  <ExternalLink size={18} aria-hidden="true" /> Check vehicle tax on GOV.UK
                 </a>
               </>
             )}

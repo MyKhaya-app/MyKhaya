@@ -40,6 +40,7 @@ vi.mock("@mykhaya/api-client", async (importOriginal) => {
       uploadVehiclePhoto: vi.fn(),
       vehicleMot: vi.fn(),
       refreshVehicleMot: vi.fn(),
+      refreshVehicleDetails: vi.fn(),
     },
   };
 });
@@ -318,6 +319,18 @@ describe("Vehicle page — Details tab", () => {
     await waitFor(() => expect(api.deleteVehicle).toHaveBeenCalledWith("home-1", "v1"));
     expect(push).toHaveBeenCalledWith("/driveway");
   });
+
+  it("refreshes DVLA data from the Details tab", async () => {
+    (api.refreshVehicleDetails as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ...VEHICLE,
+      refresh_outcome: "refreshed",
+      tax_status: "Taxed",
+    });
+    renderPage();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Refresh vehicle details" }));
+    await waitFor(() => expect(api.refreshVehicleDetails).toHaveBeenCalledWith("home-1", "v1"));
+  });
 });
 
 describe("Vehicle page — Tax tab", () => {
@@ -348,19 +361,32 @@ describe("Vehicle page — Tax tab", () => {
       tax_calculation: {
         status: "calculated",
         annual_rate: 35,
-        payment_options: { single_12_month: 35 },
+        payment_options: { single_12_month_total: 35 },
         tax_year: "2026-2027",
         category: "2001-2017 car",
         assumptions: ["M1/M1G vehicle"],
         missing_information: [],
+        supplement_message: "The premium supplement is not applied in this estimate.",
         source: "https://www.gov.uk/vehicle-tax-rate-tables",
         calculated_at: "2026-11-17T10:00:00Z",
       },
     });
     renderPage();
-    expect(await screen.findByText("Local VED estimate")).toBeInTheDocument();
+    expect(await screen.findByText("Standard annual rate · 2026-2027 tax year")).toBeInTheDocument();
     expect(screen.getByText("Annual VED").nextSibling).toHaveTextContent("£35");
-    expect(screen.getByText(/local estimate from published rates, not a DVLA-confirmed tax amount/)).toBeInTheDocument();
+    expect(screen.getByText("£35")).toBeInTheDocument();
+    expect(screen.getByText("Payment options")).toBeInTheDocument();
+    expect(screen.getByText("The premium supplement is not applied in this estimate.")).toBeInTheDocument();
+  });
+
+  it("refreshes DVLA data from the Tax tab and renders the refreshed outcome", async () => {
+    const refreshed = { ...VEHICLE, refresh_outcome: "refreshed", tax_status: "Taxed" };
+    (api.vehicle as ReturnType<typeof vi.fn>).mockResolvedValue(VEHICLE);
+    (api.refreshVehicleDetails as ReturnType<typeof vi.fn>).mockResolvedValue(refreshed);
+    renderPage();
+    await userEvent.setup().click(await screen.findByRole("button", { name: "Refresh DVLA tax details" }));
+    await waitFor(() => expect(api.refreshVehicleDetails).toHaveBeenCalledWith("home-1", "v1"));
+    expect(await screen.findByText("Taxed")).toBeInTheDocument();
   });
 });
 

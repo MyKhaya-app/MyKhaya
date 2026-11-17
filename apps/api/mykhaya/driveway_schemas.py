@@ -49,6 +49,7 @@ class VehicleTaxCalculation(BaseModel):
     category: str | None = None
     assumptions: list[str] = Field(default_factory=list)
     missing_information: list[str] = Field(default_factory=list)
+    supplement_message: str | None = None
     source: str
     calculated_at: datetime
 

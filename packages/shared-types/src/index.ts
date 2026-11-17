@@ -1103,6 +1103,7 @@ export interface VehicleTaxCalculation {
   category: string | null;
   assumptions: string[];
   missing_information: string[];
+  supplement_message: string | null;
   source: string;
   calculated_at: string;
 }

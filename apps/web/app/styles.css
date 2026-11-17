@@ -11555,6 +11555,25 @@ html:has(.drv-page)::-webkit-scrollbar,
 }
 .drv-page .drv-tabs .rr-segment-active { color: var(--colour-white); }
 .drv-page .drv-panel { display: flex; flex-direction: column; gap: 12px; }
+.drv-page .drv-tax-heading {
+  color: var(--colour-slate);
+  font-size: 15px;
+  font-weight: 800;
+  margin: 4px 2px -4px;
+}
+.drv-page .drv-tax-estimate-card { padding: 22px 18px 18px; }
+.drv-page .drv-tax-annual { border-bottom: 1px solid var(--colour-line); padding-bottom: 18px; text-align: center; }
+.drv-page .drv-tax-annual-amount { align-items: baseline; display: flex; gap: 8px; justify-content: center; margin: 0; }
+.drv-page .drv-tax-annual-amount strong { color: var(--colour-forest-dark); font-size: clamp(42px, 12vw, 64px); font-weight: 800; letter-spacing: -0.06em; line-height: 1; }
+.drv-page .drv-tax-annual-amount span { color: var(--colour-slate); font-size: 18px; font-style: italic; }
+.drv-page .drv-tax-annual h2 { color: var(--colour-slate); font-size: 16px; font-weight: 500; margin: 10px 0 0; }
+.drv-page .drv-tax-annual-unavailable { color: var(--colour-muted); font-size: 22px; font-weight: 800; margin: 0; }
+.drv-page .drv-tax-supplement { align-items: center; display: flex; gap: 12px; justify-content: center; padding: 16px 0 0; }
+.drv-page .drv-tax-supplement svg { background: var(--colour-sage-soft); border-radius: 50%; color: var(--colour-forest-dark); flex: none; padding: 4px; }
+.drv-page .drv-tax-supplement p { color: var(--colour-slate); font-size: 15px; line-height: 1.45; margin: 0; max-width: 42rem; text-align: left; }
+.drv-page .drv-tax-payments { overflow: hidden; }
+.drv-page .drv-tax-payments h2 { font-size: 20px; margin: 18px 18px 2px; }
+.drv-page .drv-tax-payments .drv-kv { border: 0; border-radius: 0; }
 
 /* MOT card (Overview) and MOT tab header */
 .drv-page .drv-mot-card {

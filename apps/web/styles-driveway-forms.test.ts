@@ -40,4 +40,11 @@ describe("styles.css — Driveway vehicle tabs", () => {
     const segment = css.match(/\.drv-page \.drv-tabs \.rr-segment \{[^}]*\}/)?.[0] ?? "";
     expect(segment).toContain("white-space: nowrap;");
   });
+
+  it("keeps the Tax tab cards and action scoped to the Driveway theme", () => {
+    expect(css).toContain(".drv-page .drv-tax-estimate-card");
+    expect(css).toContain(".drv-page .drv-tax-payments");
+    expect(css).toContain(".drv-page .drv-button-full");
+    expect(css).toContain("var(--colour-forest-dark)");
+  });
 });

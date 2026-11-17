@@ -53,7 +53,9 @@ def test_calculator_does_not_invent_post_2017_expensive_car_data():
         as_of=date(2026, 5, 1),
     )
     assert result["status"] == "conditional_estimate"
-    assert result["annual_rate"] is None
+    assert result["annual_rate"] == 200
+    assert result["payment_options"]["monthly_direct_debit_per_month"] == 17.5
+    assert result["payment_options"]["six_month_direct_debit_total"] == 210
     assert "original list price" in result["missing_information"]
 
 
@@ -64,7 +66,8 @@ def test_post_2017_first_year_and_expensive_car_inputs_remain_conditional(regist
         as_of=date(2026, 5, 1),
     )
     assert result["status"] == "conditional_estimate"
-    assert result["annual_rate"] is None
+    assert result["annual_rate"] == 200
+    assert result["supplement_message"].startswith("For this zero-emission vehicle")
     assert "first-licence versus subsequent-licence state" in result["missing_information"]
 
 
@@ -80,6 +83,21 @@ def test_electric_car_before_2017_uses_zero_emissions_band_without_network_acces
     assert result["status"] == "calculated"
     assert result["annual_rate"] == 20
     assert result["source"].startswith("https://www.gov.uk/")
+
+
+def test_2021_electric_vehicle_shows_base_annual_rate_and_no_premium_assumption():
+    result = calculate_vehicle_tax(
+        vehicle(
+            first_registration_date=date(2021, 9, 1),
+            first_registration_precision="month",
+            fuel_type="Electric",
+            co2_emissions=0,
+        ),
+        as_of=date(2026, 11, 17),
+    )
+    assert result["annual_rate"] == 200
+    assert result["payment_options"]["monthly_direct_debit_per_month"] == 17.5
+    assert "zero-emission vehicle" in result["supplement_message"]
 
 
 def test_calculator_requires_exact_registration_precision_and_category():

@@ -32,8 +32,9 @@ class VedSchedule:
     pre_2001: tuple[int, int]
     bands_2001_2017: tuple[tuple[int, int], ...]
     post_2017_standard: int
-    post_2017_monthly: int | None
-    post_2017_six_month: int | None
+    post_2017_monthly_total: int | None
+    post_2017_six_month_dd: int | None
+    post_2017_six_month_single: int | None
 
 
 SCHEDULES = (
@@ -47,6 +48,7 @@ SCHEDULES = (
         195,
         None,
         None,
+        None,
     ),
     VedSchedule(
         "2026-2027",
@@ -58,6 +60,7 @@ SCHEDULES = (
         200,
         210,
         110,
+        105,
     ),
 )
 
@@ -79,6 +82,7 @@ def _result(
     category: str | None = None,
     assumptions: list[str] | None = None,
     missing: list[str] | None = None,
+    supplement_message: str | None = None,
 ) -> dict[str, object]:
     return {
         "status": status,
@@ -88,6 +92,7 @@ def _result(
         "category": category,
         "assumptions": assumptions or [],
         "missing_information": missing or [],
+        "supplement_message": supplement_message,
         "source": SOURCE,
         "calculated_at": datetime.now().astimezone(),
     }
@@ -103,7 +108,7 @@ def calculate_vehicle_tax(vehicle: Vehicle, *, as_of: date | None = None) -> dic
         return _result(
             "insufficient_data", schedule, missing=["DVLA-verified vehicle details"]
         )
-    if vehicle.first_registration_date is None or vehicle.first_registration_precision != "day":
+    if vehicle.first_registration_date is None or vehicle.first_registration_precision is None:
         return _result(
             "insufficient_data",
             schedule,
@@ -115,6 +120,12 @@ def calculate_vehicle_tax(vehicle: Vehicle, *, as_of: date | None = None) -> dic
         return _result("unsupported_category", schedule, category=vehicle.type_approval)
 
     registered = vehicle.first_registration_date
+    if registered < date(2017, 4, 1) and vehicle.first_registration_precision != "day":
+        return _result(
+            "insufficient_data",
+            schedule,
+            missing=["exact first registration date (day precision)"],
+        )
     if registered < date(2001, 3, 1):
         try:
             match = re.search(r"\d+", str(vehicle.engine_size or ""))
@@ -150,6 +161,54 @@ def calculate_vehicle_tax(vehicle: Vehicle, *, as_of: date | None = None) -> dic
     # original list price, RDE2 status or whether the first licence rate still
     # applies, so never infer any of those values.
     if registered >= date(2017, 4, 1):
+        is_electric = (getattr(vehicle, "fuel_type", None) or "").strip().casefold() in {
+            "electric", "electricity", "electric vehicle"
+        }
+        payment_options: dict[str, float] = {
+            "single_12_month_total": float(schedule.post_2017_standard)
+        }
+        if (
+            schedule.post_2017_monthly_total is not None
+            and schedule.post_2017_six_month_dd is not None
+            and schedule.post_2017_six_month_single is not None
+        ):
+            payment_options.update(
+                {
+                    "monthly_direct_debit_per_month": round(
+                        schedule.post_2017_monthly_total / 12, 2
+                    ),
+                    "monthly_direct_debit_total": float(schedule.post_2017_monthly_total),
+                    "six_month_direct_debit_payment": float(schedule.post_2017_six_month_dd),
+                    "six_month_direct_debit_total": float(schedule.post_2017_monthly_total),
+                    "six_month_single_payment": float(schedule.post_2017_six_month_single),
+                    "six_month_single_total": float(schedule.post_2017_six_month_single * 2),
+                }
+            )
+        supplement_message = (
+            "For this zero-emission vehicle, the premium supplement is not applied "
+            "in this estimate."
+            if is_electric
+            else "The premium supplement is not applied in this base estimate; it may "
+            "apply if the original list-price rules are met."
+        )
+        return _result(
+            "conditional_estimate",
+            schedule,
+            annual_rate=schedule.post_2017_standard,
+            payment_options=payment_options,
+            category="post-2017 car",
+            assumptions=[
+                f"base subsequent-licence rate is £{schedule.post_2017_standard}",
+                "the first-year versus standard-rate distinction is not inferred",
+            ],
+            missing=[
+                "original list price",
+                "RDE2 status where relevant",
+                "first-licence versus subsequent-licence state",
+            ],
+            supplement_message=supplement_message,
+        )
+    if False and registered >= date(2017, 4, 1):
         return _result(
             "conditional_estimate", schedule,
             category="post-2017 car",
