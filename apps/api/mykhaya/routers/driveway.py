@@ -200,19 +200,30 @@ def _mot_lookup_preview(history: MotHistory, *, checked_at: datetime) -> dict[st
     }
 
 
-def _may_see_sensitive_fields(vehicle: Vehicle, auth: AuthContext, membership: Membership) -> bool:
-    if vehicle.owner_user_id == auth.user.id:
+def _may_see_sensitive_fields(
+    vehicle: Vehicle,
+    auth: AuthContext,
+    membership: Membership,
+    *,
+    user_id: uuid.UUID | None = None,
+) -> bool:
+    if vehicle.owner_user_id == (user_id if user_id is not None else auth.user.id):
         return True
     return membership.relationship == HouseholdRelationship.home_admin
 
 
 def _vehicle_response(
-    vehicle: Vehicle, auth: AuthContext, membership: Membership, settings: Settings
+    vehicle: Vehicle,
+    auth: AuthContext,
+    membership: Membership,
+    settings: Settings,
+    *,
+    user_id: uuid.UUID | None = None,
 ) -> VehicleResponse:
     # Visibility is decided BEFORE any VIN is read: get_vehicle_vin (which
     # decrypts when the Phase 2D read flag is on) is only ever called for a
     # viewer already entitled to the VIN — never speculatively.
-    reveal_sensitive = _may_see_sensitive_fields(vehicle, auth, membership)
+    reveal_sensitive = _may_see_sensitive_fields(vehicle, auth, membership, user_id=user_id)
     try:
         registration = get_vehicle_registration(vehicle, settings)
         vin = get_vehicle_vin(vehicle, settings) if reveal_sensitive else None
@@ -703,12 +714,13 @@ async def refresh_vehicle_details(
     """Refresh DVLA-owned fields for an existing vehicle. Provider values
     never replace a non-null field with null, and the registration is checked
     again before the result is committed."""
+    user_id = auth.user.id
     membership = await require_capability(home_id, Capability.driveway_view, auth, db)
     await _require_vehicle_manage(db, home_id, auth)
     await enforce_rate_limit(
         request,
         settings,
-        f"driveway-dvla-refresh:{auth.user.id}",
+        f"driveway-dvla-refresh:{user_id}",
         settings.driveway_lookup_rate_limit,
         3600,
     )
@@ -758,7 +770,7 @@ async def refresh_vehicle_details(
         db,
         request,
         "driveway.vehicle.dvla_refreshed",
-        auth.user.id,
+        user_id,
         home_id,
         "vehicle",
         fresh.id,
@@ -770,8 +782,12 @@ async def refresh_vehicle_details(
     # that transaction, including `membership`. Re-read it after the commit so
     # response serialization never performs an implicit async refresh on an
     # expired object (and keeps the authorization decision home-scoped).
+    # Rollback expires the authenticated User instance as well. Refresh it
+    # explicitly before the standard membership lookup rather than adding a
+    # user-ID override to the shared authorization helper.
+    await db.refresh(auth.user)
     membership = await membership_for(home_id, auth, db)
-    return _vehicle_response(fresh, auth, membership, settings)
+    return _vehicle_response(fresh, auth, membership, settings, user_id=user_id)
 
 
 @router.post("/{home_id}/vehicles/{vehicle_id}/photo", response_model=VehicleResponse)
