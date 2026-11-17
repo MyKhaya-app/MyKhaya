@@ -1068,6 +1068,18 @@ export interface Vehicle {
   last_successful_lookup: string | null;
   tax_status: string | null;
   tax_due_date: string | null;
+  co2_emissions: number | null;
+  euro_status: string | null;
+  type_approval: string | null;
+  wheel_plan: string | null;
+  revenue_weight: number | null;
+  marked_for_export: boolean | null;
+  marked_as_scrapped: boolean | null;
+  date_of_last_v5c_issued: string | null;
+  real_driving_emissions: string | null;
+  vehicle_status: string | null;
+  automated_vehicle: boolean | null;
+  art_end_date: string | null;
   inspection_status: string | null;
   inspection_due_date: string | null;
   photo_version: string | null;
@@ -1409,8 +1421,42 @@ export interface VehicleLookupResult {
   tax_due_date: string | null;
   inspection_status: string | null;
   inspection_due_date: string | null;
+  co2_emissions: number | null;
+  euro_status: string | null;
+  type_approval: string | null;
+  wheel_plan: string | null;
+  revenue_weight: number | null;
+  marked_for_export: boolean | null;
+  marked_as_scrapped: boolean | null;
+  date_of_last_v5c_issued: string | null;
+  real_driving_emissions: string | null;
+  vehicle_status: string | null;
+  automated_vehicle: boolean | null;
+  art_end_date: string | null;
+  checked_at: string | null;
+  mot: VehicleLookupMotResult | null;
   capabilities: string[];
   message: string | null;
+}
+
+export interface VehicleLookupMotTest {
+  test_number: string | null;
+  test_date: string;
+  completed_at: string | null;
+  expiry_date: string | null;
+  result: VehicleMotResult;
+  odometer_value: number | null;
+  odometer_unit: "mi" | "km" | null;
+  odometer_result: string | null;
+  defects: Array<{ text: string; category: string; dangerous: boolean }>;
+}
+
+export interface VehicleLookupMotResult {
+  status: string | null;
+  due_date: string | null;
+  first_mot_due_date: string | null;
+  refreshed_at: string | null;
+  tests: VehicleLookupMotTest[];
 }
 
 export interface PlanComparisonRow {

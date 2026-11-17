@@ -75,6 +75,14 @@ class MotHistory:
     tests: tuple[MotTestRecord, ...]
     # For a vehicle that has not yet needed an MOT (DVSA "motTestDueDate").
     first_mot_due_date: date | None = None
+    registration: str | None = None
+    make: str | None = None
+    model: str | None = None
+    colour: str | None = None
+    fuel_type: str | None = None
+    engine_size: str | None = None
+    first_registration_date: date | None = None
+    year_of_manufacture: int | None = None
     provider: str = PROVIDER_NAME
 
 
@@ -206,6 +214,7 @@ def _normalise_odometer(raw: dict[str, Any]) -> tuple[int | None, str | None, st
     result_raw = str(raw.get("odometerResultType") or "").strip().upper()
     result = {
         "READ": "read",
+        "OK": "read",
         "NO_ODOMETER": "no_odometer",
         "UNREADABLE": "unreadable",
     }.get(result_raw, "other" if result_raw else None)
@@ -270,9 +279,31 @@ def normalise_mot_response(payload: Any) -> MotHistory:
         key=lambda t: t.completed_at or datetime.combine(t.test_date, datetime.min.time(), UTC),
         reverse=True,
     )
+    def first_value(*keys: str) -> Any:
+        return next((payload.get(key) for key in keys if payload.get(key) not in (None, "")), None)
+
+    year_raw = first_value("yearOfManufacture", "manufactureYear")
+    year = (
+        year_raw
+        if isinstance(year_raw, int)
+        else int(year_raw)
+        if str(year_raw).isdigit()
+        else None
+    )
+    engine_value = first_value("engineSize", "engineCapacity")
     return MotHistory(
         tests=tuple(unique),
         first_mot_due_date=_parse_date(payload.get("motTestDueDate")),
+        registration=first_value("registration", "registrationNumber"),
+        make=first_value("make"),
+        model=first_value("model"),
+        colour=first_value("primaryColour", "colour"),
+        fuel_type=first_value("fuelType"),
+        engine_size=str(engine_value) if engine_value is not None else None,
+        first_registration_date=_parse_date(
+            first_value("firstUsedDate", "registrationDate", "manufactureDate")
+        ),
+        year_of_manufacture=year,
     )
 
 

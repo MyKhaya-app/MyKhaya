@@ -1920,6 +1920,11 @@ export class MyKhayaClient {
     this.request<import("@mykhaya/shared-types").Vehicle>(
       `/homes/${encodeURIComponent(homeId)}/vehicles/${encodeURIComponent(vehicleId)}`,
     );
+  refreshVehicleDetails = (homeId: string, vehicleId: string) =>
+    this.request<import("@mykhaya/shared-types").Vehicle>(
+      `/homes/${encodeURIComponent(homeId)}/vehicles/${encodeURIComponent(vehicleId)}/refresh`,
+      { method: "POST" },
+    );
   createVehicle = (homeId: string, body: import("@mykhaya/shared-types").VehicleCreatePayload) =>
     this.request<import("@mykhaya/shared-types").Vehicle>(
       `/homes/${encodeURIComponent(homeId)}/vehicles`,

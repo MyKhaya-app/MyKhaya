@@ -80,9 +80,14 @@ export default function AddVehiclePage() {
   // "Add a vehicle for {Name}" on the Driveway empty state links here with
   // ?owner=<user id>; only a real member of this Home is accepted.
   useEffect(() => {
-    const requested = new URLSearchParams(window.location.search).get("owner");
+    const params = new URLSearchParams(window.location.search);
+    const requested = params.get("owner");
+    const requestedRegistration = params.get("registration");
     if (requested && members.some((member) => member.user_id === requested)) {
       setValues((current) => ({ ...current, ownerUserId: requested }));
+    }
+    if (requestedRegistration) {
+      setValues((current) => ({ ...current, registration: requestedRegistration }));
     }
   }, [members]);
 
@@ -213,6 +218,8 @@ export default function AddVehiclePage() {
                 <span className="more-icon-tile blue" aria-hidden="true">🚗</span>
                 <strong>{[lookup.make, lookup.model].filter(Boolean).join(" ") || lookup.registration}</strong>
                 <span>{lookup.registration}</span>
+                <span>{lookup.engine_size ? `${lookup.engine_size} cc` : null}{lookup.tax_status ? ` · ${lookup.tax_status}` : ""}{lookup.mot?.status ? ` · MOT ${lookup.mot.status}` : ""}</span>
+                {lookup.mot?.tests.slice(0, 3).map((test) => <small key={`${test.test_number ?? "test"}-${test.test_date}`}>{test.test_date} · {test.result} · {test.odometer_value != null ? `${test.odometer_value} ${test.odometer_unit ?? ""}` : "mileage unavailable"}</small>)}
                 <span>{[lookup.year, lookup.fuel_type, lookup.colour].filter(Boolean).join(" · ")}</span>
                 {lookup.capabilities.map((capability) => <small key={capability}>{capability === "inspection" ? "MOT information available" : "Tax information available"}</small>)}
               </div>}

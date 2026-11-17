@@ -21,6 +21,18 @@ class VehicleLookup:
     tax_due_date: date | None = None
     inspection_status: str | None = None
     inspection_due_date: date | None = None
+    co2_emissions: int | None = None
+    euro_status: str | None = None
+    type_approval: str | None = None
+    wheel_plan: str | None = None
+    revenue_weight: int | None = None
+    marked_for_export: bool | None = None
+    marked_as_scrapped: bool | None = None
+    date_of_last_v5c_issued: date | None = None
+    real_driving_emissions: str | None = None
+    vehicle_status: str | None = None
+    automated_vehicle: bool | None = None
+    art_end_date: date | None = None
     capabilities: tuple[str, ...] = ()
 
 
@@ -76,20 +88,47 @@ class UKDVLAProvider:
         except ValueError as exc:
             raise VehicleLookupUnavailable from exc
 
-        def parsed_date(key: str) -> date | None:
-            value = payload.get(key)
+        def parsed_date(*keys: str) -> date | None:
+            value = next((payload.get(key) for key in keys if payload.get(key)), None)
             if not value:
                 return None
             try:
-                return date.fromisoformat(str(value))
+                return date.fromisoformat(str(value)[:10])
             except ValueError:
                 return None
+
+        def parsed_first_registration() -> date | None:
+            value = payload.get("monthOfFirstRegistration")
+            year = payload.get("yearOfFirstRegistration")
+            if isinstance(value, str) and len(value) == 7 and value[4] == "-":
+                try:
+                    return date.fromisoformat(f"{value}-01")
+                except ValueError:
+                    return None
+            if isinstance(value, str) and value.isdigit():
+                value = int(value)
+            if isinstance(year, int) and isinstance(value, int) and 1 <= value <= 12:
+                try:
+                    return date(year, value, 1)
+                except ValueError:
+                    return None
+            return parsed_date("monthOfFirstRegistration")
 
         capabilities: list[str] = []
         if payload.get("taxStatus") or payload.get("taxDueDate"):
             capabilities.append("tax")
-        if payload.get("motStatus") or payload.get("motExpiryDate"):
+        if payload.get("motStatus") or payload.get("motExpiry") or payload.get("motExpiryDate"):
             capabilities.append("inspection")
+        specification_keys = (
+            "co2Emissions",
+            "euroStatus",
+            "typeApproval",
+            "wheelPlan",
+            "wheelplan",
+            "revenueWeight",
+        )
+        if any(payload.get(key) is not None for key in specification_keys):
+            capabilities.append("specifications")
         return VehicleLookup(
             registration=payload.get("registrationNumber") or normalized,
             make=payload.get("make"),
@@ -98,10 +137,22 @@ class UKDVLAProvider:
             year=payload.get("yearOfManufacture"),
             fuel_type=payload.get("fuelType"),
             engine_size=str(payload["engineCapacity"]) if payload.get("engineCapacity") else None,
-            first_registration_date=parsed_date("monthOfFirstRegistration"),
+            first_registration_date=parsed_first_registration(),
             tax_status=payload.get("taxStatus"),
             tax_due_date=parsed_date("taxDueDate"),
             inspection_status=payload.get("motStatus"),
-            inspection_due_date=parsed_date("motExpiryDate"),
+            inspection_due_date=parsed_date("motExpiry", "motExpiryDate"),
+            co2_emissions=payload.get("co2Emissions"),
+            euro_status=payload.get("euroStatus"),
+            type_approval=payload.get("typeApproval"),
+            wheel_plan=payload.get("wheelPlan") or payload.get("wheelplan"),
+            revenue_weight=payload.get("revenueWeight"),
+            marked_for_export=payload.get("markedForExport"),
+            marked_as_scrapped=payload.get("markedAsScrapped"),
+            date_of_last_v5c_issued=parsed_date("dateOfLastV5CIssued"),
+            real_driving_emissions=payload.get("realDrivingEmissions"),
+            vehicle_status=payload.get("vehicleStatus"),
+            automated_vehicle=payload.get("automatedVehicle"),
+            art_end_date=parsed_date("artEndDate"),
             capabilities=tuple(capabilities),
         )

@@ -47,6 +47,43 @@ async def test_dvla_maps_only_supported_vehicle_fields_and_never_logs_key() -> N
 
 
 @pytest.mark.asyncio
+async def test_dvla_maps_v12_specifications_and_year_month_registration() -> None:
+    provider = UKDVLAProvider(
+        SecretStr("test-secret"),
+        "https://dvla.test",
+        transport=httpx.MockTransport(
+            lambda _: httpx.Response(
+                200,
+                json={
+                    "registrationNumber": "AA19AAA",
+                    "yearOfManufacture": 2019,
+                    "yearOfFirstRegistration": 2019,
+                    "monthOfFirstRegistration": 3,
+                    "co2Emissions": 120,
+                    "euroStatus": "Euro 6",
+                    "typeApproval": "M1",
+                    "wheelPlan": "2 AXLE RIGID BODY",
+                    "revenueWeight": 1800,
+                    "markedForExport": False,
+                    "markedAsScrapped": False,
+                    "dateOfLastV5CIssued": "2024-01-02",
+                    "realDrivingEmissions": "2",
+                    "vehicleStatus": "Taxed",
+                    "automatedVehicle": False,
+                    "artEndDate": "2025-03-30",
+                    "motExpiry": "2026-03-30",
+                },
+            )
+        ),
+    )
+    result = await provider.lookup("AA19 AAA")
+    assert result.first_registration_date.isoformat() == "2019-03-01"
+    assert result.co2_emissions == 120
+    assert result.wheel_plan == "2 AXLE RIGID BODY"
+    assert result.inspection_due_date.isoformat() == "2026-03-30"
+
+
+@pytest.mark.asyncio
 async def test_dvla_not_found_is_safe() -> None:
     provider = UKDVLAProvider(
         SecretStr("test-secret"),

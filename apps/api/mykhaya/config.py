@@ -227,6 +227,10 @@ class Settings(BaseSettings):
     dvsa_refresh_hours: int = Field(default=24, ge=1, le=24 * 30)
     # Per-user cap on MOT refresh requests per hour (manual + automatic).
     dvsa_refresh_rate_limit: int = Field(default=30, ge=1, le=1000)
+    # Arbitrary-registration DVSA lookup is deliberately off until the
+    # provider-use review and deployment approval are complete.
+    dvsa_arbitrary_lookup_enabled: bool = False
+    dvsa_arbitrary_lookup_rate_limit: int = Field(default=3, ge=1, le=30)
     vehicle_photo_storage_dir: str = "/data/vehicle-photos"
     vehicle_photo_max_upload_bytes: int = Field(default=20_971_520, ge=1024, le=52_428_800)
     request_body_limit: int = Field(default=1_048_576, ge=1024, le=2_097_152)

@@ -54,6 +54,21 @@ class VehicleResponse(BaseModel):
     first_registration_date: date | None
     tax_status: str | None
     tax_due_date: date | None
+    co2_emissions: int | None
+    euro_status: str | None
+    type_approval: str | None
+    wheel_plan: str | None
+    revenue_weight: int | None
+    marked_for_export: bool | None
+    marked_as_scrapped: bool | None
+    date_of_last_v5c_issued: date | None
+    real_driving_emissions: str | None
+    vehicle_status: str | None
+    automated_vehicle: bool | None
+    art_end_date: date | None
+    lookup_provider: str | None
+    lookup_status: str | None
+    last_successful_lookup: datetime | None
     inspection_status: str | None
     inspection_due_date: date | None
     photo_version: str | None
@@ -74,6 +89,18 @@ class VehicleLookupRequest(StrictModel):
     registration: str = Field(min_length=2, max_length=20)
 
 
+class VehicleLookupMotTestResponse(BaseModel):
+    test_number: str | None = None
+    test_date: date
+    completed_at: datetime | None = None
+    expiry_date: date | None = None
+    result: str
+    odometer_value: int | None = None
+    odometer_unit: str | None = None
+    odometer_result: str | None = None
+    defects: list[dict[str, object]] = []
+
+
 class VehicleLookupResult(BaseModel):
     found: bool
     manual_entry_required: bool = False
@@ -90,8 +117,33 @@ class VehicleLookupResult(BaseModel):
     tax_due_date: date | None = None
     inspection_status: str | None = None
     inspection_due_date: date | None = None
+    co2_emissions: int | None = None
+    euro_status: str | None = None
+    type_approval: str | None = None
+    wheel_plan: str | None = None
+    revenue_weight: int | None = None
+    marked_for_export: bool | None = None
+    marked_as_scrapped: bool | None = None
+    date_of_last_v5c_issued: date | None = None
+    real_driving_emissions: str | None = None
+    vehicle_status: str | None = None
+    automated_vehicle: bool | None = None
+    art_end_date: date | None = None
+    checked_at: datetime | None = None
+    mot: "VehicleLookupMotResult | None" = None
     capabilities: list[str] = []
     message: str | None = None
+
+
+class VehicleLookupMotResult(BaseModel):
+    status: str | None = None
+    due_date: date | None = None
+    first_mot_due_date: date | None = None
+    refreshed_at: datetime | None = None
+    tests: list[VehicleLookupMotTestResponse] = []
+
+
+VehicleLookupResult.model_rebuild()
 
 
 class VehicleReminderCreate(StrictModel):

@@ -11303,6 +11303,17 @@ html:has(.drv-page)::-webkit-scrollbar,
 }
 .drv-page .drv-chevron { color: var(--colour-muted); flex: none; }
 
+.drv-page .drv-lookup-card {
+  background: var(--colour-sage-soft);
+  border: 1px solid var(--colour-sand-dark);
+  border-radius: 22px;
+  margin: 18px 0 22px;
+  padding: 18px;
+}
+.drv-page .drv-lookup-card h2 { font-size: 18px; margin: 0; }
+.drv-page .drv-lookup-result { margin-top: 14px; padding: 14px; }
+.drv-page .drv-lookup-result .drv-button { margin-top: 12px; }
+
 /* Empty state */
 .drv-page .drv-empty {
   align-items: center;
