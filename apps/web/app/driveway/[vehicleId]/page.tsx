@@ -35,20 +35,21 @@ import {
   type MotState,
 } from "../vehicle-display";
 
-// Driveway vehicle: Overview | MOT | Details. The selected tab is kept in
+// Driveway vehicle: Overview | MOT | Tax | Details. The selected tab is kept in
 // the URL (?tab=mot) so "back" from MOT history lands on the MOT tab.
 
-type Tab = "overview" | "mot" | "details";
+type Tab = "overview" | "mot" | "tax" | "details";
 const TABS: { id: Tab; label: string }[] = [
   { id: "overview", label: "Overview" },
   { id: "mot", label: "MOT" },
+  { id: "tax", label: "Tax" },
   { id: "details", label: "Details" },
 ];
 
 function tabFromUrl(): Tab {
   if (typeof window === "undefined") return "overview";
   const value = new URLSearchParams(window.location.search).get("tab");
-  return value === "mot" || value === "details" ? value : "overview";
+  return value === "mot" || value === "tax" || value === "details" ? value : "overview";
 }
 
 function loadErrorMessage(cause: unknown, fallback: string): string {
@@ -297,6 +298,15 @@ export default function VehicleDetailPage({ params }: { params: Promise<{ vehicl
     },
   ].filter((row): row is { label: string; value: string } => Boolean(row.value));
 
+  const taxDetails = [
+    { label: "Tax status", value: vehicle.tax_status },
+    { label: "Tax due date", value: formatShortDate(vehicle.tax_due_date) },
+    { label: "SORN / vehicle status", value: vehicle.vehicle_status },
+    { label: "CO₂ emissions", value: vehicle.co2_emissions != null ? `${vehicle.co2_emissions} g/km` : null },
+    { label: "Additional-rate end", value: formatShortDate(vehicle.art_end_date) },
+    { label: "Last DVLA check", value: vehicle.last_successful_lookup ? `${formatShortDate(vehicle.last_successful_lookup)} (${checkedAgo(vehicle.last_successful_lookup)})` : null },
+  ].filter((row): row is { label: string; value: string } => Boolean(row.value));
+
   const recentTests = mot?.tests.slice(0, 3) ?? [];
   const oldestTestId = mot?.tests[mot.tests.length - 1]?.id;
 
@@ -457,6 +467,27 @@ export default function VehicleDetailPage({ params }: { params: Promise<{ vehicl
                     View full MOT history <ChevronRight size={16} strokeWidth={2.2} aria-hidden="true" />
                   </Link>
                 )}
+              </>
+            )}
+          </div>
+        )}
+
+        {tab === "tax" && (
+          <div className="drv-panel" role="tabpanel" id="drv-panel-tax" aria-labelledby="drv-tab-tax">
+            {!motEligible ? (
+              <p className="empty-mini">DVLA tax information is only available for vehicles registered in the UK.</p>
+            ) : (
+              <>
+                {taxDetails.length > 0 ? <KeyValues rows={taxDetails} /> : <p className="empty-mini">Tax information has not been provided by DVLA yet.</p>}
+                <p className="drv-muted-small">Tax class and a tax amount are not returned by the current DVLA vehicle enquiry response. Check the official vehicle tax service for the authoritative amount.</p>
+                {vehicleRefreshError && <p className="notice error" role="alert">{vehicleRefreshError}</p>}
+                <button type="button" className="drv-button drv-button-secondary" onClick={() => void refreshVehicleDetails()} disabled={vehicleRefreshBusy}>
+                  <RefreshCw size={18} aria-hidden="true" className={vehicleRefreshBusy ? "drv-spin" : undefined} />
+                  {vehicleRefreshBusy ? "Refreshing DVLA details…" : "Refresh DVLA tax details"}
+                </button>
+                <a className="drv-text-link" href="https://www.gov.uk/check-vehicle-tax" target="_blank" rel="noreferrer">
+                  Check vehicle tax on GOV.UK <ChevronRight size={16} strokeWidth={2.2} aria-hidden="true" />
+                </a>
               </>
             )}
           </div>

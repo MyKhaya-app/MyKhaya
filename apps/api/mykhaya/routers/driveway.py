@@ -766,6 +766,11 @@ async def refresh_vehicle_details(
     )
     await db.commit()
     await db.refresh(fresh)
+    # The rollback before the provider call expires ORM instances loaded from
+    # that transaction, including `membership`. Re-read it after the commit so
+    # response serialization never performs an implicit async refresh on an
+    # expired object (and keeps the authorization decision home-scoped).
+    membership = await membership_for(home_id, auth, db)
     return _vehicle_response(fresh, auth, membership, settings)
 
 

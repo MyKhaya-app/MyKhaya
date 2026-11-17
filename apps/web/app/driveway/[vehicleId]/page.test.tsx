@@ -3,7 +3,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import VehicleDetailPage from "./page";
 
-// Vehicle page (Screen 2): header, Overview | MOT | Details tabs, the MOT
+// Vehicle page (Screen 2): header, Overview | MOT | Tax | Details tabs, the MOT
 // card with refresh, the red reminder action when the MOT needs attention,
 // and the existing photo/edit/remove flows.
 
@@ -178,7 +178,7 @@ describe("Vehicle page — header and tabs", () => {
     renderPage();
     const tablist = await screen.findByRole("tablist", { name: "Vehicle sections" });
     const tabs = within(tablist).getAllByRole("tab");
-    expect(tabs.map((tab) => tab.textContent)).toEqual(["Overview", "MOT", "Details"]);
+    expect(tabs.map((tab) => tab.textContent)).toEqual(["Overview", "MOT", "Tax", "Details"]);
     expect(tabs[0]).toHaveAttribute("aria-selected", "true");
 
     const user = userEvent.setup();
@@ -186,8 +186,8 @@ describe("Vehicle page — header and tabs", () => {
     expect(within(tablist).getByRole("tab", { name: "MOT" })).toHaveAttribute("aria-selected", "true");
     expect(window.location.search).toBe("?tab=mot");
     await user.keyboard("{ArrowRight}");
-    expect(within(tablist).getByRole("tab", { name: "Details" })).toHaveFocus();
-    expect(window.location.search).toBe("?tab=details");
+    expect(within(tablist).getByRole("tab", { name: "Tax" })).toHaveFocus();
+    expect(window.location.search).toBe("?tab=tax");
   });
 
   it("opens on the tab named in the URL", async () => {
@@ -317,6 +317,28 @@ describe("Vehicle page — Details tab", () => {
     await user.click(within(sheet).getByRole("button", { name: "Remove vehicle" }));
     await waitFor(() => expect(api.deleteVehicle).toHaveBeenCalledWith("home-1", "v1"));
     expect(push).toHaveBeenCalledWith("/driveway");
+  });
+});
+
+describe("Vehicle page — Tax tab", () => {
+  beforeEach(() => window.history.replaceState(null, "", "/driveway/v1?tab=tax"));
+
+  it("shows persisted DVLA tax fields, last check and a safe refresh action", async () => {
+    (api.vehicle as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ...VEHICLE,
+      tax_status: "Taxed",
+      tax_due_date: "2027-01-01",
+      vehicle_status: "Taxed",
+      co2_emissions: 120,
+      art_end_date: "2027-06-30",
+      last_successful_lookup: "2026-11-17T10:00:00Z",
+    });
+    renderPage();
+    expect(await screen.findByText("Tax status")).toBeInTheDocument();
+    expect(screen.getByText("Tax due date").nextSibling).toHaveTextContent("1 Jan 2027");
+    expect(screen.getByText("CO₂ emissions").nextSibling).toHaveTextContent("120 g/km");
+    expect(screen.getByRole("button", { name: "Refresh DVLA tax details" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Check vehicle tax on GOV.UK/ })).toHaveAttribute("href", "https://www.gov.uk/check-vehicle-tax");
   });
 });
 

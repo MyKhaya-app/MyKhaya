@@ -651,3 +651,60 @@ async def test_consumer_lookup_provider_failure_offers_manual_entry(
         assert payload["manual_entry_required"] is True
     finally:
         app.dependency_overrides.pop(get_settings, None)
+
+
+@pytest.mark.asyncio
+async def test_existing_vehicle_dvla_refresh_returns_updated_vehicle_after_provider_call(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression: the pre-provider rollback must not leave response auth state expired."""
+    user_id = await create_verified_user(client, unique_email("dvla-refresh"), "Driveway Refresh")
+    home_id = await create_driveway_home(client, "DVLA Refresh Home")
+    await enable_dvla_toggle(enabled=True)
+
+    async def fake_lookup(self: object, registration: str) -> VehicleLookup:
+        return VehicleLookup(
+            registration=registration,
+            make="BMW",
+            model="i4",
+            colour="Black",
+            tax_status="Taxed",
+            tax_due_date=datetime(2027, 1, 1).date(),
+        )
+
+    monkeypatch.setattr(driveway_providers.UKDVLAProvider, "lookup", fake_lookup)
+    app.dependency_overrides[get_settings] = lambda: _override_settings(
+        dvla_environment="uat",
+        dvla_uat_endpoint="https://uat.dvla.example/vehicle-enquiry",
+        dvla_uat_api_key=SecretStr("uat-secret"),
+    )
+    try:
+        created = await consumer_unsafe(
+            client,
+            "POST",
+            f"/api/v1/homes/{home_id}/vehicles",
+            json={
+                "nickname": "Family car",
+                "owner_user_id": str(user_id),
+                "make": "User-entered make",
+                "country_code": "GB",
+                "registration": "AP22 OOJ",
+            },
+        )
+        assert created.status_code == 201, created.text
+        vehicle_id = created.json()["id"]
+
+        refreshed = await consumer_unsafe(
+            client,
+            "POST",
+            f"/api/v1/homes/{home_id}/vehicles/{vehicle_id}/refresh",
+        )
+        assert refreshed.status_code == 200, refreshed.text
+        payload = refreshed.json()
+        assert payload["id"] == vehicle_id
+        assert payload["make"] == "User-entered make"
+        assert payload["model"] == "i4"
+        assert payload["tax_status"] == "Taxed"
+        assert payload["last_successful_lookup"] is not None
+    finally:
+        app.dependency_overrides.pop(get_settings, None)
