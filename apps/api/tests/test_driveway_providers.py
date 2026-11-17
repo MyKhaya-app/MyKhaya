@@ -4,6 +4,7 @@ import httpx
 import pytest
 from pydantic import SecretStr
 
+from mykhaya.driveway_dvla_controls import DvlaBudgetExceeded
 from mykhaya.driveway_providers import (
     UKDVLAProvider,
     VehicleLookupNotFound,
@@ -113,3 +114,47 @@ async def test_dvla_not_found_is_safe() -> None:
     )
     with pytest.raises(VehicleLookupNotFound):
         await provider.lookup("AB12 CDE")
+
+
+@pytest.mark.asyncio
+async def test_production_provider_consumes_shared_budget_before_http(monkeypatch) -> None:
+    budget_calls = 0
+
+    async def budget(settings) -> None:
+        nonlocal budget_calls
+        budget_calls += 1
+
+    monkeypatch.setattr("mykhaya.driveway_providers.enforce_request_budget", budget)
+    provider = UKDVLAProvider(
+        SecretStr("test-secret"),
+        "https://dvla.test",
+        settings=object(),
+        transport=httpx.MockTransport(lambda _: httpx.Response(404)),
+    )
+    with pytest.raises(VehicleLookupNotFound):
+        await provider.lookup("AB12 CDE")
+    assert budget_calls == 1
+
+
+@pytest.mark.asyncio
+async def test_provider_does_not_contact_dvla_when_budget_is_exhausted(monkeypatch) -> None:
+    requests = 0
+
+    def handler(_: httpx.Request) -> httpx.Response:
+        nonlocal requests
+        requests += 1
+        return httpx.Response(200, json={"registrationNumber": "AB12CDE"})
+
+    async def exhausted(settings) -> None:
+        raise DvlaBudgetExceeded
+
+    monkeypatch.setattr("mykhaya.driveway_providers.enforce_request_budget", exhausted)
+    provider = UKDVLAProvider(
+        SecretStr("test-secret"),
+        "https://dvla.test",
+        settings=object(),
+        transport=httpx.MockTransport(handler),
+    )
+    with pytest.raises(DvlaBudgetExceeded):
+        await provider.lookup("AB12 CDE")
+    assert requests == 0

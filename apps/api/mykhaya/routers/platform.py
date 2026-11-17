@@ -61,6 +61,7 @@ from mykhaya.consumer_mfa_policy import (
     resolve_consumer_mfa_policy,
 )
 from mykhaya.db import get_db
+from mykhaya.driveway_dvla_controls import DvlaBudgetExceeded, DvlaRedisUnavailable
 from mykhaya.driveway_mot_provider import (
     MotAuthFailed,
     MotLookupError,
@@ -7322,7 +7323,9 @@ async def driveway_dvla_test(
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "DVLA is not configured.")
     assert settings.dvla_active_api_key is not None and settings.dvla_active_endpoint is not None
     environment_label = settings.dvla_environment_label or "DVLA"
-    provider = UKDVLAProvider(settings.dvla_active_api_key, settings.dvla_active_endpoint)
+    provider = UKDVLAProvider(
+        settings.dvla_active_api_key, settings.dvla_active_endpoint, settings=settings
+    )
     try:
         await provider.lookup(body.registration)
         result = {"state": "Healthy", "message": f"DVLA {environment_label} connection successful."}
@@ -7335,6 +7338,11 @@ async def driveway_dvla_test(
         result = {"state": "Unavailable", "message": "DVLA authentication failed."}
     except VehicleLookupUnavailable:
         result = {"state": "Unavailable", "message": "DVLA service is unavailable."}
+    except (DvlaBudgetExceeded, DvlaRedisUnavailable):
+        result = {
+            "state": "Unavailable",
+            "message": "DVLA request budget or Redis is temporarily unavailable.",
+        }
     row = await db.scalar(
         select(PlatformSetting)
         .where(PlatformSetting.key == "driveway_dvla_enabled")

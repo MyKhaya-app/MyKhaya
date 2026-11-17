@@ -6,6 +6,9 @@ from datetime import date
 import httpx
 from pydantic import SecretStr
 
+from mykhaya.config import Settings
+from mykhaya.driveway_dvla_controls import enforce_request_budget
+
 
 def normalize_fuel_type(value: object) -> str | None:
     """Map provider fuel labels to stable Driveway labels without dropping
@@ -82,13 +85,21 @@ class UKDVLAProvider:
     name = "uk_dvla"
 
     def __init__(
-        self, api_key: SecretStr, url: str, *, transport: httpx.AsyncBaseTransport | None = None
+        self,
+        api_key: SecretStr,
+        url: str,
+        *,
+        settings: Settings | None = None,
+        transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self._api_key = api_key.get_secret_value()
         self._url = url
+        self._settings = settings
         self._transport = transport
 
     async def lookup(self, registration: str) -> VehicleLookup:
+        if self._settings is not None:
+            await enforce_request_budget(self._settings)
         normalized = normalize_registration(registration)
         try:
             async with httpx.AsyncClient(transport=self._transport, timeout=8.0) as client:

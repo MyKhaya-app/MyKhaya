@@ -49,6 +49,13 @@ from mykhaya.audit import audit
 from mykhaya.config import Settings, get_settings
 from mykhaya.db import get_db
 from mykhaya.dependencies import AuthContext, auth_context, membership_for
+from mykhaya.driveway_dvla_controls import (
+    DvlaBudgetExceeded,
+    DvlaRedisUnavailable,
+    failure_is_recent,
+    mark_failure,
+    refresh_lock,
+)
 from mykhaya.driveway_mot import (
     MotRefreshRefused,
     _replace_history,
@@ -106,6 +113,7 @@ from mykhaya.driveway_sensitive import (
     set_vehicle_vin,
     vehicle_sensitive_ciphertexts,
 )
+from mykhaya.driveway_tax import calculate_vehicle_tax
 from mykhaya.entitlements import require_entitlement
 from mykhaya.features import require_feature
 from mykhaya.household_permissions import Capability, require_capability
@@ -219,6 +227,7 @@ def _vehicle_response(
     settings: Settings,
     *,
     user_id: uuid.UUID | None = None,
+    refresh_outcome: str | None = None,
 ) -> VehicleResponse:
     # Visibility is decided BEFORE any VIN is read: get_vehicle_vin (which
     # decrypts when the Phase 2D read flag is on) is only ever called for a
@@ -276,6 +285,8 @@ def _vehicle_response(
         archived=vehicle.archived_at is not None,
         created_at=vehicle.created_at,
         updated_at=vehicle.updated_at,
+        refresh_outcome=refresh_outcome,
+        tax_calculation=calculate_vehicle_tax(vehicle),
     )
 
 
@@ -440,7 +451,9 @@ async def lookup_vehicle(
             " the vehicle manually.",
         )
     assert settings.dvla_active_api_key is not None and settings.dvla_active_endpoint is not None
-    provider = UKDVLAProvider(settings.dvla_active_api_key, settings.dvla_active_endpoint)
+    provider = UKDVLAProvider(
+        settings.dvla_active_api_key, settings.dvla_active_endpoint, settings=settings
+    )
     try:
         result = await provider.lookup(body.registration)
     except VehicleLookupNotFound:
@@ -466,6 +479,16 @@ async def lookup_vehicle(
             manual_entry_required=True,
             message="We can't check vehicle details right now. You can try again later or add"
             " the vehicle manually.",
+        )
+    except (DvlaBudgetExceeded, DvlaRedisUnavailable):
+        await _record_lookup_health(db, success=False, summary="DVLA request budget unavailable")
+        return VehicleLookupResult(
+            found=False,
+            manual_entry_required=True,
+            message=(
+                "Vehicle checks are busy right now. Please try again shortly or add the "
+                "vehicle manually."
+            ),
         )
     checked_at = datetime.now(UTC)
     mot_preview: dict[str, object] | None = None
@@ -549,9 +572,17 @@ async def create_vehicle(
                 assert settings.dvla_active_api_key is not None
                 assert settings.dvla_active_endpoint is not None
                 dvla_result = await UKDVLAProvider(
-                    settings.dvla_active_api_key, settings.dvla_active_endpoint
+                    settings.dvla_active_api_key,
+                    settings.dvla_active_endpoint,
+                    settings=settings,
                 ).lookup(registration)
-            except (VehicleLookupNotFound, VehicleLookupAuthFailed, VehicleLookupUnavailable):
+            except (
+                VehicleLookupNotFound,
+                VehicleLookupAuthFailed,
+                VehicleLookupUnavailable,
+                DvlaBudgetExceeded,
+                DvlaRedisUnavailable,
+            ):
                 dvla_result = None
     if (
         body.country_code.upper() == "GB"
@@ -745,20 +776,73 @@ async def refresh_vehicle_details(
         raise HTTPException(
             status.HTTP_409_CONFLICT, "Add this vehicle's registration to refresh it."
         )
+    now = datetime.now(UTC)
+    last_lookup = row.last_successful_lookup
+    if last_lookup and last_lookup.tzinfo is None:
+        last_lookup = last_lookup.replace(tzinfo=UTC)
+    if last_lookup and now - last_lookup < timedelta(
+        seconds=settings.dvla_refresh_cooldown_seconds
+    ):
+        return _vehicle_response(
+            row,
+            auth,
+            membership,
+            settings,
+            user_id=user_id,
+            refresh_outcome="unchanged",
+        )
+    try:
+        if await failure_is_recent(settings, vehicle_id):
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "The DVLA check is temporarily backed off after a provider failure.",
+            )
+    except DvlaRedisUnavailable as exc:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "Vehicle checks are temporarily unavailable.",
+        ) from exc
     await db.rollback()
     try:
-        assert settings.dvla_active_api_key is not None
-        assert settings.dvla_active_endpoint is not None
-        result = await UKDVLAProvider(
-            settings.dvla_active_api_key, settings.dvla_active_endpoint
-        ).lookup(registration)
+        async with refresh_lock(settings, vehicle_id) as lock_acquired:
+            if not lock_acquired:
+                return _vehicle_response(
+                    row,
+                    auth,
+                    membership,
+                    settings,
+                    user_id=user_id,
+                    refresh_outcome="busy",
+                )
+            assert settings.dvla_active_api_key is not None
+            assert settings.dvla_active_endpoint is not None
+            result = await UKDVLAProvider(
+                settings.dvla_active_api_key,
+                settings.dvla_active_endpoint,
+                settings=settings,
+            ).lookup(registration)
     except VehicleLookupNotFound as exc:
         raise HTTPException(
             status.HTTP_404_NOT_FOUND, "We couldn't find that registration."
         ) from exc
     except (VehicleLookupAuthFailed, VehicleLookupUnavailable) as exc:
+        try:
+            await mark_failure(settings, vehicle_id)
+        except DvlaRedisUnavailable:
+            pass
         raise HTTPException(
             status.HTTP_503_SERVICE_UNAVAILABLE, "Vehicle checks aren't available right now."
+        ) from exc
+    except DvlaBudgetExceeded as exc:
+        raise HTTPException(
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            "The DVLA request budget is currently in use. Try again shortly.",
+            headers={"Retry-After": "2"},
+        ) from exc
+    except DvlaRedisUnavailable as exc:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "Vehicle checks are temporarily unavailable.",
         ) from exc
     fresh = await _get_vehicle(db, home_id, vehicle_id, for_update=True)
     if get_vehicle_registration(fresh, settings) != registration:
@@ -787,7 +871,9 @@ async def refresh_vehicle_details(
     # user-ID override to the shared authorization helper.
     await db.refresh(auth.user)
     membership = await membership_for(home_id, auth, db)
-    return _vehicle_response(fresh, auth, membership, settings, user_id=user_id)
+    return _vehicle_response(
+        fresh, auth, membership, settings, user_id=user_id, refresh_outcome="refreshed"
+    )
 
 
 @router.post("/{home_id}/vehicles/{vehicle_id}/photo", response_model=VehicleResponse)

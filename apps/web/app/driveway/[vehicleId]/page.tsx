@@ -306,6 +306,14 @@ export default function VehicleDetailPage({ params }: { params: Promise<{ vehicl
     { label: "Additional-rate end", value: formatShortDate(vehicle.art_end_date) },
     { label: "Last DVLA check", value: vehicle.last_successful_lookup ? `${formatShortDate(vehicle.last_successful_lookup)} (${checkedAgo(vehicle.last_successful_lookup)})` : null },
   ].filter((row): row is { label: string; value: string } => Boolean(row.value));
+  const taxCalculation = vehicle.tax_calculation;
+  const taxEstimateDetails = taxCalculation ? ([
+    { label: "Estimate status", value: taxCalculation.status.replaceAll("_", " ") },
+    { label: "Annual VED", value: taxCalculation.annual_rate != null ? `£${taxCalculation.annual_rate}` : null },
+    { label: "Tax year", value: taxCalculation.tax_year },
+    { label: "Category", value: taxCalculation.category },
+    { label: "Payment options", value: Object.entries(taxCalculation.payment_options).map(([name, amount]) => `${name.replaceAll("_", " ")}: £${amount}`).join(" · ") || null },
+  ].filter((row): row is { label: string; value: string } => Boolean(row.value))) : [];
 
   const recentTests = mot?.tests.slice(0, 3) ?? [];
   const oldestTestId = mot?.tests[mot.tests.length - 1]?.id;
@@ -479,6 +487,17 @@ export default function VehicleDetailPage({ params }: { params: Promise<{ vehicl
             ) : (
               <>
                 {taxDetails.length > 0 ? <KeyValues rows={taxDetails} /> : <p className="empty-mini">Tax information has not been provided by DVLA yet.</p>}
+                {taxCalculation && (
+                  <>
+                    <h2 className="drv-section-title">Local VED estimate</h2>
+                    {taxEstimateDetails.length > 0 && <KeyValues rows={taxEstimateDetails} />}
+                    {taxCalculation.assumptions.length > 0 && <p className="drv-muted-small">Assumptions: {taxCalculation.assumptions.join("; ")}</p>}
+                    {taxCalculation.missing_information.length > 0 && <p className="drv-muted-small">Information still needed: {taxCalculation.missing_information.join(", ")}.</p>}
+                    <p className="drv-muted-small">This is a local estimate from published rates, not a DVLA-confirmed tax amount.</p>
+                  </>
+                )}
+                {vehicle.refresh_outcome === "unchanged" && <p className="notice" role="status">Stored DVLA details are still fresh; no new DVLA check was made.</p>}
+                {vehicle.refresh_outcome === "busy" && <p className="notice" role="status">Another DVLA check is already running. These are the currently stored details.</p>}
                 <p className="drv-muted-small">Tax class and a tax amount are not returned by the current DVLA vehicle enquiry response. Check the official vehicle tax service for the authoritative amount.</p>
                 {vehicleRefreshError && <p className="notice error" role="alert">{vehicleRefreshError}</p>}
                 <button type="button" className="drv-button drv-button-secondary" onClick={() => void refreshVehicleDetails()} disabled={vehicleRefreshBusy}>
@@ -496,6 +515,8 @@ export default function VehicleDetailPage({ params }: { params: Promise<{ vehicl
         {tab === "details" && (
           <div className="drv-panel" role="tabpanel" id="drv-panel-details" aria-labelledby="drv-tab-details">
             <KeyValues rows={details} />
+            {vehicle.refresh_outcome === "unchanged" && <p className="notice" role="status">Stored DVLA details are still fresh; no new DVLA check was made.</p>}
+            {vehicle.refresh_outcome === "busy" && <p className="notice" role="status">Another DVLA check is already running. These are the currently stored details.</p>}
             {vehicleRefreshError && <p className="notice error" role="alert">{vehicleRefreshError}</p>}
             <button type="button" className="drv-button drv-button-secondary" onClick={() => void refreshVehicleDetails()} disabled={vehicleRefreshBusy}>
               <RefreshCw size={18} aria-hidden="true" className={vehicleRefreshBusy ? "drv-spin" : undefined} />

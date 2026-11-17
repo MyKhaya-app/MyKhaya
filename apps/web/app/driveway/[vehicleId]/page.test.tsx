@@ -340,6 +340,28 @@ describe("Vehicle page — Tax tab", () => {
     expect(screen.getByRole("button", { name: "Refresh DVLA tax details" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Check vehicle tax on GOV.UK/ })).toHaveAttribute("href", "https://www.gov.uk/check-vehicle-tax");
   });
+
+  it("shows a local VED estimate without presenting it as DVLA-confirmed", async () => {
+    (api.vehicle as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ...VEHICLE,
+      first_registration_date: "2015-05-01",
+      tax_calculation: {
+        status: "calculated",
+        annual_rate: 35,
+        payment_options: { single_12_month: 35 },
+        tax_year: "2026-2027",
+        category: "2001-2017 car",
+        assumptions: ["M1/M1G vehicle"],
+        missing_information: [],
+        source: "https://www.gov.uk/vehicle-tax-rate-tables",
+        calculated_at: "2026-11-17T10:00:00Z",
+      },
+    });
+    renderPage();
+    expect(await screen.findByText("Local VED estimate")).toBeInTheDocument();
+    expect(screen.getByText("Annual VED").nextSibling).toHaveTextContent("£35");
+    expect(screen.getByText(/local estimate from published rates, not a DVLA-confirmed tax amount/)).toBeInTheDocument();
+  });
 });
 
 describe("Vehicle page — not found", () => {

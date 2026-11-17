@@ -1089,6 +1089,22 @@ export interface Vehicle {
   archived: boolean;
   created_at: string;
   updated_at: string;
+  refresh_outcome: "refreshed" | "unchanged" | "busy" | "rate_limited" | "unavailable" | null;
+  tax_calculation: VehicleTaxCalculation | null;
+}
+
+export type VehicleTaxCalculationStatus = "calculated" | "conditional_estimate" | "insufficient_data" | "unsupported_category";
+
+export interface VehicleTaxCalculation {
+  status: VehicleTaxCalculationStatus;
+  annual_rate: number | null;
+  payment_options: Record<string, number>;
+  tax_year: string | null;
+  category: string | null;
+  assumptions: string[];
+  missing_information: string[];
+  source: string;
+  calculated_at: string;
 }
 
 export interface VehicleListResponse {

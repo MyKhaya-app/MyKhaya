@@ -39,6 +39,20 @@ class VehicleUpdate(VehicleCreate):
     expected_updated_at: datetime
 
 
+class VehicleTaxCalculation(BaseModel):
+    status: Literal[
+        "calculated", "conditional_estimate", "insufficient_data", "unsupported_category"
+    ]
+    annual_rate: int | None = None
+    payment_options: dict[str, float] = Field(default_factory=dict)
+    tax_year: str | None = None
+    category: str | None = None
+    assumptions: list[str] = Field(default_factory=list)
+    missing_information: list[str] = Field(default_factory=list)
+    source: str
+    calculated_at: datetime
+
+
 class VehicleResponse(BaseModel):
     id: uuid.UUID
     group_id: uuid.UUID
@@ -82,6 +96,10 @@ class VehicleResponse(BaseModel):
     archived: bool
     created_at: datetime
     updated_at: datetime
+    refresh_outcome: Literal[
+        "refreshed", "unchanged", "busy", "rate_limited", "unavailable"
+    ] | None = None
+    tax_calculation: VehicleTaxCalculation | None = None
 
 
 class VehicleListResponse(BaseModel):

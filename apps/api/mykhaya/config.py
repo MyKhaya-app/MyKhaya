@@ -202,6 +202,12 @@ class Settings(BaseSettings):
     )
     dvla_production_api_key: SecretStr | None = None
     driveway_lookup_rate_limit: int = Field(default=10, ge=1, le=100)
+    # Conservative DVLA VES controls. These are deployment-wide safeguards,
+    # intentionally below the provider's documented default ceiling.
+    dvla_request_budget_per_second: int = Field(default=1, ge=1, le=2)
+    dvla_refresh_cooldown_seconds: int = Field(default=86400, ge=60, le=604800)
+    dvla_refresh_failure_backoff_seconds: int = Field(default=300, ge=30, le=3600)
+    dvla_refresh_lock_seconds: int = Field(default=30, ge=5, le=120)
     # Driveway / DVSA MOT History API (OAuth 2.0 client credentials via
     # Microsoft Entra ID + an X-API-Key header — see
     # docs/operations/driveway-providers.md). Credentials are deployment
