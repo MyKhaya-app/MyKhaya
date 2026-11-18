@@ -11316,17 +11316,31 @@ select.plan-meal-field-input {
 }
 
 /* Shared consumer Back/primary-action dock. The shell owns the placement so
-   modules only register an explicit action and never duplicate positioning. */
+   modules only register an explicit action and never duplicate positioning.
+   One bottom action row spanning the content width, just above the bottom
+   navigation: Back is pinned to the start (left), the primary Add to the end
+   (right) via its auto start margin, so each keeps its side when the other
+   is absent. Both share the row's single vertical position and one compact
+   circular size (--consumer-action-size). */
+.app-shell {
+  --consumer-action-size: 52px;
+  --consumer-action-offset: 0.9rem;
+}
 .consumer-action-dock {
   align-items: center;
-  bottom: calc(var(--bottom-nav-height) + var(--safe-bottom) + 0.9rem);
+  bottom: calc(var(--bottom-nav-height) + var(--safe-bottom) + var(--consumer-action-offset));
   display: flex;
+  flex-direction: row;
   gap: 0.65rem;
+  justify-content: flex-start;
   left: max(1rem, var(--safe-left));
   pointer-events: none;
   position: fixed;
   right: max(1rem, var(--safe-right));
   z-index: 8;
+}
+.consumer-action-dock > .consumer-primary-action {
+  margin-left: auto;
 }
 .consumer-action {
   align-items: center;
@@ -11334,14 +11348,37 @@ select.plan-meal-field-input {
   border-radius: 50%;
   box-shadow: 0 10px 24px rgb(31 41 51 / 20%);
   display: flex;
+  flex: none;
   flex-direction: column;
   gap: 0.05rem;
-  height: 52px;
+  height: var(--consumer-action-size);
   justify-content: center;
-  min-width: 52px;
+  min-width: var(--consumer-action-size);
   padding: 0;
   pointer-events: auto;
-  width: 52px;
+  width: var(--consumer-action-size);
+}
+/* Room below the last content so the end of every page can scroll clear of
+   the floating row (phone layouts only; the Duo rail and the desktop/tablet
+   web layout reserve their own space). Browser/PWA: the bottom nav overlays
+   the page, so its height is included. */
+@media (max-width: 759.98px) {
+  .app-shell:not(.native-shell-app):has(> .consumer-action-dock) .app-main {
+    padding-bottom: calc(
+      var(--bottom-nav-height) + var(--safe-bottom) + var(--consumer-action-offset) + var(--consumer-action-size) + 1rem
+    );
+  }
+}
+/* Native phone: the bottom nav is a real flex sibling below the scroll
+   region, so only the row's own height and offset need reserving. */
+html.native-shell .app-shell.native-shell-app:not(.native-wide-viewport, .native-compact-rail, .native-right-column, .native-keyboard-open):has(> .consumer-action-dock) .app-main {
+  padding-bottom: calc(var(--consumer-action-offset) + var(--consumer-action-size) + 1rem);
+}
+/* Phone landscape (wide but too short for the right-hand column): the nav is
+   a rail at the right edge, so the row ends before the rail column instead
+   of putting Add on top of it. */
+.app-shell.native-shell-app.native-wide-viewport:not(.native-right-column) .consumer-action-dock {
+  right: var(--native-rail-column);
 }
 .consumer-action span {
   font-size: 0.57rem;
@@ -11370,6 +11407,7 @@ select.plan-meal-field-input {
   align-items: center;
   bottom: calc(var(--native-dock-top) + var(--native-rail-gap));
   flex-direction: column-reverse;
+  justify-content: flex-start;
   gap: 0.5rem;
   left: auto;
   right: var(--native-rail-inset);
@@ -11377,6 +11415,10 @@ select.plan-meal-field-input {
 }
 .app-shell.native-right-column:has(.calendar-page) .calendar-page .calendar-month-row-actions .calendar-add-desktop {
   display: none;
+}
+/* The rail stacks its controls on its own centre line: no left/right slots. */
+.app-shell.native-right-column .consumer-action-dock > .consumer-primary-action {
+  margin-left: 0;
 }
 .app-shell.native-right-column .consumer-action {
   height: var(--native-tool-size, 40px);
@@ -13371,7 +13413,7 @@ a.family-feed-row {
    1rem bottom offset) rather than at an offset tuned for one dock height.
    Never lower than their default position when no dock is shown. */
 @media (min-width: 760px) {
-  .app-shell:not(.native-shell-app) :is(.rr-fab, .calendar-fab) {
+  .app-shell:not(.native-shell-app) :is(.rr-fab, .calendar-fab, .consumer-action-dock) {
     bottom: calc(
       max(var(--bottom-nav-height) + 0.9rem, var(--around-house-dock-height, 0px) + 2rem) + var(--safe-bottom)
     );
