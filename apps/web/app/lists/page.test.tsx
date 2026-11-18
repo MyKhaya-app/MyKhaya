@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import ListsPage from "./page";
+import { ConsumerActionProvider } from "@/components/consumer-action-dock";
 
 // Coverage for the Lists overview — see docs/architecture/lists.md. Mirrors
 // the Meal Plans locked-state/feature-gate pattern established in
@@ -66,7 +67,11 @@ describe("Lists — Free plan (included, bounded by lists.max_lists)", () => {
       list_usage: { count: 1, limit: 2, over_limit: false },
     });
 
-    render(<ListsPage />);
+    render(
+      <ConsumerActionProvider>
+        <ListsPage />
+      </ConsumerActionProvider>,
+    );
 
     expect(await screen.findByText(/no lists yet/i)).toBeInTheDocument();
     expect(screen.queryByText(/view family plan/i)).not.toBeInTheDocument();
@@ -93,7 +98,11 @@ describe("Lists — Free plan (included, bounded by lists.max_lists)", () => {
       ],
     });
 
-    render(<ListsPage />);
+    render(
+      <ConsumerActionProvider>
+        <ListsPage />
+      </ConsumerActionProvider>,
+    );
 
     expect(
       await screen.findByText("You've reached the Free plan limit of 2 lists."),
@@ -280,7 +289,11 @@ describe("Lists — Family plan overview", () => {
         },
       ],
     });
-    render(<ListsPage />);
+    render(
+      <ConsumerActionProvider>
+        <ListsPage />
+      </ConsumerActionProvider>,
+    );
     const user = userEvent.setup();
 
     expect(await screen.findAllByRole("link", { name: /groceries/i })).not.toHaveLength(0);
@@ -377,7 +390,7 @@ describe("Lists — Family plan overview", () => {
     expect(screen.getByText(/complete · 6 items/i)).toBeInTheDocument();
   });
 
-  it("uses the shared segmented control and creates a new list from the floating Add action", async () => {
+  it("uses the shared segmented control and creates a new list from the shared Add action", async () => {
     (api.createList as ReturnType<typeof vi.fn>).mockResolvedValue({
       id: "list-9",
       name: "Packing",
@@ -390,14 +403,18 @@ describe("Lists — Family plan overview", () => {
       updated_at: "2026-08-01T00:00:00Z",
     });
 
-    render(<ListsPage />);
+    render(
+      <ConsumerActionProvider>
+        <ListsPage />
+      </ConsumerActionProvider>,
+    );
     const user = userEvent.setup();
     const add = await screen.findByRole("button", { name: "Add" });
     const segmented = screen.getByRole("tablist", { name: "Lists scope" });
     expect(segmented).toHaveClass("rr-segmented");
     expect(screen.getByRole("tab", { name: "Personal" })).toHaveClass("rr-segment-active");
 
-    expect(add).toHaveClass("rr-fab");
+    expect(add).toHaveClass("consumer-primary-action");
     await user.click(add);
     await user.type(screen.getByLabelText(/list name/i), "Packing");
     await user.click(screen.getByRole("button", { name: /create list/i }));

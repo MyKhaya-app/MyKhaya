@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import DrivewayPage from "./page";
+import { ConsumerActionProvider } from "@/components/consumer-action-dock";
 
 // Driveway list (Screen 1): person filter chips, the MOT summary strip, the
 // vehicle cards and the empty state. MOT dates are relative to today so the
@@ -121,7 +122,11 @@ describe("Driveway list — header and filters", () => {
 
   it("offers All, Mine and each other family member, and filters by owner", async () => {
     mockVehicles([BMW, { ...TEST_CAR, owner_user_id: "u2" }]);
-    render(<DrivewayPage />);
+    render(
+      <ConsumerActionProvider>
+        <DrivewayPage />
+      </ConsumerActionProvider>,
+    );
     const group = await screen.findByRole("group", { name: "Filter by person" });
     const chips = within(group).getAllByRole("button").map((chip) => chip.textContent);
     expect(chips).toEqual(["All", "Mine", "Megan"]);
@@ -200,13 +205,16 @@ describe("Driveway list — vehicle cards", () => {
     expect(screen.queryByText(/MOTs in date|MOT valid/)).not.toBeInTheDocument();
   });
 
-  it("keeps the floating Add vehicle action", async () => {
+  it("keeps the shared Add vehicle action", async () => {
     mockVehicles([BMW]);
-    render(<DrivewayPage />);
+    render(
+      <ConsumerActionProvider>
+        <DrivewayPage />
+      </ConsumerActionProvider>,
+    );
     await screen.findByText("BMW i4");
-    const add = screen.getByRole("link", { name: "Add vehicle" });
-    expect(add).toHaveAttribute("href", "/driveway/add");
-    expect(add).toHaveClass("rr-fab");
+    const add = screen.getByRole("button", { name: "Add vehicle" });
+    expect(add).toHaveClass("consumer-primary-action");
   });
 });
 

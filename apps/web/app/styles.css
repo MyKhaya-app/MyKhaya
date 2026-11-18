@@ -11095,6 +11095,83 @@ select.plan-meal-field-input {
   flex: none;
 }
 
+/* Shared consumer Back/primary-action dock. The shell owns the placement so
+   modules only register an explicit action and never duplicate positioning. */
+.consumer-action-dock {
+  align-items: center;
+  bottom: calc(var(--bottom-nav-height) + var(--safe-bottom) + 0.9rem);
+  display: flex;
+  gap: 0.65rem;
+  left: max(1rem, var(--safe-left));
+  pointer-events: none;
+  position: fixed;
+  right: max(1rem, var(--safe-right));
+  z-index: 8;
+}
+.consumer-action {
+  align-items: center;
+  border: 1px solid transparent;
+  border-radius: 50%;
+  box-shadow: 0 10px 24px rgb(31 41 51 / 20%);
+  display: flex;
+  flex-direction: column;
+  gap: 0.05rem;
+  height: 52px;
+  justify-content: center;
+  min-width: 52px;
+  padding: 0;
+  pointer-events: auto;
+  width: 52px;
+}
+.consumer-action span {
+  font-size: 0.57rem;
+  font-weight: 700;
+  line-height: 1;
+}
+.consumer-back-action {
+  background: var(--colour-cream);
+  border-color: var(--colour-line);
+  color: var(--colour-forest);
+}
+.consumer-primary-action {
+  background: var(--colour-forest);
+  color: var(--colour-white);
+}
+.consumer-action:hover,
+.consumer-action:focus-visible {
+  transform: translateY(-1px);
+}
+.consumer-action:focus-visible {
+  outline: 3px solid var(--colour-sage);
+  outline-offset: 3px;
+}
+
+.app-shell.native-right-column .consumer-action-dock {
+  align-items: center;
+  bottom: calc(var(--native-dock-top) + var(--native-rail-gap));
+  flex-direction: column-reverse;
+  gap: 0.5rem;
+  left: auto;
+  right: var(--native-rail-inset);
+  width: var(--native-rail-width);
+}
+.app-shell.native-right-column:has(.calendar-page) .calendar-page .calendar-month-row-actions .calendar-add-desktop {
+  display: none;
+}
+.app-shell.native-right-column .consumer-action {
+  height: var(--native-tool-size, 40px);
+  min-width: var(--native-tool-size, 40px);
+  width: var(--native-tool-size, 40px);
+}
+.app-shell.native-right-column .consumer-action span {
+  clip: rect(0 0 0 0);
+  height: 1px;
+  overflow: hidden;
+  position: absolute;
+  white-space: nowrap;
+  width: 1px;
+}
+
 /* --- Driveway (Driveway list, Vehicle, MOT history, MOT nudge) -------------
    Scoped to .drv-page / .drv-* so nothing here reaches other modules.
    Mobile-first: the phone layout is the base; wider screens add columns via
