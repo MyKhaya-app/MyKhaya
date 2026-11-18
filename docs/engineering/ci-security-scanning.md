@@ -22,7 +22,24 @@ its exact SHA.
 | `semgrep` | Semgrep 1.172.0, `p/owasp-top-ten` | `apps/` | Any finding |
 | `checkov` | Checkov 3.2.451 | Dockerfiles and GitHub Actions | Any failed check |
 | `sbom` | Syft v1.30.0 | Repository | Generation error |
+| `container-image` | Trivy 0.64.1 | The built `api` (runtime target; also runs worker, scheduler and migrations) and `web` images, including OS packages | HIGH or CRITICAL with a fix available |
 | `security-gate` | — | Aggregates the jobs above | Any job not successful |
+
+### Container image findings
+
+`container-image` covers what `filesystem` can't see: packages that come from
+the base image and `apt`. It publishes a complete JSON report for each image as
+the `trivy-image-api` and `trivy-image-web` artifacts. The report covers every
+severity, including findings with no released fix. The job fails on any HIGH or
+CRITICAL finding that has a fix available.
+
+Nothing is suppressed. A HIGH or CRITICAL finding with no upstream fix (Debian
+status `affected`, `fix_deferred` or `will_not_fix`) can't be cleared by
+updating. It stays in the report and is triaged like any other finding: record
+the package, the reachability assessment, the compensating controls and a
+review date, then recheck it when Debian publishes a fix. A fixable finding is
+remediated by rebuilding on an updated base image or package, never by
+ignoring it.
 
 Because Gitleaks scans every fetched ref, a release branch's security run can
 report a finding that exists only on another branch (for example `dev`). The

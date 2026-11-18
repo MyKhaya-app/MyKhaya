@@ -1,4 +1,4 @@
-FROM python:3.13.5-slim-bookworm AS builder
+FROM python:3.13.18-slim-bookworm AS builder
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_CACHE_DIR=1
 # Vehicle Report PDFs (WeasyPrint): Pango/HarfBuzz text layout only. No system
 # fonts are installed on purpose; reports embed the brand fonts below. The test
@@ -38,7 +38,7 @@ RUN groupadd --system --gid 10001 mykhaya \
 USER 10001:10001
 CMD ["python", "-m", "pytest"]
 
-FROM python:3.13.5-slim-bookworm AS runtime
+FROM python:3.13.18-slim-bookworm AS runtime
 ARG MYKHAYA_VERSION=unknown
 ARG MYKHAYA_COMMIT_SHA=unknown
 ARG MYKHAYA_BUILD_TIME=unknown
@@ -62,6 +62,13 @@ COPY --from=builder /opt/mykhaya/report-assets /opt/mykhaya/report-assets
 # fontconfig cache WeasyPrint uses lives on the /tmp tmpfs instead.
 ENV SOURCE_DATE_EPOCH=0 XDG_CACHE_HOME=/tmp/.cache
 COPY --from=builder /opt/venv /opt/venv
+# Nothing installs packages at runtime, so the shipped image carries no pip
+# (neither the base image's nor the venv's): its vendored libraries were the
+# only remaining fixable findings in the image scan. Builder/test keep pip.
+RUN rm -rf /usr/local/lib/python3.13/site-packages/pip /usr/local/lib/python3.13/site-packages/pip-*.dist-info \
+	/usr/local/bin/pip /usr/local/bin/pip3 /usr/local/bin/pip3.13 \
+	/opt/venv/lib/python3.13/site-packages/pip /opt/venv/lib/python3.13/site-packages/pip-*.dist-info \
+	/opt/venv/bin/pip /opt/venv/bin/pip3 /opt/venv/bin/pip3.13
 WORKDIR /app
 COPY --chown=mykhaya:mykhaya apps/api/alembic.ini ./
 COPY --chown=mykhaya:mykhaya apps/api/migrations ./migrations

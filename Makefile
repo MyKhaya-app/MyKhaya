@@ -125,11 +125,17 @@ release-check: version-check compose-check caddy-check
 # .github/workflows/security.yml one-for-one, same images/flags/versions.
 security-check:
 	docker run --rm -v "$(CURDIR):/repo" zricethezav/gitleaks:v8.28.0 detect --source=/repo --no-banner
-	docker run --rm -v "$(CURDIR)/apps/api:/src" -w /src python:3.13.5-slim-bookworm sh -c "python -m pip install --upgrade pip && pip install . pip-audit && pip-audit"
+	docker run --rm -v "$(CURDIR)/apps/api:/src" -w /src python:3.13.18-slim-bookworm sh -c "python -m pip install --upgrade pip && pip install . pip-audit && pip-audit"
 	docker run --rm -v "$(CURDIR):/src" aquasec/trivy:0.64.1 fs --exit-code 1 --severity HIGH,CRITICAL --scanners vuln,misconfig /src
 	docker run --rm -v "$(CURDIR):/src" semgrep/semgrep:1.172.0 semgrep scan --config p/owasp-top-ten --error /src/apps
 	docker run --rm -v "$(CURDIR):/src" bridgecrew/checkov:3.2.451 -d /src --framework dockerfile github_actions --quiet
 	docker run --rm -v "$(CURDIR):/src" anchore/syft:v1.30.0 dir:/src -o cyclonedx-json=/src/mykhaya-sbom.cdx.json
+	docker build -f apps/api/Dockerfile --target runtime -t mykhaya-api:scan .
+	docker build -f apps/web/Dockerfile -t mykhaya-web:scan .
+	for image in mykhaya-api:scan mykhaya-web:scan; do \
+		docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.64.1 image --scanners vuln --severity HIGH,CRITICAL --format table "$$image" && \
+		docker run --rm -v /var/run/docker.sock:/var/run/docker.sock aquasec/trivy:0.64.1 image --scanners vuln --exit-code 1 --severity HIGH,CRITICAL --ignore-unfixed "$$image" || exit 1; \
+	done
 
 dev-preflight:
 	sh infrastructure/scripts/dev-deploy.sh preflight
