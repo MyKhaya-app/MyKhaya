@@ -191,7 +191,8 @@ off pending further approval. Arbitrary DVSA lookup stays disabled.
   `VehicleReportRequest`. Nickname and photo appear only for saved vehicles when
   it is true. The nickname carries a "Nickname" label, and the disclaimer says
   that household-added details aren't provider data. The web report page has an
-  "Include nickname and photo" checkbox.
+  "Include nickname and photo" switch; switching it off also hides the photo
+  from the on-screen report, so the preview matches the PDF.
 - **Email:** `vehicle_report_email_enabled` (default `false`) refuses both
   email endpoints with 403 before anything is rendered. When enabled, the
   verified-email check and 3-per-hour limit also run before rendering.

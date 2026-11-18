@@ -1,7 +1,14 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
-import { ExternalLink, Info, Printer, Share2 } from "lucide-react";
+import {
+  Download,
+  ExternalLink,
+  Info,
+  Mail,
+  Printer,
+  Share2,
+} from "lucide-react";
 import type {
   Vehicle,
   VehicleLookupResult,
@@ -11,7 +18,16 @@ import type {
 import { Logo } from "@/components/logo";
 import { api, ApiError } from "@mykhaya/api-client";
 import { isNativeShell } from "@/components/native-runtime";
-import { formatRegistrationDate, formatShortDate } from "../vehicle-display";
+import {
+  formatMileage,
+  formatPlate,
+  formatRegistrationDate,
+  formatShortDate,
+  motExpiryText,
+  motShortLabel,
+  motState,
+  type MotTone,
+} from "../vehicle-display";
 import {
   NativeVehicleReportError,
   presentNativeVehicleReport,
@@ -106,51 +122,146 @@ function taxAmount(value: number | null | undefined): string | null {
   return value == null ? null : `£${value.toFixed(2).replace(/\.00$/, "")}`;
 }
 
+// Colours follow the shared Driveway pills (.drv-pill-valid / -expired / -none).
+function taxTone(status: string | null | undefined): MotTone {
+  if (!status) return "none";
+  const normalised = status.trim().toLowerCase();
+  if (normalised === "taxed") return "valid";
+  if (normalised === "untaxed") return "expired";
+  return "none";
+}
+
+function Pill({ tone, children }: { tone: MotTone; children: ReactNode }) {
+  return (
+    <span className={`drv-pill drv-pill-small drv-pill-${tone}`}>{children}</span>
+  );
+}
+
+const RESULT_LABELS: Record<string, string> = {
+  passed: "Passed",
+  failed: "Failed",
+  other: "Other",
+};
+const RESULT_TONES: Record<string, MotTone> = {
+  passed: "valid",
+  failed: "expired",
+};
+
+// The VED payment plans DVLA offers, as pairs of the calculator's
+// payment_options keys (see apps/api/mykhaya/driveway_tax.py). A plan is shown
+// only when both of its amounts are present.
+const PAYMENT_PLANS: Array<{
+  label: string;
+  payment: string;
+  total: string;
+  perMonth?: boolean;
+}> = [
+  {
+    label: "12-month payment",
+    payment: "single_12_month_total",
+    total: "single_12_month_total",
+  },
+  {
+    label: "Monthly Direct Debit",
+    payment: "monthly_direct_debit_per_month",
+    total: "monthly_direct_debit_total",
+    perMonth: true,
+  },
+  {
+    label: "6-month Direct Debit",
+    payment: "six_month_direct_debit_payment",
+    total: "six_month_direct_debit_total",
+  },
+  {
+    label: "6-month single payment",
+    payment: "six_month_single_payment",
+    total: "six_month_single_total",
+  },
+];
+
+function PaymentOptions({ options }: { options: Record<string, number> }) {
+  const plans = PAYMENT_PLANS.filter(
+    (plan) => options[plan.payment] != null && options[plan.total] != null,
+  );
+  const known = new Set(plans.flatMap((plan) => [plan.payment, plan.total]));
+  const other = Object.entries(options).filter(([key]) => !known.has(key));
+  if (!plans.length && !other.length) return null;
+  return (
+    <>
+      {plans.length > 0 && (
+        <table className="drv-report-payments">
+          <caption className="sr-only">VED payment options</caption>
+          <thead>
+            <tr>
+              <th scope="col">How you pay</th>
+              <th scope="col">Payment</th>
+              <th scope="col">Total</th>
+            </tr>
+          </thead>
+          <tbody>
+            {plans.map((plan) => (
+              <tr key={plan.label}>
+                <th scope="row">{plan.label}</th>
+                <td>
+                  {taxAmount(options[plan.payment])}
+                  {plan.perMonth ? "/mo" : ""}
+                </td>
+                <td>{taxAmount(options[plan.total])}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
+      {other.length > 0 && (
+        <dl className="drv-report-payments-other">
+          {other.map(([key, amount]) => (
+            <Row key={key} label={key.replaceAll("_", " ")} value={taxAmount(amount)} />
+          ))}
+        </dl>
+      )}
+    </>
+  );
+}
+
 function motTests(mot: ReportMot) {
   if (!mot || !mot.tests.length) return null;
   return (
-    <div className="drv-report-mot-table" role="table" aria-label="MOT history">
-      <div className="drv-report-mot-row drv-report-mot-head" role="row">
-        <span>Date</span>
-        <span>Mileage</span>
-        <span>Result</span>
-      </div>
+    <ol className="drv-report-tests" aria-label="MOT tests">
       {mot.tests.map((test, index) => (
-        <div
-          className="drv-report-mot-row"
-          role="row"
+        <li
+          className="drv-report-test"
           key={`${test.test_number ?? "test"}-${test.test_date}-${index}`}
         >
-          <span>{formatShortDate(test.test_date) ?? test.test_date}</span>
-          <span>
-            {test.odometer_value != null
-              ? `${test.odometer_value.toLocaleString()} ${test.odometer_unit ?? ""}`
-              : "Unavailable"}
-          </span>
           <span
-            className={
-              test.result === "passed"
-                ? "drv-report-positive"
-                : test.result === "failed"
-                  ? "drv-report-negative"
-                  : ""
-            }
-          >
-            {test.result}
-          </span>
-          {test.defects.length > 0 && (
-            <ul className="drv-report-defects">
-              {test.defects.map((defect, defectIndex) => (
-                <li key={`${defect.category}-${defectIndex}`}>
-                  {defect.dangerous ? "Dangerous: " : ""}
-                  {defect.text}
-                </li>
-              ))}
-            </ul>
-          )}
-        </div>
+            className={`drv-report-test-dot${index === 0 ? " drv-report-test-dot-latest" : ""}`}
+            aria-hidden="true"
+          />
+          <div className="drv-report-test-body">
+            <div className="drv-report-test-top">
+              <span className="drv-report-test-date">
+                {formatShortDate(test.test_date) ?? test.test_date}
+              </span>
+              <Pill tone={RESULT_TONES[test.result] ?? "none"}>
+                {RESULT_LABELS[test.result] ?? test.result}
+              </Pill>
+            </div>
+            <span className="drv-report-test-miles">
+              {formatMileage(test, true) ?? "Mileage unavailable"}
+            </span>
+            {test.defects.length > 0 && (
+              <ul className="drv-report-defects">
+                {test.defects.map((defect, defectIndex) => (
+                  <li key={`${defect.category}-${defectIndex}`}>
+                    {defect.dangerous ? "Dangerous: " : ""}
+                    {defect.text}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        </li>
       ))}
-    </div>
+    </ol>
   );
 }
 
@@ -183,6 +294,17 @@ export function VehicleReport({
     "Vehicle report";
   const isFull = reportFormat === "full";
   const motSummary = mot && "summary" in mot ? mot.summary : mot;
+  const motStatus =
+    motSummary && "status" in motSummary ? motSummary.status : null;
+  const motDue =
+    motSummary && "due_date" in motSummary ? motSummary.due_date : null;
+  const motNow = motState(motStatus, motDue);
+  const hasMotStatus = Boolean(motStatus || motDue);
+  const taxDue = formatShortDate(vehicle.tax_due_date);
+  const plate = formatPlate(vehicle.registration);
+  // The household toggle also governs the on-screen preview, so what is shown
+  // here matches the PDF that Save PDF / Print will produce.
+  const showPhoto = Boolean(photo) && (source !== "saved" || includeHousehold);
   const tax = taxCalculation;
   const generated = new Intl.DateTimeFormat("en-GB", {
     dateStyle: "medium",
@@ -426,114 +548,151 @@ export function VehicleReport({
           <p>Generated {generated}</p>
         </div>
       </header>
-      <div className="drv-report-actions" aria-label="Report actions">
-        <div
-          className="drv-report-format"
-          role="group"
-          aria-label="Report format"
-        >
-          <button
-            type="button"
-            className={reportFormat === "full" ? "active" : ""}
-            onClick={() => setReportFormat("full")}
-            disabled={busy !== null}
+      <div className="drv-report-toolbar">
+        <div className="drv-report-controls">
+          <div
+            className="rr-segmented drv-report-format"
+            role="group"
+            aria-label="Report format"
           >
-            Full report
-          </button>
-          <button
-            type="button"
-            className={reportFormat === "essential" ? "active" : ""}
-            onClick={() => setReportFormat("essential")}
-            disabled={busy !== null}
-          >
-            Essential report
-          </button>
-        </div>
-        {source === "saved" && (
-          <label className="drv-report-household">
-            <input
-              type="checkbox"
-              checked={includeHousehold}
-              onChange={(event) => setIncludeHousehold(event.target.checked)}
+            <button
+              type="button"
+              className={`rr-segment${reportFormat === "full" ? " rr-segment-active" : ""}`}
+              aria-pressed={reportFormat === "full"}
+              onClick={() => setReportFormat("full")}
               disabled={busy !== null}
-            />{" "}
-            Include nickname and photo
-          </label>
-        )}
-        <button
-          type="button"
-          className="drv-button drv-button-secondary"
-          onClick={() => void printPdf()}
-          disabled={busy !== null}
-        >
-          <Printer size={18} aria-hidden="true" /> Print
-        </button>
-        <button
-          type="button"
-          className="drv-button drv-button-primary"
-          onClick={() => void savePdf()}
-          disabled={busy !== null}
-        >
-          {busy === "save" ? "Preparing…" : "Save PDF"}
-        </button>
-        <button
-          type="button"
-          className="drv-button drv-button-secondary"
-          onClick={() => void email()}
-          disabled={busy !== null || !REPORT_SHARING_AVAILABLE}
-          aria-describedby={
-            REPORT_SHARING_AVAILABLE ? undefined : "drv-report-sharing-note"
-          }
-        >
-          {busy === "email" ? "Queueing…" : "Email me"}
-        </button>
-        <button
-          type="button"
-          className="drv-button drv-button-secondary"
-          onClick={() => void share()}
-          disabled={busy !== null || !REPORT_SHARING_AVAILABLE}
-          aria-describedby={
-            REPORT_SHARING_AVAILABLE ? undefined : "drv-report-sharing-note"
-          }
-        >
-          {busy === "share" ? (
-            "Preparing…"
-          ) : (
-            <>
-              <Share2 size={18} aria-hidden="true" /> Share
-            </>
+            >
+              Full report
+            </button>
+            <button
+              type="button"
+              className={`rr-segment${reportFormat === "essential" ? " rr-segment-active" : ""}`}
+              aria-pressed={reportFormat === "essential"}
+              onClick={() => setReportFormat("essential")}
+              disabled={busy !== null}
+            >
+              Essential report
+            </button>
+          </div>
+          {source === "saved" && (
+            <label className="drv-report-household">
+              <span>Include nickname and photo</span>
+              <input
+                type="checkbox"
+                role="switch"
+                className="drv-report-switch"
+                checked={includeHousehold}
+                onChange={(event) => setIncludeHousehold(event.target.checked)}
+                disabled={busy !== null}
+              />
+            </label>
           )}
-        </button>
+        </div>
+        <div className="drv-report-actions" aria-label="Report actions" role="group">
+          <div className="drv-report-primary-actions">
+            <button
+              type="button"
+              className="drv-report-button drv-report-button-primary"
+              onClick={() => void savePdf()}
+              disabled={busy !== null}
+            >
+              <Download size={20} aria-hidden="true" />
+              {busy === "save" ? "Preparing…" : "Save PDF"}
+            </button>
+            <button
+              type="button"
+              className="drv-report-button drv-report-button-secondary"
+              onClick={() => void printPdf()}
+              disabled={busy !== null}
+            >
+              <Printer size={20} aria-hidden="true" />
+              {busy === "print" ? "Preparing…" : "Print"}
+            </button>
+          </div>
+          <div className="drv-report-sharing">
+            <div className="drv-report-sharing-buttons">
+              <button
+                type="button"
+                className="drv-report-button drv-report-button-quiet"
+                onClick={() => void email()}
+                disabled={busy !== null || !REPORT_SHARING_AVAILABLE}
+                aria-describedby={
+                  REPORT_SHARING_AVAILABLE ? undefined : "drv-report-sharing-note"
+                }
+              >
+                <Mail size={18} aria-hidden="true" />
+                {busy === "email" ? "Queueing…" : "Email me"}
+              </button>
+              <button
+                type="button"
+                className="drv-report-button drv-report-button-quiet"
+                onClick={() => void share()}
+                disabled={busy !== null || !REPORT_SHARING_AVAILABLE}
+                aria-describedby={
+                  REPORT_SHARING_AVAILABLE ? undefined : "drv-report-sharing-note"
+                }
+              >
+                <Share2 size={18} aria-hidden="true" />
+                {busy === "share" ? "Preparing…" : "Share"}
+              </button>
+            </div>
+            {!REPORT_SHARING_AVAILABLE && (
+              <p className="drv-report-sharing-note" id="drv-report-sharing-note">
+                Emailing and sharing reports isn’t available yet. You can save or
+                print the PDF.
+              </p>
+            )}
+          </div>
+        </div>
       </div>
-      {!REPORT_SHARING_AVAILABLE && (
-        <p
-          className="drv-muted drv-report-sharing-note"
-          id="drv-report-sharing-note"
-        >
-          Emailing and sharing reports isn’t available yet. You can save or
-          print the PDF.
-        </p>
-      )}
       {shareMessage && (
         <p className="notice" role="status">
           {shareMessage}
         </p>
       )}
-      <section className="drv-report-hero">
-        {photo && <div className="drv-report-photo">{photo}</div>}
-        <div>
-          <p className="drv-eyebrow">
-            {source === "saved" ? "Saved Home Vehicle" : "One-off Lookup"}
-          </p>
-          <h2>{name}</h2>
-          <div className="drv-report-plate">
-            {vehicle.registration ?? "Registration unavailable"}
+      <section className="drv-report-hero" aria-labelledby="drv-report-vehicle">
+        {showPhoto && <div className="drv-report-photo">{photo}</div>}
+        <div className="drv-report-hero-body">
+          <div className="drv-report-hero-heading">
+            <div>
+              <p className="drv-report-eyebrow">
+                {source === "saved" ? "Saved Home Vehicle" : "One-off Lookup"}
+              </p>
+              <h2 id="drv-report-vehicle">{name}</h2>
+            </div>
+            <span className="drv-report-plate">
+              {plate ?? "Registration unavailable"}
+            </span>
           </div>
-          <p>
+          <p className="drv-report-hero-summary">
             {source === "saved"
               ? "Household vehicle information summary"
               : "Vehicle information summary"}
           </p>
+          {(vehicle.tax_status || hasMotStatus) && (
+            <dl className="drv-report-glance">
+              {vehicle.tax_status && (
+                <div>
+                  <dt>Tax</dt>
+                  <dd>
+                    <Pill tone={taxTone(vehicle.tax_status)}>
+                      {vehicle.tax_status}
+                    </Pill>
+                  </dd>
+                  {taxDue && <dd>Due {taxDue}</dd>}
+                </div>
+              )}
+              {hasMotStatus && (
+                <div>
+                  <dt>MOT</dt>
+                  <dd>
+                    <Pill tone={motNow.tone}>{motShortLabel(motNow)}</Pill>
+                  </dd>
+                  {motExpiryText(motNow) && <dd>{motExpiryText(motNow)}</dd>}
+                </div>
+              )}
+            </dl>
+          )}
         </div>
       </section>
       <div className="drv-report-grid">
@@ -546,11 +705,17 @@ export function VehicleReport({
         </Section>
         <Section title="Tax and status">
           <dl>
-            <Row label="Tax status" value={vehicle.tax_status} />
-            <Row
-              label="Tax due"
-              value={formatShortDate(vehicle.tax_due_date)}
-            />
+            {vehicle.tax_status && (
+              <div className="drv-report-row">
+                <dt>Tax status</dt>
+                <dd>
+                  <Pill tone={taxTone(vehicle.tax_status)}>
+                    {vehicle.tax_status}
+                  </Pill>
+                </dd>
+              </div>
+            )}
+            <Row label="Tax due" value={taxDue} />
             <Row label="Vehicle status" value={vehicle.vehicle_status} />
             <Row
               label="SORN / export"
@@ -575,17 +740,7 @@ export function VehicleReport({
                   : "Tax year unavailable"}
                 . Estimate only; check GOV.UK for the authoritative amount.
               </small>
-              {Object.entries(tax.payment_options).length > 0 && (
-                <dl className="drv-report-payments">
-                  {Object.entries(tax.payment_options).map(([key, amount]) => (
-                    <Row
-                      key={key}
-                      label={key.replaceAll("_", " ")}
-                      value={taxAmount(amount)}
-                    />
-                  ))}
-                </dl>
-              )}
+              <PaymentOptions options={tax.payment_options} />
             </div>
           )}
           <p className="drv-report-source">
@@ -596,27 +751,22 @@ export function VehicleReport({
       </div>
       <Section title="MOT history" className="drv-report-mot">
         <dl>
-          <Row
-            label="Status"
-            value={
-              motSummary && "status" in motSummary ? motSummary.status : null
-            }
-          />
-          <Row
-            label="Expiry / due"
-            value={
-              motSummary && "due_date" in motSummary
-                ? formatShortDate(motSummary.due_date)
-                : null
-            }
-          />
+          {hasMotStatus && (
+            <div className="drv-report-row">
+              <dt>Status</dt>
+              <dd>
+                <Pill tone={motNow.tone}>{motShortLabel(motNow)}</Pill>
+              </dd>
+            </div>
+          )}
+          <Row label="Expiry / due" value={formatShortDate(motDue)} />
         </dl>
         {mot ? (
           (motTests(mot) ?? (
-            <p className="drv-muted">No detailed MOT tests were returned.</p>
+            <p className="drv-report-muted">No detailed MOT tests were returned.</p>
           ))
         ) : (
-          <p className="drv-muted">
+          <p className="drv-report-muted">
             MOT history is unavailable for this report because arbitrary DVSA
             lookup is disabled.
           </p>
@@ -644,19 +794,19 @@ export function VehicleReport({
           </Section>
         </>
       )}
-      <footer className="drv-report-footer">
-        <span>Generated with MyKhaya</span>
-        <span>mykhaya.app</span>
-      </footer>
       <a
         className="drv-report-gov-link"
         href="https://www.gov.uk/check-vehicle-tax"
         target="_blank"
         rel="noreferrer"
       >
-        <ExternalLink size={16} aria-hidden="true" /> Check vehicle tax on
-        GOV.UK
+        Check vehicle tax on GOV.UK
+        <ExternalLink size={16} aria-hidden="true" />
       </a>
+      <footer className="drv-report-footer">
+        <span>Generated with MyKhaya</span>
+        <span>mykhaya.app</span>
+      </footer>
     </main>
   );
 }
