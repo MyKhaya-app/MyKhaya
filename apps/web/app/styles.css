@@ -1008,6 +1008,9 @@ textarea {
 .drv-report {
   background: var(--colour-cream);
   color: var(--colour-slate);
+  /* The two-column section grid depends on the report's own width, not the
+     viewport: beside the tablet rail a 768px viewport leaves ~540px. */
+  container-type: inline-size;
   display: flex;
   flex-direction: column;
   gap: 16px;
@@ -1284,9 +1287,17 @@ textarea {
   .drv-report-photo { flex: 0 0 min(320px, 40%); height: auto; min-height: 220px; }
   .drv-report-hero-body { justify-content: center; padding: 22px 24px; }
   .drv-report-hero h2 { font-size: clamp(30px, 4vw, 44px); }
-  .drv-report-grid { align-items: start; gap: 18px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .drv-report-section { padding: 22px; }
   .drv-report-gov-link { align-self: flex-start; padding: 0 20px; }
+}
+/* 320px phones: three payment columns need slimmer cell padding to fit the card. */
+@container (max-width: 320px) {
+  .drv-report-payments thead th,
+  .drv-report-payments tbody th,
+  .drv-report-payments td { padding-left: 8px; padding-right: 8px; }
+}
+@container (min-width: 681px) {
+  .drv-report-grid { align-items: start; gap: 18px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 @media print {
   .drv-report { max-width: none; padding: 0; }
