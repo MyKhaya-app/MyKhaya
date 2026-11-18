@@ -42,9 +42,21 @@ SCHEDULES = (
         "2025-2026",
         TAX_YEAR_2025_START,
         (220, 360),
-        ((100, 20), (110, 20), (120, 35), (130, 165), (140, 195), (150, 215),
-         (165, 265), (175, 315), (185, 345), (200, 395), (225, 430), (255, 735),
-         (10_000, 760)),
+        (
+            (100, 20),
+            (110, 20),
+            (120, 35),
+            (130, 165),
+            (140, 195),
+            (150, 215),
+            (165, 265),
+            (175, 315),
+            (185, 345),
+            (200, 395),
+            (225, 430),
+            (255, 735),
+            (10_000, 760),
+        ),
         195,
         None,
         None,
@@ -54,13 +66,25 @@ SCHEDULES = (
         "2026-2027",
         TAX_YEAR_2026_START,
         (230, 375),
-        ((100, 20), (110, 20), (120, 35), (130, 170), (140, 200), (150, 225),
-         (165, 275), (175, 325), (185, 360), (200, 410), (225, 445), (255, 760),
-         (10_000, 790)),
+        (
+            (100, 20),
+            (110, 20),
+            (120, 35),
+            (130, 170),
+            (140, 200),
+            (150, 225),
+            (165, 275),
+            (175, 325),
+            (185, 360),
+            (200, 410),
+            (225, 445),
+            (255, 760),
+            (10_000, 790),
+        ),
         200,
-        210,
-        110,
-        105,
+        210,  # total of 12 monthly Direct Debit payments
+        105,  # each of 2 six-monthly Direct Debit payments (DVLA V149, April 2026)
+        110,  # single 6-month payment, not by Direct Debit (DVLA V149, April 2026)
     ),
 )
 
@@ -105,9 +129,7 @@ def calculate_vehicle_tax(vehicle: Vehicle, *, as_of: date | None = None) -> dic
     if vehicle.country_code.upper() != "GB":
         return _result("unsupported_category", schedule, missing=["UK vehicle data"])
     if vehicle.lookup_provider != "uk_dvla":
-        return _result(
-            "insufficient_data", schedule, missing=["DVLA-verified vehicle details"]
-        )
+        return _result("insufficient_data", schedule, missing=["DVLA-verified vehicle details"])
     if vehicle.first_registration_date is None or vehicle.first_registration_precision is None:
         return _result(
             "insufficient_data",
@@ -136,7 +158,9 @@ def calculate_vehicle_tax(vehicle: Vehicle, *, as_of: date | None = None) -> dic
             return _result("insufficient_data", schedule, missing=["engine capacity"])
         annual = schedule.pre_2001[0 if engine_cc <= 1549 else 1]
         return _result(
-            "calculated", schedule, annual_rate=annual,
+            "calculated",
+            schedule,
+            annual_rate=annual,
             payment_options={"single_12_month": float(annual)},
             category="pre-2001 car",
             assumptions=["M1/M1G vehicle", "rate based on engine capacity"],
@@ -148,7 +172,9 @@ def calculate_vehicle_tax(vehicle: Vehicle, *, as_of: date | None = None) -> dic
         for upper, annual in schedule.bands_2001_2017:
             if vehicle.co2_emissions <= upper:
                 return _result(
-                    "calculated", schedule, annual_rate=annual,
+                    "calculated",
+                    schedule,
+                    annual_rate=annual,
                     payment_options={"single_12_month": float(annual)},
                     category="2001-2017 car",
                     assumptions=[
@@ -162,7 +188,9 @@ def calculate_vehicle_tax(vehicle: Vehicle, *, as_of: date | None = None) -> dic
     # applies, so never infer any of those values.
     if registered >= date(2017, 4, 1):
         is_electric = (getattr(vehicle, "fuel_type", None) or "").strip().casefold() in {
-            "electric", "electricity", "electric vehicle"
+            "electric",
+            "electricity",
+            "electric vehicle",
         }
         payment_options: dict[str, float] = {
             "single_12_month_total": float(schedule.post_2017_standard)
@@ -178,8 +206,10 @@ def calculate_vehicle_tax(vehicle: Vehicle, *, as_of: date | None = None) -> dic
                         schedule.post_2017_monthly_total / 12, 2
                     ),
                     "monthly_direct_debit_total": float(schedule.post_2017_monthly_total),
+                    # Each six-month option's total is its own instalment twice;
+                    # never borrowed from another payment method.
                     "six_month_direct_debit_payment": float(schedule.post_2017_six_month_dd),
-                    "six_month_direct_debit_total": float(schedule.post_2017_monthly_total),
+                    "six_month_direct_debit_total": float(schedule.post_2017_six_month_dd * 2),
                     "six_month_single_payment": float(schedule.post_2017_six_month_single),
                     "six_month_single_total": float(schedule.post_2017_six_month_single * 2),
                 }
@@ -210,7 +240,8 @@ def calculate_vehicle_tax(vehicle: Vehicle, *, as_of: date | None = None) -> dic
         )
     if False and registered >= date(2017, 4, 1):
         return _result(
-            "conditional_estimate", schedule,
+            "conditional_estimate",
+            schedule,
             category="post-2017 car",
             assumptions=[
                 f"base subsequent-licence rate is £{schedule.post_2017_standard}",
