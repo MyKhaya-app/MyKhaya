@@ -1301,7 +1301,7 @@ textarea {
 }
 @media print {
   .drv-report { max-width: none; padding: 0; }
-  .drv-report-toolbar, .drv-report-gov-link { display: none; }
+  .drv-report-toolbar, .drv-report-gov-link, .drv-report > .notice { display: none; }
   .drv-report-header { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   .drv-report-section, .drv-report-hero, .drv-report-test { break-inside: avoid; }
   .drv-report-section { box-shadow: none; }
@@ -14077,5 +14077,37 @@ a.family-feed-row {
   .skeleton-block,
   .skeleton-line {
     animation: none;
+  }
+}
+
+/* Vehicle Report: the browser's own print (Ctrl+P / Print menu). The report's
+   Print button prints the generated PDF instead; this keeps a page print to
+   the report alone. It sits after every shell rule it overrides, and is
+   scoped to a shell that contains a report, so no other page's print output
+   changes. The report's own controls are hidden in its section above. */
+@media print {
+  .app-shell:has(.drv-report) :is(.app-header, .desktop-nav, .bottom-nav, .consumer-action-dock, .around-house-dock, .sheet-backdrop, .bottom-sheet),
+  .app-shell:has(.drv-report) .app-content-scroll-region > :not(.app-main),
+  .app-shell:has(.drv-report) .app-main > :not(.drv-report) {
+    display: none;
+  }
+  /* Browser shell: drop the desktop rail's 224px gutter and the space kept
+     clear for the bottom navigation and floating docks. */
+  .app-shell:has(.drv-report),
+  .app-shell:has(.drv-report) .app-main,
+  .app-shell.native-shell-app:is(.native-wide-viewport, .native-compact-rail):has(.drv-report) .app-main {
+    min-height: 0;
+    padding: 0;
+  }
+  /* Native shell: the page is a fixed-height scroll region on screen, which
+     would clip the printout to one page. */
+  html.native-shell body:has(.drv-report),
+  html.native-shell .app-shell:has(.drv-report) {
+    height: auto;
+    overflow: visible;
+  }
+  html.native-shell .app-shell:has(.drv-report) .app-content-scroll-region {
+    display: block;
+    overflow: visible;
   }
 }

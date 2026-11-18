@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { renderWithConsumerActions } from "@/components/consumer-action-dock.testing";
 import { ApiError } from "@mykhaya/api-client";
 import { BudgetModule, BudgetOverviewWithAdd } from "./budget-module-wired";
 import { BudgetModuleSheets } from "./budget-module-sheets";
@@ -72,26 +73,26 @@ beforeEach(() => {
 
 describe("Budget consumer API wiring", () => {
   it("renders the spending-entry list from the selected month", async () => {
-    render(<BudgetModule screen="spending" />);
+    renderWithConsumerActions(<BudgetModule screen="spending" />);
     expect(await screen.findByText("Tesco")).toBeInTheDocument();
     expect(apiMock.budgetEntries).toHaveBeenCalled();
   });
 
   it("loads, edits and deletes spending entries", async () => {
-    render(<BudgetModule screen="entry-edit" entryId="entry-1" />);
+    renderWithConsumerActions(<BudgetModule screen="entry-edit" entryId="entry-1" />);
     expect(await screen.findByDisplayValue("Tesco")).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Description"), { target: { value: "Updated Tesco" } });
     fireEvent.click(screen.getByRole("button", { name: "Save entry" }));
     await waitFor(() => expect(apiMock.updateBudgetEntry).toHaveBeenCalledWith("home-1", "entry-1", expect.objectContaining({ description: "Updated Tesco" })));
 
-    render(<BudgetModule screen="spending" />);
+    renderWithConsumerActions(<BudgetModule screen="spending" />);
     fireEvent.click(await screen.findByRole("button", { name: "Delete Tesco" }));
     fireEvent.click(screen.getByRole("button", { name: "Delete entry" }));
     await waitFor(() => expect(apiMock.deleteBudgetEntry).toHaveBeenCalledWith("home-1", "entry-1"));
   });
 
   it("saves monthly expected and received income", async () => {
-    render(<BudgetModule screen="income" />);
+    renderWithConsumerActions(<BudgetModule screen="income" />);
     fireEvent.click(await screen.findByRole("button", { name: /Salary/ }));
     fireEvent.change(screen.getByLabelText("Expected amount (per month)"), { target: { value: "4900" } });
     fireEvent.change(screen.getByLabelText("Received amount (per month)"), { target: { value: "4300" } });
@@ -100,7 +101,7 @@ describe("Budget consumer API wiring", () => {
   });
 
   it("keeps every income amount and date when only the source name changes", async () => {
-    render(<BudgetModule screen="income" />);
+    renderWithConsumerActions(<BudgetModule screen="income" />);
     fireEvent.click(await screen.findByRole("button", { name: /Salary/ }));
     fireEvent.change(screen.getByLabelText("Source name"), { target: { value: "Salary (main)" } });
     fireEvent.click(screen.getByRole("button", { name: "Save changes" }));
@@ -109,7 +110,7 @@ describe("Budget consumer API wiring", () => {
   });
 
   it("shows a blank expected amount on its field and sends nothing", async () => {
-    render(<BudgetModule screen="income" />);
+    renderWithConsumerActions(<BudgetModule screen="income" />);
     fireEvent.click(await screen.findByRole("button", { name: /Salary/ }));
     const expected = screen.getByLabelText("Expected amount (per month)");
     fireEvent.change(expected, { target: { value: "" } });
@@ -125,7 +126,7 @@ describe("Budget consumer API wiring", () => {
     apiMock.budgetMonth
       .mockResolvedValueOnce(month)
       .mockResolvedValueOnce({ ...month, income: [...month.income, { id: "income-2", source_id: "source-2", source_name: "NNUH", expected_amount: 0, received_amount: 0 }] });
-    render(<BudgetModule screen="income" />);
+    renderWithConsumerActions(<BudgetModule screen="income" />);
     fireEvent.click(await screen.findByRole("button", { name: /Add income source/ }));
     expect(screen.getByRole("dialog", { name: "Add income source" })).toBeInTheDocument();
     fireEvent.change(screen.getByLabelText("Source name"), { target: { value: "NNUH" } });
@@ -135,7 +136,7 @@ describe("Budget consumer API wiring", () => {
   });
 
   it("opens edit and then the destructive income-source confirmation", async () => {
-    render(<BudgetModule screen="income" />);
+    renderWithConsumerActions(<BudgetModule screen="income" />);
     fireEvent.click(await screen.findByRole("button", { name: /Salary/ }));
     fireEvent.click(screen.getByRole("button", { name: "Delete income source" }));
     expect(screen.getByRole("dialog", { name: "Delete income source?" })).toBeInTheDocument();
@@ -146,7 +147,7 @@ describe("Budget consumer API wiring", () => {
     apiMock.createBudgetIncomeSource.mockRejectedValueOnce(
       new ApiError(409, "Income source already exists"),
     );
-    render(<BudgetModule screen="income" />);
+    renderWithConsumerActions(<BudgetModule screen="income" />);
     fireEvent.click(await screen.findByRole("button", { name: /Add income source/ }));
     const input = await screen.findByLabelText("Source name");
     fireEvent.change(input, { target: { value: "NNUH" } });
@@ -160,7 +161,7 @@ describe("Budget consumer API wiring", () => {
 
   it("loads and saves user-owned Budget settings", async () => {
     apiMock.updateBudgetSettings.mockResolvedValue({ id: "profile-1", owner_user_id: "user-1", currency: "EUR", month_start_day: 15, archived: false });
-    render(<BudgetModule screen="settings" />);
+    renderWithConsumerActions(<BudgetModule screen="settings" />);
     const input = await screen.findByLabelText("Currency");
     expect(input).toHaveValue("GBP");
     fireEvent.change(input, { target: { value: "EUR" } });
@@ -171,7 +172,7 @@ describe("Budget consumer API wiring", () => {
 
   it("shows Personal/Together only for an active relationship and uses shared discovery", async () => {
     apiMock.incomingBudgetShares.mockResolvedValue([{ home_id: "home-1", owner_user_id: "owner-1", owner_display_name: "Partner", level: "summary" }]);
-    render(<BudgetModule screen="together" />);
+    renderWithConsumerActions(<BudgetModule screen="together" />);
     expect(await screen.findByRole("link", { name: "Partner" })).toBeInTheDocument();
     await waitFor(() => {
       expect(apiMock.sharedBudgetMonth).toHaveBeenCalledWith(
@@ -185,13 +186,13 @@ describe("Budget consumer API wiring", () => {
 
   it("does not show Together after a share is revoked", async () => {
     apiMock.budgetShares.mockResolvedValue([{ id: "share-1", partner_user_id: "partner-1", level: "summary", active: false }]);
-    render(<BudgetModule screen="overview" />);
+    renderWithConsumerActions(<BudgetModule screen="overview" />);
     await waitFor(() => expect(screen.queryByRole("navigation", { name: "Budget view" })).not.toBeInTheDocument());
   });
 
   it("fails closed when Budget is disabled", async () => {
     apiMock.budgetProfile.mockRejectedValue(new Error("disabled"));
-    render(<BudgetModule screen="overview" />);
+    renderWithConsumerActions(<BudgetModule screen="overview" />);
     expect(await screen.findByText("Budget isn’t available here")).toBeInTheDocument();
     expect(apiMock.budgetCategories).not.toHaveBeenCalled();
   });
@@ -199,7 +200,7 @@ describe("Budget consumer API wiring", () => {
   it("offers the Ultimate upgrade, like Driveway, when the plan does not include Budget", async () => {
     planAccess(false);
     apiMock.budgetProfile.mockRejectedValue(new ApiError(403, "Budget is included with Ultimate.", "plan_feature_unavailable"));
-    render(<BudgetModule screen="overview" />);
+    renderWithConsumerActions(<BudgetModule screen="overview" />);
     expect(await screen.findByText("Included with MyKhaya Ultimate.")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "View plans" })).toHaveAttribute("href", "/settings/billing");
     expect(screen.queryByText(/has not enabled Budget/)).not.toBeInTheDocument();
@@ -209,7 +210,7 @@ describe("Budget consumer API wiring", () => {
   it("says Budget is not available yet when the module is not released", async () => {
     planAccess(true, false);
     apiMock.budgetProfile.mockRejectedValue(new Error("not released"));
-    render(<BudgetModule screen="overview" />);
+    renderWithConsumerActions(<BudgetModule screen="overview" />);
     expect(await screen.findByText(/isn't available for this Home yet/)).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: "View plans" })).not.toBeInTheDocument();
   });
@@ -217,7 +218,7 @@ describe("Budget consumer API wiring", () => {
   it("never reveals Budget content from plan state alone: the API stays the gate", async () => {
     planAccess(true);
     apiMock.budgetProfile.mockRejectedValue(new ApiError(403, "Budget is included with Ultimate.", "plan_feature_unavailable"));
-    render(<BudgetModule screen="overview" />);
+    renderWithConsumerActions(<BudgetModule screen="overview" />);
     expect(await screen.findByText("Budget isn’t available here")).toBeInTheDocument();
     expect(apiMock.budgetMonth).not.toHaveBeenCalled();
   });
@@ -225,13 +226,13 @@ describe("Budget consumer API wiring", () => {
   it("does not offer the Add action on the upgrade screen, like Driveway", async () => {
     planAccess(false);
     apiMock.budgetProfile.mockRejectedValue(new ApiError(403, "Budget is included with Ultimate.", "plan_feature_unavailable"));
-    render(<BudgetOverviewWithAdd />);
+    renderWithConsumerActions(<BudgetOverviewWithAdd />);
     expect(await screen.findByText("Included with MyKhaya Ultimate.")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Add Budget item" })).not.toBeInTheDocument();
   });
 
   it("keeps the Add action once Budget is available", async () => {
-    render(<BudgetOverviewWithAdd />);
+    renderWithConsumerActions(<BudgetOverviewWithAdd />);
     expect(await screen.findByRole("button", { name: "Add Budget item" })).toBeInTheDocument();
   });
 

@@ -32,6 +32,7 @@ import {
   NativeVehicleReportError,
   presentNativeVehicleReport,
 } from "./vehicle-report-native";
+import { openPrintWindow, showPdfInPrintWindow } from "./vehicle-report-print";
 
 type ReportVehicle = Pick<
   VehicleLookupResult,
@@ -380,11 +381,21 @@ export function VehicleReport({
   }
 
   async function printPdf() {
-    setBusy("print");
+    const native = isNativeShell();
+    // Browser: open the tab now, inside the click, before any await (see
+    // vehicle-report-print.ts). A blocked tab costs no PDF request.
+    const printWindow = native ? null : openPrintWindow();
     setShareMessage("");
+    if (!native && !printWindow) {
+      setShareMessage(
+        "Your browser blocked the PDF tab. Allow pop-ups for MyKhaya, or use Save PDF.",
+      );
+      return;
+    }
+    setBusy("print");
     try {
       const report = await getPdf();
-      if (isNativeShell()) {
+      if (native) {
         await presentNativeVehicleReport(
           report.blob,
           report.filename,
@@ -396,21 +407,23 @@ export function VehicleReport({
         );
         return;
       }
-      const url = URL.createObjectURL(report.blob);
-      const printWindow = window.open(url, "_blank", "noopener,noreferrer");
-      if (!printWindow) {
-        URL.revokeObjectURL(url);
-        throw new Error("The browser blocked the PDF window.");
+      if (!printWindow || !showPdfInPrintWindow(printWindow, report.blob)) {
+        setShareMessage(
+          "The PDF tab was closed before the report was ready. Press Print to try again.",
+        );
+        return;
       }
-      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
       setShareMessage(
         "PDF opened in a new tab. Use the PDF viewer's Print action.",
       );
     } catch (error) {
+      printWindow?.close();
       setShareMessage(
-        error instanceof NativeVehicleReportError
+        error instanceof ApiError && error.status === 429
           ? error.message
-          : "The PDF could not be opened for printing. Please allow pop-ups and try again.",
+          : error instanceof NativeVehicleReportError
+            ? error.message
+            : "The PDF could not be prepared for printing. Please try again.",
       );
     } finally {
       setBusy(null);

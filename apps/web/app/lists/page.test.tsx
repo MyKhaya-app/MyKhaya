@@ -1,8 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
+import { renderWithConsumerActions } from "@/components/consumer-action-dock.testing";
 import userEvent from "@testing-library/user-event";
 import ListsPage from "./page";
-import { ConsumerActionProvider } from "@/components/consumer-action-dock";
 
 // Coverage for the Lists overview — see docs/architecture/lists.md. Mirrors
 // the Meal Plans locked-state/feature-gate pattern established in
@@ -67,11 +67,7 @@ describe("Lists — Free plan (included, bounded by lists.max_lists)", () => {
       list_usage: { count: 1, limit: 2, over_limit: false },
     });
 
-    render(
-      <ConsumerActionProvider>
-        <ListsPage />
-      </ConsumerActionProvider>,
-    );
+    renderWithConsumerActions(<ListsPage />);
 
     expect(await screen.findByText(/no lists yet/i)).toBeInTheDocument();
     expect(screen.queryByText(/view family plan/i)).not.toBeInTheDocument();
@@ -98,11 +94,7 @@ describe("Lists — Free plan (included, bounded by lists.max_lists)", () => {
       ],
     });
 
-    render(
-      <ConsumerActionProvider>
-        <ListsPage />
-      </ConsumerActionProvider>,
-    );
+    renderWithConsumerActions(<ListsPage />);
 
     expect(
       await screen.findByText("You've reached the Free plan limit of 2 lists."),
@@ -130,7 +122,7 @@ describe("Lists — Free plan (included, bounded by lists.max_lists)", () => {
       ],
     });
 
-    render(<ListsPage />);
+    renderWithConsumerActions(<ListsPage />);
 
     expect(
       await screen.findByText(/Read-only on Free — included with Family/),
@@ -152,7 +144,7 @@ describe("Lists — at-limit create flow (Part B)", () => {
 
   it("6. Free with 0 Lists -> Add opens the ordinary create form", async () => {
     mockBilling({ count: 0, limit: 2, over_limit: false });
-    render(<ListsPage />);
+    renderWithConsumerActions(<ListsPage />);
     await userEvent.click(await screen.findByRole("button", { name: "Add" }));
     expect(await screen.findByLabelText(/list name/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /create list/i })).toBeInTheDocument();
@@ -160,14 +152,14 @@ describe("Lists — at-limit create flow (Part B)", () => {
 
   it("7. Free with 1 List -> Add opens the ordinary create form", async () => {
     mockBilling({ count: 1, limit: 2, over_limit: false });
-    render(<ListsPage />);
+    renderWithConsumerActions(<ListsPage />);
     await userEvent.click(await screen.findByRole("button", { name: "Add" }));
     expect(await screen.findByLabelText(/list name/i)).toBeInTheDocument();
   });
 
   it("8. Free with 2 Lists -> Add reflects the limit before any submission, no create form shown", async () => {
     mockBilling({ count: 2, limit: 2, over_limit: false });
-    render(<ListsPage />);
+    renderWithConsumerActions(<ListsPage />);
     await userEvent.click(await screen.findByRole("button", { name: "Add" }));
     // The sheet-only CTA line, unique to the at-limit view (unlike the
     // limit sentence itself, which is also shown passively near the FAB).
@@ -180,7 +172,7 @@ describe("Lists — at-limit create flow (Part B)", () => {
 
   it("9. At-limit view shows the same Family/upgrade CTA pattern used elsewhere (FamilyUpsell's link)", async () => {
     mockBilling({ count: 2, limit: 2, over_limit: false });
-    render(<ListsPage />);
+    renderWithConsumerActions(<ListsPage />);
     await userEvent.click(await screen.findByRole("button", { name: "Add" }));
     expect(await screen.findByText("Upgrade to MyKhaya Family for unlimited lists.")).toBeInTheDocument();
     const link = screen.getByRole("link", { name: "View Family plan" });
@@ -189,7 +181,7 @@ describe("Lists — at-limit create flow (Part B)", () => {
 
   it("10. No create API call happens when the UI already knows the limit is reached", async () => {
     mockBilling({ count: 2, limit: 2, over_limit: false });
-    render(<ListsPage />);
+    renderWithConsumerActions(<ListsPage />);
     await userEvent.click(await screen.findByRole("button", { name: "Add" }));
     await screen.findByText("Upgrade to MyKhaya Family for unlimited lists.");
     expect(api.createList).not.toHaveBeenCalled();
@@ -206,7 +198,7 @@ describe("Lists — at-limit create flow (Part B)", () => {
         { entitlement: "lists.max_lists", limit: 2 },
       ),
     );
-    render(<ListsPage />);
+    renderWithConsumerActions(<ListsPage />);
     await userEvent.click(await screen.findByRole("button", { name: "Add" }));
     await userEvent.type(await screen.findByLabelText(/list name/i), "Third list");
     await userEvent.click(screen.getByRole("button", { name: /create list/i }));
@@ -219,7 +211,7 @@ describe("Lists — at-limit create flow (Part B)", () => {
 
   it("12. Family (unlimited) -> Add always opens the ordinary create form, never the at-limit view", async () => {
     mockBilling({ count: 5, limit: null, over_limit: false });
-    render(<ListsPage />);
+    renderWithConsumerActions(<ListsPage />);
     await userEvent.click(await screen.findByRole("button", { name: "Add" }));
     expect(await screen.findByLabelText(/list name/i)).toBeInTheDocument();
     expect(screen.queryByText(/reached the Free plan limit/)).not.toBeInTheDocument();
@@ -233,7 +225,7 @@ describe("Lists — feature-gate consistency", () => {
       features: [{ feature: "shopping", enabled: false }],
     });
 
-    render(<ListsPage />);
+    renderWithConsumerActions(<ListsPage />);
 
     expect(await screen.findByText(/isn't available for this home yet/i)).toBeInTheDocument();
     expect(screen.queryByText(/^not found$/i)).not.toBeInTheDocument();
@@ -246,14 +238,14 @@ describe("Lists — Family plan overview", () => {
   });
 
   it("shows the empty state with a call to action when there are no lists", async () => {
-    render(<ListsPage />);
+    renderWithConsumerActions(<ListsPage />);
 
     expect(await screen.findByText(/no lists yet/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /create your first list/i })).toBeInTheDocument();
   });
 
   it("renders the hero artwork with the correct asset path and alt text, and uses the shared compact module-page spacing", async () => {
-    const { container } = render(<ListsPage />);
+    const { container } = renderWithConsumerActions(<ListsPage />);
     await screen.findByRole("heading", { name: "Lists", level: 1 });
 
     const art = screen.getByAltText("Small lists, big things together");
@@ -266,7 +258,7 @@ describe("Lists — Family plan overview", () => {
   });
 
   it("opens the existing create flow from the browser Quick add panel", async () => {
-    render(<ListsPage />);
+    renderWithConsumerActions(<ListsPage />);
 
     await screen.findByText(/no lists yet/i);
     await userEvent.click(screen.getByRole("button", { name: "New list" }));
@@ -289,11 +281,7 @@ describe("Lists — Family plan overview", () => {
         },
       ],
     });
-    render(
-      <ConsumerActionProvider>
-        <ListsPage />
-      </ConsumerActionProvider>,
-    );
+    renderWithConsumerActions(<ListsPage />);
     const user = userEvent.setup();
 
     expect(await screen.findAllByRole("link", { name: /groceries/i })).not.toHaveLength(0);
@@ -332,7 +320,7 @@ describe("Lists — Family plan overview", () => {
       ],
     });
 
-    render(<ListsPage />);
+    renderWithConsumerActions(<ListsPage />);
     const groceriesLink = (await screen.findAllByRole("link", { name: /groceries/i })).find((link) =>
       link.closest(".lists-card"),
     );
@@ -380,7 +368,7 @@ describe("Lists — Family plan overview", () => {
       ],
     });
 
-    render(<ListsPage />);
+    renderWithConsumerActions(<ListsPage />);
     const groceries = (await screen.findAllByRole("link", { name: /groceries/i })).find((link) =>
       link.closest(".lists-card"),
     );
@@ -403,11 +391,7 @@ describe("Lists — Family plan overview", () => {
       updated_at: "2026-08-01T00:00:00Z",
     });
 
-    render(
-      <ConsumerActionProvider>
-        <ListsPage />
-      </ConsumerActionProvider>,
-    );
+    renderWithConsumerActions(<ListsPage />);
     const user = userEvent.setup();
     const add = await screen.findByRole("button", { name: "Add" });
     const segmented = screen.getByRole("tablist", { name: "Lists scope" });
@@ -424,7 +408,7 @@ describe("Lists — Family plan overview", () => {
 
   it("filters lists by search", async () => {
     (api.lists as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [] });
-    render(<ListsPage />);
+    renderWithConsumerActions(<ListsPage />);
     await screen.findByRole("button", { name: "Add" });
     fireEvent.change(screen.getByLabelText(/search lists/i), { target: { value: "pack" } });
 
@@ -437,7 +421,7 @@ describe("Lists — Family plan overview", () => {
   });
 
   it("scopes the list query to the selected Personal or Household segment", async () => {
-    render(<ListsPage />);
+    renderWithConsumerActions(<ListsPage />);
     const user = userEvent.setup();
     await screen.findByRole("button", { name: "Add" });
 
@@ -462,7 +446,7 @@ describe("Lists — Family plan overview", () => {
       }],
     });
     (api.moveListScope as ReturnType<typeof vi.fn>).mockResolvedValue({});
-    render(<ListsPage />);
+    renderWithConsumerActions(<ListsPage />);
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: /more actions for groceries/i }));
     await user.click(screen.getByRole("button", { name: "Move to Personal" }));

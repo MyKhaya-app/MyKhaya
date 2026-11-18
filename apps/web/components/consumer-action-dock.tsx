@@ -29,8 +29,13 @@ export function ConsumerActionProvider({ children }: { children: React.ReactNode
 }
 
 /**
- * Registers the current module action. Callers should memoise the action object
- * so its identity changes only when its label, callback or enabled state changes.
+ * Registers the current module action with the shell's ConsumerActionDock.
+ *
+ * The action must be a stable reference: memoise it (useMemo, with every value
+ * its label, enabled flag and callback read in the dependency list) so its
+ * identity changes only when one of those changes. A new object on every render
+ * re-runs this effect, which updates the provider, which re-renders the page,
+ * which creates another object: an endless render loop.
  */
 export function useConsumerPrimaryAction(action: ConsumerPrimaryAction | null): void {
   const context = useContext(ActionContext);
