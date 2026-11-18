@@ -28,11 +28,18 @@ serialised.
 
 from __future__ import annotations
 
+import base64
+import binascii
+import hashlib
+import hmac
+import json
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
+from typing import Literal, cast
 
 import structlog
 from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile, status
@@ -91,6 +98,7 @@ from mykhaya.driveway_reminders import (
 from mykhaya.driveway_schemas import (
     VehicleCreate,
     VehicleListResponse,
+    VehicleLookupReportRequest,
     VehicleLookupRequest,
     VehicleLookupResult,
     VehicleMotNudgePlanRequest,
@@ -100,6 +108,7 @@ from mykhaya.driveway_schemas import (
     VehicleMotRefreshResult,
     VehicleMotResponse,
     VehicleReminderCreate,
+    VehicleReportRequest,
     VehicleResponse,
     VehicleUpdate,
 )
@@ -121,15 +130,24 @@ from mykhaya.models import (
     FeatureKey,
     HouseholdRelationship,
     Membership,
+    NotificationDelivery,
     PlatformSetting,
     RoutineScope,
     Vehicle,
 )
+from mykhaya.notifications.engine import notify
+from mykhaya.notifications.templates import render_notification_email
 from mykhaya.rate_limit import enforce_rate_limit
 from mykhaya.routers.reminders import _to_response as _reminder_response
 from mykhaya.schemas import ReminderListResponse, ReminderResponse
 from mykhaya.showcase.guards import is_showcase_home
 from mykhaya.vehicle_photo_storage import get_vehicle_photo_storage, vehicle_photo_filename
+from mykhaya.vehicle_report_pdf import (
+    VehicleReportUnavailable,
+    render_vehicle_report_pdf,
+    sanitise_report_filename,
+)
+from mykhaya.vehicle_report_storage import get_vehicle_report_storage
 
 
 async def _require_driveway(
@@ -148,6 +166,154 @@ async def _require_driveway(
 
 router = APIRouter(prefix="/homes", tags=["driveway"], dependencies=[Depends(_require_driveway)])
 log = structlog.get_logger()
+
+_LOOKUP_REPORT_TTL_SECONDS = 600
+
+
+def _lookup_report_secret(settings: Settings) -> bytes:
+    return settings.secret_key.get_secret_value().encode("utf-8")
+
+
+def _sign_lookup_report(
+    result: VehicleLookupResult, home_id: uuid.UUID, user_id: uuid.UUID, settings: Settings
+) -> str:
+    payload = {
+        "home_id": str(home_id),
+        "user_id": str(user_id),
+        "expires_at": int(datetime.now(UTC).timestamp()) + _LOOKUP_REPORT_TTL_SECONDS,
+        "result": result.model_dump(mode="json"),
+    }
+    encoded = (
+        base64.urlsafe_b64encode(
+            json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
+        )
+        .decode()
+        .rstrip("=")
+    )
+    signature = hmac.new(
+        _lookup_report_secret(settings), encoded.encode(), hashlib.sha256
+    ).hexdigest()
+    return f"{encoded}.{signature}"
+
+
+def _verify_lookup_report(
+    token: str, home_id: uuid.UUID, user_id: uuid.UUID, settings: Settings
+) -> VehicleLookupResult:
+    try:
+        encoded, signature = token.rsplit(".", 1)
+        expected = hmac.new(
+            _lookup_report_secret(settings), encoded.encode(), hashlib.sha256
+        ).hexdigest()
+        if not hmac.compare_digest(signature, expected):
+            raise ValueError
+        padded = encoded + "=" * (-len(encoded) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(padded.encode()))
+        if payload["home_id"] != str(home_id) or payload["user_id"] != str(user_id):
+            raise ValueError
+        if int(payload["expires_at"]) < int(datetime.now(UTC).timestamp()):
+            raise ValueError
+        return VehicleLookupResult.model_validate(payload["result"])
+    except (
+        ValueError,
+        KeyError,
+        TypeError,
+        json.JSONDecodeError,
+        UnicodeDecodeError,
+        binascii.Error,
+    ):
+        raise HTTPException(
+            status.HTTP_410_GONE, "This one-off lookup report has expired. Run the lookup again."
+        ) from None
+
+
+def _report_payload(vehicle: VehicleResponse, mot: VehicleMotResponse | None) -> dict[str, object]:
+    payload = vehicle.model_dump(mode="json")
+    payload["tax_calculation"] = (
+        vehicle.tax_calculation.model_dump(mode="json") if vehicle.tax_calculation else None
+    )
+    return {"vehicle": payload, "mot": mot.model_dump(mode="json") if mot else None}
+
+
+# Approved 2026-11-18: one budget per user per hour across both report
+# services (saved and one-off) and both formats. Email keeps its own 3/hour.
+_REPORT_DOWNLOAD_LIMIT = 30
+_REPORT_DOWNLOAD_WINDOW_SECONDS = 3600
+
+
+async def _enforce_report_download_limit(
+    request: Request, settings: Settings, auth: AuthContext
+) -> None:
+    await enforce_rate_limit(
+        request,
+        settings,
+        f"driveway-report-download:{auth.user.id}",
+        _REPORT_DOWNLOAD_LIMIT,
+        _REPORT_DOWNLOAD_WINDOW_SECONDS,
+        per_client=False,
+    )
+
+
+async def _render_report(**kwargs: object) -> bytes:
+    """Render, failing closed with a clear 503 if this deployment can't."""
+    try:
+        return await render_vehicle_report_pdf(**kwargs)
+    except VehicleReportUnavailable:
+        log.error("vehicle_report_unavailable")
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE, "Vehicle Reports are temporarily unavailable."
+        ) from None
+
+
+async def _report_email_preflight(request: Request, auth: AuthContext, settings: Settings) -> None:
+    """Every email gate that doesn't need the PDF, checked before rendering."""
+    if not settings.vehicle_report_email_enabled:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, "Emailing Vehicle Reports isn't available yet."
+        )
+    if auth.user.email_verified_at is None or not auth.user.email:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "Verify your MyKhaya account email before emailing a report."
+        )
+    await enforce_rate_limit(request, settings, f"driveway-report-email:{auth.user.id}", 3, 3600)
+
+
+async def _build_saved_report(
+    *,
+    home_id: uuid.UUID,
+    vehicle_id: uuid.UUID,
+    format: Literal["full", "essential"],
+    include_household_details: bool,
+    auth: AuthContext,
+    db: AsyncSession,
+    settings: Settings,
+) -> tuple[bytes, str, VehicleResponse]:
+    membership = await require_capability(home_id, Capability.driveway_view, auth, db)
+    row = await _get_vehicle(db, home_id, vehicle_id)
+    # The serialised, permission-filtered view (registration already decrypted
+    # through driveway_sensitive), never the stored row.
+    vehicle_view = _vehicle_response(row, auth, membership, settings)
+    mot = VehicleMotResponse.model_validate(
+        await mot_view(db, settings, home_id=home_id, vehicle=row)
+    )
+    payload = _report_payload(vehicle_view, mot)
+    # The photo is read only after the same driveway_view check and Home-scoped
+    # lookup that authorise the rest of the report.
+    photo = (
+        await get_vehicle_photo_storage(settings).load(row.photo_key)
+        if include_household_details and row.photo_key
+        else None
+    )
+    data = await _render_report(
+        vehicle=payload["vehicle"],
+        mot=payload["mot"],
+        format=format,
+        generated_at=datetime.now(UTC),
+        source="saved",
+        photo=photo,
+        include_household_details=include_household_details,
+        settings=settings,
+    )
+    return data, sanitise_report_filename(vehicle_view.registration), vehicle_view
 
 
 def _first_present[T](*values: T | None) -> T | None:
@@ -545,7 +711,22 @@ async def lookup_vehicle(
             if result.model is None:
                 result = replace(result, model=history.model)
     await _record_lookup_health(db, success=True, summary="Vehicle lookup succeeded")
-    return VehicleLookupResult(
+    tax_calculation = calculate_vehicle_tax(
+        cast(
+            Vehicle,
+            SimpleNamespace(
+                country_code=country,
+                lookup_provider=provider.name,
+                first_registration_date=result.first_registration_date,
+                first_registration_precision=result.first_registration_precision,
+                type_approval=result.type_approval,
+                engine_size=result.engine_size,
+                co2_emissions=result.co2_emissions,
+                fuel_type=result.fuel_type,
+            ),
+        ),
+    )
+    lookup_response = VehicleLookupResult(
         found=True,
         provider=provider.name,
         registration=result.registration,
@@ -577,8 +758,262 @@ async def lookup_vehicle(
         art_end_date=result.art_end_date,
         checked_at=checked_at,
         mot=mot_preview,
+        tax_calculation=tax_calculation,
         capabilities=list(result.capabilities),
     )
+    lookup_response.report_token = _sign_lookup_report(
+        lookup_response, home_id, auth.user.id, settings
+    )
+    return lookup_response
+
+
+@router.post("/{home_id}/vehicles/{vehicle_id:uuid}/report/pdf")
+async def download_vehicle_report(
+    home_id: uuid.UUID,
+    vehicle_id: uuid.UUID,
+    body: VehicleReportRequest,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, str]:
+    await _enforce_report_download_limit(request, settings, auth)
+    data, filename, _ = await _build_saved_report(
+        home_id=home_id,
+        vehicle_id=vehicle_id,
+        format=body.format,
+        include_household_details=body.include_household_details,
+        auth=auth,
+        db=db,
+        settings=settings,
+    )
+    audit(
+        db,
+        request,
+        "driveway.vehicle.report.generated",
+        auth.user.id,
+        home_id,
+        "vehicle",
+        vehicle_id,
+        {"format": body.format, "household_details": body.include_household_details},
+    )
+    await db.commit()
+    return {
+        "filename": filename,
+        "content_type": "application/pdf",
+        "pdf_base64": base64.b64encode(data).decode("ascii"),
+    }
+
+
+@router.post("/{home_id}/vehicles/lookup/report/pdf")
+async def download_lookup_report(
+    home_id: uuid.UUID,
+    body: VehicleLookupReportRequest,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, str]:
+    await _enforce_report_download_limit(request, settings, auth)
+    await require_capability(home_id, Capability.driveway_view, auth, db)
+    result = _verify_lookup_report(body.report_token, home_id, auth.user.id, settings)
+    payload = result.model_dump(mode="json")
+    data = await _render_report(
+        vehicle=payload,
+        mot=payload.get("mot"),
+        format=body.format,
+        generated_at=datetime.now(UTC),
+        source="lookup",
+        settings=settings,
+    )
+    filename = sanitise_report_filename(result.registration)
+    audit(
+        db,
+        request,
+        "driveway.lookup.report.generated",
+        auth.user.id,
+        home_id,
+        "lookup",
+        None,
+        {"format": body.format},
+    )
+    await db.commit()
+    return {
+        "filename": filename,
+        "content_type": "application/pdf",
+        "pdf_base64": base64.b64encode(data).decode("ascii"),
+    }
+
+
+async def _queue_vehicle_report_email(
+    *,
+    request: Request,
+    home_id: uuid.UUID,
+    auth: AuthContext,
+    db: AsyncSession,
+    settings: Settings,
+    data: bytes,
+    filename: str,
+    format: str,
+    vehicle_name: str,
+    registration: str | None,
+    vehicle_id: uuid.UUID | None,
+) -> None:
+    # The kill switch, verified-email check and 3/hour limit ran in
+    # _report_email_preflight before the PDF was rendered.
+    if len(data) > settings.vehicle_report_max_pdf_bytes:
+        raise HTTPException(
+            status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "This report is too large to email."
+        )
+    request_key = request.headers.get("Idempotency-Key", "").strip()
+    if not request_key:
+        request_key = hashlib.sha256(data).hexdigest()[:32]
+    idempotency_key = (
+        f"driveway-vehicle-report:{auth.user.id}:{home_id}:"
+        f"{vehicle_id or 'lookup'}:{format}:{request_key}"
+    )
+    if (
+        await db.scalar(
+            select(NotificationDelivery.id).where(
+                NotificationDelivery.idempotency_key == f"{idempotency_key}:email"
+            )
+        )
+        is not None
+    ):
+        return
+    key = f"vehicle-report-{uuid.uuid4()}.pdf"
+    await get_vehicle_report_storage(settings).save(key, data)
+    subject, text, html = await render_notification_email(
+        db,
+        settings,
+        "driveway_vehicle_report",
+        {
+            "user_first_name": (auth.user.display_name or "there").split(" ", 1)[0],
+            "vehicle_name": vehicle_name,
+            "registration": registration or "Unavailable",
+            "report_type": "Full" if format == "full" else "Essential",
+            "generated_date": datetime.now(UTC).date().isoformat(),
+            "link": settings.public_web_url,
+        },
+    )
+    await notify(
+        db,
+        settings=settings,
+        recipient_user_id=auth.user.id,
+        notification_type="driveway_vehicle_report",
+        title=subject,
+        body=text,
+        html_body=html,
+        idempotency_key=idempotency_key,
+        group_id=home_id,
+        related_entity_type="vehicle" if vehicle_id else "lookup",
+        related_entity_id=vehicle_id,
+        attachment_storage_key=key,
+        attachment_filename=filename,
+        attachment_storage_kind="vehicle_report",
+        attachment_cleanup=True,
+    )
+    if (
+        await db.scalar(
+            select(NotificationDelivery.id).where(
+                NotificationDelivery.idempotency_key == f"{idempotency_key}:email"
+            )
+        )
+        is None
+    ):
+        await get_vehicle_report_storage(settings).delete(key)
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "Email delivery is not enabled for this account."
+        )
+    audit(
+        db,
+        request,
+        "driveway.vehicle.report.email_queued",
+        auth.user.id,
+        home_id,
+        "vehicle" if vehicle_id else "lookup",
+        vehicle_id,
+        {"format": format},
+    )
+    await db.commit()
+
+
+@router.post("/{home_id}/vehicles/{vehicle_id:uuid}/report/email", status_code=202)
+async def email_vehicle_report(
+    home_id: uuid.UUID,
+    vehicle_id: uuid.UUID,
+    body: VehicleReportRequest,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, str]:
+    await _report_email_preflight(request, auth, settings)
+    data, filename, vehicle_view = await _build_saved_report(
+        home_id=home_id,
+        vehicle_id=vehicle_id,
+        format=body.format,
+        include_household_details=body.include_household_details,
+        auth=auth,
+        db=db,
+        settings=settings,
+    )
+    name = (
+        " ".join(value for value in (vehicle_view.make, vehicle_view.model) if value)
+        or vehicle_view.nickname
+    )
+    await _queue_vehicle_report_email(
+        request=request,
+        home_id=home_id,
+        auth=auth,
+        db=db,
+        settings=settings,
+        data=data,
+        filename=filename,
+        format=body.format,
+        vehicle_name=name,
+        registration=vehicle_view.registration,
+        vehicle_id=vehicle_id,
+    )
+    return {"status": "queued"}
+
+
+@router.post("/{home_id}/vehicles/lookup/report/email", status_code=202)
+async def email_lookup_report(
+    home_id: uuid.UUID,
+    body: VehicleLookupReportRequest,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, str]:
+    await _report_email_preflight(request, auth, settings)
+    await require_capability(home_id, Capability.driveway_view, auth, db)
+    result = _verify_lookup_report(body.report_token, home_id, auth.user.id, settings)
+    payload = result.model_dump(mode="json")
+    data = await _render_report(
+        vehicle=payload,
+        mot=payload.get("mot"),
+        format=body.format,
+        generated_at=datetime.now(UTC),
+        source="lookup",
+        settings=settings,
+    )
+    name = " ".join(value for value in (result.make, result.model) if value) or "Vehicle"
+    await _queue_vehicle_report_email(
+        request=request,
+        home_id=home_id,
+        auth=auth,
+        db=db,
+        settings=settings,
+        data=data,
+        filename=sanitise_report_filename(result.registration),
+        format=body.format,
+        vehicle_name=name,
+        registration=result.registration,
+        vehicle_id=None,
+    )
+    return {"status": "queued"}
 
 
 @router.post("/{home_id}/vehicles", response_model=VehicleResponse, status_code=201)

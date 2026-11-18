@@ -1,0 +1,253 @@
+/* MyKhaya Vehicle Report: A4 print stylesheet (WeasyPrint).
+   Colours are packages/design-tokens/src/tokens.css values; fonts are the
+   self-hosted brand faces in apps/web/public/fonts/marketing (SIL OFL). */
+
+@font-face { font-family: "Figtree"; font-weight: 400 700; src: url("FONT:figtree_latin") format("woff2"); }
+@font-face { font-family: "Figtree"; font-weight: 400 700; src: url("FONT:figtree_latin_ext") format("woff2"); unicode-range: U+0100-02BA, U+1E00-1E9F; }
+@font-face { font-family: "Bricolage Grotesque"; font-weight: 600 800; src: url("FONT:bricolage_grotesque_latin") format("woff2"); }
+@font-face { font-family: "Bricolage Grotesque"; font-weight: 600 800; src: url("FONT:bricolage_grotesque_latin_ext") format("woff2"); unicode-range: U+0100-02BA, U+1E00-1E9F; }
+
+:root {
+  --forest: #3f5442;
+  --forest-dark: #33452f;
+  --sage: #7d8f7a;
+  --sage-soft: #e7ebe4;
+  --terracotta: #e07a5f;
+  --terracotta-ink: #b4532e;
+  --mustard: #e9b44c;
+  --plate: #f7c948;
+  --cream: #f2ede3;
+  --cream-light: #faf7f1;
+  --white: #fffefb;
+  --slate: #233028;
+  --muted: #62706f;
+  --line: #ece6da;
+  --line-strong: #ddd6c8;
+  --sand: #e9e4d9;
+  --sand-dark: #d9d2c4;
+  --danger: #a33e2b;
+  --danger-soft: #f9e0da;
+  --info-soft: #e2eaf4;
+  --info-ink: #2c4669;
+  --good: #3f7a5c;          /* palette emerald: pass text */
+  --good-soft: #e3efe6;
+  --amber-soft: #fbefd2;
+  --amber-ink: #7a5714;
+}
+
+@page {
+  size: A4;
+  margin: 23mm 13mm 17mm;
+  background: var(--white);
+  @top-center { content: element(runhead); width: 100%; vertical-align: bottom; padding-bottom: 4mm; }
+  @bottom-center { content: element(runfoot); width: 100%; vertical-align: top; padding-top: 3mm; }
+}
+@page :first {
+  margin-top: 11mm;
+  @top-center { content: none; }
+}
+
+* { box-sizing: border-box; }
+html { font-family: "Figtree", sans-serif; font-size: 9.5pt; line-height: 1.4; color: var(--slate); }
+body { margin: 0; }
+h1, h2, h3, p, dl, dd, ul { margin: 0; padding: 0; }
+ul { list-style: none; }
+b, strong { font-weight: 700; }
+.num { text-align: right; }
+sub { font-size: 0.72em; vertical-align: -0.25em; line-height: 0; }
+
+/* ------------------------------------------------------------- running header/footer */
+.runhead { position: running(runhead); border-bottom: 0.3mm solid var(--line-strong); padding-bottom: 2.4mm; height: 9mm; }
+.runhead > * { display: inline-block; vertical-align: middle; margin-right: 2.2mm; }
+.rh-logo { width: 6.2mm; height: 6.2mm; object-fit: contain; border-radius: 1.6mm; }
+.rh-brand { font-family: "Bricolage Grotesque"; font-weight: 700; font-size: 10.5pt; color: var(--forest); }
+.rh-sep { width: 0.3mm; height: 4mm; background: var(--line-strong); }
+.rh-title { font-weight: 600; font-size: 9.5pt; color: var(--muted); }
+.runhead > .rh-meta { float: right; margin: 0.6mm 0 0; white-space: nowrap; font-size: 9pt; font-weight: 600; color: var(--slate); }
+.rh-plate { margin-right: 2mm; background: var(--plate); border: 0.25mm solid var(--slate); border-radius: 1mm;
+  padding: 0.3mm 1.6mm; font-family: "Bricolage Grotesque"; font-weight: 700; font-size: 8.5pt; letter-spacing: 0.04em; }
+
+.runfoot { position: running(runfoot); display: flex; align-items: center; border-top: 0.3mm solid var(--line-strong);
+  padding-top: 2.4mm; font-size: 8pt; color: var(--muted); }
+.runfoot b { color: var(--forest); }
+.runfoot .pageno { margin-left: auto; margin-right: 6mm; white-space: nowrap; }
+.runfoot .pageno::after { content: "Page " counter(page) " of " counter(pages); }
+.runfoot .site { font-weight: 700; color: var(--forest); }
+.is-essential .runfoot .pageno { visibility: hidden; }
+
+/* ------------------------------------------------------------- masthead (page 1) */
+.masthead { display: flex; align-items: center; background: var(--forest); color: var(--white);
+  border-radius: 4.5mm; padding: 4mm 7mm; margin-bottom: 4mm; }
+.mh-brand { display: flex; align-items: center; gap: 3.6mm; }
+.mh-logo { display: block; flex: none; width: 12mm; height: 12mm; background: var(--white); border-radius: 3.2mm; padding: 1.2mm; }
+.mh-logo img { width: 9.6mm; height: 9.6mm; display: block; }
+.mh-word { font-family: "Bricolage Grotesque"; font-weight: 700; font-size: 20pt; letter-spacing: -0.01em; }
+.mh-rule { width: 0.35mm; height: 12mm; background: rgb(255 254 251 / 35%); margin: 0 8mm; }
+.mh-title { white-space: nowrap; }
+.mh-title h1 { font-family: "Bricolage Grotesque"; font-weight: 700; font-size: 22pt; line-height: 1.05; letter-spacing: -0.01em; }
+.mh-title p { font-size: 10.5pt; color: rgb(255 254 251 / 82%); margin-top: 1mm; font-weight: 500; }
+
+/* ------------------------------------------------------------- cards */
+.card { background: var(--white); border: 0.3mm solid var(--line-strong); border-radius: 4.5mm;
+  padding: 3.6mm 5mm 3mm; break-inside: avoid; }
+.pair { display: flex; gap: 4mm; margin-top: 4mm; break-inside: avoid; }
+.pair > .card { margin-top: 0; }
+.pair > .card { flex: 1 1 0; min-width: 0; }
+.pair + .card, .card + .card, .card + .band, .pair + .band { margin-top: 4mm; }
+.pair > .card + .card { margin-top: 0; }
+.card-head { display: flex; align-items: center; gap: 2.8mm; margin-bottom: 1.8mm; }
+.disc { display: block; width: 8.6mm; height: 8.6mm; padding: 2mm; flex: none;
+  border-radius: 50%; background: var(--cream); color: var(--slate); }
+.ic { display: block; width: 4.6mm; height: 4.6mm; }
+.card-head h2 { white-space: nowrap; font-family: "Figtree"; font-weight: 700; font-size: 10pt; letter-spacing: 0.09em;
+  text-transform: uppercase; color: var(--terracotta-ink); }
+
+.rows .row { display: flex; align-items: baseline; justify-content: space-between; gap: 4mm;
+  padding: 1.45mm 0; border-bottom: 0.25mm solid var(--line); }
+.rows .row:last-child { border-bottom: 0; }
+.rows dt { color: var(--muted); font-size: 9.5pt; flex: none; }
+.rows dd { font-weight: 700; font-size: 10pt; text-align: right; }
+.cols2 { display: table; width: 100%; table-layout: fixed; }
+.cols2 > .rows { display: table-cell; width: 50%; vertical-align: top; }
+.cols2 > .rows:first-child { padding-right: 4.5mm; }
+.cols2 > .rows:last-child { padding-left: 4.5mm; }
+
+.empty { color: var(--muted); font-size: 9.5pt; background: var(--cream-light); border-radius: 3mm; padding: 3.5mm 4mm; }
+
+/* ------------------------------------------------------------- hero */
+.hero { display: flex; gap: 6mm; padding: 3.6mm; align-items: center; }
+.hero-photo { width: 58mm; height: 38mm; flex: none; border-radius: 3.6mm; overflow: hidden; background: var(--sand); }
+/* Show the whole photograph: fit inside the frame at its own aspect ratio,
+   centred, with the sand surface filling any unused space. Never crop. */
+.hero-photo img { width: 100%; height: 100%; object-fit: contain; object-position: center; display: block; }
+.hero-photo.is-empty { color: var(--muted); background: var(--sand); padding-top: 11mm; }
+.ic-photo { display: block; margin: 0 auto; width: 18mm; height: 18mm; stroke-width: 1.3; }
+.hero-body { flex: 1; position: relative; padding-right: 2mm; }
+.eyebrow { font-weight: 700; font-size: 9.5pt; letter-spacing: 0.13em; text-transform: uppercase; color: var(--terracotta-ink); }
+.hero-name { font-family: "Bricolage Grotesque"; font-weight: 700; font-size: 25pt; line-height: 1.08;
+  letter-spacing: -0.015em; margin: 1mm 0 2.6mm; }
+.hero-chips { white-space: nowrap; }
+.hero-chips > span { display: inline-block; vertical-align: middle; margin-right: 2.6mm; }
+.plate { background: var(--plate); border: 0.4mm solid var(--slate); border-radius: 1.8mm; padding: 1.1mm 4mm 1mm;
+  font-family: "Bricolage Grotesque"; font-weight: 700; font-size: 15pt; letter-spacing: 0.06em; line-height: 1.1; }
+.chip { background: var(--sand); border-radius: 99mm; padding: 1.6mm 4mm; font-weight: 700; font-size: 10.5pt; }
+.chip small { font-weight: 600; font-size: 7.5pt; color: var(--muted); letter-spacing: 0.06em; text-transform: uppercase; margin-right: 1.8mm; }
+.hero-name.is-long { font-size: 18pt; }
+.hero-sub { margin-top: 2.6mm; color: var(--muted); font-size: 10.5pt; }
+.badge { position: absolute; top: -1mm; right: 0; white-space: nowrap;
+  background: var(--sage-soft); color: var(--forest-dark); border-radius: 99mm; padding: 1.5mm 3.4mm;
+  font-weight: 700; font-size: 8.5pt; }
+.ic-badge { width: 3.6mm; height: 3.6mm; vertical-align: -0.8mm; margin-right: 1.4mm; }
+
+/* ------------------------------------------------------------- tax */
+.ved { display: flex; align-items: center; background: var(--cream); border-radius: 3.4mm;
+  padding: 2.6mm 4mm; margin-top: 2.2mm; }
+.ved-main { white-space: nowrap; flex: none; display: flex; flex-direction: column; padding-right: 4.2mm; border-right: 0.3mm solid var(--sand-dark); }
+.ved-label { font-weight: 700; font-size: 8.5pt; color: var(--forest-dark); }
+.ved-amount { font-family: "Bricolage Grotesque"; font-weight: 700; font-size: 20pt; line-height: 1.1; }
+.ved-amount small { font-size: 13pt; }
+.ved-basis { padding-left: 4.2mm; font-size: 8.5pt; color: var(--muted); display: flex; flex-direction: column; gap: 0.6mm; }
+.ved-basis b { color: var(--slate); font-weight: 600; white-space: nowrap; }
+.note { display: flex; align-items: flex-start; gap: 1.8mm; margin-top: 2mm; font-size: 8.5pt; color: var(--muted); }
+.ic-note { width: 3.8mm; height: 3.8mm; flex: none; margin-top: 0.2mm; }
+
+table { width: 100%; border-collapse: collapse; }
+.plans { margin-top: 2.4mm; border: 0.25mm solid var(--line); border-radius: 3mm; overflow: hidden; font-size: 9pt; }
+.plans thead tr { background: var(--cream); }
+.plans th { text-align: left; font-weight: 700; padding: 1.4mm 3mm; font-size: 8.5pt; }
+.plans th.num { text-align: right; }
+sub { font-size: 0.72em; vertical-align: -0.25em; line-height: 0; }
+.plans td { padding: 1.4mm 2.6mm; border-top: 0.25mm solid var(--line); white-space: nowrap; }
+.plans td.num { font-weight: 600; }
+.ic-row { width: 3.6mm; height: 3.6mm; vertical-align: -0.7mm; margin-right: 1.8mm; color: var(--muted); }
+
+/* ------------------------------------------------------------- MOT */
+.pill { display: inline-block; border-radius: 99mm; padding: 1.1mm 3.6mm; font-weight: 700; font-size: 9.5pt; }
+.pill.good { background: var(--sage-soft); color: var(--forest-dark); }
+.pill.bad { background: var(--danger-soft); color: var(--danger); }
+.pill.neutral { background: var(--sand); color: var(--slate); }
+.card > .pill { margin-bottom: 1mm; }
+
+.mini-table { margin-top: 2.2mm; border: 0.25mm solid var(--line); border-radius: 3mm; overflow: hidden; }
+.mt-title { background: var(--cream); font-weight: 700; font-size: 9.5pt; padding: 2mm 3.4mm 1.4mm; }
+.mini-table thead tr { background: var(--cream); }
+.mini-table th { font-size: 8.5pt; font-weight: 600; color: var(--muted); text-align: left; padding: 0 2.6mm 1.6mm; }
+.mini-table th.num { text-align: right; }
+sub { font-size: 0.72em; vertical-align: -0.25em; line-height: 0; }
+.mini-table td { padding: 1.5mm 2.6mm; border-top: 0.25mm solid var(--line); font-size: 9.5pt; }
+.mini-table .strong { font-weight: 700; }
+.c-dot { width: 5mm; padding-right: 0 !important; }
+.dot { display: inline-block; width: 2.2mm; height: 2.2mm; border-radius: 50%; background: var(--good); }
+.dot.bad { background: var(--danger); }
+.dot.neutral { background: var(--sand-dark); }
+.result { font-weight: 700; }
+.result.good { color: var(--good); }
+.result.bad { color: var(--danger); }
+
+.mot-wide { display: flex; gap: 6mm; margin-top: 4mm; }
+.mw-left { width: 52mm; flex: none; border-right: 0.3mm solid var(--line); padding-right: 5mm; }
+.mw-right { flex: 1; display: flex; flex-direction: column; justify-content: center; }
+.mw-right .mini-table { margin-top: 0; }
+.mw-label { color: var(--muted); margin-top: 3mm; }
+.mw-date { font-family: "Bricolage Grotesque"; font-weight: 700; font-size: 16pt; line-height: 1.15; }
+
+/* ------------------------------------------------------------- band */
+.band { display: block; position: relative; background: var(--cream); border-radius: 4mm;
+  padding: 3mm 5mm 3mm 15mm; margin-top: 4mm; font-size: 8.5pt; line-height: 1.45; break-inside: avoid; }
+.ic-band { position: absolute; left: 5mm; top: 3.2mm; width: 6mm; height: 6mm; color: var(--forest); }
+
+/* ------------------------------------------------------------- full report: MOT history */
+.mot-full { margin-top: 5mm; }
+.section > .card-head { margin-bottom: 3.6mm; }
+.stats { display: flex; gap: 3mm; margin-bottom: 3.4mm; }
+.stat { flex: 1 1 0; background: var(--cream); border-radius: 3.2mm; padding: 2mm 3.4mm; display: flex; flex-direction: column; }
+.stat.wide { flex: 1.5 1 0; }
+.stat { white-space: nowrap; }
+.stat b { font-family: "Bricolage Grotesque"; font-size: 14pt; line-height: 1.1; }
+.stat span { font-size: 8.5pt; color: var(--muted); }
+
+.test { border: 0.3mm solid var(--line-strong); border-left: 1.4mm solid var(--good); border-radius: 3mm;
+  padding: 2.2mm 4mm 2.2mm; margin-bottom: 2.2mm; break-inside: avoid; }
+.test.bad { border-left-color: var(--danger); }
+.test.neutral { border-left-color: var(--sand-dark); }
+.test-top { display: flex; align-items: center; gap: 4mm; }
+.t-date { width: 32mm; font-weight: 700; font-size: 10.5pt; }
+.t-miles { width: 58mm; font-weight: 600; white-space: nowrap; }
+.t-miles span { font-weight: 400; font-size: 8pt; color: var(--muted); margin-left: 1.2mm; }
+.t-expiry { flex: 1; font-size: 9pt; white-space: nowrap; }
+.t-expiry span { font-size: 8pt; color: var(--muted); }
+.t-result { width: 22mm; text-align: right; }
+.t-result .pill { font-size: 8.5pt; padding: 0.9mm 3mm; }
+.defects { margin-top: 1.8mm; border-top: 0.25mm solid var(--line); padding-top: 1.2mm; }
+.defects li { display: flex; gap: 3mm; align-items: baseline; padding: 0.6mm 0; font-size: 9pt; line-height: 1.35; }
+.tag { flex: none; width: 27mm; text-align: center; border-radius: 1.4mm; padding: 0.4mm 0; font-size: 7.5pt;
+  font-weight: 700; letter-spacing: 0.02em; background: var(--sand); color: var(--slate); }
+.tag.dangerous { background: var(--danger); color: var(--white); }
+.tag.major, .tag.fail { background: var(--danger-soft); color: var(--danger); }
+.tag.minor { background: var(--amber-soft); color: var(--amber-ink); }
+.tag.prs { background: var(--info-soft); color: var(--info-ink); }
+.clean { margin-top: 1mm; font-size: 8.5pt; color: var(--muted); }
+
+/* ------------------------------------------------------------- full report: closing pages */
+.closing { margin-top: 4mm; }
+.closing > * + * { margin-top: 4mm; }
+.keep, .keep-together { break-inside: avoid; }
+.keep-together > * + * { margin-top: 4mm; }
+.ved-grid { display: flex; gap: 8mm; }
+.ved-grid > div { flex: 1 1 0; }
+.ved-grid .plans { margin-top: 0; }
+.lede { font-size: 9.5pt; color: var(--muted); margin: -0.4mm 0 2.6mm; }
+.lede b { color: var(--slate); }
+.sub.first { margin-top: 0; }
+.sub { margin-top: 3mm; font-weight: 700; font-size: 8.5pt; color: var(--forest-dark); }
+.bullets li { position: relative; padding-left: 3.4mm; font-size: 9pt; margin-top: 0.8mm; }
+.bullets li::before { content: ""; position: absolute; left: 0.4mm; top: 1.8mm; width: 1.4mm; height: 1.4mm; border-radius: 50%; background: var(--sage); }
+.body-text { font-size: 9pt; color: var(--muted); }
+
+.about { background: var(--cream); border-radius: 4.5mm; padding: 3.6mm 5mm 4mm; }
+.about .disc { background: var(--white); }
+.closing > .card + .card { margin-top: 4.5mm; }
+.about-cols { display: flex; gap: 6mm; }
+.about-cols > div { flex: 1 1 0; }
+.about h3 { font-size: 9.5pt; font-weight: 700; margin-bottom: 1mm; }
+.about p { font-size: 8.5pt; line-height: 1.45; color: var(--slate); }

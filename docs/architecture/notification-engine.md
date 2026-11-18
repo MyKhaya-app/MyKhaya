@@ -79,6 +79,20 @@ raises `ValueError` if a non-mandatory type is called without one.
 Monitoring alerts to Platform Control Centre administrators
 (`platform.monitoring_alert`, see `docs/architecture/service-monitoring.md`) use
 the same `recipient_email` path, since PCC administrators have no consumer account.
+Vehicle Report emails (`driveway_vehicle_report`) are the one
+`REQUESTED_EMAIL_TYPES` type: email the user explicitly asked for, for themselves.
+They're delivered even when routine email notifications are off, because the user
+has just requested this one message. They're email-only (no in-app or push copy),
+and inactive users and Homes still suppress them. Unlike `MANDATORY_EMAIL_TYPES`,
+they're refused for an unverified address, and `notify()` raises if they're called
+with a `recipient_email`. They always pass the requesting user's own
+`recipient_user_id`. The report can only go to that
+account's verified address held by the account system, and the router refuses the
+request before rendering if the address isn't verified. The PDF travels as an
+attachment held in Vehicle Report storage (`attachment_storage_kind="vehicle_report"`)
+and is deleted by the worker after the send succeeds or fails permanently
+(`attachment_cleanup=True`). Legal evidence attachments are never cleaned up this way.
+The whole path is off unless `vehicle_report_email_enabled` is set.
 
 Returns the created in-app `Notification` row, or `None` if nothing was written to
 in-app (channel disabled, category disabled, or the type is a mandatory

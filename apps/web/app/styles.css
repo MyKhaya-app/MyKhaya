@@ -999,6 +999,93 @@ textarea {
     transition: none;
   }
 }
+
+/* Driveway vehicle reports use the existing Driveway tokens and typography.
+   The report is deliberately a protected route view, not a public share page. */
+.drv-report {
+  background: var(--colour-cream);
+  color: var(--colour-slate);
+  margin: 0 auto;
+  max-width: 1080px;
+  padding: 24px;
+}
+.drv-report-header {
+  align-items: center;
+  background: var(--colour-forest);
+  border-radius: 18px;
+  color: var(--colour-white);
+  display: flex;
+  gap: 32px;
+  justify-content: space-between;
+  padding: 24px 30px;
+}
+.drv-report-brand { align-items: center; display: flex; font-size: 25px; font-weight: 800; gap: 10px; }
+.drv-report-mark { align-items: center; background: var(--colour-white); border-radius: 12px; color: var(--colour-forest); display: inline-flex; font-size: 25px; height: 48px; justify-content: center; width: 48px; }
+.drv-report-header h1 { font-size: clamp(28px, 4vw, 44px); letter-spacing: -0.04em; margin: 0; }
+.drv-report-header p { color: var(--colour-sage-soft); margin: 2px 0 0; }
+.drv-report-actions { display: flex; flex-wrap: wrap; gap: 10px; justify-content: flex-end; margin: 18px 0; }
+.drv-report-actions .drv-button { margin: 0; }
+.drv-report-format { align-items: center; background: var(--colour-white); border: 1px solid var(--colour-line); border-radius: 10px; display: inline-flex; padding: 3px; }
+.drv-report-format button { background: transparent; border: 0; border-radius: 7px; color: var(--colour-muted); cursor: pointer; font: inherit; min-height: 40px; padding: 0 12px; }
+.drv-report-format button.active { background: var(--colour-forest); color: var(--colour-white); font-weight: 800; }
+.drv-report-household { align-items: center; color: var(--colour-slate); cursor: pointer; display: inline-flex; font-size: var(--font-small); gap: 8px; min-height: 44px; }
+.drv-report-household input { accent-color: var(--colour-forest); height: 18px; width: 18px; }
+.drv-report-sharing-note { font-size: var(--font-small); margin: -8px 0 12px; text-align: right; }
+@media print { .drv-report-sharing-note { display: none; } }
+.drv-report-hero { align-items: center; background: var(--colour-white); border: 1px solid var(--colour-line); border-radius: 18px; display: flex; gap: 22px; margin-bottom: 18px; padding: 22px; }
+.drv-report-photo { border-radius: 14px; height: 150px; overflow: hidden; width: 210px; }
+.drv-report-photo > img { height: 100%; object-fit: cover; width: 100%; }
+.drv-report-hero h2 { color: var(--colour-forest-dark); font-size: clamp(28px, 5vw, 48px); letter-spacing: -0.05em; margin: 0 0 8px; }
+.drv-report-hero p:last-child { color: var(--colour-muted); font-size: 16px; margin: 10px 0 0; }
+.drv-report-plate { background: var(--colour-plate); border: 2px solid var(--colour-slate); border-radius: 7px; display: inline-block; font-weight: 800; letter-spacing: 0.06em; padding: 5px 12px; }
+.drv-report-grid { display: grid; gap: 18px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.drv-report-section { background: var(--colour-white); border: 1px solid var(--colour-line); border-radius: 18px; margin-top: 18px; padding: 20px; }
+.drv-report-section h2 { color: var(--colour-terracotta); font-size: 18px; letter-spacing: 0.08em; margin: 0 0 14px; text-transform: uppercase; }
+.drv-report-row { border-bottom: 1px solid var(--colour-line); display: flex; gap: 14px; justify-content: space-between; padding: 9px 0; }
+.drv-report-row:last-child { border-bottom: 0; }
+.drv-report-row dt { color: var(--colour-muted); min-width: 0; }
+.drv-report-row dd { font-weight: 800; margin: 0; overflow-wrap: anywhere; text-align: right; }
+.drv-report-estimate { background: var(--colour-cream); border-radius: 12px; display: flex; flex-direction: column; gap: 3px; margin-top: 14px; padding: 14px; }
+.drv-report-estimate span, .drv-report-estimate small { color: var(--colour-muted); }
+.drv-report-estimate strong { color: var(--colour-forest-dark); font-size: 28px; }
+.drv-report-estimate small { line-height: 1.4; }
+.drv-report-payments { margin-top: 8px; }
+.drv-report-payments .drv-report-row { padding: 5px 0; }
+.drv-report-source { align-items: flex-start; color: var(--colour-muted); display: flex; font-size: 13px; gap: 7px; line-height: 1.4; margin: 14px 0 0; }
+.drv-report-mot-table { border: 1px solid var(--colour-line); border-radius: 12px; overflow: hidden; }
+.drv-report-mot-row { align-items: start; border-top: 1px solid var(--colour-line); display: grid; gap: 12px; grid-template-columns: 1.2fr 1fr 0.8fr; padding: 10px 12px; }
+.drv-report-mot-row:first-child { border-top: 0; }
+.drv-report-mot-head { background: var(--colour-cream); font-weight: 800; }
+.drv-report-positive { color: var(--colour-forest-dark); font-weight: 800; }
+.drv-report-negative { color: var(--colour-danger); font-weight: 800; }
+.drv-report-defects { grid-column: 1 / -1; margin: 0; padding-left: 20px; }
+.drv-report-note { background: var(--colour-cream); }
+.drv-report-note p { line-height: 1.5; margin: 0 0 10px; }
+.drv-report-note p:last-child { margin-bottom: 0; }
+.drv-report-footer { border-top: 1px solid var(--colour-line); color: var(--colour-muted); display: flex; justify-content: space-between; margin-top: 24px; padding: 14px 0 0; }
+.drv-report-gov-link { align-items: center; color: var(--colour-forest-dark); display: inline-flex; font-weight: 800; gap: 6px; margin-top: 14px; }
+.drv-report-launch { align-self: flex-start; margin-top: 4px; }
+@media (max-width: 680px) {
+  .drv-report { padding: 12px; }
+  .drv-report-header { align-items: flex-start; flex-direction: column; gap: 14px; padding: 20px; }
+  .drv-report-actions { justify-content: stretch; }
+  .drv-report-actions .drv-button { flex: 1 1 140px; }
+  .drv-report-format { flex: 1 1 100%; justify-content: center; }
+  .drv-report-hero { align-items: flex-start; flex-direction: column; }
+  .drv-report-photo { height: 180px; width: 100%; }
+  .drv-report-grid { grid-template-columns: 1fr; }
+  .drv-report-section { padding: 16px; }
+  .drv-report-mot-row { grid-template-columns: 1fr 1fr; }
+  .drv-report-mot-row > span:last-of-type { grid-column: 1 / -1; }
+}
+@media print {
+  .drv-report { max-width: none; padding: 0; }
+  .drv-report-actions, .drv-report-gov-link { display: none; }
+  .drv-report-header { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .drv-report-section, .drv-report-hero { break-inside: avoid; }
+  .drv-report-section { box-shadow: none; }
+  .drv-report-mot-row { break-inside: avoid; }
+}
 .security-card > .notice,
 .security-panel {
   margin: 0.25rem 0 0.75rem;

@@ -1461,8 +1461,10 @@ export interface VehicleLookupResult {
   art_end_date: string | null;
   checked_at: string | null;
   mot: VehicleLookupMotResult | null;
+  tax_calculation: VehicleTaxCalculation | null;
   capabilities: string[];
   message: string | null;
+  report_token?: string | null;
 }
 
 export interface VehicleLookupMotTest {

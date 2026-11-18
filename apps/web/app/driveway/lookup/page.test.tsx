@@ -37,6 +37,10 @@ describe("dedicated Driveway vehicle lookup", () => {
     expect(await screen.findByText("A4")).toBeInTheDocument();
     expect(screen.getByText("Feb 2021")).toBeInTheDocument();
     expect(push).not.toHaveBeenCalled();
+    await user.click(screen.getByRole("button", { name: "Vehicle Report" }));
+    expect(push).toHaveBeenCalledWith("/driveway/lookup/report");
+    expect(window.sessionStorage.getItem("mykhaya.driveway.lookup.report")).toContain("AA19MOT");
+    push.mockClear();
     await user.click(screen.getByRole("button", { name: "Add to Driveway" }));
     expect(push).toHaveBeenCalledWith("/driveway/add");
     expect(window.sessionStorage.getItem("mykhaya.driveway.lookup.handoff")).toContain("AA19MOT");

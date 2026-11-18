@@ -1,5 +1,17 @@
 FROM python:3.13.5-slim-bookworm AS builder
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_CACHE_DIR=1
+# Vehicle Report PDFs (WeasyPrint): Pango/HarfBuzz text layout only. No system
+# fonts are installed on purpose; reports embed the brand fonts below. The test
+# stage builds on this one, so its PDF tests render exactly as the runtime does.
+RUN apt-get update \
+	&& apt-get install -y --no-install-recommends libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz-subset0 \
+	&& rm -rf /var/lib/apt/lists/*
+# Brand fonts and logo for reports, copied (never fetched) from the web app.
+COPY apps/web/public/fonts/marketing/ /opt/mykhaya/report-assets/fonts/marketing/
+COPY apps/web/public/images/marketing/mykhaya-logo-256.png /opt/mykhaya/report-assets/images/marketing/
+# Reproducible PDFs: fontTools otherwise stamps the current time into every
+# embedded font subset, so identical reports would differ byte for byte.
+ENV SOURCE_DATE_EPOCH=0
 WORKDIR /build
 RUN python -m venv /opt/venv
 ENV PATH=/opt/venv/bin:$PATH
@@ -41,6 +53,14 @@ LABEL org.opencontainers.image.title="MyKhaya API" \
 	org.opencontainers.image.created="$MYKHAYA_BUILD_TIME" \
 	org.opencontainers.image.source="https://github.com"
 RUN groupadd --system --gid 10001 mykhaya && useradd --system --uid 10001 --gid mykhaya --home-dir /app mykhaya
+# Vehicle Report PDF rendering (see the builder stage).
+RUN apt-get update \
+	&& apt-get install -y --no-install-recommends libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz-subset0 \
+	&& rm -rf /var/lib/apt/lists/*
+COPY --from=builder /opt/mykhaya/report-assets /opt/mykhaya/report-assets
+# The root filesystem is read-only in every environment (compose.yml); the
+# fontconfig cache WeasyPrint uses lives on the /tmp tmpfs instead.
+ENV SOURCE_DATE_EPOCH=0 XDG_CACHE_HOME=/tmp/.cache
 COPY --from=builder /opt/venv /opt/venv
 WORKDIR /app
 COPY --chown=mykhaya:mykhaya apps/api/alembic.ini ./

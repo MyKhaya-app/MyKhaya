@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ChangeEvent, KeyboardEvent, use, useCallback, useEffect, useRef, useState } from "react";
-import { Bell, Camera, CheckCircle2, ChevronLeft, ChevronRight, ExternalLink, Pencil, RefreshCw, ShieldAlert, ShieldCheck, Trash2 } from "lucide-react";
+import { Bell, Camera, CheckCircle2, ChevronLeft, ChevronRight, ExternalLink, FileText, Pencil, RefreshCw, ShieldAlert, ShieldCheck, Trash2 } from "lucide-react";
 import type { Member, Vehicle, VehicleMot } from "@mykhaya/shared-types";
 import { ApiError, api } from "@mykhaya/api-client";
 import { AppShellContent } from "@/components/app-shell";
@@ -357,6 +357,9 @@ export default function VehicleDetailPage({ params }: { params: Promise<{ vehicl
               <PlateChip registration={vehicle.registration} size="md" />
               <span className="drv-owner-chip">{ownerLabel}</span>
             </div>
+            <Link className="drv-button drv-button-secondary drv-report-launch" href={`/driveway/${vehicle.id}/report`}>
+              <FileText size={18} aria-hidden="true" /> Vehicle Report
+            </Link>
           </div>
         </div>
         {!isNativeShell() && (

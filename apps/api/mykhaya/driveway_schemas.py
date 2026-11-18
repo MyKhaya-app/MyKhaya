@@ -112,6 +112,14 @@ class VehicleLookupRequest(StrictModel):
     registration: str = Field(min_length=2, max_length=20)
 
 
+class VehicleReportRequest(StrictModel):
+    format: Literal["full", "essential"] = "full"
+    # Saved vehicles only: the household-entered nickname and the vehicle
+    # photo. False gives a report suitable for sharing outside the Home.
+    # Ignored for one-off lookups, which never carry household details.
+    include_household_details: bool = True
+
+
 class VehicleLookupMotTestResponse(BaseModel):
     test_number: str | None = None
     test_date: date
@@ -157,8 +165,10 @@ class VehicleLookupResult(BaseModel):
     art_end_date: date | None = None
     checked_at: datetime | None = None
     mot: "VehicleLookupMotResult | None" = None
+    tax_calculation: VehicleTaxCalculation | None = None
     capabilities: list[str] = []
     message: str | None = None
+    report_token: str | None = None
 
 
 class VehicleLookupMotResult(BaseModel):
@@ -170,6 +180,10 @@ class VehicleLookupMotResult(BaseModel):
 
 
 VehicleLookupResult.model_rebuild()
+
+
+class VehicleLookupReportRequest(VehicleReportRequest):
+    report_token: str = Field(min_length=32, max_length=12000)
 
 
 class VehicleReminderCreate(StrictModel):

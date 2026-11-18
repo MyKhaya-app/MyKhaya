@@ -257,6 +257,14 @@ class Settings(BaseSettings):
     # accepted from package contents or request parameters.
     home_migration_storage_dir: str = "/data/home-migrations"
     legal_evidence_storage_dir: str = "/data/legal-evidence"
+    vehicle_report_max_pdf_bytes: int = Field(default=10_485_760, ge=1024, le=52_428_800)
+    # Outbound email of Vehicle Reports stays off until the Owner approves it.
+    # Server-side kill switch, failing closed like dvsa_arbitrary_lookup_enabled.
+    vehicle_report_email_enabled: bool = False
+    # Brand fonts and logo for PDF rendering, copied into the API image from
+    # apps/web/public at build time (never fetched over the network). Falls
+    # back to the repository's apps/web/public when running from a checkout.
+    vehicle_report_assets_dir: str = "/opt/mykhaya/report-assets"
     # How long a package file that hasn't completed an import may stay on
     # disk before the scheduler purges it (completed imports are removed
     # immediately). Packages are full plaintext Home copies — keep this short.

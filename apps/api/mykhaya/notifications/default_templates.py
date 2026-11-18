@@ -60,6 +60,35 @@ class TemplateDefault:
 
 
 TEMPLATES: dict[str, TemplateDefault] = {
+    "driveway_vehicle_report": TemplateDefault(
+        subject="Your MyKhaya Vehicle Report for {{registration}}",
+        body=(
+            "Hi {{user_first_name}},\n\n"
+            "Your {{report_type}} Vehicle Report for {{vehicle_name}} "
+            "({{registration}}) was generated on {{generated_date}}.\n\n"
+            "The branded PDF is attached to this email. Vehicle and tax "
+            "information is sourced from official data where available; VED "
+            "figures are estimates.\n\n"
+            "Open MyKhaya: {{link}}\n\nMyKhaya"
+        ),
+        allowed_variables=frozenset(
+            {
+                "user_first_name",
+                "vehicle_name",
+                "registration",
+                "report_type",
+                "generated_date",
+                "link",
+            }
+        ),
+        required_variables=frozenset({"registration", "report_type"}),
+        description=(
+            "A user-requested Vehicle Report sent only to the signed-in user's "
+            "verified account email."
+        ),
+        module="driveway",
+        disableable=True,
+    ),
     "legal_acceptance_confirmation": TemplateDefault(
         subject="Your MyKhaya {{document_name}} acceptance confirmation",
         body=(
@@ -776,6 +805,14 @@ del _template_type, _default, _unknown_required
 # Realistic placeholder values for the Platform Admin preview/test-send actions — never
 # real user data, since a preview must never leak anything from an actual account.
 SAMPLE_VARIABLES: dict[str, dict[str, str]] = {
+    "driveway_vehicle_report": {
+        "user_first_name": "Jamie",
+        "vehicle_name": "Peugeot e-208",
+        "registration": "MK21 HYA",
+        "report_type": "Full",
+        "generated_date": "2026-11-17",
+        "link": "https://app.example.test",
+    },
     "platform.monitoring_alert": {
         "subject": "[MyKhaya DEV] Service Degraded: DVSA MOT History",
         "summary": (

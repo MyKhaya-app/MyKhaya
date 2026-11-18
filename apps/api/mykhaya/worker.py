@@ -66,6 +66,7 @@ from mykhaya.syslog_forwarding import (
     configure_structlog_forwarding,
     syslog_config_from_platform_value,
 )
+from mykhaya.vehicle_report_storage import get_vehicle_report_storage
 
 log = structlog.get_logger()
 
@@ -321,10 +322,17 @@ async def _process_email(db: AsyncSession, settings: Settings, event: OutboxEven
 
     smtp_config = await resolve_smtp_config(settings, db)
     attachment = None
+    # Only transient Vehicle Report PDFs are ever deleted after sending; legal
+    # evidence attachments are retained records and are never cleaned up here.
+    report_storage = None
     if event.payload.get("attachment_storage_key"):
-        data = await get_legal_evidence_storage(settings).load(
-            event.payload["attachment_storage_key"]
-        )
+        if event.payload.get("attachment_storage_kind") == "vehicle_report":
+            report_storage = get_vehicle_report_storage(settings)
+            data = await report_storage.load(event.payload["attachment_storage_key"])
+        else:
+            data = await get_legal_evidence_storage(settings).load(
+                event.payload["attachment_storage_key"]
+            )
         if data is None:
             raise EmailTemporaryError("Legal evidence attachment is not available yet")
         attachment = (
@@ -355,6 +363,8 @@ async def _process_email(db: AsyncSession, settings: Settings, event: OutboxEven
                 evidence.email_sent_at = datetime.now(UTC)
                 evidence.provider_message_id = provider_message_id
         _redact_sensitive_email_payload(event)
+        if event.payload.get("attachment_cleanup") and report_storage is not None:
+            await report_storage.delete(event.payload["attachment_storage_key"])
     except EmailPermanentError as exc:
         delivery.attempted_at = datetime.now(UTC)
         delivery.retry_count += 1
@@ -362,6 +372,8 @@ async def _process_email(db: AsyncSession, settings: Settings, event: OutboxEven
         delivery.sanitised_failure_reason = exc.category
         await _mark_evidence_email_failure(db, event, terminal=True)
         _redact_sensitive_email_payload(event)
+        if event.payload.get("attachment_cleanup") and report_storage is not None:
+            await report_storage.delete(event.payload["attachment_storage_key"])
         # Permanent (e.g. recipient/sender rejected) failures are never
         # retried — retrying a 5xx recipient rejection indefinitely wastes
         # sends and can itself hurt sender reputation. Not re-raised, so the
