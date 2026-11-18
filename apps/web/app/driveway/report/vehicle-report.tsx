@@ -2,13 +2,56 @@
 
 import { useState, type ReactNode } from "react";
 import { ExternalLink, Info, Printer, Share2 } from "lucide-react";
-import type { Vehicle, VehicleLookupResult, VehicleMot, VehicleTaxCalculation } from "@mykhaya/shared-types";
+import type {
+  Vehicle,
+  VehicleLookupResult,
+  VehicleMot,
+  VehicleTaxCalculation,
+} from "@mykhaya/shared-types";
 import { Logo } from "@/components/logo";
 import { api, ApiError } from "@mykhaya/api-client";
 import { isNativeShell } from "@/components/native-runtime";
 import { formatRegistrationDate, formatShortDate } from "../vehicle-display";
+import {
+  NativeVehicleReportError,
+  presentNativeVehicleReport,
+} from "./vehicle-report-native";
 
-type ReportVehicle = Pick<VehicleLookupResult, "registration" | "make" | "model" | "colour" | "year" | "fuel_type" | "engine_size" | "first_registration_date" | "first_registration_precision" | "first_registration_with_dvla_date" | "first_registration_with_dvla_precision" | "tax_status" | "tax_due_date" | "inspection_status" | "inspection_due_date" | "co2_emissions" | "euro_status" | "type_approval" | "wheel_plan" | "revenue_weight" | "marked_for_export" | "marked_as_scrapped" | "date_of_last_v5c_issued" | "real_driving_emissions" | "vehicle_status" | "automated_vehicle" | "art_end_date"> & { nickname?: string | null; country_code?: string | null; last_successful_lookup?: string | null; tax_calculation?: VehicleTaxCalculation | null };
+type ReportVehicle = Pick<
+  VehicleLookupResult,
+  | "registration"
+  | "make"
+  | "model"
+  | "colour"
+  | "year"
+  | "fuel_type"
+  | "engine_size"
+  | "first_registration_date"
+  | "first_registration_precision"
+  | "first_registration_with_dvla_date"
+  | "first_registration_with_dvla_precision"
+  | "tax_status"
+  | "tax_due_date"
+  | "inspection_status"
+  | "inspection_due_date"
+  | "co2_emissions"
+  | "euro_status"
+  | "type_approval"
+  | "wheel_plan"
+  | "revenue_weight"
+  | "marked_for_export"
+  | "marked_as_scrapped"
+  | "date_of_last_v5c_issued"
+  | "real_driving_emissions"
+  | "vehicle_status"
+  | "automated_vehicle"
+  | "art_end_date"
+> & {
+  nickname?: string | null;
+  country_code?: string | null;
+  last_successful_lookup?: string | null;
+  tax_calculation?: VehicleTaxCalculation | null;
+};
 type ReportMot = VehicleMot | NonNullable<VehicleLookupResult["mot"]> | null;
 
 export interface VehicleReportProps {
@@ -26,18 +69,37 @@ export interface VehicleReportProps {
 function display(value: unknown): string | null {
   if (value === null || value === undefined || value === "") return null;
   if (typeof value === "boolean") return value ? "Yes" : "No";
-  if (typeof value === "string" || typeof value === "number") return String(value);
+  if (typeof value === "string" || typeof value === "number")
+    return String(value);
   return null;
 }
 
 function Row({ label, value }: { label: string; value: unknown }) {
   const text = display(value);
   if (!text) return null;
-  return <div className="drv-report-row"><dt>{label}</dt><dd>{text}</dd></div>;
+  return (
+    <div className="drv-report-row">
+      <dt>{label}</dt>
+      <dd>{text}</dd>
+    </div>
+  );
 }
 
-function Section({ title, children, className = "" }: { title: string; children: ReactNode; className?: string }) {
-  return <section className={`drv-report-section ${className}`.trim()}><h2>{title}</h2>{children}</section>;
+function Section({
+  title,
+  children,
+  className = "",
+}: {
+  title: string;
+  children: ReactNode;
+  className?: string;
+}) {
+  return (
+    <section className={`drv-report-section ${className}`.trim()}>
+      <h2>{title}</h2>
+      {children}
+    </section>
+  );
 }
 
 function taxAmount(value: number | null | undefined): string | null {
@@ -46,69 +108,245 @@ function taxAmount(value: number | null | undefined): string | null {
 
 function motTests(mot: ReportMot) {
   if (!mot || !mot.tests.length) return null;
-  return <div className="drv-report-mot-table" role="table" aria-label="MOT history">
-    <div className="drv-report-mot-row drv-report-mot-head" role="row"><span>Date</span><span>Mileage</span><span>Result</span></div>
-    {mot.tests.map((test, index) => <div className="drv-report-mot-row" role="row" key={`${test.test_number ?? "test"}-${test.test_date}-${index}`}>
-      <span>{formatShortDate(test.test_date) ?? test.test_date}</span>
-      <span>{test.odometer_value != null ? `${test.odometer_value.toLocaleString()} ${test.odometer_unit ?? ""}` : "Unavailable"}</span>
-      <span className={test.result === "passed" ? "drv-report-positive" : test.result === "failed" ? "drv-report-negative" : ""}>{test.result}</span>
-      {test.defects.length > 0 && <ul className="drv-report-defects">{test.defects.map((defect, defectIndex) => <li key={`${defect.category}-${defectIndex}`}>{defect.dangerous ? "Dangerous: " : ""}{defect.text}</li>)}</ul>}
-    </div>)}
-  </div>;
+  return (
+    <div className="drv-report-mot-table" role="table" aria-label="MOT history">
+      <div className="drv-report-mot-row drv-report-mot-head" role="row">
+        <span>Date</span>
+        <span>Mileage</span>
+        <span>Result</span>
+      </div>
+      {mot.tests.map((test, index) => (
+        <div
+          className="drv-report-mot-row"
+          role="row"
+          key={`${test.test_number ?? "test"}-${test.test_date}-${index}`}
+        >
+          <span>{formatShortDate(test.test_date) ?? test.test_date}</span>
+          <span>
+            {test.odometer_value != null
+              ? `${test.odometer_value.toLocaleString()} ${test.odometer_unit ?? ""}`
+              : "Unavailable"}
+          </span>
+          <span
+            className={
+              test.result === "passed"
+                ? "drv-report-positive"
+                : test.result === "failed"
+                  ? "drv-report-negative"
+                  : ""
+            }
+          >
+            {test.result}
+          </span>
+          {test.defects.length > 0 && (
+            <ul className="drv-report-defects">
+              {test.defects.map((defect, defectIndex) => (
+                <li key={`${defect.category}-${defectIndex}`}>
+                  {defect.dangerous ? "Dangerous: " : ""}
+                  {defect.text}
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      ))}
+    </div>
+  );
 }
 
 // Outbound email and external sharing of reports stay off until the Owner
 // approves them (the API refuses report email independently of this flag).
 const REPORT_SHARING_AVAILABLE = false;
 
-export function VehicleReport({ source, format, vehicle, mot, taxCalculation = vehicle.tax_calculation, photo, homeId, vehicleId, lookupResult }: VehicleReportProps) {
+export function VehicleReport({
+  source,
+  format,
+  vehicle,
+  mot,
+  taxCalculation = vehicle.tax_calculation,
+  photo,
+  homeId,
+  vehicleId,
+  lookupResult,
+}: VehicleReportProps) {
   const [shareMessage, setShareMessage] = useState("");
-  const [busy, setBusy] = useState<"save" | "email" | "share" | null>(null);
-  const [reportFormat, setReportFormat] = useState<"full" | "essential">(format);
+  const [busy, setBusy] = useState<"save" | "print" | "email" | "share" | null>(null);
+  const [reportFormat, setReportFormat] = useState<"full" | "essential">(
+    format,
+  );
   // Saved vehicles only: the household-entered nickname and the vehicle photo.
   // Switch off for a report that will be shared outside the Home.
   const [includeHousehold, setIncludeHousehold] = useState(true);
-  const name = [vehicle.make, vehicle.model].filter(Boolean).join(" ") || vehicle.nickname || "Vehicle report";
+  const name =
+    [vehicle.make, vehicle.model].filter(Boolean).join(" ") ||
+    vehicle.nickname ||
+    "Vehicle report";
   const isFull = reportFormat === "full";
   const motSummary = mot && "summary" in mot ? mot.summary : mot;
   const tax = taxCalculation;
-  const generated = new Intl.DateTimeFormat("en-GB", { dateStyle: "medium" }).format(new Date());
+  const generated = new Intl.DateTimeFormat("en-GB", {
+    dateStyle: "medium",
+  }).format(new Date());
 
-  async function getPdf(): Promise<{ blob: Blob; filename: string }> {
-    const result = source === "saved" && vehicleId
-      ? await api.vehicleReportPdf(homeId ?? "", vehicleId, reportFormat, includeHousehold)
-      : await api.lookupReportPdf(homeId ?? "", lookupResult?.report_token ?? "", reportFormat);
-    const bytes = Uint8Array.from(atob(result.pdf_base64), (char) => char.charCodeAt(0));
-    return { blob: new Blob([bytes], { type: result.content_type }), filename: result.filename };
+  async function getPdf(): Promise<{
+    blob: Blob;
+    filename: string;
+    base64: string;
+  }> {
+    const result =
+      source === "saved" && vehicleId
+        ? await api.vehicleReportPdf(
+            homeId ?? "",
+            vehicleId,
+            reportFormat,
+            includeHousehold,
+          )
+        : await api.lookupReportPdf(
+            homeId ?? "",
+            lookupResult?.report_token ?? "",
+            reportFormat,
+          );
+    const bytes = Uint8Array.from(atob(result.pdf_base64), (char) =>
+      char.charCodeAt(0),
+    );
+    return {
+      blob: new Blob([bytes], { type: "application/pdf" }),
+      filename: result.filename,
+      base64: result.pdf_base64,
+    };
+  }
+
+  function downloadPdf(blob: Blob, filename: string): void {
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement("a");
+    anchor.href = url;
+    anchor.download = filename;
+    anchor.click();
+    window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
   }
 
   async function savePdf() {
-    setBusy("save"); setShareMessage("");
-    try { const { blob, filename } = await getPdf(); const url = URL.createObjectURL(blob); const anchor = document.createElement("a"); anchor.href = url; anchor.download = filename; anchor.click(); URL.revokeObjectURL(url); setShareMessage("PDF ready to save."); }
-    catch (error) { setShareMessage(error instanceof ApiError && error.status === 429 ? error.message : "The PDF could not be prepared. Please try again."); }
-    finally { setBusy(null); }
+    setBusy("save");
+    setShareMessage("");
+    try {
+      const report = await getPdf();
+      if (isNativeShell()) {
+        await presentNativeVehicleReport(
+          report.blob,
+          report.filename,
+          report.base64,
+          `Save MyKhaya Vehicle Report - ${name}`,
+        );
+        setShareMessage(
+          "PDF ready. Choose Save to Files or another supported action.",
+        );
+      } else {
+        downloadPdf(report.blob, report.filename);
+        setShareMessage("PDF ready to save.");
+      }
+    } catch (error) {
+      setShareMessage(
+        error instanceof ApiError && error.status === 429
+          ? error.message
+          : error instanceof NativeVehicleReportError
+            ? error.message
+            : "The PDF could not be prepared. Please try again.",
+      );
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function printPdf() {
+    setBusy("print");
+    setShareMessage("");
+    try {
+      const report = await getPdf();
+      if (isNativeShell()) {
+        await presentNativeVehicleReport(
+          report.blob,
+          report.filename,
+          report.base64,
+          `Print MyKhaya Vehicle Report - ${name}`,
+        );
+        setShareMessage(
+          "PDF ready. Choose Print in the native document actions.",
+        );
+        return;
+      }
+      const url = URL.createObjectURL(report.blob);
+      const printWindow = window.open(url, "_blank", "noopener,noreferrer");
+      if (!printWindow) {
+        URL.revokeObjectURL(url);
+        throw new Error("The browser blocked the PDF window.");
+      }
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+      setShareMessage(
+        "PDF opened in a new tab. Use the PDF viewer's Print action.",
+      );
+    } catch (error) {
+      setShareMessage(
+        error instanceof NativeVehicleReportError
+          ? error.message
+          : "The PDF could not be opened for printing. Please allow pop-ups and try again.",
+      );
+    } finally {
+      setBusy(null);
+    }
   }
 
   async function share() {
-    setBusy("share"); setShareMessage("");
+    setBusy("share");
+    setShareMessage("");
     try {
       const { blob, filename } = await getPdf();
       const file = new File([blob], filename, { type: "application/pdf" });
-      if (navigator.share && (!navigator.canShare || navigator.canShare({ files: [file] }))) { await navigator.share({ title: `MyKhaya Vehicle Report - ${name}`, files: [file] }); return; }
-      await savePdf();
-      setShareMessage(isNativeShell() ? "Native file sharing is unavailable in this app build; the PDF was saved instead." : "File sharing is unavailable in this browser; the PDF was saved instead.");
-    } catch (error) { if (!(error instanceof DOMException && error.name === "AbortError")) setShareMessage("The PDF could not be prepared for sharing."); }
-    finally { setBusy(null); }
+      if (
+        navigator.share &&
+        (!navigator.canShare || navigator.canShare({ files: [file] }))
+      ) {
+        await navigator.share({
+          title: `MyKhaya Vehicle Report - ${name}`,
+          files: [file],
+        });
+        return;
+      }
+      throw new Error("File sharing is unavailable in this environment.");
+    } catch (error) {
+      if (!(error instanceof DOMException && error.name === "AbortError"))
+        setShareMessage("The PDF could not be prepared for sharing.");
+    } finally {
+      setBusy(null);
+    }
   }
 
   async function email() {
-    setBusy("email"); setShareMessage("");
+    setBusy("email");
+    setShareMessage("");
     try {
-      if (source === "saved" && vehicleId) await api.emailVehicleReport(homeId ?? "", vehicleId, reportFormat, includeHousehold);
-      else await api.emailLookupReport(homeId ?? "", lookupResult?.report_token ?? "", reportFormat);
+      if (source === "saved" && vehicleId)
+        await api.emailVehicleReport(
+          homeId ?? "",
+          vehicleId,
+          reportFormat,
+          includeHousehold,
+        );
+      else
+        await api.emailLookupReport(
+          homeId ?? "",
+          lookupResult?.report_token ?? "",
+          reportFormat,
+        );
       setShareMessage("Email queued to your verified MyKhaya account email.");
-    } catch (error) { setShareMessage(error instanceof ApiError && [403, 409, 429].includes(error.status) ? error.message : "The report email could not be queued. Please try again."); }
-    finally { setBusy(null); }
+    } catch (error) {
+      setShareMessage(
+        error instanceof ApiError && [403, 409, 429].includes(error.status)
+          ? error.message
+          : "The report email could not be queued. Please try again.",
+      );
+    } finally {
+      setBusy(null);
+    }
   }
 
   /*
@@ -130,27 +368,299 @@ export function VehicleReport({ source, format, vehicle, mot, taxCalculation = v
   } */
 
   const detailRows: Array<[string, unknown]> = [
-    ["Registration", vehicle.registration], ["Make / model", name], ["Year", vehicle.year],
-    ["First registration", formatRegistrationDate(vehicle.first_registration_date, vehicle.first_registration_precision ?? "day")],
-    ["First registered with DVLA", formatRegistrationDate(vehicle.first_registration_with_dvla_date, vehicle.first_registration_with_dvla_precision ?? "day")],
-    ["Fuel", vehicle.fuel_type], ["Colour", vehicle.colour], ["Engine capacity", vehicle.engine_size ? `${vehicle.engine_size} cc` : null], ["Country", vehicle.country_code],
+    ["Registration", vehicle.registration],
+    ["Make / model", name],
+    ["Year", vehicle.year],
+    [
+      "First registration",
+      formatRegistrationDate(
+        vehicle.first_registration_date,
+        vehicle.first_registration_precision ?? "day",
+      ),
+    ],
+    [
+      "First registered with DVLA",
+      formatRegistrationDate(
+        vehicle.first_registration_with_dvla_date,
+        vehicle.first_registration_with_dvla_precision ?? "day",
+      ),
+    ],
+    ["Fuel", vehicle.fuel_type],
+    ["Colour", vehicle.colour],
+    [
+      "Engine capacity",
+      vehicle.engine_size ? `${vehicle.engine_size} cc` : null,
+    ],
+    ["Country", vehicle.country_code],
   ];
   const additionalRows: Array<[string, unknown]> = [
-    ["CO₂ emissions", vehicle.co2_emissions != null ? `${vehicle.co2_emissions} g/km` : null], ["Euro status", vehicle.euro_status], ["Type approval", vehicle.type_approval], ["Wheelplan", vehicle.wheel_plan],
-    ["Revenue weight", vehicle.revenue_weight != null ? `${vehicle.revenue_weight} kg` : null], ["Marked for export", vehicle.marked_for_export], ["Marked as scrapped", vehicle.marked_as_scrapped], ["Last V5C issued", formatRegistrationDate(vehicle.date_of_last_v5c_issued, "day")], ["Real driving emissions", vehicle.real_driving_emissions], ["Automated vehicle", vehicle.automated_vehicle],
+    [
+      "CO₂ emissions",
+      vehicle.co2_emissions != null ? `${vehicle.co2_emissions} g/km` : null,
+    ],
+    ["Euro status", vehicle.euro_status],
+    ["Type approval", vehicle.type_approval],
+    ["Wheelplan", vehicle.wheel_plan],
+    [
+      "Revenue weight",
+      vehicle.revenue_weight != null ? `${vehicle.revenue_weight} kg` : null,
+    ],
+    ["Marked for export", vehicle.marked_for_export],
+    ["Marked as scrapped", vehicle.marked_as_scrapped],
+    [
+      "Last V5C issued",
+      formatRegistrationDate(vehicle.date_of_last_v5c_issued, "day"),
+    ],
+    ["Real driving emissions", vehicle.real_driving_emissions],
+    ["Automated vehicle", vehicle.automated_vehicle],
   ];
 
-  return <main className="drv-report" aria-labelledby="drv-report-title">
-    <header className="drv-report-header"><div className="drv-report-brand"><Logo /></div><div><h1 id="drv-report-title">Vehicle Report</h1><p>Generated {generated}</p></div></header>
-    <div className="drv-report-actions" aria-label="Report actions"><div className="drv-report-format" role="group" aria-label="Report format"><button type="button" className={reportFormat === "full" ? "active" : ""} onClick={() => setReportFormat("full")} disabled={busy !== null}>Full report</button><button type="button" className={reportFormat === "essential" ? "active" : ""} onClick={() => setReportFormat("essential")} disabled={busy !== null}>Essential report</button></div>{source === "saved" && <label className="drv-report-household"><input type="checkbox" checked={includeHousehold} onChange={(event) => setIncludeHousehold(event.target.checked)} disabled={busy !== null} /> Include nickname and photo</label>}<button type="button" className="drv-button drv-button-secondary" onClick={() => window.print()} disabled={busy !== null}><Printer size={18} aria-hidden="true" /> Print</button><button type="button" className="drv-button drv-button-primary" onClick={() => void savePdf()} disabled={busy !== null}>{busy === "save" ? "Preparing…" : "Save PDF"}</button><button type="button" className="drv-button drv-button-secondary" onClick={() => void email()} disabled={busy !== null || !REPORT_SHARING_AVAILABLE} aria-describedby={REPORT_SHARING_AVAILABLE ? undefined : "drv-report-sharing-note"}>{busy === "email" ? "Queueing…" : "Email me"}</button><button type="button" className="drv-button drv-button-secondary" onClick={() => void share()} disabled={busy !== null || !REPORT_SHARING_AVAILABLE} aria-describedby={REPORT_SHARING_AVAILABLE ? undefined : "drv-report-sharing-note"}>{busy === "share" ? "Preparing…" : <><Share2 size={18} aria-hidden="true" /> Share</>}</button></div>
-    {!REPORT_SHARING_AVAILABLE && <p className="drv-muted drv-report-sharing-note" id="drv-report-sharing-note">Emailing and sharing reports isn’t available yet. You can save or print the PDF.</p>}
-    {shareMessage && <p className="notice" role="status">{shareMessage}</p>}
-    <section className="drv-report-hero">{photo && <div className="drv-report-photo">{photo}</div>}<div><p className="drv-eyebrow">{source === "saved" ? "Saved Home Vehicle" : "One-off Lookup"}</p><h2>{name}</h2><div className="drv-report-plate">{vehicle.registration ?? "Registration unavailable"}</div><p>{source === "saved" ? "Household vehicle information summary" : "Vehicle information summary"}</p></div></section>
-    <div className="drv-report-grid"><Section title="Vehicle details"><dl>{detailRows.map(([label, value]) => <Row key={label} label={label} value={value} />)}</dl></Section><Section title="Tax and status"><dl><Row label="Tax status" value={vehicle.tax_status} /><Row label="Tax due" value={formatShortDate(vehicle.tax_due_date)} /><Row label="Vehicle status" value={vehicle.vehicle_status} /><Row label="SORN / export" value={vehicle.marked_for_export ? "Marked for export" : vehicle.marked_as_scrapped ? "Marked as scrapped" : null} /></dl>{tax && <div className="drv-report-estimate"><span>Estimated annual VED</span><strong>{taxAmount(tax.annual_rate) ?? "Unavailable"} / year</strong><small>{tax.tax_year ? `${tax.tax_year} tax year` : "Tax year unavailable"}. Estimate only; check GOV.UK for the authoritative amount.</small>{Object.entries(tax.payment_options).length > 0 && <dl className="drv-report-payments">{Object.entries(tax.payment_options).map(([key, amount]) => <Row key={key} label={key.replaceAll("_", " ")} value={taxAmount(amount)} />)}</dl>}</div>}<p className="drv-report-source"><Info size={16} aria-hidden="true" /> DVLA tax and status information; VED figures are MyKhaya estimates.</p></Section></div>
-    <Section title="MOT history" className="drv-report-mot"><dl><Row label="Status" value={motSummary && "status" in motSummary ? motSummary.status : null} /><Row label="Expiry / due" value={motSummary && "due_date" in motSummary ? formatShortDate(motSummary.due_date) : null} /></dl>{mot ? motTests(mot) ?? <p className="drv-muted">No detailed MOT tests were returned.</p> : <p className="drv-muted">MOT history is unavailable for this report because arbitrary DVSA lookup is disabled.</p>}</Section>
-    {isFull && <><Section title="Additional vehicle details"><dl>{additionalRows.map(([label, value]) => <Row key={label} label={label} value={value} />)}</dl></Section><Section title="Data sources and privacy" className="drv-report-note"><p>Vehicle details, tax status and VED inputs are sourced from DVLA where available. MOT results are sourced from DVSA only through authorised saved-vehicle functionality.</p><p>Private household data, authentication secrets, internal identifiers and full VIN values are excluded from this report.</p></Section></>}
-    <footer className="drv-report-footer"><span>Generated with MyKhaya</span><span>mykhaya.app</span></footer><a className="drv-report-gov-link" href="https://www.gov.uk/check-vehicle-tax" target="_blank" rel="noreferrer"><ExternalLink size={16} aria-hidden="true" /> Check vehicle tax on GOV.UK</a>
-  </main>;
+  return (
+    <main className="drv-report" aria-labelledby="drv-report-title">
+      <header className="drv-report-header">
+        <div className="drv-report-brand">
+          <Logo />
+        </div>
+        <div>
+          <h1 id="drv-report-title">Vehicle Report</h1>
+          <p>Generated {generated}</p>
+        </div>
+      </header>
+      <div className="drv-report-actions" aria-label="Report actions">
+        <div
+          className="drv-report-format"
+          role="group"
+          aria-label="Report format"
+        >
+          <button
+            type="button"
+            className={reportFormat === "full" ? "active" : ""}
+            onClick={() => setReportFormat("full")}
+            disabled={busy !== null}
+          >
+            Full report
+          </button>
+          <button
+            type="button"
+            className={reportFormat === "essential" ? "active" : ""}
+            onClick={() => setReportFormat("essential")}
+            disabled={busy !== null}
+          >
+            Essential report
+          </button>
+        </div>
+        {source === "saved" && (
+          <label className="drv-report-household">
+            <input
+              type="checkbox"
+              checked={includeHousehold}
+              onChange={(event) => setIncludeHousehold(event.target.checked)}
+              disabled={busy !== null}
+            />{" "}
+            Include nickname and photo
+          </label>
+        )}
+        <button
+          type="button"
+          className="drv-button drv-button-secondary"
+          onClick={() => void printPdf()}
+          disabled={busy !== null}
+        >
+          <Printer size={18} aria-hidden="true" /> Print
+        </button>
+        <button
+          type="button"
+          className="drv-button drv-button-primary"
+          onClick={() => void savePdf()}
+          disabled={busy !== null}
+        >
+          {busy === "save" ? "Preparing…" : "Save PDF"}
+        </button>
+        <button
+          type="button"
+          className="drv-button drv-button-secondary"
+          onClick={() => void email()}
+          disabled={busy !== null || !REPORT_SHARING_AVAILABLE}
+          aria-describedby={
+            REPORT_SHARING_AVAILABLE ? undefined : "drv-report-sharing-note"
+          }
+        >
+          {busy === "email" ? "Queueing…" : "Email me"}
+        </button>
+        <button
+          type="button"
+          className="drv-button drv-button-secondary"
+          onClick={() => void share()}
+          disabled={busy !== null || !REPORT_SHARING_AVAILABLE}
+          aria-describedby={
+            REPORT_SHARING_AVAILABLE ? undefined : "drv-report-sharing-note"
+          }
+        >
+          {busy === "share" ? (
+            "Preparing…"
+          ) : (
+            <>
+              <Share2 size={18} aria-hidden="true" /> Share
+            </>
+          )}
+        </button>
+      </div>
+      {!REPORT_SHARING_AVAILABLE && (
+        <p
+          className="drv-muted drv-report-sharing-note"
+          id="drv-report-sharing-note"
+        >
+          Emailing and sharing reports isn’t available yet. You can save or
+          print the PDF.
+        </p>
+      )}
+      {shareMessage && (
+        <p className="notice" role="status">
+          {shareMessage}
+        </p>
+      )}
+      <section className="drv-report-hero">
+        {photo && <div className="drv-report-photo">{photo}</div>}
+        <div>
+          <p className="drv-eyebrow">
+            {source === "saved" ? "Saved Home Vehicle" : "One-off Lookup"}
+          </p>
+          <h2>{name}</h2>
+          <div className="drv-report-plate">
+            {vehicle.registration ?? "Registration unavailable"}
+          </div>
+          <p>
+            {source === "saved"
+              ? "Household vehicle information summary"
+              : "Vehicle information summary"}
+          </p>
+        </div>
+      </section>
+      <div className="drv-report-grid">
+        <Section title="Vehicle details">
+          <dl>
+            {detailRows.map(([label, value]) => (
+              <Row key={label} label={label} value={value} />
+            ))}
+          </dl>
+        </Section>
+        <Section title="Tax and status">
+          <dl>
+            <Row label="Tax status" value={vehicle.tax_status} />
+            <Row
+              label="Tax due"
+              value={formatShortDate(vehicle.tax_due_date)}
+            />
+            <Row label="Vehicle status" value={vehicle.vehicle_status} />
+            <Row
+              label="SORN / export"
+              value={
+                vehicle.marked_for_export
+                  ? "Marked for export"
+                  : vehicle.marked_as_scrapped
+                    ? "Marked as scrapped"
+                    : null
+              }
+            />
+          </dl>
+          {tax && (
+            <div className="drv-report-estimate">
+              <span>Estimated annual VED</span>
+              <strong>
+                {taxAmount(tax.annual_rate) ?? "Unavailable"} / year
+              </strong>
+              <small>
+                {tax.tax_year
+                  ? `${tax.tax_year} tax year`
+                  : "Tax year unavailable"}
+                . Estimate only; check GOV.UK for the authoritative amount.
+              </small>
+              {Object.entries(tax.payment_options).length > 0 && (
+                <dl className="drv-report-payments">
+                  {Object.entries(tax.payment_options).map(([key, amount]) => (
+                    <Row
+                      key={key}
+                      label={key.replaceAll("_", " ")}
+                      value={taxAmount(amount)}
+                    />
+                  ))}
+                </dl>
+              )}
+            </div>
+          )}
+          <p className="drv-report-source">
+            <Info size={16} aria-hidden="true" /> DVLA tax and status
+            information; VED figures are MyKhaya estimates.
+          </p>
+        </Section>
+      </div>
+      <Section title="MOT history" className="drv-report-mot">
+        <dl>
+          <Row
+            label="Status"
+            value={
+              motSummary && "status" in motSummary ? motSummary.status : null
+            }
+          />
+          <Row
+            label="Expiry / due"
+            value={
+              motSummary && "due_date" in motSummary
+                ? formatShortDate(motSummary.due_date)
+                : null
+            }
+          />
+        </dl>
+        {mot ? (
+          (motTests(mot) ?? (
+            <p className="drv-muted">No detailed MOT tests were returned.</p>
+          ))
+        ) : (
+          <p className="drv-muted">
+            MOT history is unavailable for this report because arbitrary DVSA
+            lookup is disabled.
+          </p>
+        )}
+      </Section>
+      {isFull && (
+        <>
+          <Section title="Additional vehicle details">
+            <dl>
+              {additionalRows.map(([label, value]) => (
+                <Row key={label} label={label} value={value} />
+              ))}
+            </dl>
+          </Section>
+          <Section title="Data sources and privacy" className="drv-report-note">
+            <p>
+              Vehicle details, tax status and VED inputs are sourced from DVLA
+              where available. MOT results are sourced from DVSA only through
+              authorised saved-vehicle functionality.
+            </p>
+            <p>
+              Private household data, authentication secrets, internal
+              identifiers and full VIN values are excluded from this report.
+            </p>
+          </Section>
+        </>
+      )}
+      <footer className="drv-report-footer">
+        <span>Generated with MyKhaya</span>
+        <span>mykhaya.app</span>
+      </footer>
+      <a
+        className="drv-report-gov-link"
+        href="https://www.gov.uk/check-vehicle-tax"
+        target="_blank"
+        rel="noreferrer"
+      >
+        <ExternalLink size={16} aria-hidden="true" /> Check vehicle tax on
+        GOV.UK
+      </a>
+    </main>
+  );
 }
 
-export function savedVehicleReportVehicle(vehicle: Vehicle): ReportVehicle { return vehicle; }
+export function savedVehicleReportVehicle(vehicle: Vehicle): ReportVehicle {
+  return vehicle;
+}
