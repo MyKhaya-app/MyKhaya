@@ -150,6 +150,15 @@ router = APIRouter(prefix="/homes", tags=["driveway"], dependencies=[Depends(_re
 log = structlog.get_logger()
 
 
+def _first_present[T](*values: T | None) -> T | None:
+    """The first value that is set (a blank string counts as unset)."""
+    for value in values:
+        if value is None or (isinstance(value, str) and not value.strip()):
+            continue
+        return value
+    return None
+
+
 def _apply_dvla_lookup(vehicle: Vehicle, result: VehicleLookup, *, checked_at: datetime) -> None:
     """Apply only values DVLA actually returned; manual/user data survives
     partial provider responses. ``result`` is a VehicleLookup dataclass."""
@@ -157,24 +166,49 @@ def _apply_dvla_lookup(vehicle: Vehicle, result: VehicleLookup, *, checked_at: d
     vehicle.lookup_status = "success"
     vehicle.last_successful_lookup = checked_at
     for field in (
-        "make", "colour", "year", "fuel_type", "engine_size",
-        "first_registration_date", "first_registration_precision",
+        "make",
+        "colour",
+        "year",
+        "fuel_type",
+        "engine_size",
+        "first_registration_date",
+        "first_registration_precision",
         "first_registration_with_dvla_date",
-        "first_registration_with_dvla_precision", "tax_status", "tax_due_date",
-        "co2_emissions", "euro_status", "type_approval", "wheel_plan",
-        "revenue_weight", "marked_for_export", "marked_as_scrapped",
-        "date_of_last_v5c_issued", "real_driving_emissions", "vehicle_status",
-        "automated_vehicle", "art_end_date",
+        "first_registration_with_dvla_precision",
+        "tax_status",
+        "tax_due_date",
+        "co2_emissions",
+        "euro_status",
+        "type_approval",
+        "wheel_plan",
+        "revenue_weight",
+        "marked_for_export",
+        "marked_as_scrapped",
+        "date_of_last_v5c_issued",
+        "real_driving_emissions",
+        "vehicle_status",
+        "automated_vehicle",
+        "art_end_date",
     ):
         value = getattr(result, field, None)
         # Tax and DVLA supplementary fields are provider-owned. General
         # vehicle details remain user-editable, so a refresh only fills a
         # missing value and never replaces a user-entered value.
         provider_owned = field in {
-            "tax_status", "tax_due_date", "co2_emissions", "euro_status", "type_approval",
-            "wheel_plan", "revenue_weight", "marked_for_export", "marked_as_scrapped",
-            "date_of_last_v5c_issued", "real_driving_emissions", "vehicle_status",
-            "automated_vehicle", "art_end_date",
+            "tax_status",
+            "tax_due_date",
+            "co2_emissions",
+            "euro_status",
+            "type_approval",
+            "wheel_plan",
+            "revenue_weight",
+            "marked_for_export",
+            "marked_as_scrapped",
+            "date_of_last_v5c_issued",
+            "real_driving_emissions",
+            "vehicle_status",
+            "automated_vehicle",
+            "art_end_date",
         }
         if value is not None and (provider_owned or getattr(vehicle, field, None) is None):
             setattr(vehicle, field, value)
@@ -556,6 +590,10 @@ async def create_vehicle(
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> VehicleResponse:
+    # Captured before the pre-provider rollback below, which expires every ORM
+    # object in the session (auth.user and membership included); reading an
+    # expired attribute later would need an implicit async refresh.
+    user_id = auth.user.id
     membership = await require_capability(home_id, Capability.driveway_manage, auth, db)
     await _require_home_member_owner(db, home_id, body.owner_user_id)
     registration = body.registration.strip() if body.registration else None
@@ -593,7 +631,7 @@ async def create_vehicle(
         await enforce_rate_limit(
             request,
             settings,
-            f"driveway-dvsa-lookup:{auth.user.id}",
+            f"driveway-dvsa-lookup:{user_id}",
             settings.dvsa_arbitrary_lookup_rate_limit,
             3600,
         )
@@ -604,44 +642,51 @@ async def create_vehicle(
     if dvla_result is not None and dvla_result.registration:
         registration = dvla_result.registration
     checked_at = datetime.now(UTC) if dvla_result is not None else None
-    make = dvla_result.make if dvla_result and dvla_result.make is not None else body.make
-    model = dvla_result.model if dvla_result and dvla_result.model is not None else (
-        mot_history.model if mot_history and mot_history.model is not None else body.model
+    # General vehicle details are user-editable: a value the user submitted
+    # (typically DVLA-prefilled on the form, then corrected) always wins, and
+    # provider data only fills what was left empty. This is the same rule the
+    # DVLA refresh applies (_apply_dvla_lookup). The model never comes from
+    # DVLA unless DVLA actually returned one; the vehicle enquiry service has none.
+    make = _first_present(body.make, dvla_result.make if dvla_result else None, None)
+    model = _first_present(
+        body.model,
+        dvla_result.model if dvla_result else None,
+        mot_history.model if mot_history else None,
     )
-    colour = dvla_result.colour if dvla_result and dvla_result.colour is not None else (
-        mot_history.colour if mot_history and mot_history.colour is not None else body.colour
+    colour = _first_present(
+        body.colour,
+        dvla_result.colour if dvla_result else None,
+        mot_history.colour if mot_history else None,
     )
-    year = dvla_result.year if dvla_result and dvla_result.year is not None else (
-        mot_history.year_of_manufacture
-        if mot_history and mot_history.year_of_manufacture is not None
-        else body.year
+    year = _first_present(
+        body.year,
+        dvla_result.year if dvla_result else None,
+        mot_history.year_of_manufacture if mot_history else None,
     )
-    fuel_type = dvla_result.fuel_type if dvla_result and dvla_result.fuel_type is not None else (
-        mot_history.fuel_type
-        if mot_history and mot_history.fuel_type is not None
-        else body.fuel_type
+    fuel_type = _first_present(
+        body.fuel_type,
+        dvla_result.fuel_type if dvla_result else None,
+        mot_history.fuel_type if mot_history else None,
     )
-    engine_size = (
-        dvla_result.engine_size
-        if dvla_result and dvla_result.engine_size is not None
-        else mot_history.engine_size
-        if mot_history and mot_history.engine_size is not None
-        else body.engine_size
+    engine_size = _first_present(
+        body.engine_size,
+        dvla_result.engine_size if dvla_result else None,
+        mot_history.engine_size if mot_history else None,
     )
-    first_registration_date = (
-        dvla_result.first_registration_date
-        if dvla_result and dvla_result.first_registration_date is not None
-        else mot_history.first_registration_date
-        if mot_history and mot_history.first_registration_date is not None
-        else body.first_registration_date
-    )
-    first_registration_precision = (
-        dvla_result.first_registration_precision
-        if dvla_result and dvla_result.first_registration_precision is not None
-        else mot_history.first_registration_precision
-        if mot_history and mot_history.first_registration_precision is not None
-        else body.first_registration_precision
-    )
+    # The date and its precision always come from the same source.
+    first_registration_precision: str | None
+    if body.first_registration_date is not None:
+        first_registration_date = body.first_registration_date
+        first_registration_precision = body.first_registration_precision
+    elif dvla_result and dvla_result.first_registration_date is not None:
+        first_registration_date = dvla_result.first_registration_date
+        first_registration_precision = dvla_result.first_registration_precision
+    elif mot_history and mot_history.first_registration_date is not None:
+        first_registration_date = mot_history.first_registration_date
+        first_registration_precision = mot_history.first_registration_precision
+    else:
+        first_registration_date = None
+        first_registration_precision = body.first_registration_precision
     first_registration_with_dvla_date = (
         dvla_result.first_registration_with_dvla_date if dvla_result else None
     )
@@ -704,12 +749,12 @@ async def create_vehicle(
         row.mot_refreshed_at = datetime.now(UTC)
         row.mot_refresh_attempted_at = row.mot_refreshed_at
         row.mot_refresh_outcome = "success"
-        await _sync_reminder(db, row, summary, auth.user.id)
+        await _sync_reminder(db, row, summary, user_id)
     audit(
         db,
         request,
         "driveway.vehicle.created",
-        auth.user.id,
+        user_id,
         home_id,
         "vehicle",
         row.id,
@@ -717,7 +762,11 @@ async def create_vehicle(
     )
     await db.commit()
     await db.refresh(row)
-    return _vehicle_response(row, auth, membership, settings)
+    # Same as the DVLA refresh endpoint: re-read what the commit expired so
+    # response serialisation never performs an implicit async refresh.
+    await db.refresh(auth.user)
+    membership = await membership_for(home_id, auth, db)
+    return _vehicle_response(row, auth, membership, settings, user_id=user_id)
 
 
 @router.get("/{home_id}/vehicles/{vehicle_id}", response_model=VehicleResponse)
@@ -846,9 +895,7 @@ async def refresh_vehicle_details(
         ) from exc
     fresh = await _get_vehicle(db, home_id, vehicle_id, for_update=True)
     if get_vehicle_registration(fresh, settings) != registration:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT, "This vehicle changed. Reload and try again."
-        )
+        raise HTTPException(status.HTTP_409_CONFLICT, "This vehicle changed. Reload and try again.")
     _apply_dvla_lookup(fresh, result, checked_at=datetime.now(UTC))
     audit(
         db,

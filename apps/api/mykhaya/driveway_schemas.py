@@ -97,9 +97,9 @@ class VehicleResponse(BaseModel):
     archived: bool
     created_at: datetime
     updated_at: datetime
-    refresh_outcome: Literal[
-        "refreshed", "unchanged", "busy", "rate_limited", "unavailable"
-    ] | None = None
+    refresh_outcome: (
+        Literal["refreshed", "unchanged", "busy", "rate_limited", "unavailable"] | None
+    ) = None
     tax_calculation: VehicleTaxCalculation | None = None
 
 

@@ -281,6 +281,7 @@ def normalise_mot_response(payload: Any) -> MotHistory:
         key=lambda t: t.completed_at or datetime.combine(t.test_date, datetime.min.time(), UTC),
         reverse=True,
     )
+
     def first_value(*keys: str) -> Any:
         return next((payload.get(key) for key in keys if payload.get(key) not in (None, "")), None)
 

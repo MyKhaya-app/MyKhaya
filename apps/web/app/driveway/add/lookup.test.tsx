@@ -37,7 +37,13 @@ describe("Driveway UK vehicle lookup", () => {
     await user.type(await screen.findByLabelText("Registration / licence plate"), " aa19mot ");
     await user.click(screen.getByRole("button", { name: "Find my vehicle" }));
     await waitFor(() => expect(lookupVehicle).toHaveBeenCalledWith("home-1", { country_code: "GB", registration: "AA19MOT" }));
-    expect(await screen.findByRole("status")).toHaveTextContent("Test Vehicle");
+    // The result is a labelled facts list (redesigned in 2a19e0a): check each
+    // value is shown against the right label, not merely present somewhere.
+    const status = await screen.findByRole("status");
+    const facts: Record<string, string> = Object.fromEntries(
+      Array.from(status.querySelectorAll("dt")).map((term): [string, string] => [term.textContent ?? "", term.nextElementSibling?.textContent ?? ""]),
+    );
+    expect(facts).toMatchObject({ Registration: "AA19MOT", Make: "Test", Model: "Vehicle", Year: "2019", Fuel: "Petrol", Colour: "Black" });
   });
 
   it("preserves the entered VRN after a failed lookup", async () => {

@@ -708,3 +708,139 @@ async def test_existing_vehicle_dvla_refresh_returns_updated_vehicle_after_provi
         assert payload["last_successful_lookup"] is not None
     finally:
         app.dependency_overrides.pop(get_settings, None)
+
+
+async def _create_with_dvla(
+    client: AsyncClient,
+    monkeypatch: pytest.MonkeyPatch,
+    prefix: str,
+    body: dict[str, object],
+    lookup: VehicleLookup,
+) -> dict[str, object]:
+    user_id = await create_verified_user(client, unique_email(prefix), "Driveway Create")
+    home_id = await create_driveway_home(client, "DVLA Create Home")
+    await enable_dvla_toggle(enabled=True)
+
+    async def fake_lookup(self: object, registration: str) -> VehicleLookup:
+        return lookup
+
+    monkeypatch.setattr(driveway_providers.UKDVLAProvider, "lookup", fake_lookup)
+    app.dependency_overrides[get_settings] = lambda: _override_settings(
+        dvla_environment="uat",
+        dvla_uat_endpoint="https://uat.dvla.example/vehicle-enquiry",
+        dvla_uat_api_key=SecretStr("uat-secret"),
+    )
+    try:
+        created = await consumer_unsafe(
+            client,
+            "POST",
+            f"/api/v1/homes/{home_id}/vehicles",
+            json={
+                "nickname": "Family car",
+                "owner_user_id": str(user_id),
+                "country_code": "GB",
+                "registration": "AP22 OOJ",
+                **body,
+            },
+        )
+    finally:
+        app.dependency_overrides.pop(get_settings, None)
+    assert created.status_code == 201, created.text
+    payload: dict[str, object] = created.json()
+    assert payload["owner_user_id"] == str(user_id)
+    return payload
+
+
+@pytest.mark.asyncio
+async def test_create_keeps_user_corrections_and_fills_gaps_from_dvla(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression for the pre-provider rollback (no expired auth state) and for
+    field precedence: what the user submitted wins; DVLA fills only the gaps;
+    DVLA-owned tax data always comes from DVLA."""
+    payload = await _create_with_dvla(
+        client,
+        monkeypatch,
+        "dvla-create-precedence",
+        {"make": "User-corrected make", "colour": "  ", "year": 2020},
+        VehicleLookup(
+            registration="AP22 OOJ",
+            make="BMW",
+            colour="BLACK",
+            year=2022,
+            fuel_type="ELECTRICITY",
+            tax_status="Taxed",
+        ),
+    )
+    assert payload["make"] == "User-corrected make"  # correction kept
+    assert payload["year"] == 2020  # correction kept
+    assert payload["colour"] == "BLACK"  # blank field filled from DVLA
+    assert payload["fuel_type"] == "ELECTRICITY"  # missing field filled from DVLA
+    assert payload["tax_status"] == "Taxed"  # provider-owned
+    assert payload["last_successful_lookup"] is not None
+
+
+@pytest.mark.asyncio
+async def test_create_never_invents_a_model_dvla_did_not_return(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    payload = await _create_with_dvla(
+        client,
+        monkeypatch,
+        "dvla-create-no-model",
+        {},
+        VehicleLookup(registration="AP22 OOJ", make="BMW", tax_status="Taxed"),
+    )
+    assert payload["make"] == "BMW"
+    assert payload["model"] is None
+
+
+@pytest.mark.asyncio
+async def test_refresh_preserves_a_manually_edited_field(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    created = await _create_with_dvla(
+        client,
+        monkeypatch,
+        "dvla-refresh-manual-edit",
+        {},
+        VehicleLookup(registration="AP22 OOJ", make="BMW", colour="BLACK", tax_status="SORN"),
+    )
+    assert created["colour"] == "BLACK"
+    home_id, vehicle_id = created["group_id"], created["id"]
+    edited = await consumer_unsafe(
+        client,
+        "PATCH",
+        f"/api/v1/homes/{home_id}/vehicles/{vehicle_id}",
+        json={
+            "nickname": "Family car",
+            "owner_user_id": created["owner_user_id"],
+            "make": "BMW",
+            "colour": "Midnight blue",
+            "country_code": "GB",
+            "registration": "AP22 OOJ",
+            "expected_updated_at": created["updated_at"],
+        },
+    )
+    assert edited.status_code == 200, edited.text
+
+    async def fresh_lookup(self: object, registration: str) -> VehicleLookup:
+        return VehicleLookup(registration=registration, colour="BLACK", tax_status="Taxed")
+
+    monkeypatch.setattr(driveway_providers.UKDVLAProvider, "lookup", fresh_lookup)
+    # model_copy skips validation: a zero cooldown lets the refresh run at once.
+    app.dependency_overrides[get_settings] = lambda: _override_settings(
+        dvla_environment="uat",
+        dvla_uat_endpoint="https://uat.dvla.example/vehicle-enquiry",
+        dvla_uat_api_key=SecretStr("uat-secret"),
+        dvla_refresh_cooldown_seconds=0,
+    )
+    try:
+        refreshed = await consumer_unsafe(
+            client, "POST", f"/api/v1/homes/{home_id}/vehicles/{vehicle_id}/refresh"
+        )
+    finally:
+        app.dependency_overrides.pop(get_settings, None)
+    assert refreshed.status_code == 200, refreshed.text
+    assert refreshed.json()["colour"] == "Midnight blue"  # manual edit preserved
+    assert refreshed.json()["tax_status"] == "Taxed"  # provider-owned field updated

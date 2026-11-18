@@ -5,8 +5,9 @@ from __future__ import annotations
 import logging
 import time
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable
 from contextlib import asynccontextmanager
+from typing import Any, cast
 
 from redis.asyncio import Redis
 
@@ -31,7 +32,8 @@ class DvlaBudgetExceeded(Exception):
 
 
 def _redis(settings: Settings) -> Redis:
-    return Redis.from_url(settings.redis_url, socket_timeout=2, decode_responses=True)
+    client: Redis = Redis.from_url(settings.redis_url, socket_timeout=2, decode_responses=True)
+    return client
 
 
 def _namespace(settings: Settings) -> str:
@@ -59,7 +61,9 @@ async def refresh_lock(settings: Settings, vehicle_id: uuid.UUID) -> AsyncIterat
             yield True
         finally:
             try:
-                await redis.eval(RELEASE_LOCK_SCRIPT, 1, key, token)
+                # redis-py types eval() for both its sync and async clients;
+                # on redis.asyncio it is always awaitable.
+                await cast("Awaitable[Any]", redis.eval(RELEASE_LOCK_SCRIPT, 1, key, token))
             except Exception:
                 log.debug("DVLA refresh lock cleanup was unavailable", exc_info=True)
     finally:
