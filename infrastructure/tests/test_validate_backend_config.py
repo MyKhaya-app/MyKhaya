@@ -1,6 +1,8 @@
 """Regression tests for merged backend runtime configuration validation."""
 
 import importlib.util
+import json
+import re
 import subprocess
 import sys
 import unittest
@@ -177,6 +179,142 @@ class BackendConfigTests(unittest.TestCase):
         self.assertIn("--no-deps", command)
         self.assertIn("--rm", command)
         self.assertIn("mykhaya-config-probe-123", command)
+
+    def test_service_env_mode_uses_the_dev_root_and_overlay(self):
+        with mock.patch.dict(module.os.environ, {"MYKHAYA_DEV_CONFIG_ROOT": "/etc/mykhaya/dev"}):
+            command = module.compose_command("mykhaya-config-probe-1")
+            env = module.compose_environment()
+        self.assertEqual(
+            command,
+            ["docker", "compose", "-p", "mykhaya-config-probe-1", "--env-file",
+             "/etc/mykhaya/dev/compose.env", "-f", "compose.yml", "-f", "compose.dev.yml",
+             "-f", "compose.dev.service-env.yml"],
+        )
+        for name in module.BLANKED_INTERPOLATION:
+            self.assertEqual(env[name], "")
+
+    def test_production_ignores_the_dev_root(self):
+        with mock.patch.dict(
+            module.os.environ,
+            {"MYKHAYA_DEV_CONFIG_ROOT": "/etc/mykhaya/dev", "MYKHAYA_PRODUCTION": "1"},
+        ):
+            self.assertIsNone(module.service_env_root())
+            self.assertIsNone(module.compose_environment())
+            self.assertNotIn("--env-file", module.base_compose_args())
+
+    def test_service_env_skips_only_comparisons_the_contract_removes(self):
+        values = self.base()
+        values[3] = config("migrate", redis="redis://unset-default:6379/0")
+        values[2] = config("scheduler")
+        values[2] = module.RuntimeConfig(**{**values[2].__dict__, "smtp_host": "mailpit-default"})
+        self.assertEqual(module.validate(values, service_env=True), [])
+        legacy = module.validate(values)
+        self.assertIn("migrate redis_url differs from api", legacy)
+        self.assertIn("scheduler SMTP connection differs from api", legacy)
+        # A scheduler that is given SMTP (monitoring) must still match api.
+        values[2] = module.RuntimeConfig(**{**values[2].__dict__, "email_delivery_configured": True})
+        self.assertIn("scheduler SMTP connection differs from api",
+                      module.validate(values, service_env=True))
+        # Worker SMTP and every session secret are always compared.
+        values[1] = module.RuntimeConfig(**{**values[1].__dict__, "smtp_port": 2525})
+        self.assertIn("worker SMTP connection differs from api",
+                      module.validate(values, service_env=True))
+
+    def resolved(self, volumes):
+        return {
+            "name": "mykhaya",
+            "services": {name: {"build": {}} for name in module.SERVICES},
+            "volumes": volumes,
+        }
+
+    def override_for(self, volumes, environment):
+        with mock.patch.dict(module.os.environ, environment):
+            if "MYKHAYA_PRODUCTION" not in environment:
+                module.os.environ.pop("MYKHAYA_PRODUCTION", None)
+            context = module.create_probe_context(self.resolved(volumes))
+        try:
+            return context, context.override_path.read_text(encoding="utf-8")
+        finally:
+            context.override_path.unlink(missing_ok=True)
+            context.override_path.parent.rmdir()
+
+    def test_every_declared_volume_is_probe_owned(self):
+        volumes = {
+            "postgres_data": {"name": "mykhaya_postgres_data"},
+            "home_migration_data": {"name": "mykhaya_prod_home_migration_data"},
+            "explicit": {"name": "mykhaya_explicit"},
+        }
+        self.assertEqual(module.probe_owned_volumes({"volumes": volumes}),
+                         ["explicit", "home_migration_data", "postgres_data"])
+
+    def test_external_volumes_fail_closed(self):
+        with self.assertRaises(module.ProbeIsolationError) as raised:
+            module.probe_owned_volumes({"volumes": {"shared": {"name": "x", "external": True}}})
+        self.assertIn("shared", str(raised.exception))
+
+    def test_dev_and_production_probes_never_name_application_volumes(self):
+        volumes = {
+            "home_migration_data": {"name": "mykhaya_dev_home_migration_data"},
+            "postgres_data": {"name": "mykhaya_postgres_data"},
+        }
+        for environment in ({}, {"MYKHAYA_PRODUCTION": "1"}):
+            with self.subTest(environment=environment):
+                context, override = self.override_for(volumes, environment)
+                for key in volumes:
+                    self.assertIn(f'name: "{context.project_name}_{key}"', override)
+                self.assertNotIn("mykhaya_dev_home_migration_data", override)
+                self.assertNotIn('"mykhaya_postgres_data"', override)
+
+    def test_probe_project_names_are_collision_resistant(self):
+        names = {module.probe_project_name() for _ in range(50)}
+        self.assertEqual(len(names), 50)
+        self.assertTrue(all(re.fullmatch(r"mykhaya-config-probe-\d+-[0-9a-f]{8}", n) for n in names))
+
+    def isolation_with(self, model, existing=()):
+        context = module.ProbeContext("probe-x", ("docker", "compose", "-p", "probe-x"), Path("o.yml"))
+
+        def fake_run(command, **kwargs):
+            if command[:3] == ["docker", "volume", "inspect"]:
+                return subprocess.CompletedProcess(command, 0 if command[3] in existing else 1, "", "")
+            return subprocess.CompletedProcess(command, 0, json.dumps(model), "")
+
+        with mock.patch.object(module.subprocess, "run", side_effect=fake_run):
+            module.verify_probe_isolation(context)
+
+    def test_isolation_verification_accepts_only_probe_owned_resources(self):
+        good = {"volumes": {"a": {"name": "probe-x_a"}}, "networks": {"edge": {"name": "probe-x_edge"}}}
+        self.isolation_with(good)
+        for bad, fragment in (
+            ({"volumes": {"a": {"name": "mykhaya_dev_home_migration_data"}}}, "volume a is not probe-scoped"),
+            ({"volumes": {"a": {"name": "x", "external": True}}}, "volume a is external"),
+            ({"networks": {"edge": {"name": "mykhaya_edge"}}}, "network edge is not probe-scoped"),
+        ):
+            with self.subTest(fragment=fragment), self.assertRaises(module.ProbeIsolationError) as raised:
+                self.isolation_with(bad)
+            self.assertIn(fragment, str(raised.exception))
+        with self.assertRaises(module.ProbeIsolationError) as raised:
+            self.isolation_with(good, existing=("probe-x_a",))
+        self.assertIn("volume a already exists", str(raised.exception))
+
+    def test_cleanup_never_uses_down_volumes_and_removes_only_owned_volumes(self):
+        context = module.ProbeContext("probe-x", ("docker", "compose", "-p", "probe-x"), Path("missing/o.yml"))
+        calls = []
+
+        def fake_run(command, **kwargs):
+            calls.append(command)
+            if command[:3] == ["docker", "volume", "ls"]:
+                # Label filter output; a stray non-prefixed name must never be removed.
+                listed = "probe-x_a\nmykhaya_dev_home_migration_data\n"
+                return subprocess.CompletedProcess(command, 0, listed, "")
+            return subprocess.CompletedProcess(command, 0, "", "")
+
+        with mock.patch.object(module.subprocess, "run", side_effect=fake_run):
+            module.cleanup_probe(context)
+        self.assertNotIn("--volumes", calls[0])
+        self.assertIn("down", calls[0])
+        self.assertIn("label=com.docker.compose.project=probe-x", calls[1])
+        removed = [c[3] for c in calls if c[:3] == ["docker", "volume", "rm"]]
+        self.assertEqual(removed, ["probe-x_a"])
 
     def test_compose_failure_diagnostics_redact_connection_values(self):
         result = subprocess.CompletedProcess(

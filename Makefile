@@ -4,23 +4,28 @@
 # Ensures a fresh clone gets both files `docker compose`/`make up` need without any
 # manual copy step beyond what's already documented.
 init:
+	@sh infrastructure/scripts/dev-host-guard.sh $@
 	@test -f .env || cp .env.example .env
 	@test -f compose.override.yml || cp compose.override.yml.example compose.override.yml
 	docker compose build
 up:
+	@sh infrastructure/scripts/dev-host-guard.sh $@
 	@test -f .env || cp .env.example .env
 	@test -f compose.override.yml || cp compose.override.yml.example compose.override.yml
 	docker compose up --build -d
 down:
+	@sh infrastructure/scripts/dev-host-guard.sh $@
 	docker compose down
 logs:
 	docker compose logs -f --tail=200
 build:
 	docker compose build
 backend-rebuild:
+	@sh infrastructure/scripts/dev-host-guard.sh $@
 	docker compose build api worker scheduler migrate
 	docker compose up -d --no-deps api worker scheduler
 migrate:
+	@sh infrastructure/scripts/dev-host-guard.sh $@
 	docker compose run --rm migrate
 test:
 	pnpm test
@@ -46,6 +51,7 @@ format:
 seed:
 	docker compose exec api python -m mykhaya.seed
 reset:
+	@sh infrastructure/scripts/dev-host-guard.sh $@
 	@test -f .env || cp .env.example .env
 	@test -f compose.override.yml || cp compose.override.yml.example compose.override.yml
 	docker compose down -v

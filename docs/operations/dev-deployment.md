@@ -33,6 +33,29 @@ services, prints container status, and verifies liveness and readiness. The publ
 are HTTPS, so secure cookies remain enabled even though NetBird Proxy connects to Caddy
 over HTTP.
 
+## Configuration modes
+
+The deploy script has two configuration modes:
+
+- **Legacy (default):** the repository root `.env`, exactly as described on this
+  page.
+- **Service-specific:** selected only by `MYKHAYA_DEV_CONFIG_ROOT=/etc/mykhaya/dev`.
+  Each service receives its own file through `compose.dev.service-env.yml`, and
+  Compose interpolation uses the non-secret `compose.env` instead of the root `.env`.
+  `sh infrastructure/scripts/dev-deploy.sh config-check` validates the layout without
+  touching any container. Migration and rollback:
+  [dev-service-config-migration.md](dev-service-config-migration.md). Requires
+  Docker Compose 2.24.4 or later.
+
+The cutover state in `/etc/mykhaya/dev/.service-env-state` (`legacy`, `pending`,
+`active`, `rollback-pending`) is written by the deploy script itself: `pending`
+after every validation and before any container is replaced, `active` only after
+the health checks pass. While it is `pending`, `active` or `rollback-pending`,
+the legacy mode refuses to run unless `MYKHAYA_DEV_LEGACY_ENV_ROLLBACK=1` is set
+for an explicit rollback. `dev-deploy.sh state` shows it. Once the state file
+exists, `make init`, `up`, `down`, `backend-rebuild`, `migrate` and `reset` refuse to
+run on the DEV host; they are local-workstation commands.
+
 ## DNS and NetBird Proxy
 
 Create or delegate these names to NetBird Proxy:
@@ -100,7 +123,6 @@ Direct server checks intentionally use the `localhost` Caddy site:
 ```sh
 curl -fsS http://127.0.0.1:8089/api/v1/health/live
 curl -fsS http://127.0.0.1:8089/api/v1/health/ready
-curl -fsS http://127.0.0.1:8089/api/v1/health/build
 ```
 
 Mailpit is available only on the server at `http://127.0.0.1:8025` by default. Use an
@@ -138,6 +160,16 @@ precede schema-changing updates.
 
 `make dev-down` uses `docker compose stop`; it does not remove containers, networks, or
 persistent volumes.
+
+The pre-start runtime validation (`validate_backend_config.py`) runs throwaway probe
+containers in their own Compose project and removes that project's volumes
+afterwards. `compose.dev.yml` pins `home_migration_data` to the fixed name
+`mykhaya_dev_home_migration_data`, and Compose removes a fixed-name volume declared
+by any project once no container (running or stopped) holds it. The probe
+therefore renames every declared volume into its own unique project, fails closed
+on external volumes, verifies before starting that it owns every volume and
+network it would create, and removes only volumes labelled for its own project.
+Details: [dev-service-config-migration.md](dev-service-config-migration.md#volume-safety).
 
 ## Troubleshooting
 
@@ -181,14 +213,12 @@ enrolment at `https://admin.dev.mykhaya.app/login` immediately afterwards.
 
 ## Confirming the deployed version
 
-`GET /api/v1/health/build` (unauthenticated, `include_in_schema=False`) returns
-`version`, `commit`, `build_time`, `environment`, and `channel` sourced from
-`MYKHAYA_VERSION=dev`, `MYKHAYA_COMMIT_SHA`, `MYKHAYA_BUILD_TIME`, and
-`MYKHAYA_BUILD_CHANNEL=development`:
-
-```sh
-curl -fsS http://127.0.0.1:8089/api/v1/health/build
-```
+`GET /api/v1/health/build` (`include_in_schema=False`) returns `version`, `commit`,
+`build_time`, `environment`, and `channel` sourced from `MYKHAYA_VERSION=dev`,
+`MYKHAYA_COMMIT_SHA`, `MYKHAYA_BUILD_TIME`, and `MYKHAYA_BUILD_CHANNEL=development`.
+It requires an authenticated app session (an unauthenticated request receives
+401), so use it from a signed-in browser or with a session cookie rather than a
+bare `curl`.
 
 The same version/channel (plus commit and build time outside production) is already
 surfaced without any extra tooling on the Control Centre Overview page
