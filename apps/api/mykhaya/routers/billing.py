@@ -110,6 +110,20 @@ from mykhaya.rate_limit import enforce_rate_limit
 
 router = APIRouter(prefix="/billing", tags=["billing"])
 group_router = APIRouter(prefix="/groups/{group_id}/billing", tags=["billing"])
+
+
+def _safe_webhook_failure_code(exc: Exception) -> str:
+    """Return a durable, non-sensitive classification for a failed webhook.
+
+    The event ID and event type are already retained as safe troubleshooting
+    identifiers. Exception text is intentionally excluded because provider or
+    dependency errors can contain credentials, URLs or response fragments.
+    """
+    if isinstance(exc, WebhookStateApplicationError):
+        return "webhook_state_retryable" if exc.result.retryable else "webhook_state_rejected"
+    return "webhook_processing_failed"
+
+
 log = structlog.get_logger()
 
 
@@ -863,7 +877,7 @@ async def stripe_webhook(
             StripeWebhookFailure(
                 stripe_event_id=event.get("id"),
                 event_type=event.get("type"),
-                error_message=f"{type(exc).__name__}: {exc}"[:500],
+                error_message=_safe_webhook_failure_code(exc),
             )
         )
         await db.commit()

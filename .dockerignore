@@ -1,3 +1,31 @@
 .env.responsive-audit.local
 apps/web/.env.responsive-audit.local
 **/.env.responsive-audit.local
+
+# Local credentials and deployment-only secret material must never enter a
+# Docker build context, including when the builder or cache is remote.
+.env
+.env.*
+!.env.example
+secrets/
+backups/
+**/*.pem
+**/*.p8
+**/*firebase-adminsdk-*.json
+**/google-services.json
+
+# Database exports and local backup artifacts are not build inputs.
+*.sql
+*.sql.gz
+*.dump
+*.bak
+
+# Local dependency, build and test output is recreated inside the images and
+# must not be sent with the build context.
+**/node_modules/
+**/.next/
+**/test-results/
+**/coverage/
+**/__pycache__/
+**/.pytest_cache/
+**/.ruff_cache/
