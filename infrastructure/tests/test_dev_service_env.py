@@ -249,12 +249,15 @@ class StaticContractTests(unittest.TestCase):
         (self.cfg.root / "test.env").write_text("MYKHAYA_ENVIRONMENT=test\n", encoding="utf-8")
         self.assertRejected("test.env: is not a recognised DEV configuration file")
 
-    def test_dollar_values_are_flagged_without_disclosure(self):
+    def test_interpolating_dollar_values_are_refused_without_disclosure(self):
+        # Compose would interpolate $secret (to empty), silently changing the value.
         self.cfg.edit("api.env", add="MYKHAYA_SMTP_PASSWORD=synthetic$secret\n")
-        self.cfg.edit("worker.env", add="MYKHAYA_SMTP_PASSWORD=synthetic$secret\n")
-        report = self.cfg.validate()
-        self.assertTrue(any("contains '$'" in w for w in report.warnings))
-        self.assertTrue(all("synthetic$secret" not in w for w in report.warnings))
+        self.cfg.edit("worker.env", add="MYKHAYA_SMTP_PASSWORD='synthetic$secret'\n")
+        errors = self.assertRejected("api.env line")
+        self.assertTrue(any("MYKHAYA_SMTP_PASSWORD contains '$' that Compose would interpolate" in e
+                            for e in errors))
+        self.assertFalse(any("worker.env" in e and "interpolate" in e for e in errors))
+        self.assertTrue(all("synthetic" not in e for e in errors))
 
     @unittest.skipUnless(POSIX, "POSIX permission semantics")
     def test_world_readable_secret_files_and_links_are_refused(self):

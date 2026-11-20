@@ -168,7 +168,32 @@ URLs exactly as `compose.yml` does today and reports, by name only:
 - for each service, what it no longer receives.
 
 Review that report. Every entry must be either a credential the service does not
-use or a pinned/obsolete name. Then make sure `compose.env` contains the
+use or a pinned/obsolete name.
+
+The tool reads `.env` exactly as Docker Compose does. A value may span several
+lines only inside quotes, as a PEM key such as `MYKHAYA_APNS_PRIVATE_KEY` usually
+does (`KEY="-----BEGIN ...` on one line, `...-----"` on the last). Double-quoted
+values decode `\n`, `\t`, `\r`, `\\`, `\"` and `\$`; single-quoted values are
+literal; unquoted values are one line, with literal backslashes (the one-line
+`\n` form used for FCM keys is preserved as written). The tool refuses rather
+than guesses wherever Compose would silently change a value: an unterminated
+quote, text after a closing quote, a line that is neither an assignment nor
+inside quotes, an unquoted multiline key (Compose keeps only its first line), or
+a `$` that Compose would interpolate (write `$$`, or use single quotes). Errors
+name the line and variable only, never a value. Generated files are written in
+full only after every file has been read back and matched exactly.
+
+To see how a multiline value is quoted without displaying it, print only its
+first character after `=` and the last character of its final line:
+
+```sh
+awk -v k=MYKHAYA_APNS_PRIVATE_KEY 'index($0, k"=")==1 {print "opens with:", substr($0, length(k)+2, 1)}' .env
+```
+
+`"` or `'` means the value is quoted and Compose reads the whole key. Anything
+else means Compose has only ever passed its first line to the worker, so APNs
+signing cannot currently work; fix the quoting in the legacy `.env` (and verify
+APNs delivery) before splitting. Then make sure `compose.env` contains the
 absolute key directories from step 1:
 
 ```text

@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import stat
 import sys
 from dataclasses import dataclass, field
@@ -253,31 +254,162 @@ SECRET_FILES = ("api.env", "worker.env", "scheduler.env", "migrate.env", "postgr
 # --- Parsing --------------------------------------------------------------------
 
 
-def parse_env_file(path: Path) -> tuple[dict[str, str], list[str]]:
-    """Parse a dotenv file the way Compose env_file does for plain KEY=VALUE.
+# Docker Compose dotenv semantics, verified on Compose 2.33 and 5.1.4:
+#   "double" may span lines; \n \t \r \\ \" \$ are decoded, any other
+#            backslash sequence is kept literally; $$ -> $; $NAME interpolates.
+#   'single' may span lines; only \' is decoded; everything else is literal.
+#   unquoted is one line; surrounding whitespace and a " #" comment are removed;
+#            backslashes are literal; $$ -> $; $NAME interpolates.
+# Compose silently drops a non-assignment line and text after a closing quote.
+# This parser refuses those, unterminated quotes and unescaped interpolation
+# instead, so a value is never silently truncated or altered.
+DOUBLE_QUOTE_ESCAPES = {"n": "\n", "t": "\t", "r": "\r", "\\": "\\", '"': '"', "$": "$"}
+# Upper-case names only (every MyKhaya setting is). A stray line of base64 key
+# material that ends in "=" padding must never be mistaken for an assignment,
+# because names, unlike values, appear in reports.
+ENV_KEY = re.compile(r"[A-Z_][A-Z0-9_]*")
+PEM_BEGIN, PEM_END = "-----BEGIN", "-----END"
 
-    Returns (values, problems). Problems name lines and keys, never values.
+
+def _resolve_dollars(text: str) -> str | None:
+    """Apply Compose's `$$` -> `$`; None if a bare `$` would interpolate."""
+    out, i = [], 0
+    while i < len(text):
+        if text[i] == "$":
+            if text[i + 1:i + 2] == "$":
+                out.append("$")
+                i += 2
+                continue
+            return None
+        out.append(text[i])
+        i += 1
+    return "".join(out)
+
+
+def parse_env_text(text: str, name: str) -> tuple[dict[str, str], list[str]]:
+    """Parse dotenv text exactly as Compose env_file does, or report why not.
+
+    Returns (values, problems). Problems name the file, line and key only,
+    never any part of a value.
     """
     values: dict[str, str] = {}
     problems: list[str] = []
-    for number, raw in enumerate(path.read_text(encoding="utf-8-sig").splitlines(), 1):
-        line = raw.strip()
-        if not line or line.startswith("#"):
+    text = text.removeprefix("\ufeff")
+    position, line_number, length = 0, 1, len(text)
+
+    def end_of_line(start: int) -> int:
+        end = text.find("\n", start)
+        return length if end < 0 else end
+
+    while position < length:
+        eol = end_of_line(position)
+        line = text[position:eol]
+        start_line = line_number
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            position, line_number = eol + 1, line_number + 1
             continue
-        if line.startswith("export "):
-            line = line[len("export "):].lstrip()
-        if "=" not in line:
-            problems.append(f"{path.name} line {number}: not a KEY=VALUE assignment")
+        body = line.lstrip()
+        if body.startswith(("export ", "export\t")):
+            body = body[len("export"):].lstrip()
+        match = ENV_KEY.match(body)
+        if not match or not body[match.end():].lstrip(" \t").startswith("="):
+            problems.append(f"{name} line {start_line}: not a KEY=VALUE assignment "
+                            "(and not inside a quoted value)")
+            position, line_number = eol + 1, line_number + 1
             continue
-        key, value = line.split("=", 1)
-        key = key.strip()
-        value = value.strip()
-        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
-            value = value[1:-1]
+        key = match.group(0)
+        after_key = body[match.end():].lstrip(" \t")[1:]
+        value_start = eol - len(after_key)  # index of the value text in `text`
+        while value_start < eol and text[value_start] in " \t":
+            value_start += 1
+        quote = text[value_start] if value_start < eol else ""
+        if quote in ("\"", "'"):
+            index, chars = value_start + 1, []
+            while index < length:
+                char = text[index]
+                if char == "\\" and index + 1 < length:
+                    following = text[index + 1]
+                    if quote == "\"" and following in DOUBLE_QUOTE_ESCAPES:
+                        chars.append("\x00" if following == "$" else DOUBLE_QUOTE_ESCAPES[following])
+                        index += 2
+                        continue
+                    if quote == "'" and following == "'":
+                        chars.append("'")
+                        index += 2
+                        continue
+                    chars.append(char)
+                    index += 1
+                    continue
+                if char == quote:
+                    break
+                chars.append(char)
+                index += 1
+            line_number += text.count("\n", value_start, min(index, length))
+            if index >= length:
+                problems.append(f"{name} line {start_line}: {key} has an unterminated "
+                                f"{'double' if quote == chr(34) else 'single'}-quoted value")
+                break  # nothing after an unterminated quote can be trusted
+            rest_end = end_of_line(index)
+            rest = text[index + 1:rest_end].rstrip("\r").strip()
+            if rest and not rest.startswith("#"):
+                problems.append(f"{name} line {line_number}: {key} has text after its closing quote")
+            value: str | None = "".join(chars)
+            if quote == "\"":
+                # \$ was decoded to a placeholder so it is never interpolated.
+                value = _resolve_dollars(value)
+                if value is not None:
+                    value = value.replace("\x00", "$")
+            position, line_number = rest_end + 1, line_number + 1
+        else:
+            raw = text[value_start:eol].rstrip("\r")
+            comment = re.search(r"\s#", raw)
+            if comment:
+                raw = raw[:comment.start()]
+            value = _resolve_dollars(raw.strip())
+            position, line_number = eol + 1, line_number + 1
+            if value is not None and value.startswith(PEM_BEGIN) and PEM_END not in value:
+                # An unquoted multiline PEM: Compose keeps only this first line
+                # and drops the rest. Consume the block up to its END line
+                # without parsing it, so no key material is read as a name.
+                while position < length:
+                    block_eol = end_of_line(position)
+                    ended = PEM_END in text[position:block_eol]
+                    position, line_number = block_eol + 1, line_number + 1
+                    if ended:
+                        break
+                problems.append(f"{name} lines {start_line}-{line_number - 1}: {key} is an "
+                                "unquoted multiline value (Compose keeps only its first line); "
+                                "enclose the whole value in double quotes")
+                continue
+        if value is None:
+            problems.append(f"{name} line {start_line}: {key} contains '$' that Compose would "
+                            "interpolate; write a literal dollar as '$$' or single-quote the value")
+            continue
         if key in values:
-            problems.append(f"{path.name} line {number}: {key} is assigned more than once")
+            problems.append(f"{name} line {start_line}: {key} is assigned more than once")
         values[key] = value
     return values, problems
+
+
+def parse_env_file(path: Path) -> tuple[dict[str, str], list[str]]:
+    """Parse a dotenv file with Compose env_file semantics (see parse_env_text)."""
+    return parse_env_text(path.read_bytes().decode("utf-8"), path.name)
+
+
+def format_env_value(value: str) -> str:
+    """Serialise a value so Compose env_file reads back exactly `value`."""
+    simple = (
+        value == value.strip()
+        and "\n" not in value and "\r" not in value
+        and not value.startswith(("\"", "'"))
+        and re.search(r"\s#", value) is None
+    )
+    if simple:
+        return value.replace("$", "$$")
+    escaped = (value.replace("\\", "\\\\").replace("\"", "\\\"")
+               .replace("$", "$$").replace("\r", "\\r"))
+    return f"\"{escaped}\""
 
 
 # --- Results ---------------------------------------------------------------------
@@ -381,9 +513,6 @@ def check_contract(contract: FileContract, values: dict[str, str], report: Repor
     for name, value in sorted(values.items()):
         if any(marker.lower() in value.lower() for marker in PLACEHOLDER_MARKERS):
             report.error(f"{contract.name}: {name} still contains a documented placeholder")
-        if "$" in value and contract.secret_bearing:
-            report.warn(f"{contract.name}: {name} contains '$'; Compose interpolates env_file "
-                        "values, so confirm it is escaped as '$$' exactly as in the legacy .env")
     for name in sorted(names & JSON_LIST_NAMES):
         try:
             parsed = json.loads(values[name])
@@ -654,20 +783,44 @@ def split_legacy_env(legacy: dict[str, str]) -> tuple[dict[str, dict[str, str]],
 
 
 def write_split(files: dict[str, dict[str, str]], out: Path) -> None:
-    """Create each file exclusively (never overwrite), with restrictive modes."""
+    """Write every file or none, never overwriting, with restrictive modes.
+
+    Each file is first written under a temporary name in `out` and parsed back;
+    only if every file reproduces its values exactly are they all renamed into
+    place. Any failure removes the temporary files and leaves `out` unchanged.
+    Messages never include a value.
+    """
     if not out.is_dir():
         raise SystemExit(f"ERROR: {out} does not exist; create it first (mode 0750)")
     existing = [name for name in files if (out / name).exists()]
     if existing:
         raise SystemExit(f"ERROR: refusing to overwrite existing files: {', '.join(existing)}")
-    for contract in SPLIT_TARGETS:
-        mode = 0o600 if contract.secret_bearing else 0o640
-        fd = os.open(out / contract.name, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
-        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
-            handle.write(f"# Generated from the legacy DEV .env by service_env_contract.py "
-                         f"--split-legacy-env. Contract: {contract.name}.\n")
-            for name in sorted(files[contract.name]):
-                handle.write(f"{name}={files[contract.name][name]}\n")
+    staged: list[tuple[Path, Path]] = []
+    try:
+        for contract in SPLIT_TARGETS:
+            mode = 0o600 if contract.secret_bearing else 0o640
+            temporary = out / f".{contract.name}.split-{os.getpid()}.tmp"
+            fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
+            staged.append((temporary, out / contract.name))
+            with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+                handle.write(f"# Generated from the legacy DEV .env by service_env_contract.py "
+                             f"--split-legacy-env. Contract: {contract.name}.\n")
+                for name in sorted(files[contract.name]):
+                    handle.write(f"{name}={format_env_value(files[contract.name][name])}\n")
+            parsed, problems = parse_env_file(temporary)
+            if problems or parsed != files[contract.name]:
+                raise SystemExit(f"ERROR: {contract.name} did not round-trip exactly; nothing "
+                                 "was written")
+        for temporary, final in staged:
+            if final.exists():
+                raise SystemExit(f"ERROR: {final.name} appeared during the split; nothing was "
+                                 "written")
+        for temporary, final in staged:
+            os.replace(temporary, final)
+        staged = []
+    finally:
+        for temporary, _ in staged:
+            temporary.unlink(missing_ok=True)
 
 
 # --- Resolved Compose model checks (names only) --------------------------------
@@ -750,7 +903,8 @@ def check_provenance(model: dict, root: Path) -> list[str]:
         for name in sorted(set(supplied) - restated):
             if name not in env:
                 errors.append(f"{service}: {name} from its file does not reach the container")
-            elif str(env[name]) != supplied[name]:
+            # `compose config` prints every literal "$" as "$$".
+            elif str(env[name]).replace("$$", "$") != supplied[name]:
                 errors.append(f"{service}: {name} differs from its file (another source wins)")
     return errors
 
