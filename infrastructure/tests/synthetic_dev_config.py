@@ -73,6 +73,11 @@ def write_synthetic_root(base: Path) -> Path:
     for directory in (root, field_keys, apple):
         directory.mkdir(parents=True, exist_ok=True)
         os.chmod(directory, 0o700)
+    # Empty key directories fail validation; these placeholders are not keys.
+    for directory in (field_keys, apple):
+        placeholder = directory / "synthetic-placeholder.txt"
+        placeholder.write_text("synthetic placeholder, not key material\n", encoding="utf-8")
+        os.chmod(placeholder, 0o600)  # 0400 would make Windows cleanup fail
     for name, content in files(field_keys, apple).items():
         path = root / name
         path.write_text(content, encoding="utf-8", newline="\n")

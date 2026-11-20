@@ -152,6 +152,21 @@ Key files: mode `0440` (or `0640`), owner `root`, group `10001` (the container
 user), as in [sensitive-field-keys.md](sensitive-field-keys.md). Never world-readable.
 Copy keys with `install -m 0440 -o root -g 10001 SRC DEST`; never print them.
 
+The validator accepts this key-material policy, and nothing looser:
+
+| | Accepted | Rejected |
+|---|---|---|
+| Owner (directory and files) | `root` (0) or the service account (10001) | the deployment account, any other UID |
+| Group | `root` (0) or `10001` | any other GID |
+| Directory mode | no access for others, no group write (`0700`, `0750`) | anything readable, writable or searchable by others, or group-writable |
+| File mode | no access for others, no group write (`0400`, `0440`, `0600`, `0640`) | readable or writable by others, group-writable, setuid/setgid |
+| Contents | regular files the service account can read | symbolic links, subdirectories and other file types; an empty directory; a file named by a `*_FILE` setting that is absent |
+
+An Apple directory owned `10001:10001` with mode `0700` and a key `0600` is
+therefore valid as it stands. Do not loosen key permissions, and do not add the
+deployment account to group `10001`, to make validation pass: the deployment
+account is meant to be unable to read the keys.
+
 ## 3. Generate the service files from the legacy `.env`
 
 ```sh
@@ -219,6 +234,28 @@ database roles and passwords against `postgres.env`, identical shared secrets,
 and that the merged Compose model gives each service exactly its restated values
 plus its own files. It builds, stops and restarts nothing. Fix every reported
 item and repeat until it passes.
+
+The key directories are readable only by the containers' service identity, so
+`config-check` inspects them from a short-lived probe container rather than as
+the deployment account. The probe:
+
+- uses the API image already built on the host (`docker compose config` names
+  it), first confirming the image runs as `10001:10001`; it never pulls;
+- runs with `--network none`, `--read-only`, `--cap-drop ALL`,
+  `--security-opt no-new-privileges` and `--user 10001:10001`, with no
+  environment files or credentials;
+- mounts only the one key directory being checked, read-only;
+- reports file metadata (type, mode, owner, group) and whether the service
+  account has read permission. It never opens a key, so it cannot detect a
+  corrupt or wrong key: the services prove that at startup.
+
+The deployment account still checks the key directory itself from the host: it
+must exist, must not be a symbolic link, must not resolve to a production path
+and must not be inside the repository. The probe must also report the same
+directory (inode) as the host sees. If the image is missing, Docker is
+unreachable or the probe fails, `config-check` fails; it never skips the key
+check. Docker user-namespace remapping is not supported: remapped owners are
+rejected.
 
 ## 5. Cut over
 

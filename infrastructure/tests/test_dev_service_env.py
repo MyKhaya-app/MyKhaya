@@ -42,6 +42,23 @@ def docker_compose_available() -> bool:
     return subprocess.run(["docker", "compose", "version"], capture_output=True).returncode == 0
 
 
+def trusted_probe(source: str) -> contract.KeyDirListing:
+    """Stands in for the Docker key-directory probe (test_key_directory_probe.py
+    exercises the real one): the real entries, with correctly provisioned
+    ownership and modes as the service identity would see them."""
+    path = Path(source)
+    entries = []
+    for child in sorted(path.iterdir()):
+        kind = ("symlink" if child.is_symlink() else "directory" if child.is_dir()
+                else "file" if child.is_file() else "other")
+        entries.append(contract.KeyEntry(child.name, kind, 0o440, 0, contract.SERVICE_GID,
+                                         child.lstat().st_ino, kind == "file"))
+    root = contract.KeyEntry(".", "directory", 0o750, 0, contract.SERVICE_GID,
+                             path.lstat().st_ino, True)
+    return contract.KeyDirListing(contract.SERVICE_UID, contract.SERVICE_GID,
+                                  (contract.SERVICE_GID,), root, tuple(entries))
+
+
 class SyntheticRoot:
     def __init__(self) -> None:
         self.base = Path(tempfile.mkdtemp(prefix="mykhaya-f03-3a-"))
@@ -58,7 +75,8 @@ class SyntheticRoot:
         path.write_text(text + add, encoding="utf-8", newline="\n")
 
     def validate(self) -> contract.Report:
-        return contract.validate_root(self.root, repo_root=ROOT, check_perms=POSIX)
+        return contract.validate_root(self.root, repo_root=ROOT, check_perms=POSIX,
+                                      probe=trusted_probe)
 
     def cleanup(self) -> None:
         shutil.rmtree(self.base, ignore_errors=True)
@@ -336,7 +354,8 @@ class LegacySplitTests(unittest.TestCase):
     def test_split_output_passes_the_contract(self):
         code, output, out, _ = self.run_split()
         self.assertEqual(code, 0)
-        report = contract.validate_root(out, repo_root=ROOT, check_perms=POSIX)
+        report = contract.validate_root(out, repo_root=ROOT, check_perms=POSIX,
+                                        probe=trusted_probe)
         self.assertEqual(report.errors, [])
 
     def test_split_never_prints_values_and_reports_names(self):

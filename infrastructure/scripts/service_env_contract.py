@@ -13,8 +13,8 @@ in api.env matches the one PostgreSQL was initialised with) and reported by
 variable name.
 
 Usage:
-    service_env_contract.py --root /etc/mykhaya/dev [--repo-root PATH]
-                            [--skip-permissions]
+    service_env_contract.py --root /etc/mykhaya/dev --probe-image IMAGE
+                            [--repo-root PATH] [--skip-permissions]
 """
 
 from __future__ import annotations
@@ -23,7 +23,9 @@ import argparse
 import json
 import os
 import re
+import secrets
 import stat
+import subprocess
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
@@ -649,9 +651,327 @@ def check_cross_file(files: dict[str, dict[str, str]], report: Report) -> None:
                          "MYKHAYA_APPLE_PRIVATE_KEY_FILE, not both (use the file in DEV)")
 
 
+# --- Protected key directories ------------------------------------------------
+# The field keyrings and the Apple signing key are readable only by the
+# containers' service identity (compose.yml mounts them read-only), never by the
+# deployment account. Their contents are therefore inspected from inside a
+# short-lived container running as that identity, from the locally built API
+# image: no network, no capabilities, read-only root filesystem, only the one
+# key directory mounted read-only, no environment files. It reports metadata
+# only (lstat and an access(2) permission check); nothing ever opens a key.
+
+SERVICE_UID = 10001  # USER 10001:10001 in apps/api/Dockerfile (runtime stage)
+SERVICE_GID = 10001
+TRUSTED_KEY_OWNERS = frozenset({0, SERVICE_UID})
+TRUSTED_KEY_GROUPS = frozenset({0, SERVICE_GID})
+KEY_DIRS = {P + "FIELD_KEYS_HOST_DIR": "/run/secrets/mykhaya/",
+            P + "APPLE_KEY_HOST_DIR": "/run/secrets/mykhaya-apple/"}
+KEY_FILE_SETTINGS = {P + "FIELD_ENCRYPTION_KEYS_FILE": P + "FIELD_KEYS_HOST_DIR",
+                     P + "BLIND_INDEX_KEYS_FILE": P + "FIELD_KEYS_HOST_DIR",
+                     P + "APPLE_PRIVATE_KEY_FILE": P + "APPLE_KEY_HOST_DIR"}
+PROBE_MOUNT = "/probe"
+PROBE_TIMEOUT_SECONDS = 60
+PROBE_KINDS = frozenset({"directory", "file", "symlink", "other"})
+IMAGE_REFERENCE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._/:@-]{0,254}")
+
+# Runs inside the probe container. Fixed text: it takes no input, follows no
+# links (lstat; access() is asked only of regular files and directories), and
+# prints numbers and entry names. os.access() is a permission check for the
+# service identity, not proof that a key is valid; the services prove that at
+# startup.
+PROBE_SCRIPT = """
+import json, os, stat, sys
+
+def describe(path, name):
+    info = os.lstat(path)
+    mode = info.st_mode
+    if stat.S_ISLNK(mode):
+        kind = "symlink"
+    elif stat.S_ISDIR(mode):
+        kind = "directory"
+    elif stat.S_ISREG(mode):
+        kind = "file"
+    else:
+        kind = "other"
+    wanted = os.R_OK | os.X_OK if kind == "directory" else os.R_OK
+    return {"name": name, "kind": kind, "mode": stat.S_IMODE(mode), "uid": info.st_uid,
+            "gid": info.st_gid, "inode": info.st_ino,
+            "readable": kind in ("file", "directory") and os.access(path, wanted)}
+
+result = {"uid": os.getuid(), "gid": os.getgid(), "groups": sorted(os.getgroups())}
+try:
+    result["root"] = describe("/probe", ".")
+except FileNotFoundError:
+    result["error"] = "missing"
+except OSError:
+    result["error"] = "unavailable"
+else:
+    try:
+        result["entries"] = [describe("/probe/" + n, n) for n in sorted(os.listdir("/probe"))]
+    except PermissionError:
+        result["error"] = "denied"
+    except OSError:
+        result["error"] = "unavailable"
+sys.stdout.write(json.dumps(result))
+"""
+
+
+class ProbeFailure(Exception):
+    """The key-directory probe could not run; the message is safe to print."""
+
+
+@dataclass(frozen=True)
+class KeyEntry:
+    name: str
+    kind: str
+    mode: int
+    uid: int
+    gid: int
+    inode: int
+    readable: bool
+
+
+@dataclass(frozen=True)
+class KeyDirListing:
+    uid: int
+    gid: int
+    groups: tuple[int, ...]
+    root: KeyEntry | None
+    entries: tuple[KeyEntry, ...] | None  # None: the service identity cannot list it
+    error: str | None = None
+
+
+def _safe_name(name: str) -> str:
+    """Entry names are diagnostic metadata; keep them printable and short."""
+    cleaned = "".join(c if c.isprintable() and c not in "\r\n" else "?" for c in name)
+    return cleaned if len(cleaned) <= 64 else cleaned[:61] + "..."
+
+
+def _entry(raw: object, *, root: bool) -> KeyEntry:
+    if not isinstance(raw, dict):
+        raise ProbeFailure("the probe returned unexpected output")
+    name = raw.get("name")
+    numbers = [raw.get(k) for k in ("mode", "uid", "gid", "inode")]
+    if (not isinstance(name, str) or raw.get("kind") not in PROBE_KINDS
+            or not all(type(n) is int and n >= 0 for n in numbers)
+            or type(raw.get("readable")) is not bool
+            or (name != "." if root else (not name or "/" in name or name in {".", ".."}))):
+        raise ProbeFailure("the probe returned unexpected output")
+    return KeyEntry(name, raw["kind"], raw["mode"], raw["uid"], raw["gid"], raw["inode"],
+                    raw["readable"])
+
+
+def parse_probe_output(text: str) -> KeyDirListing:
+    try:
+        data = json.loads(text.strip().splitlines()[-1]) if text.strip() else None
+    except ValueError:
+        data = None
+    if not isinstance(data, dict):
+        raise ProbeFailure("the probe returned unexpected output")
+    ids = [data.get("uid"), data.get("gid")]
+    groups = data.get("groups")
+    error = data.get("error")
+    if (not all(type(i) is int for i in ids) or not isinstance(groups, list)
+            or not all(type(g) is int for g in groups)
+            or error not in {None, "missing", "unavailable", "denied"}):
+        raise ProbeFailure("the probe returned unexpected output")
+    root = _entry(data["root"], root=True) if "root" in data else None
+    entries = None
+    if "entries" in data:
+        if not isinstance(data["entries"], list):
+            raise ProbeFailure("the probe returned unexpected output")
+        entries = tuple(_entry(e, root=False) for e in data["entries"])
+    if root is None and error is None or error is None and entries is None:
+        raise ProbeFailure("the probe returned unexpected output")
+    return KeyDirListing(ids[0], ids[1], tuple(groups), root, entries, error)
+
+
+def probe_command(image: str, source: str, name: str, script: str = PROBE_SCRIPT) -> list[str]:
+    return ["docker", "run", "--rm", "--name", name, "--pull", "never",
+            "--network", "none", "--read-only", "--cap-drop", "ALL",
+            "--security-opt", "no-new-privileges", "--user", f"{SERVICE_UID}:{SERVICE_GID}",
+            "--label", "app.mykhaya.probe=key-directory",
+            "--mount", f"type=bind,source={source},target={PROBE_MOUNT},readonly",
+            "--workdir", "/", "--entrypoint", "python", image, "-I", "-S", "-B", "-c", script]
+
+
+def _docker_failure(stderr: str, what: str) -> ProbeFailure:
+    """Map Docker's diagnostics to fixed messages; its own text is never echoed."""
+    lowered = stderr.lower()
+    if "no such image" in lowered or "unable to find image" in lowered:
+        return ProbeFailure("the API image is not available locally; build it first "
+                            "(the probe never pulls images)")
+    if "cannot connect to the docker daemon" in lowered or "permission denied while trying "\
+            "to connect" in lowered:
+        return ProbeFailure("the Docker daemon is not reachable")
+    if "bind source path does not exist" in lowered:
+        return ProbeFailure("the directory is not visible to the Docker daemon")
+    return ProbeFailure(f"{what} failed")
+
+
+def verify_probe_image(image: str, run=subprocess.run) -> None:
+    """The probe must run as the identity the services actually use."""
+    try:
+        result = run(["docker", "image", "inspect", "--format", "{{json .Config.User}}", image],
+                     capture_output=True, text=True, check=False, timeout=PROBE_TIMEOUT_SECONDS)
+    except (OSError, subprocess.SubprocessError):
+        raise ProbeFailure("Docker is unavailable") from None
+    if result.returncode != 0:
+        raise _docker_failure(result.stderr or "no such image", "inspecting the API image")
+    try:
+        user = json.loads(result.stdout.strip())
+    except ValueError:
+        user = None
+    if user != f"{SERVICE_UID}:{SERVICE_GID}":
+        raise ProbeFailure(f"the API image does not run as the expected service identity "
+                           f"{SERVICE_UID}:{SERVICE_GID}")
+
+
+def docker_key_dir_probe(image: str, run=subprocess.run):
+    """Return a probe that lists one key directory as the service identity."""
+    if not IMAGE_REFERENCE.fullmatch(image):
+        raise ProbeFailure("the API image reference is not valid")
+    verified = False
+
+    def probe(source: str) -> KeyDirListing:
+        nonlocal verified
+        if not source.startswith("/") or any(c in source for c in ',"\r\n'):
+            raise ProbeFailure("the path cannot be passed safely to Docker")
+        if not verified:
+            verify_probe_image(image, run)
+            verified = True
+        name = f"mykhaya-keydir-probe-{os.getpid()}-{secrets.token_hex(4)}"
+        try:
+            result = run(probe_command(image, source, name), capture_output=True, text=True,
+                         check=False, timeout=PROBE_TIMEOUT_SECONDS)
+        except subprocess.TimeoutExpired:
+            run(["docker", "rm", "-f", name], capture_output=True, text=True, check=False)
+            raise ProbeFailure("the probe container timed out") from None
+        except (OSError, subprocess.SubprocessError):
+            raise ProbeFailure("Docker is unavailable") from None
+        if result.returncode != 0:
+            raise _docker_failure(result.stderr or "", "the probe container")
+        return parse_probe_output(result.stdout)
+
+    return probe
+
+
+def _deployment_uid() -> int | None:
+    return os.geteuid() if hasattr(os, "geteuid") else None
+
+
+def check_key_material(entry: KeyEntry, label: str, report: Report, *, directory: bool,
+                       deployment_uid: int | None) -> None:
+    """Ownership and mode policy for key directories and key files only."""
+    if entry.kind == "symlink":
+        report.error(f"{label}: must not be a symbolic link")
+        return
+    expected = "directory" if directory else "file"
+    if entry.kind != expected:
+        report.error(f"{label}: unexpected file type (only regular key files are allowed"
+                     f"{'' if directory else ' inside a key directory'})")
+        return
+    trusted = f"root (0) or the service account ({SERVICE_UID})"
+    if deployment_uid not in {None, 0} and entry.uid == deployment_uid:
+        report.error(f"{label}: is owned by the deployment account (UID {entry.uid}); "
+                     f"key material must be owned by {trusted}")
+    elif entry.uid not in TRUSTED_KEY_OWNERS:
+        report.error(f"{label}: is owned by untrusted UID {entry.uid}; expected {trusted}")
+    if entry.gid not in TRUSTED_KEY_GROUPS:
+        report.error(f"{label}: has untrusted group GID {entry.gid}; expected 0 or {SERVICE_GID}")
+    if entry.mode & stat.S_IWGRP:
+        report.error(f"{label}: is writable by its group (mode {entry.mode:04o})")
+    if entry.mode & stat.S_IWOTH:
+        report.error(f"{label}: is writable by other users (mode {entry.mode:04o})")
+    if entry.mode & (stat.S_IROTH | stat.S_IXOTH):
+        report.error(f"{label}: is readable by other users (mode {entry.mode:04o}; expected "
+                     f"{'0700/0750' if directory else '0400/0440/0600/0640'})")
+    if not directory and entry.mode & (stat.S_ISUID | stat.S_ISGID):
+        report.error(f"{label}: has setuid/setgid bits (mode {entry.mode:04o})")
+    if not entry.readable:
+        report.error(f"{label}: is not {'listable' if directory else 'readable'} by the service "
+                     f"account ({SERVICE_UID}:{SERVICE_GID}), so the services could not use it")
+
+
+def check_key_directory(key: str, path: Path, probe, report: Report,
+                        referenced: set[str]) -> None:
+    label = f"compose.env: {key}"
+    try:
+        host = path.lstat()
+    except FileNotFoundError:
+        report.error(f"{label} does not exist on this host")
+        return
+    except PermissionError:
+        report.error(f"{label}: a parent directory denies the deployment account access")
+        return
+    except OSError:
+        report.error(f"{label}: cannot be inspected")
+        return
+    if stat.S_ISLNK(host.st_mode):
+        report.error(f"{label}: must not be a symbolic link")
+        return
+    if not stat.S_ISDIR(host.st_mode):
+        report.error(f"{label}: is not a directory")
+        return
+    if probe is None:
+        report.error(f"{label}: cannot be verified: no API image was given for the key-directory "
+                     "probe (--probe-image)")
+        return
+    try:
+        listing = probe(str(path))
+    except ProbeFailure as exc:
+        report.error(f"{label}: cannot be verified: {exc}")
+        return
+    if (listing.uid, listing.gid) != (SERVICE_UID, SERVICE_GID):
+        report.error(f"{label}: cannot be verified: the probe did not run as "
+                     f"{SERVICE_UID}:{SERVICE_GID}")
+        return
+    if listing.root is None:
+        report.error(f"{label}: cannot be verified: the mounted directory was "
+                     f"{listing.error or 'unavailable'}")
+        return
+    root = listing.root
+    # Same directory (bind mounts preserve the inode). The probe's ownership and
+    # modes are authoritative: they are what the services see. Under Docker
+    # user-namespace remapping the owners appear remapped and fail the policy.
+    if root.inode != host.st_ino:
+        report.error(f"{label}: the probe saw a different directory from the host "
+                     "(was it replaced during validation?)")
+        return
+    deployment_uid = _deployment_uid()
+    check_key_material(root, key, report, directory=True, deployment_uid=deployment_uid)
+    if listing.entries is None:
+        if root.readable:  # access() allowed it but listing still failed
+            report.error(f"{label}: cannot be listed by the service account")
+        return
+    if not listing.entries:
+        report.error(f"{label}: is empty; the services would find no keys")
+    for entry in listing.entries:
+        check_key_material(entry, f"{key}/{_safe_name(entry.name)}", report, directory=False,
+                           deployment_uid=deployment_uid)
+    present = {e.name for e in listing.entries if e.kind == "file"}
+    for name in sorted(referenced - present):
+        report.error(f"{key}: {_safe_name(name)} is named by a *_FILE setting but is not a "
+                     "regular file in this directory")
+
+
+def _referenced_key_files(files: dict[str, dict[str, str]]) -> dict[str, set[str]]:
+    """Key file names the services are configured to read, per host directory."""
+    wanted: dict[str, set[str]] = {key: set() for key in KEY_DIRS}
+    for values in files.values():
+        for setting, key in KEY_FILE_SETTINGS.items():
+            value = values.get(setting, "")
+            prefix = KEY_DIRS[key]
+            if value.startswith(prefix):  # other locations are rejected elsewhere
+                wanted[key].add(value[len(prefix):])
+    return wanted
+
+
 def check_secret_dirs(compose: dict[str, str], repo_root: Path | None, check_perms: bool,
-                      report: Report) -> None:
-    for key in (P + "FIELD_KEYS_HOST_DIR", P + "APPLE_KEY_HOST_DIR"):
+                      report: Report, *, probe=None,
+                      files: dict[str, dict[str, str]] | None = None) -> None:
+    referenced = _referenced_key_files(files or {})
+    for key in KEY_DIRS:
         value = compose.get(key, "")
         if not value:
             continue
@@ -662,24 +982,32 @@ def check_secret_dirs(compose: dict[str, str], repo_root: Path | None, check_per
         if _is_production_path(value):
             report.error(f"compose.env: {key} points at a production path")
             continue
-        if repo_root is not None and _inside(path.resolve(), repo_root.resolve()):
+        try:
+            resolved = path.resolve()
+        except (OSError, RuntimeError):
+            report.error(f"compose.env: {key} cannot be resolved on this host")
+            continue
+        if repo_root is not None and _inside(resolved, repo_root.resolve()):
             report.error(f"compose.env: {key} is inside the repository working tree")
             continue
-        if not path.is_dir():
+        try:
+            exists = path.is_dir()
+        except OSError:
+            exists = False
+        if not exists:
             # Compose would silently create an empty root-owned directory.
             report.error(f"compose.env: {key} does not exist on this host")
             continue
-        if _is_production_path(str(path.resolve())):
+        if _is_production_path(str(resolved)):
             report.error(f"compose.env: {key} resolves (via a link) to a production path")
         if check_perms:
-            check_permissions(path, secret=True, is_dir=True, report=report, label=key)
-            for child in sorted(path.iterdir()):
-                check_permissions(child, secret=True, is_dir=child.is_dir(), report=report,
-                                  label=f"{key}/{child.name}")
+            check_key_directory(key, path, probe, report, referenced[key])
 
 
 def validate_root(root: Path, *, repo_root: Path | None = None,
-                  check_perms: bool = True) -> Report:
+                  check_perms: bool = True, probe=None) -> Report:
+    """Validate the seven files; ``probe`` lists key directories (see
+    docker_key_dir_probe) and is required whenever permissions are checked."""
     report = Report()
     check_root_location(root, repo_root, report)
     if report.errors and not root.is_dir():
@@ -713,7 +1041,8 @@ def validate_root(root: Path, *, repo_root: Path | None = None,
         report.error(f"{name}: is not a recognised DEV configuration file "
                      "(test configuration is synthetic and tracked in the repository)")
     check_cross_file(files, report)
-    check_secret_dirs(files.get("compose.env", {}), repo_root, check_perms, report)
+    check_secret_dirs(files.get("compose.env", {}), repo_root, check_perms, report,
+                      probe=probe, files=files)
     return report
 
 
@@ -973,6 +1302,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parents[2])
     parser.add_argument("--skip-permissions", action="store_true",
                         help="only for non-POSIX development hosts; never on the DEV server")
+    parser.add_argument("--probe-image", metavar="IMAGE",
+                        help="with --root: the locally built API image used to inspect the "
+                             "protected key directories as the service identity (never pulled)")
     args = parser.parse_args(argv)
     if args.split_legacy_env:
         if args.out is None:
@@ -1017,7 +1349,15 @@ def main(argv: list[str] | None = None) -> int:
         print("ERROR: permission checks need a POSIX host; pass --skip-permissions only for "
               "local synthetic validation", file=sys.stderr)
         return 2
-    report = validate_root(args.root, repo_root=args.repo_root, check_perms=check_perms)
+    probe = None
+    if check_perms and args.probe_image:
+        try:
+            probe = docker_key_dir_probe(args.probe_image)
+        except ProbeFailure as exc:
+            print(f"ERROR: key-directory probe: {exc}", file=sys.stderr)
+            return 1
+    report = validate_root(args.root, repo_root=args.repo_root, check_perms=check_perms,
+                           probe=probe)
     for warning in report.warnings:
         print(f"WARNING: {warning}", file=sys.stderr)
     if report.errors:

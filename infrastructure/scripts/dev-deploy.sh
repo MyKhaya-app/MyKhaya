@@ -124,9 +124,25 @@ validate_service_env() {
     /*) ;;
     *) die "MYKHAYA_DEV_CONFIG_ROOT must be an absolute path" ;;
   esac
-  "$PYTHON" infrastructure/scripts/service_env_contract.py \
-    --root "$DEV_CONFIG_ROOT" --repo-root "$REPO_ROOT" ||
+  # The key directories are readable only by the containers' service identity,
+  # so their contents are inspected (metadata only) by a locked-down probe
+  # container from the locally built API image. Without an image the check
+  # fails closed; it is never skipped.
+  probe_image=$(api_image) || probe_image=
+  set -- --root "$DEV_CONFIG_ROOT" --repo-root "$REPO_ROOT"
+  [ -z "$probe_image" ] || set -- "$@" --probe-image "$probe_image"
+  "$PYTHON" infrastructure/scripts/service_env_contract.py "$@" ||
     die "DEV service configuration is invalid; nothing was built, stopped or restarted"
+}
+
+api_image() {
+  # Prints only the API image name; the merged model holds secret values and
+  # never leaves this pipe.
+  compose config --format json 2>/dev/null |
+    "$PYTHON" -c 'import json, sys
+model = json.load(sys.stdin)
+api = model["services"]["api"]
+print(api.get("image") or model["name"] + "-api")' 2>/dev/null
 }
 
 check_resolved_service_env() {
@@ -544,7 +560,9 @@ case "${1:-}" in
     health_checks
     ;;
   config-check)
-    # Configuration only: no images, containers, ports or Git changes.
+    # Configuration only: no builds, pulls, port or Git changes, and no service
+    # container is touched. The only container is the short-lived, isolated
+    # key-directory probe (service_env_contract.py), removed on exit.
     [ "$CONFIG_MODE" = service-env ] || die "config-check validates the service-specific layout; set MYKHAYA_DEV_CONFIG_ROOT"
     PYTHON=$(find_python) || die "Python 3 is unavailable (required for configuration validation)"
     export PYTHON

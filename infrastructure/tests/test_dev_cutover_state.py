@@ -39,6 +39,17 @@ case "$*" in
   "network inspect mykhaya_data")
     echo '[{"Driver":"bridge","Internal":true,"IPAM":{"Config":[]}}]'; exit 0 ;;
   "compose version"*|*" config "*|*" config") exec "$REAL_DOCKER" "$@" ;;
+  "image inspect "*) echo '"10001:10001"'; exit 0 ;;
+  "run "*"app.mykhaya.probe=key-directory"*)
+    # The key-directory probe, answering as a correctly provisioned host would.
+    if [ -n "${FAKE_PROBE_FAIL:-}" ]; then echo "Cannot connect to the Docker daemon" >&2; exit 125; fi
+    for argument in "$@"; do
+      case "$argument" in
+        type=bind,source=*) source=${argument#type=bind,source=}; source=${source%%,target=*} ;;
+      esac
+    done
+    printf '{"uid":10001,"gid":10001,"groups":[10001],"root":{"name":".","kind":"directory","mode":488,"uid":0,"gid":10001,"inode":%s,"readable":true},"entries":[{"name":"synthetic-placeholder.txt","kind":"file","mode":288,"uid":0,"gid":10001,"inode":1,"readable":true}]}\n' "$(stat -c %i "$source")"
+    exit 0 ;;
   port*) exit 1 ;;
   inspect*)
     last=$(eval "printf '%s' \"\${$#}\"")
@@ -217,6 +228,15 @@ class CutoverStateTests(unittest.TestCase):
     def test_invalid_configuration_fails_before_state_or_containers_change(self):
         (self.root / "api.env").unlink()
         self.assertRefused(self.deploy(), "DEV service configuration is invalid")
+        self.assertEqual(self.state_now(), "absent")
+        self.assertEqual(self.recreations(), [])
+
+    def test_unverifiable_key_directories_fail_before_state_or_containers_change(self):
+        result = self.deploy(probe_fail="1")
+        self.assertRefused(result, "DEV service configuration is invalid")
+        self.assertIn("MYKHAYA_FIELD_KEYS_HOST_DIR: cannot be verified: the Docker daemon is not "
+                      "reachable", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
         self.assertEqual(self.state_now(), "absent")
         self.assertEqual(self.recreations(), [])
 
