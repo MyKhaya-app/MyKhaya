@@ -79,12 +79,18 @@ a80415dd31c2b26f334a5138861c0be15ae01aa7:compose.e2e.yml:generic-api-key:111
 ce2887cfca68f4a9e8a3e2d66a105de9e077282f:.env.production.example:generic-api-key:4
 
 # CONFIRMED real secret (see docs/security/MYKHAYA_SECURITY_AUDIT_2026-10.md
-# SEC-18): a real DVLA UAT Vehicle Enquiry Service API key was committed to
-# .env.example on 2026-09-29, matching the value in the live, gitignored
-# .env file. Rotation is tracked in SEC-18 (external action, not performed by
-# this audit). The value has been removed from the current tree
-# (.env.example's MYKHAYA_DVLA_UAT_API_KEY is now blank, matching every other
-# credential field in that file).
+# SEC-18 and its "SEC-18 disposition record"): a real DVLA UAT Vehicle Enquiry
+# Service API key was committed to .env.example on 2026-09-29, matching the
+# value in the live, gitignored .env file.
+#
+# Source-code remediation is complete: the value was removed in d31892e
+# (2026-10-02) and re-verified absent from every tracked file on 2026-11-21
+# (.env.example's MYKHAYA_DVLA_UAT_API_KEY is blank, matching every other
+# credential field in that file). The historical Git exposure in the commit
+# below is acknowledged and previously assessed under SEC-18. Future audits
+# cite SEC-18 for it and do not raise it as a new finding. Revocation of the
+# credential is an Owner action that has NOT been independently verified; this
+# entry is not evidence of revocation and never substitutes for it.
 #
 # This fingerprint is scoped to this exact historical commit only — Gitleaks
 # fingerprints are commit:file:rule:line, so they are bound to that one

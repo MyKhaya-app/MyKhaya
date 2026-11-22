@@ -104,6 +104,23 @@ or copy the fixture value. The scan must return no findings after these exact
 dispositions are present; any new fingerprint or any finding outside this
 table requires separate investigation.
 
+### Previously assessed historical findings
+
+These are genuine credential exposures in published history. They have already
+been investigated and given a disposition. A future audit or review cites the
+existing finding ID and does not raise the same historical commit as a new
+finding. The audit report holds the authoritative disposition; this table only
+points to it.
+
+| Finding | Fingerprint | Source remediation | Revocation | Authoritative record |
+|---|---|---|---|---|
+| SEC-18: historical DVLA UAT credential exposure | `32b102ab29fcb88c2ecb27edbb13f4e76b7cd336:.env.example:generic-api-key:70` | Complete (removed in `d31892e`; re-verified 2026-11-21) | Not independently verified (Owner action) | [Security audit 2026-10, SEC-18 disposition record](../security/MYKHAYA_SECURITY_AUDIT_2026-10.md#sec-18-disposition-record-historical-dvla-uat-credential-exposure) |
+
+Each exception is an exact fingerprint for that one historical occurrence. It
+does not cover the same value or any other credential in another commit, file
+or line. A recurrence of that kind is a new finding and follows
+**Genuine credential** triage above.
+
 ## Synthetic fixture conventions
 
 - Make synthetic values obviously synthetic: include `synthetic`, `e2e`,
