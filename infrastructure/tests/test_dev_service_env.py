@@ -605,8 +605,12 @@ class ComposeModelTests(unittest.TestCase):
         production = (ROOT / "compose.production.yml").read_text(encoding="utf-8")
         self.assertNotIn("service-env", production)
         self.assertNotIn("MYKHAYA_DEV_CONFIG_ROOT", (ROOT / "compose.yml").read_text(encoding="utf-8"))
-        prod_script = (ROOT / "infrastructure/scripts/prod-deploy.sh").read_text(encoding="utf-8")
-        self.assertNotIn("service-env", prod_script)
+        # PROD has its own service-env overlay (F-03); it must never load DEV's.
+        for name in ("prod-deploy.sh", "prod-config-mode.sh", "prod-health.sh"):
+            prod_script = (ROOT / "infrastructure/scripts" / name).read_text(encoding="utf-8")
+            self.assertNotIn("compose.dev.service-env.yml", prod_script)
+            self.assertNotIn("compose.dev.yml", prod_script)
+            self.assertNotIn("MYKHAYA_DEV_CONFIG_ROOT", prod_script)
 
 
 class DotenvFallbackRegressionTests(unittest.TestCase):

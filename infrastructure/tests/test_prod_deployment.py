@@ -53,7 +53,7 @@ class ProductionDeploymentTests(unittest.TestCase):
             self.assertIn(key, self.script)
         self.assertLess(
             self.script.index("require_installation_config"),
-            self.script.index("$COMPOSE config --quiet"),
+            self.script.index("prod_compose config --quiet"),
         )
 
     def test_install_validates_before_starting_or_migrating(self) -> None:
@@ -67,7 +67,7 @@ class ProductionDeploymentTests(unittest.TestCase):
 
     def test_production_channel_and_commit_metadata_are_exported_before_build(self) -> None:
         metadata = self.script.index('export MYKHAYA_VERSION MYKHAYA_COMMIT_SHA="$head_commit"')
-        build = self.script.index("$COMPOSE build web api worker scheduler migrate")
+        build = self.script.index("prod_compose build web api worker scheduler migrate")
         self.assertLess(metadata, build)
         self.assertIn("MYKHAYA_BUILD_CHANNEL=stable", self.script)
         self.assertIn("git rev-parse HEAD", self.script)
@@ -76,10 +76,10 @@ class ProductionDeploymentTests(unittest.TestCase):
         self.assertIn('git merge-base --is-ancestor "$tag_commit" origin/main', self.script)
 
     def test_build_precedes_migration_and_application_replacement(self) -> None:
-        build = self.script.index("$COMPOSE build web api worker scheduler migrate")
-        migration = self.script.index("$COMPOSE run --rm --no-deps migrate", build)
+        build = self.script.index("prod_compose build web api worker scheduler migrate")
+        migration = self.script.index("prod_compose run --rm --no-deps migrate", build)
         replacement = self.script.index(
-            "$COMPOSE up -d --no-build caddy web api worker scheduler", migration
+            "prod_compose up -d --no-build caddy web api worker scheduler", migration
         )
         self.assertLess(build, migration)
         self.assertLess(migration, replacement)
@@ -92,9 +92,9 @@ class ProductionDeploymentTests(unittest.TestCase):
         self.assertNotRegex(self.script, r"\bdown\s+-v\b|\bvolume\s+rm\b|\bprune\b")
 
     def test_application_services_start_with_no_build_after_images_build(self) -> None:
-        build = self.script.index("$COMPOSE build web api worker scheduler migrate")
+        build = self.script.index("prod_compose build web api worker scheduler migrate")
         start = self.script.index(
-            "$COMPOSE up -d --no-build caddy web api worker scheduler"
+            "prod_compose up -d --no-build caddy web api worker scheduler"
         )
         self.assertLess(build, start)
         self.assertIn("--no-build", self.script[start : start + 100])
@@ -148,7 +148,9 @@ class ProductionDeploymentTests(unittest.TestCase):
 
     def test_production_health_checks_use_http_loopback_and_web_host(self) -> None:
         self.assertIn(
-            "WEB_DOMAIN=${WEB_DOMAIN:-$(sed -n 's/^WEB_DOMAIN=//p' .env 2>/dev/null | tail -n 1 | tr -d '\\r')}",
+            # PROD_ENV_SOURCE is the root .env in legacy mode (unchanged) and
+            # the PROD root's compose.env after the F-03 cutover.
+            "WEB_DOMAIN=${WEB_DOMAIN:-$(sed -n 's/^WEB_DOMAIN=//p' \"$PROD_ENV_SOURCE\" 2>/dev/null | tail -n 1 | tr -d '\\r')}",
             self.health,
         )
         self.assertIn("WEB_DOMAIN=${WEB_DOMAIN:-mykhaya.app}", self.health)
@@ -178,9 +180,9 @@ class ProductionDeploymentTests(unittest.TestCase):
     def test_release_metadata_is_exported_before_follow_up_compose_operations(self) -> None:
         export = 'export MYKHAYA_VERSION MYKHAYA_COMMIT_SHA="$head_commit"'
         for operation in (
-            "$COMPOSE build web api worker scheduler migrate",
-            "$COMPOSE run --rm --no-deps migrate",
-            "$COMPOSE up -d --no-build caddy web api worker scheduler",
+            "prod_compose build web api worker scheduler migrate",
+            "prod_compose run --rm --no-deps migrate",
+            "prod_compose up -d --no-build caddy web api worker scheduler",
         ):
             self.assertLess(self.script.index(export), self.script.index(operation))
 

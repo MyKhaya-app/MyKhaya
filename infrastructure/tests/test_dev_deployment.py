@@ -177,7 +177,11 @@ class DevelopmentDeploymentTests(unittest.TestCase):
         self.assertLess(deploy.index("compose build"), begin)
         self.assertLess(begin, deploy.index("compose up -d --no-build postgres redis"))
         self.assertLess(deploy.index("health_checks"), deploy.index("complete_transition"))
-        self.assertIn('mv -f "$temporary" "$STATE_FILE"', script)  # atomic replacement
+        # Atomic replacement, in the state helper shared with production.
+        self.assertIn('. "$SCRIPT_DIR/cutover-state.sh"', script)
+        self.assertIn('cutover_write_state "$STATE_FILE" "$1"', script)
+        helper = (ROOT / "infrastructure/scripts/cutover-state.sh").read_text(encoding="utf-8")
+        self.assertIn('mv -f "$cutover_tmp" "$cutover_file"', helper)
 
     def test_local_compose_targets_are_guarded_on_the_dev_host(self) -> None:
         makefile = (ROOT / "Makefile").read_text(encoding="utf-8").replace("\r\n", "\n")

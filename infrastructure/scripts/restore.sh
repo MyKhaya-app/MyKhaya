@@ -12,6 +12,7 @@
 # The identity is read by `age -d` directly; it is never copied, logged or
 # written next to the backups.
 set -eu
+. "$(dirname "$0")/backup-config-mode.sh"
 test "$#" -eq 1 || { echo "Usage: restore.sh /absolute/path/backup.sql.gz[.age]" >&2; exit 2; }
 source_file="$1"
 case "$source_file" in /*) ;; *) echo "Use an absolute backup path" >&2; exit 2;; esac
@@ -30,13 +31,13 @@ case "$source_file" in
     age -d -i "$identity" "$source_file" | gzip -t ||
       { echo "Backup failed decryption or integrity verification." >&2; exit 1; }
     age -d -i "$identity" "$source_file" | gzip -dc |
-      docker compose exec -T postgres pg_restore --username postgres --dbname mykhaya \
+      stack_compose exec -T postgres pg_restore --username postgres --dbname mykhaya \
         --clean --if-exists --no-owner
     ;;
   *.sql.gz)
     echo "WARNING: restoring a legacy UNENCRYPTED backup." >&2
     gzip -t "$source_file"
-    gzip -dc "$source_file" | docker compose exec -T postgres pg_restore --username postgres \
+    gzip -dc "$source_file" | stack_compose exec -T postgres pg_restore --username postgres \
       --dbname mykhaya --clean --if-exists --no-owner
     ;;
   *)

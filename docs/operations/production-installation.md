@@ -31,6 +31,11 @@ Cloudflare -> NetBird Proxy -> Caddy -> web/API
 13. Run `make prod-health`, test email/push/Stripe, and perform a backup/restore
     rehearsal before accepting traffic.
 
+An existing installation moves from the root `.env` to per-service files with
+one command; see [PROD service-specific configuration](prod-service-config-migration.md).
+After that migration every `make prod-*` command selects the service files
+automatically and `make prod-install` refuses to run.
+
 See [Deployment configuration ownership](../architecture/deployment-configuration.md)
 for the configuration inventory, PCC precedence rules, and migration procedure
 for installations that previously edited `compose.production.yml` locally.

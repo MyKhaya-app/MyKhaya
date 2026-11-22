@@ -21,6 +21,9 @@
 #   MYKHAYA_BACKUP_ALLOW_PLAINTEXT=1    non-production only, never in production
 set -eu
 umask 077
+# Selects the PROD service-specific configuration when it is active (F-03);
+# otherwise everything below is the historical behaviour.
+. "$(dirname "$0")/backup-config-mode.sh"
 # Same resolution as backup-preflight.sh: environment, then .env, then the
 # documented default — so the preflight verifies exactly what is used here.
 env_value() {
@@ -52,7 +55,7 @@ record_run() {
   detail="$2"
   size_bytes="${3:-NULL}"
   completed_at="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-  docker compose exec -T postgres psql --username postgres --dbname mykhaya -v ON_ERROR_STOP=1 \
+  stack_compose exec -T postgres psql --username postgres --dbname mykhaya -v ON_ERROR_STOP=1 \
     -c "INSERT INTO backup_runs (created_at, updated_at, started_at, completed_at, succeeded, size_bytes, detail)
         VALUES (now(), now(), '$started_at', '$completed_at', $succeeded, $size_bytes, '$detail');" \
     >/dev/null
@@ -110,7 +113,7 @@ seal() {
 # failed pg_dump/tar feeding gzip/age would look like success.
 database_destination="$backup_dir/mykhaya-${stamp}.sql.gz${suffix}"
 {
-  docker compose exec -T postgres pg_dump --username postgres --dbname mykhaya --format=custom
+  stack_compose exec -T postgres pg_dump --username postgres --dbname mykhaya --format=custom
   echo $? > "$status_dir/pg_dump"
 } | gzip -9 | seal "$database_destination" || fail "Database backup encryption or write failed."
 [ "$(cat "$status_dir/pg_dump" 2>/dev/null)" = 0 ] || fail "pg_dump failed."

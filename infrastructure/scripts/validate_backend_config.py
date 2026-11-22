@@ -37,6 +37,7 @@ PRODUCTION_APNS_BUNDLE_ID = "app.mykhaya.mobile.prod"
 MARKER = "MYKHAYA_RUNTIME_CONFIG="
 PROBE_PROJECT_PREFIX = "mykhaya-config-probe"
 SERVICE_ENV_OVERLAY = "compose.dev.service-env.yml"
+PROD_SERVICE_ENV_OVERLAY = "compose.production.service-env.yml"
 # compose.yml/compose.dev.yml interpolate these secrets; the service-env overlay
 # removes the keys, and the validator forces them blank so no shell value leaks.
 BLANKED_INTERPOLATION = (
@@ -52,9 +53,14 @@ def is_production() -> bool:
 
 
 def service_env_root() -> str | None:
-    """The explicitly selected DEV configuration root, or None (legacy/PROD)."""
+    """The selected service-specific configuration root, or None (legacy).
+
+    DEV: MYKHAYA_DEV_CONFIG_ROOT. PROD: MYKHAYA_PROD_CONFIG_ROOT, which only the
+    production scripts set, from the cutover state. A DEV root is never used
+    in production.
+    """
     if is_production():
-        return None
+        return os.environ.get("MYKHAYA_PROD_CONFIG_ROOT") or None
     return os.environ.get("MYKHAYA_DEV_CONFIG_ROOT") or None
 
 
@@ -62,16 +68,36 @@ def base_compose_args() -> list[str]:
     root = service_env_root()
     if root is None:
         return list(COMPOSE_FILES)
+    root = root.rstrip("/")
+    if is_production():
+        # Same command as prod-config-mode.sh: postgres.env is an interpolation
+        # source for PostgreSQL's unchanged service definition.
+        return [
+            "docker", "compose", "--env-file", f"{root}/compose.env",
+            "--env-file", f"{root}/postgres.env",
+            "-f", "compose.yml", "-f", "compose.production.yml", "-f", PROD_SERVICE_ENV_OVERLAY,
+        ]
     return [
-        "docker", "compose", "--env-file", f"{root.rstrip('/')}/compose.env",
+        "docker", "compose", "--env-file", f"{root}/compose.env",
         "-f", "compose.yml", "-f", "compose.dev.yml", "-f", SERVICE_ENV_OVERLAY,
     ]
+
+
+# PROD: these come from postgres.env and must not be overridden from the shell;
+# the remaining interpolated secrets are forced blank as on DEV.
+PROD_FROM_FILE = BLANKED_INTERPOLATION[:3]
+PROD_BLANKED = ("MYKHAYA_APNS_PRIVATE_KEY", "MYKHAYA_FCM_PRIVATE_KEY")
 
 
 def compose_environment() -> dict[str, str] | None:
     if service_env_root() is None:
         return None
     env = dict(os.environ)
+    if is_production():
+        for name in PROD_FROM_FILE:
+            env.pop(name, None)
+        env.update({name: "" for name in PROD_BLANKED})
+        return env
     env.update({name: "" for name in BLANKED_INTERPOLATION})
     return env
 
@@ -487,9 +513,10 @@ def contract_errors(resolved: dict) -> list[str]:
         sys.path.pop(0)
     root = service_env_root()
     assert root is not None
+    profile = service_env_contract.PROD if is_production() else service_env_contract.DEV
     return service_env_contract.check_resolved_model(
-        resolved, Path(__file__).resolve().parents[2]
-    ) + service_env_contract.check_provenance(resolved, Path(root))
+        resolved, Path(__file__).resolve().parents[2], profile
+    ) + service_env_contract.check_provenance(resolved, Path(root), profile)
 
 
 def main() -> int:
@@ -500,7 +527,9 @@ def main() -> int:
         if service_env:
             errors = contract_errors(resolved)
             if errors:
-                print("Merged DEV Compose model violates the service contract:", file=sys.stderr)
+                label = "PROD" if is_production() else "DEV"
+                print(f"Merged {label} Compose model violates the service contract:",
+                      file=sys.stderr)
                 for error in errors:
                     print(f"- {error}", file=sys.stderr)
                 return 1

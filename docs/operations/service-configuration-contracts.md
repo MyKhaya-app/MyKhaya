@@ -9,11 +9,49 @@ must never be copied over a live environment file.
 which is authoritative; this document explains them. They are applied by
 `compose.dev.service-env.yml` when `MYKHAYA_DEV_CONFIG_ROOT` is set. The
 migration and rollback procedure is in
-[dev-service-config-migration.md](dev-service-config-migration.md). **PROD** is
-unchanged and still uses the root `.env`. No PROD service templates are
-published yet: a later, separately approved PROD stage will produce them from
-this contract (the Stage 1 drafts used the wrong database roles and disabled
+[dev-service-config-migration.md](dev-service-config-migration.md).
+
+**PROD:** the same module's PROD profile (`--profile prod`) is applied by
+`compose.production.service-env.yml` once the cutover state in
+`/etc/mykhaya/prod/.service-env-state` is pending or active; the one-command
+migration is in [prod-service-config-migration.md](prod-service-config-migration.md).
+Until then PROD uses the root `.env`, unchanged. The PROD files are generated
+from the production `.env` by the migration, so no PROD templates are
+published (the Stage 1 drafts used the wrong database roles and disabled
 scheduler monitoring, so they were not committed).
+
+**Intermediate stage (DEV and PROD).** F-03 is an intermediate service-env
+migration: it limits which service receives which value, not how values are
+delivered. Credentials are still supplied as container environment variables;
+database passwords remain embedded in the `MYKHAYA_DATABASE_URL` connection
+URLs, and PostgreSQL's bootstrap passwords are Compose interpolation values.
+Anyone with Docker daemon access on the host can read them (`docker inspect`,
+`docker compose config`). The final file-backed Docker secrets
+implementation remains outstanding under MK-SEC-001 v1.2; it needs application
+changes too, because only the Apple key and the field keyrings are read from
+files today.
+
+PROD differs from DEV only where `compose.production.yml` differs from
+`compose.dev.yml`:
+
+- `compose.production.yml` pins only environment, channel, secure cookies and
+  administrator MFA, so the installation values production Settings require
+  (URLs, CORS, trusted hosts and proxies, administrator networks, registration
+  ceiling, locale defaults) live in `common.env`, which migrate also loads.
+- Caddy's domains and trusted proxy CIDRs, the key host directories, the web
+  service's email flag and the host backup settings are in `compose.env`.
+- `postgres.env` is an interpolation source (a second `--env-file`), not an
+  `env_file`, so PostgreSQL's service definition and Compose hash are
+  unchanged and it is never recreated by the migration. A value scan proves
+  its passwords reach no other service except each application's own database
+  URL.
+- Environment-supplied field keyrings are forbidden in every file (production
+  rejects them at startup). An empty key directory that nothing reads is
+  accepted as "not provisioned" (warning only).
+- The worker's file carries the APNs and FCM values Compose used to
+  interpolate, with the same defaults, so its environment is unchanged.
+- DEV identities (the DEV host name, iOS bundle, native return scheme,
+  Firebase project, test-mode Stripe keys and DEV paths) are rejected.
 
 ## Rules
 
@@ -213,8 +251,22 @@ DEV layout (`MYKHAYA_DEV_CONFIG_ROOT`, normally `/etc/mykhaya/dev/`, mode 0750):
 by absolute paths from `compose.env` (0750, files 0440/0640, never readable by
 others). The validator rejects a root or key directory inside the repository or
 on a production path, symbolic links, world-readable secret files, group- or
-world-writable files, and any other `*.env` file in the root. The PROD layout is
-not yet implemented. Local workstations keep their ignored root `.env`.
+world-writable files, and any other `*.env` file in the root. Local
+workstations keep their ignored root `.env`.
+
+PROD layout (`/etc/mykhaya/prod/`, selected by the cutover state file in it,
+root 0750): `compose.env`, `common.env`, `api.env`, `worker.env`,
+`scheduler.env`, `migrate.env` and `postgres.env`, all 0600 (the migration
+creates them with `umask 077`), plus the state file and the cutover snapshot;
+any other `*.env` file is rejected. Key directories stay at the existing external host paths named
+in `compose.env`. The same location, permission and file rules apply.
+
+- **Implemented in the repository:** the PROD profile, overlay, migration and
+  mode-aware deployment, backup and restore scripts, verified locally with
+  synthetic configuration and disposable Docker resources only.
+- **Not deployed:** nothing has been run on the production host. PROD still
+  runs from its root `.env` (state absent, legacy mode) until the Owner
+  approves `--apply` ([prod-service-config-migration.md](prod-service-config-migration.md)).
 
 Environment files are Compose inputs, not application-working-directory mounts.
 Backup exclusion and recovery of the configuration root must be verified on the

@@ -30,6 +30,18 @@ Both artefacts are streamed through `age -R <recipients>` as they are produced. 
 
 The file stores are read by a throwaway helper container that mounts the named volumes **read-only** (`--network none`, read-only root filesystem, `--cap-drop ALL`, `no-new-privileges`, uid 10001, no environment, no secrets). It does **not** go through `docker compose exec api`. The application container holds every application secret; the helper holds none, so this is strictly narrower access than before as well as one fewer dependency. `restore-files.sh` uses the same helper with writable mounts, so file stores can be restored on a rebuilt host **before** the application is started (create the volumes first with `docker compose create api`, which starts nothing).
 
+### PROD service-specific configuration
+
+Once PROD has moved to per-service files ([prod-service-config-migration.md](prod-service-config-migration.md)),
+`backup.sh`, `restore.sh`, `restore-files.sh` and `backup-preflight.sh` select
+that configuration automatically from the cutover state (`backup-config-mode.sh`):
+host values (`MYKHAYA_BACKUP_DIR`, `MYKHAYA_BACKUP_AGE_RECIPIENTS_FILE`) come
+from `/etc/mykhaya/prod/compose.env`, and PostgreSQL is reached through the PROD
+overlay in the same `mykhaya` project. The retained legacy `.env` is still
+checked for an exposed identity. In legacy mode and outside production the
+commands are exactly as before. Backups and restores work in every cutover
+state, including an interrupted one.
+
 ## Production deployment preflight
 
 `infrastructure/scripts/backup-preflight.sh` runs inside `prod-deploy.sh validate`, and as the **first step of `prod-deploy.sh update`**, before any fetch, checkout, build, migration or restart. If any check fails, the deployment stops with nothing changed. It verifies:

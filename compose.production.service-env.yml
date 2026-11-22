@@ -1,0 +1,148 @@
+# PROD service-specific configuration overlay (F-03).
+#
+# Layered last, and only by the production scripts once the cutover state in
+# /etc/mykhaya/prod/.service-env-state is pending or active
+# (infrastructure/scripts/prod-config-mode.sh):
+#
+#   docker compose --env-file /etc/mykhaya/prod/compose.env \
+#     --env-file /etc/mykhaya/prod/postgres.env \
+#     -f compose.yml -f compose.production.yml -f compose.production.service-env.yml ...
+#
+# It replaces the repository root .env with one file per service. compose.yml
+# and compose.production.yml are unchanged, so the legacy production model is
+# untouched while the state is legacy. The allow-list for every file lives in
+# infrastructure/scripts/service_env_contract.py (--profile prod).
+#
+# Requires Docker Compose 2.24.4 or later for !override.
+#
+# `environment: !override` restates each service's environment exactly as
+# compose.yml + compose.production.yml produce it, minus the values they
+# interpolate from secrets (database URLs, worker APNs/FCM), which now come
+# only from the service's own file. test_prod_service_env.py fails if this
+# restatement ever drifts from the legacy production model.
+#
+# Not overridden, deliberately:
+# - postgres: its definition stays byte-identical to the legacy model so
+#   Compose never recreates it for this change (an env_file entry alone changes
+#   the service hash). Its three bootstrap passwords are interpolated from
+#   postgres.env, the second --env-file; no other service may contain them
+#   (checked by service_env_contract.py).
+# - caddy and web: they read only non-secret interpolation values, now from
+#   compose.env.
+# Everything else (read_only, cap_drop, no-new-privileges, tmpfs, healthchecks,
+# restart, logging, networks, ports, named volumes including
+# mykhaya_prod_home_migration_data) is inherited unchanged. A missing root
+# variable or file fails closed before any container is touched.
+
+x-production-pins: &production-pins
+  # Mirrors compose.production.yml's production_api_environment.
+  MYKHAYA_ENVIRONMENT: production
+  MYKHAYA_BUILD_CHANNEL: stable
+  MYKHAYA_COOKIE_SECURE: "true"
+  MYKHAYA_ADMIN_MFA_REQUIRED: "true"
+
+x-build-metadata: &build-metadata
+  MYKHAYA_VERSION: "${MYKHAYA_VERSION:-dev}"
+  MYKHAYA_COMMIT_SHA: "${MYKHAYA_COMMIT_SHA:-unknown}"
+  MYKHAYA_BUILD_TIME: "${MYKHAYA_BUILD_TIME:-unknown}"
+
+x-apns-disabled: &apns-disabled
+  # APNs is delivered by the worker only (compose.yml).
+  MYKHAYA_APNS_DELIVERY_CONFIGURED: "false"
+  MYKHAYA_APNS_TEAM_ID: ""
+  MYKHAYA_APNS_KEY_ID: ""
+  MYKHAYA_APNS_BUNDLE_ID: ""
+  MYKHAYA_APNS_PRIVATE_KEY: ""
+
+services:
+  api:
+    env_file: !override
+      - "${MYKHAYA_PROD_CONFIG_ROOT:?Set MYKHAYA_PROD_CONFIG_ROOT (normally /etc/mykhaya/prod)}/common.env"
+      - "${MYKHAYA_PROD_CONFIG_ROOT:?Set MYKHAYA_PROD_CONFIG_ROOT (normally /etc/mykhaya/prod)}/api.env"
+    environment: !override
+      <<: [*production-pins, *build-metadata, *apns-disabled]
+      MYKHAYA_SYSLOG_DEBUG: "${MYKHAYA_SYSLOG_DEBUG:-false}"
+
+  worker:
+    env_file: !override
+      - "${MYKHAYA_PROD_CONFIG_ROOT:?Set MYKHAYA_PROD_CONFIG_ROOT (normally /etc/mykhaya/prod)}/common.env"
+      - "${MYKHAYA_PROD_CONFIG_ROOT:?Set MYKHAYA_PROD_CONFIG_ROOT (normally /etc/mykhaya/prod)}/worker.env"
+    # APNs and FCM now come from worker.env rather than interpolation; the
+    # migration writes the legacy Compose defaults there when .env had none.
+    environment: !override
+      <<: *production-pins
+    # The worker writes only legal-evidence storage (including transient
+    # Vehicle Report PDFs) and needs the field keyrings. It never reads avatars,
+    # attachments, meal images, vehicle photos, Home Migration packages or the
+    # Apple key (the same narrowing verified on DEV).
+    volumes: !override
+      - "legal_evidence_data:/data/legal-evidence"
+      - "${MYKHAYA_FIELD_KEYS_HOST_DIR:?Set MYKHAYA_FIELD_KEYS_HOST_DIR in compose.env}:/run/secrets/mykhaya:ro"
+
+  scheduler:
+    env_file: !override
+      - "${MYKHAYA_PROD_CONFIG_ROOT:?Set MYKHAYA_PROD_CONFIG_ROOT (normally /etc/mykhaya/prod)}/common.env"
+      - "${MYKHAYA_PROD_CONFIG_ROOT:?Set MYKHAYA_PROD_CONFIG_ROOT (normally /etc/mykhaya/prod)}/scheduler.env"
+    # compose.yml gives the scheduler the API's environment through the anchor.
+    environment: !override
+      <<: [*production-pins, *build-metadata, *apns-disabled]
+      MYKHAYA_SYSLOG_DEBUG: "${MYKHAYA_SYSLOG_DEBUG:-false}"
+    # Managed demo Homes read and remove avatar, meal-image and vehicle-photo
+    # files; the hourly purge removes expired Home Migration packages. No
+    # support-attachment, legal-evidence or Apple key access.
+    volumes: !override
+      - "avatar_data:/data/avatars"
+      - "meal_image_data:/data/meal-images"
+      - "vehicle_photo_data:/data/vehicle-photos"
+      - "home_migration_data:/data/home-migrations"
+      - "${MYKHAYA_FIELD_KEYS_HOST_DIR:?Set MYKHAYA_FIELD_KEYS_HOST_DIR in compose.env}:/run/secrets/mykhaya:ro"
+
+  migrate:
+    # The privileged migration identity (mykhaya_migrator) plus the installation
+    # values production Settings validate at Alembic import time.
+    env_file: !override
+      - "${MYKHAYA_PROD_CONFIG_ROOT:?Set MYKHAYA_PROD_CONFIG_ROOT (normally /etc/mykhaya/prod)}/common.env"
+      - "${MYKHAYA_PROD_CONFIG_ROOT:?Set MYKHAYA_PROD_CONFIG_ROOT (normally /etc/mykhaya/prod)}/migrate.env"
+    environment: !override
+      <<: [*production-pins, *build-metadata, *apns-disabled]
+      # Migrations never use the field keys or Apple (compose.yml).
+      MYKHAYA_FIELD_ENCRYPTION_KEYS: ""
+      MYKHAYA_BLIND_INDEX_KEYS: ""
+      MYKHAYA_APPLE_SIGN_IN_ENABLED: "false"
+      MYKHAYA_APPLE_PRIVATE_KEY: ""
+      MYKHAYA_APPLE_PRIVATE_KEY_FILE: ""
+
+  # The test service never receives production configuration. It loads only the
+  # tracked synthetic file, whose hosts (postgres-test, redis-test) exist only in
+  # the isolated compose.test.yml stack, so it cannot reach production data.
+  test:
+    env_file: !override
+      - "./.env.dev.test.example"
+    environment: !override
+      MYKHAYA_ENVIRONMENT: test
+      MYKHAYA_FIELD_ENCRYPTION_KEYS: ""
+      MYKHAYA_BLIND_INDEX_KEYS: ""
+      MYKHAYA_APNS_DELIVERY_CONFIGURED: "false"
+      MYKHAYA_APNS_TEAM_ID: ""
+      MYKHAYA_APNS_KEY_ID: ""
+      MYKHAYA_APNS_BUNDLE_ID: ""
+      MYKHAYA_APNS_PRIVATE_KEY: ""
+      MYKHAYA_APPLE_SIGN_IN_ENABLED: "false"
+      MYKHAYA_APPLE_PRIVATE_KEY: ""
+      MYKHAYA_APPLE_PRIVATE_KEY_FILE: ""
+      MYKHAYA_RATE_LIMIT_LOGIN: "1000"
+      MYKHAYA_RATE_LIMIT_REGISTER: "1000"
+      MYKHAYA_EMAIL_VERIFICATION_ENABLED: "true"
+      MYKHAYA_ADMIN_URL: "http://admin.localhost:8080"
+      MYKHAYA_STATUS_URL: "http://status.localhost:8080"
+      MYKHAYA_TRUSTED_HOSTS: '["localhost","127.0.0.1","admin.localhost","status.localhost"]'
+      MYKHAYA_CORS_ORIGINS: '["http://localhost:8080","http://admin.localhost:8080"]'
+      MYKHAYA_ADMIN_ALLOWED_NETWORKS: '["127.0.0.0/8","::1/128"]'
+      MYKHAYA_TRUSTED_PROXY_CIDRS: '["172.16.0.0/24"]'
+      MYKHAYA_ADMIN_MFA_REQUIRED: "false"
+      COVERAGE_FILE: /tmp/.coverage
+      RUFF_CACHE_DIR: /tmp/.ruff_cache
+      MYPY_CACHE_DIR: /tmp/.mypy_cache
+      MYKHAYA_AVATAR_STORAGE_DIR: /tmp/avatars
+      MYKHAYA_SUPPORT_ATTACHMENT_STORAGE_DIR: /tmp/support-attachments
+      MYKHAYA_VEHICLE_PHOTO_STORAGE_DIR: /tmp/vehicle-photos

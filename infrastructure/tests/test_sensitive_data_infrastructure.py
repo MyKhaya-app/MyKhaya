@@ -43,13 +43,19 @@ class SensitiveDataInfrastructureTests(unittest.TestCase):
     def test_deploy_runs_backup_preflight_before_any_change(self) -> None:
         validate = self.deploy[self.deploy.index("validate() {") :]
         self.assertIn("backup_preflight", validate[: validate.index("\n}\n")])
-        update = self.deploy[self.deploy.index("update() {") :]
+        update = self.deploy[self.deploy.index("\nupdate() {") :]
         update = update[: update.index("\n}\n")]
-        first_change = min(
-            update.index(marker)
-            for marker in ("git fetch", "git checkout", "build", "run --rm", "up -d")
-        )
+        first_change = min(update.index(marker) for marker in ("git fetch", "git checkout"))
         self.assertLess(update.index("backup_preflight"), first_change)
+        # After the checkout, update re-executes the release's own script;
+        # its validate() (which runs the preflight again) precedes every
+        # build, migration and container change.
+        self.assertIn("exec sh", update[update.index("git checkout") :])
+        continued = self.deploy[self.deploy.index("continue_update() {") :]
+        continued = continued[: continued.index("\n}\n")]
+        first_change = min(continued.index(marker)
+                           for marker in ("compose build", "run --rm", "up -d"))
+        self.assertLess(continued.index("\n  validate\n"), first_change)
         self.assertIn("sh infrastructure/scripts/backup-preflight.sh", self.deploy)
 
     def test_preflight_covers_every_required_check(self) -> None:

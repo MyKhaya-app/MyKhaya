@@ -9,8 +9,12 @@
 # Requires: $file_stores (space-separated store names) and a running postgres
 # service (pg_dump/pg_restore need it anyway).
 
+# backup-config-mode.sh defines stack_compose for the selected configuration;
+# for any other caller this is the historical bare command.
+command -v stack_compose >/dev/null 2>&1 || stack_compose() { docker compose "$@"; }
+
 _file_store_postgres_container() {
-  docker compose ps -q postgres 2>/dev/null | head -n 1
+  stack_compose ps -q postgres 2>/dev/null | head -n 1
 }
 
 file_store_helper_image() {

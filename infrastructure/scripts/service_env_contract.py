@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""DEV service-specific configuration contract and static validator (F-03 Stage 3A).
+"""Service-specific configuration contract and static validator (F-03).
 
 This module is the single machine-readable source for which variables each
 backend service may receive from the DEV configuration root
-(``MYKHAYA_DEV_CONFIG_ROOT``, normally ``/etc/mykhaya/dev``). The allow-lists
+(``MYKHAYA_DEV_CONFIG_ROOT``, normally ``/etc/mykhaya/dev``) and, with
+``--profile prod``, from the PROD root (``/etc/mykhaya/prod``). The allow-lists
 are derived from what the code actually reads (see
 docs/operations/service-configuration-contracts.md), not from convenience.
 
@@ -13,7 +14,7 @@ in api.env matches the one PostgreSQL was initialised with) and reported by
 variable name.
 
 Usage:
-    service_env_contract.py --root /etc/mykhaya/dev --probe-image IMAGE
+    service_env_contract.py [--profile dev|prod] --root ROOT --probe-image IMAGE
                             [--repo-root PATH] [--skip-permissions]
 """
 
@@ -248,6 +249,12 @@ PLACEHOLDER_MARKERS = ("CHANGE_ME", "__SET_IN_", "replace-with", "changeme", "ex
 PRODUCTION_MARKERS = ("/etc/mykhaya/prod", "/etc/mykhaya/production")
 PRODUCTION_APNS_BUNDLE_ID = "app.mykhaya.mobile.prod"
 PRODUCTION_FCM_PROJECT_ID = "mykhaya-prod"
+# DEV identities the PROD profile rejects (docs/mobile, .env.dev.example).
+DEVELOPMENT_MARKERS = ("/etc/mykhaya/dev", "/etc/mykhaya/development")
+DEVELOPMENT_APNS_BUNDLE_ID = "app.mykhaya.mobile"
+DEVELOPMENT_FCM_PROJECT_ID = "mykhaya-dev-faf55"
+DEVELOPMENT_HOST = "dev.mykhaya.app"
+DEVELOPMENT_NATIVE_SCHEME = "app.mykhaya.mobile://"
 APP_DB_USER = "mykhaya_app"
 MIGRATION_DB_USER = "mykhaya_migrator"
 SECRET_FILES = ("api.env", "worker.env", "scheduler.env", "migrate.env", "postgres.env")
@@ -444,18 +451,30 @@ def _inside(child: Path, parent: Path) -> bool:
         return False
 
 
-def check_root_location(root: Path, repo_root: Path | None, report: Report) -> None:
+def _is_development_path(text: str) -> bool:
+    """The mirror of _is_production_path, used by the PROD profile."""
+    lowered = text.replace("\\", "/").lower().rstrip("/")
+    return any(lowered == m or lowered.startswith(m + "/") for m in DEVELOPMENT_MARKERS) or any(
+        part in {"dev", "development"} for part in PurePosixPath(lowered).parts
+    )
+
+
+def check_root_location(root: Path, repo_root: Path | None, report: Report,
+                        profile: Profile | None = None) -> None:
+    profile = profile or DEV
     text = str(root)
+    kind = profile.foreign_kind
     if not (root.is_absolute() or text.startswith("/")):
         report.error("configuration root must be an absolute path")
-    if _is_production_path(text):
-        report.error("configuration root points at a production path; DEV must use its own root")
+    if profile.foreign_path(text):
+        report.error(f"configuration root points at a {kind} path; {profile.label} must use "
+                     "its own root")
     if not root.is_dir():
         report.error("configuration root does not exist or is not a directory")
         return
     resolved = root.resolve()
-    if _is_production_path(str(resolved)):
-        report.error("configuration root resolves (via a link) to a production path")
+    if profile.foreign_path(str(resolved)):
+        report.error(f"configuration root resolves (via a link) to a {kind} path")
     if repo_root is not None and _inside(resolved, repo_root.resolve()):
         report.error("configuration root is inside the repository working tree; "
                      "secrets there could be committed to the public repository")
@@ -495,13 +514,15 @@ def _db_parts(url: str) -> tuple[str, str, str, str, str] | None:
         return None
 
 
-def check_contract(contract: FileContract, values: dict[str, str], report: Report) -> None:
+def check_contract(contract: FileContract, values: dict[str, str], report: Report,
+                   profile: Profile | None = None) -> None:
+    profile = profile or DEV
     names = set(values)
     # compose.env is the interpolation source that feeds the pinned values.
-    pinned = frozenset() if contract is COMPOSE else PINNED_BY_COMPOSE
+    pinned = frozenset() if contract is profile.compose_contract else profile.pinned
     forbidden = contract.forbidden - contract.allowed
     for name in sorted(names & pinned):
-        report.error(f"{contract.name}: {name} is pinned by compose.dev.yml/compose.yml; "
+        report.error(f"{contract.name}: {name} is pinned by {profile.pinned_source}; "
                      "remove it (put host-specific values in compose.env)")
     for name in sorted((names & forbidden) - pinned):
         report.error(f"{contract.name}: {name} must not be supplied to this service")
@@ -515,7 +536,7 @@ def check_contract(contract: FileContract, values: dict[str, str], report: Repor
     for name, value in sorted(values.items()):
         if any(marker.lower() in value.lower() for marker in PLACEHOLDER_MARKERS):
             report.error(f"{contract.name}: {name} still contains a documented placeholder")
-    for name in sorted(names & JSON_LIST_NAMES):
+    for name in sorted(names & profile.json_lists):
         try:
             parsed = json.loads(values[name])
             if not isinstance(parsed, list) or not all(isinstance(i, str) for i in parsed):
@@ -524,8 +545,10 @@ def check_contract(contract: FileContract, values: dict[str, str], report: Repor
             report.error(f"{contract.name}: {name} must be a JSON array of strings")
 
 
-def check_cross_file(files: dict[str, dict[str, str]], report: Report) -> None:
-    api, worker, scheduler = files.get("api.env", {}), files.get("worker.env", {}), \
+def check_cross_file(files: dict[str, dict[str, str]], report: Report,
+                     profile: Profile | None = None) -> None:
+    profile = profile or DEV
+    api, worker, scheduler =files.get("api.env", {}), files.get("worker.env", {}), \
         files.get("scheduler.env", {})
     migrate, postgres = files.get("migrate.env", {}), files.get("postgres.env", {})
     compose = files.get("compose.env", {})
@@ -569,8 +592,8 @@ def check_cross_file(files: dict[str, dict[str, str]], report: Report) -> None:
             if app and app[3:] != parts[3:]:
                 report.error("migrate.env: MYKHAYA_DATABASE_URL targets a different database "
                              "from api.env")
-    pg_values = [postgres.get(k) for k in ("POSTGRES_PASSWORD", P + "MIGRATION_DB_PASSWORD",
-                                           P + "DB_PASSWORD")]
+    pg_values = [postgres.get(k) for k in (profile.admin_password_name,
+                                           P + "MIGRATION_DB_PASSWORD", P + "DB_PASSWORD")]
     if all(pg_values) and len(set(pg_values)) < 3:
         report.error("postgres.env: administrator, migration and runtime passwords must differ")
 
@@ -625,6 +648,22 @@ def check_cross_file(files: dict[str, dict[str, str]], report: Report) -> None:
     if flag in compose and flag in api and compose[flag] != api[flag]:
         report.error("compose.env: MYKHAYA_EMAIL_DELIVERY_CONFIGURED (shown by web) differs from api.env")
 
+    if profile.name == "prod":
+        check_production_separation(files, report)
+    else:
+        check_development_separation(files, report)
+    for name, values in files.items():
+        for key, prefix in ((P + "APPLE_PRIVATE_KEY_FILE", "/run/secrets/mykhaya-apple/"),
+                            (P + "FIELD_ENCRYPTION_KEYS_FILE", "/run/secrets/mykhaya/"),
+                            (P + "BLIND_INDEX_KEYS_FILE", "/run/secrets/mykhaya/")):
+            if values.get(key) and not values[key].startswith(prefix):
+                report.error(f"{name}: {key} must be inside the read-only {prefix} mount")
+        if values.get(P + "APPLE_PRIVATE_KEY") and values.get(P + "APPLE_PRIVATE_KEY_FILE"):
+            report.error(f"{name}: set either MYKHAYA_APPLE_PRIVATE_KEY or "
+                         f"MYKHAYA_APPLE_PRIVATE_KEY_FILE, not both{profile.apple_hint}")
+
+
+def check_development_separation(files: dict[str, dict[str, str]], report: Report) -> None:
     # DEV/PROD separation markers. Values are inspected, never printed.
     for name, values in files.items():
         if values.get(P + "STRIPE_SECRET_KEY", "").startswith("sk_live_"):
@@ -640,15 +679,46 @@ def check_cross_file(files: dict[str, dict[str, str]], report: Report) -> None:
         for key, value in values.items():
             if key.endswith(("_FILE", "_DIR", "HOST_DIR")) and _is_production_path(value):
                 report.error(f"{name}: {key} points at a production path")
+
+
+def check_production_separation(files: dict[str, dict[str, str]], report: Report) -> None:
+    """PROD must never carry DEV identities. Values are inspected, never printed.
+
+    The PROD files are generated from the PROD .env only, so a DEV value can
+    only arrive through a mistake in that file; these markers catch the
+    identities that would silently misroute users, payments or notifications.
+    """
+    def truthy(values: dict[str, str], key: str) -> bool:
+        return values.get(key, "").strip().lower() in {"1", "true", "yes", "on"}
+
     for name, values in files.items():
-        for key, prefix in ((P + "APPLE_PRIVATE_KEY_FILE", "/run/secrets/mykhaya-apple/"),
-                            (P + "FIELD_ENCRYPTION_KEYS_FILE", "/run/secrets/mykhaya/"),
-                            (P + "BLIND_INDEX_KEYS_FILE", "/run/secrets/mykhaya/")):
-            if values.get(key) and not values[key].startswith(prefix):
-                report.error(f"{name}: {key} must be inside the read-only {prefix} mount")
-        if values.get(P + "APPLE_PRIVATE_KEY") and values.get(P + "APPLE_PRIVATE_KEY_FILE"):
-            report.error(f"{name}: set either MYKHAYA_APPLE_PRIVATE_KEY or "
-                         "MYKHAYA_APPLE_PRIVATE_KEY_FILE, not both (use the file in DEV)")
+        if values.get(P + "STRIPE_SECRET_KEY", "").startswith("sk_test_"):
+            report.error(f"{name}: MYKHAYA_STRIPE_SECRET_KEY is a test-mode key; production "
+                         "rejects it at startup")
+        project = values.get(P + "FCM_PROJECT_ID", "")
+        if project == DEVELOPMENT_FCM_PROJECT_ID:
+            report.error(f"{name}: MYKHAYA_FCM_PROJECT_ID is the DEV Firebase project")
+        elif truthy(values, P + "FCM_DELIVERY_CONFIGURED") and project != PRODUCTION_FCM_PROJECT_ID:
+            report.error(f"{name}: MYKHAYA_FCM_PROJECT_ID must be {PRODUCTION_FCM_PROJECT_ID} "
+                         "when FCM delivery is configured")
+        if values.get(P + "APNS_BUNDLE_ID") == DEVELOPMENT_APNS_BUNDLE_ID:
+            if truthy(values, P + "APNS_DELIVERY_CONFIGURED"):
+                report.error(f"{name}: MYKHAYA_APNS_BUNDLE_ID is the DEV iOS app while APNs "
+                             "delivery is configured")
+            else:
+                report.warn(f"{name}: MYKHAYA_APNS_BUNDLE_ID is the Compose default (the DEV iOS "
+                            "app); harmless while APNs delivery is off, but set the PROD bundle "
+                            "before enabling it")
+        dvla = values.get(P + "DVLA_ENVIRONMENT")
+        if dvla not in {None, "", "uat", "production"}:
+            report.error(f"{name}: MYKHAYA_DVLA_ENVIRONMENT must be blank, uat or production")
+        for key, value in values.items():
+            if DEVELOPMENT_HOST in value.lower():
+                report.error(f"{name}: {key} refers to the DEV host name")
+            if value.startswith(DEVELOPMENT_NATIVE_SCHEME):
+                report.error(f"{name}: {key} uses the DEV app's native return scheme")
+            if key.endswith(("_FILE", "_DIR", "HOST_DIR")) and _is_development_path(value):
+                report.error(f"{name}: {key} points at a development path")
 
 
 # --- Protected key directories ------------------------------------------------
@@ -695,7 +765,8 @@ def describe(path, name):
         kind = "other"
     wanted = os.R_OK | os.X_OK if kind == "directory" else os.R_OK
     return {"name": name, "kind": kind, "mode": stat.S_IMODE(mode), "uid": info.st_uid,
-            "gid": info.st_gid, "inode": info.st_ino,
+            "gid": info.st_gid, "inode": info.st_ino, "size": info.st_size,
+            "mtime_ns": info.st_mtime_ns,
             "readable": kind in ("file", "directory") and os.access(path, wanted)}
 
 result = {"uid": os.getuid(), "gid": os.getgid(), "groups": sorted(os.getgroups())}
@@ -729,6 +800,10 @@ class KeyEntry:
     gid: int
     inode: int
     readable: bool
+    # Metadata only (lstat), used to prove key material was not replaced
+    # during a PROD cutover. Absent from older probe output.
+    size: int | None = None
+    mtime_ns: int | None = None
 
 
 @dataclass(frozen=True)
@@ -757,8 +832,11 @@ def _entry(raw: object, *, root: bool) -> KeyEntry:
             or type(raw.get("readable")) is not bool
             or (name != "." if root else (not name or "/" in name or name in {".", ".."}))):
         raise ProbeFailure("the probe returned unexpected output")
+    optional = {k: raw.get(k) for k in ("size", "mtime_ns")}
+    if not all(v is None or (type(v) is int and v >= 0) for v in optional.values()):
+        raise ProbeFailure("the probe returned unexpected output")
     return KeyEntry(name, raw["kind"], raw["mode"], raw["uid"], raw["gid"], raw["inode"],
-                    raw["readable"])
+                    raw["readable"], optional["size"], optional["mtime_ns"])
 
 
 def parse_probe_output(text: str) -> KeyDirListing:
@@ -893,8 +971,33 @@ def check_key_material(entry: KeyEntry, label: str, report: Report, *, directory
                      f"account ({SERVICE_UID}:{SERVICE_GID}), so the services could not use it")
 
 
+def check_unprovisioned_directory(entry: KeyEntry, key: str, report: Report, *,
+                                  deployment_uid: int | None) -> None:
+    """An empty key directory that nothing is configured to read (PROD only).
+
+    It holds no key material, so read and search bits are irrelevant (Docker
+    creates a missing bind source as root:root 0755). Ownership and write
+    access are still enforced, because keys may be installed into it later.
+    """
+    if entry.kind != "directory":
+        report.error(f"{key}: must not be a symbolic link" if entry.kind == "symlink"
+                     else f"{key}: unexpected file type")
+        return
+    if deployment_uid not in {None, 0} and entry.uid == deployment_uid:
+        report.error(f"{key}: is owned by the deployment account (UID {entry.uid}); "
+                     f"expected root (0) or the service account ({SERVICE_UID})")
+    elif entry.uid not in TRUSTED_KEY_OWNERS:
+        report.error(f"{key}: is owned by untrusted UID {entry.uid}")
+    if entry.gid not in TRUSTED_KEY_GROUPS:
+        report.error(f"{key}: has untrusted group GID {entry.gid}; expected 0 or {SERVICE_GID}")
+    if entry.mode & (stat.S_IWGRP | stat.S_IWOTH):
+        report.error(f"{key}: is writable by its group or other users (mode {entry.mode:04o})")
+    report.warn(f"{key}: is empty (not provisioned); nothing is configured to read from it. "
+                "Install keys only through the documented procedure, which also sets 0750.")
+
+
 def check_key_directory(key: str, path: Path, probe, report: Report,
-                        referenced: set[str]) -> None:
+                        referenced: set[str], *, allow_unprovisioned: bool = False) -> None:
     label = f"compose.env: {key}"
     try:
         host = path.lstat()
@@ -939,6 +1042,9 @@ def check_key_directory(key: str, path: Path, probe, report: Report,
                      "(was it replaced during validation?)")
         return
     deployment_uid = _deployment_uid()
+    if allow_unprovisioned and listing.entries == () and not referenced:
+        check_unprovisioned_directory(root, key, report, deployment_uid=deployment_uid)
+        return
     check_key_material(root, key, report, directory=True, deployment_uid=deployment_uid)
     if listing.entries is None:
         if root.readable:  # access() allowed it but listing still failed
@@ -967,10 +1073,27 @@ def _referenced_key_files(files: dict[str, dict[str, str]]) -> dict[str, set[str
     return wanted
 
 
+def _required_key_dirs(files: dict[str, dict[str, str]]) -> set[str]:
+    """Key directories the configuration says must hold keys (PROD profile).
+
+    Sensitive-field keyrings are needed as soon as they are required or any
+    Driveway encryption flag is on, even before a *_FILE path is set.
+    """
+    common = files.get("common.env", {})
+    flags = (P + "SENSITIVE_FIELD_KEYS_REQUIRED", P + "DRIVEWAY_FIELD_ENCRYPTION_WRITE",
+             P + "DRIVEWAY_FIELD_ENCRYPTION_READ")
+    if any(common.get(f, "").strip().lower() in {"1", "true", "yes", "on"} for f in flags):
+        return {P + "FIELD_KEYS_HOST_DIR"}
+    return set()
+
+
 def check_secret_dirs(compose: dict[str, str], repo_root: Path | None, check_perms: bool,
                       report: Report, *, probe=None,
-                      files: dict[str, dict[str, str]] | None = None) -> None:
+                      files: dict[str, dict[str, str]] | None = None,
+                      profile: Profile | None = None) -> None:
+    profile = profile or DEV
     referenced = _referenced_key_files(files or {})
+    required = _required_key_dirs(files or {}) if profile.allow_unprovisioned_keys else set()
     for key in KEY_DIRS:
         value = compose.get(key, "")
         if not value:
@@ -979,8 +1102,8 @@ def check_secret_dirs(compose: dict[str, str], repo_root: Path | None, check_per
         if not (path.is_absolute() or value.startswith("/")):
             report.error(f"compose.env: {key} must be an absolute host path")
             continue
-        if _is_production_path(value):
-            report.error(f"compose.env: {key} points at a production path")
+        if profile.foreign_path(value):
+            report.error(f"compose.env: {key} points at a {profile.foreign_kind} path")
             continue
         try:
             resolved = path.resolve()
@@ -998,25 +1121,29 @@ def check_secret_dirs(compose: dict[str, str], repo_root: Path | None, check_per
             # Compose would silently create an empty root-owned directory.
             report.error(f"compose.env: {key} does not exist on this host")
             continue
-        if _is_production_path(str(resolved)):
-            report.error(f"compose.env: {key} resolves (via a link) to a production path")
+        if profile.foreign_path(str(resolved)):
+            report.error(f"compose.env: {key} resolves (via a link) to a "
+                         f"{profile.foreign_kind} path")
         if check_perms:
-            check_key_directory(key, path, probe, report, referenced[key])
+            check_key_directory(key, path, probe, report, referenced[key],
+                                allow_unprovisioned=profile.allow_unprovisioned_keys
+                                and key not in required)
 
 
 def validate_root(root: Path, *, repo_root: Path | None = None,
-                  check_perms: bool = True, probe=None) -> Report:
+                  check_perms: bool = True, probe=None, profile: Profile | None = None) -> Report:
     """Validate the seven files; ``probe`` lists key directories (see
     docker_key_dir_probe) and is required whenever permissions are checked."""
+    profile = profile or DEV
     report = Report()
-    check_root_location(root, repo_root, report)
+    check_root_location(root, repo_root, report, profile)
     if report.errors and not root.is_dir():
         return report
     if check_perms:
         check_permissions(root, secret=True, is_dir=True, report=report,
                           label="configuration root")
     files: dict[str, dict[str, str]] = {}
-    for contract in CONTRACTS:
+    for contract in profile.contracts:
         path = root / contract.name
         if not path.exists():
             report.error(f"{contract.name}: required file is missing")
@@ -1032,17 +1159,17 @@ def validate_root(root: Path, *, repo_root: Path | None = None,
         values, problems = parse_env_file(path)
         for problem in problems:
             report.error(problem)
-        check_contract(contract, values, report)
+        check_contract(contract, values, report, profile)
         files[contract.name] = values
     unexpected = sorted(p.name for p in root.iterdir()
                         if p.is_file() and p.name.endswith(".env")
-                        and p.name not in {c.name for c in CONTRACTS})
+                        and p.name not in {c.name for c in profile.contracts})
     for name in unexpected:
-        report.error(f"{name}: is not a recognised DEV configuration file "
+        report.error(f"{name}: is not a recognised {profile.label} configuration file "
                      "(test configuration is synthetic and tracked in the repository)")
-    check_cross_file(files, report)
+    check_cross_file(files, report, profile)
     check_secret_dirs(files.get("compose.env", {}), repo_root, check_perms, report,
-                      probe=probe, files=files)
+                      probe=probe, files=files, profile=profile)
     return report
 
 
@@ -1056,8 +1183,9 @@ LEGACY_MIGRATION_URL = "postgresql+asyncpg://mykhaya_migrator:{}@postgres:5432/m
 SPLIT_TARGETS = (COMPOSE, COMMON, API, WORKER, SCHEDULER, MIGRATE, POSTGRES)
 
 
-def split_legacy_env(legacy: dict[str, str]) -> tuple[dict[str, dict[str, str]], dict[str, list[str]]]:
-    """Map a legacy DEV root .env onto the service files.
+def split_legacy_env(legacy: dict[str, str], profile: Profile | None = None
+                     ) -> tuple[dict[str, dict[str, str]], dict[str, list[str]]]:
+    """Map a legacy root .env onto the service files.
 
     Every name goes to every file whose contract allows it, so each provider
     group keeps reaching exactly the services it reaches today wherever the
@@ -1065,16 +1193,23 @@ def split_legacy_env(legacy: dict[str, str]) -> tuple[dict[str, dict[str, str]],
     the scheduler's monitoring). Returns (files, report); the report lists
     names only.
     """
-    files: dict[str, dict[str, str]] = {c.name: {} for c in SPLIT_TARGETS}
+    profile = profile or DEV
+    common, compose = profile.common_contract, profile.compose_contract
+    files: dict[str, dict[str, str]] = {c.name: {} for c in profile.contracts}
     for name, value in legacy.items():
-        target_name = LEGACY_RENAMES.get(name, name)
-        for contract in SPLIT_TARGETS:
-            if contract is COMMON or contract is COMPOSE:
+        target_name = profile.legacy_renames.get(name, name)
+        for contract in profile.contracts:
+            if contract is common or contract is compose:
                 if target_name in contract.allowed:
                     files[contract.name][target_name] = value
                 continue
-            if target_name in contract.allowed and target_name not in COMMON.allowed:
+            if target_name in contract.allowed and target_name not in common.allowed:
                 files[contract.name][target_name] = value
+    # Values the legacy model interpolated into the worker with a Compose
+    # default (`${NAME:-default}`, where empty also means unset) now come from
+    # worker.env, so the defaults are written out to keep the worker identical.
+    for name, default in profile.worker_interpolated_defaults.items():
+        files["worker.env"][name] = legacy.get(name) or default
     # The scheduler gets only the selected DVLA environment's endpoint and key.
     selected = DVLA_SELECTED.get(legacy.get(P + "DVLA_ENVIRONMENT", ""), set())
     for name in DVLA_MONITORING - selected - {P + "DVLA_ENVIRONMENT"}:
@@ -1086,32 +1221,38 @@ def split_legacy_env(legacy: dict[str, str]) -> tuple[dict[str, dict[str, str]],
         files["migrate.env"][P + "DATABASE_URL"] = LEGACY_MIGRATION_URL.format(
             legacy[P + "MIGRATION_DB_PASSWORD"])
     report: dict[str, list[str]] = {"pinned (no effect today; dropped)": [],
-                                    "not a setting or Compose input (dropped)": []}
-    placed = {n for values in files.values() for n in values} | set(LEGACY_RENAMES)
+                                    UNCLASSIFIED_HEADING: []}
+    if profile.host_only:
+        report[HOST_ONLY_HEADING] = []
+    placed = {n for values in files.values() for n in values} | set(profile.legacy_renames)
     for name in sorted(legacy):
         if name in placed:
             continue
-        if name in PINNED_BY_COMPOSE:
+        if name in profile.pinned:
             report["pinned (no effect today; dropped)"].append(name)
+        elif name in profile.host_only:
+            report[HOST_ONLY_HEADING].append(name)
         else:
-            report["not a setting or Compose input (dropped)"].append(name)
+            report[UNCLASSIFIED_HEADING].append(name)
     # What each application service stops receiving compared with the legacy
     # env_file (every legacy name reached api, worker, scheduler and migrate).
-    for service, file_names in (("api", ("common.env", "api.env")),
-                                ("worker", ("common.env", "worker.env")),
-                                ("scheduler", ("common.env", "scheduler.env")),
-                                ("migrate", ("migrate.env",))):
-        receives = set().union(*(files[f] for f in file_names))
+    for service in ("api", "worker", "scheduler", "migrate"):
+        receives = set().union(*(files[f] for f in profile.service_env_files[service]))
         # Names Compose already pinned for this service (e.g. blank APNs for
         # api/scheduler/migrate) never reached it from the .env either.
-        already_pinned = PINNED_BY_COMPOSE | RESTATED_ENVIRONMENT.get(service, frozenset())
+        already_pinned = profile.pinned | profile.restated.get(service, frozenset())
         dropped = sorted(n for n in legacy if n.startswith(P) and n not in receives
-                         and n not in already_pinned and n not in COMPOSE.allowed)
+                         and n not in already_pinned and n not in compose.allowed)
         report[f"no longer delivered to {service}"] = dropped
     return files, report
 
 
-def write_split(files: dict[str, dict[str, str]], out: Path) -> None:
+UNCLASSIFIED_HEADING = "not a setting or Compose input (dropped)"
+HOST_ONLY_HEADING = "host-script setting (dropped; read from the shell, not a service)"
+
+
+def write_split(files: dict[str, dict[str, str]], out: Path, profile: Profile | None = None
+                ) -> None:
     """Write every file or none, never overwriting, with restrictive modes.
 
     Each file is first written under a temporary name in `out` and parsed back;
@@ -1119,6 +1260,7 @@ def write_split(files: dict[str, dict[str, str]], out: Path) -> None:
     place. Any failure removes the temporary files and leaves `out` unchanged.
     Messages never include a value.
     """
+    profile = profile or DEV
     if not out.is_dir():
         raise SystemExit(f"ERROR: {out} does not exist; create it first (mode 0750)")
     existing = [name for name in files if (out / name).exists()]
@@ -1126,14 +1268,15 @@ def write_split(files: dict[str, dict[str, str]], out: Path) -> None:
         raise SystemExit(f"ERROR: refusing to overwrite existing files: {', '.join(existing)}")
     staged: list[tuple[Path, Path]] = []
     try:
-        for contract in SPLIT_TARGETS:
+        for contract in profile.contracts:
             mode = 0o600 if contract.secret_bearing else 0o640
             temporary = out / f".{contract.name}.split-{os.getpid()}.tmp"
             fd = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL, mode)
             staged.append((temporary, out / contract.name))
             with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
-                handle.write(f"# Generated from the legacy DEV .env by service_env_contract.py "
-                             f"--split-legacy-env. Contract: {contract.name}.\n")
+                handle.write(f"# Generated from the legacy {profile.label} .env by "
+                             "service_env_contract.py --split-legacy-env. "
+                             f"Contract: {contract.name}.\n")
                 for name in sorted(files[contract.name]):
                     handle.write(f"{name}={format_env_value(files[contract.name][name])}\n")
             parsed, problems = parse_env_file(temporary)
@@ -1204,8 +1347,162 @@ RESTATED_ENVIRONMENT = {
 }
 
 
-def check_provenance(model: dict, root: Path) -> list[str]:
-    """Prove each service's merged environment comes only from the DEV root.
+# --- Profiles -------------------------------------------------------------------
+# One contract module serves both environments. The DEV profile is assembled
+# from the constants above and behaves exactly as before; the PROD profile
+# differs only where compose.production.yml differs from compose.dev.yml.
+
+
+@dataclass(frozen=True)
+class Profile:
+    name: str                                   # "dev" | "prod"
+    label: str                                  # "DEV" | "PROD"
+    root_variable: str
+    contracts: tuple[FileContract, ...]
+    common_contract: FileContract
+    compose_contract: FileContract
+    pinned: frozenset[str]
+    pinned_source: str
+    json_lists: frozenset[str]
+    service_env_files: dict[str, tuple[str, ...]]
+    restated: dict[str, frozenset[str]]
+    resolved_allowed: dict[str, frozenset[str]]
+    must_be_blank: dict[str, frozenset[str]]
+    expected_mounts: dict[str, set[str]]
+    legacy_renames: dict[str, str]
+    admin_password_name: str
+    foreign_kind: str                           # the other environment, in messages
+    foreign_path: object                        # callable(str) -> bool
+    allow_unprovisioned_keys: bool = False
+    worker_interpolated_defaults: dict[str, str] = field(default_factory=dict)
+    host_only: frozenset[str] = frozenset()
+    apple_hint: str = ""
+
+
+DEV = Profile(
+    name="dev", label="DEV", root_variable="MYKHAYA_DEV_CONFIG_ROOT", contracts=CONTRACTS,
+    common_contract=COMMON, compose_contract=COMPOSE, pinned=PINNED_BY_COMPOSE,
+    pinned_source="compose.dev.yml/compose.yml", json_lists=frozenset(JSON_LIST_NAMES),
+    service_env_files=SERVICE_ENV_FILES, restated=RESTATED_ENVIRONMENT,
+    resolved_allowed=RESOLVED_ALLOWED, must_be_blank=MUST_BE_BLANK,
+    expected_mounts=EXPECTED_MOUNTS, legacy_renames=LEGACY_RENAMES,
+    admin_password_name="POSTGRES_PASSWORD", foreign_kind="production",
+    foreign_path=_is_production_path, apple_hint=" (use the file in DEV)",
+)
+
+# PROD: compose.production.yml pins only these for the application services;
+# compose.yml pins build metadata and the syslog switch. Everything else the
+# legacy production .env supplied is installation configuration
+# (docs/architecture/deployment-configuration.md).
+PROD_PINS = frozenset(P + n for n in ("ENVIRONMENT", "BUILD_CHANNEL", "COOKIE_SECURE",
+                                      "ADMIN_MFA_REQUIRED"))
+PROD_PINNED = PROD_PINS | BUILD_METADATA | {P + "SYSLOG_DEBUG"}
+INSTALLATION = frozenset(P + n for n in (
+    "REGISTRATION_MODE", "PUBLIC_WEB_URL", "ADMIN_URL", "STATUS_URL", "NATIVE_API_URL",
+    "CORS_ORIGINS", "TRUSTED_HOSTS", "TRUSTED_PROXY_CIDRS", "ADMIN_ALLOWED_NETWORKS",
+    "DEFAULT_TIMEZONE", "DEFAULT_LOCALE", "WEEK_START",
+))
+# Production Settings refuse to start without these (mykhaya/config.py), and
+# prod-deploy.sh has always required them; migrate builds the same Settings.
+INSTALLATION_REQUIRED = frozenset(P + n for n in (
+    "REGISTRATION_MODE", "PUBLIC_WEB_URL", "ADMIN_URL", "STATUS_URL", "NATIVE_API_URL",
+    "CORS_ORIGINS", "TRUSTED_HOSTS", "TRUSTED_PROXY_CIDRS", "ADMIN_ALLOWED_NETWORKS",
+))
+PROD_POSTGRES_PASSWORDS = frozenset({P + "POSTGRES_ADMIN_PASSWORD", P + "MIGRATION_DB_PASSWORD",
+                                     P + "DB_PASSWORD"})
+CADDY_INTERPOLATION = frozenset({"WEB_DOMAIN", "API_DOMAIN", "ADMIN_DOMAIN", "STATUS_DOMAIN",
+                                 P + "CADDY_TRUSTED_PROXY_CIDRS"})
+# Read by backup.sh/backup-preflight.sh on the host, never by a container.
+BACKUP_SETTINGS = frozenset({P + "BACKUP_DIR", P + "BACKUP_AGE_RECIPIENTS_FILE"})
+
+PROD_COMMON = FileContract(
+    "common.env",
+    allowed=frozenset(COMMON.allowed | INSTALLATION),
+    required=INSTALLATION_REQUIRED,
+    forbidden=COMMON.forbidden,
+    secret_bearing=False,
+    consumers=("api", "worker", "scheduler", "migrate"),
+)
+
+
+def _without_environment_keyrings(base: FileContract) -> FileContract:
+    """The same contract with the environment-supplied keyrings forbidden:
+    production rejects them at startup, so no PROD file may carry them."""
+    return FileContract(base.name, allowed=frozenset(base.allowed - FIELD_KEY_ENV_FALLBACK),
+                        required=base.required,
+                        forbidden=frozenset(base.forbidden | FIELD_KEY_ENV_FALLBACK),
+                        consumers=base.consumers)
+
+
+PROD_API, PROD_WORKER, PROD_SCHEDULER = (_without_environment_keyrings(c)
+                                         for c in (API, WORKER, SCHEDULER))
+# PROD postgres.env is an interpolation source (a second --env-file), never an
+# env_file: PostgreSQL's service definition stays byte-identical to the legacy
+# one, so Compose never recreates it for this migration (an env_file entry
+# alone changes the service hash). It holds exactly the names compose.yml
+# interpolates for PostgreSQL's one-time initialisation.
+PROD_POSTGRES = FileContract("postgres.env", allowed=PROD_POSTGRES_PASSWORDS,
+                             required=PROD_POSTGRES_PASSWORDS, consumers=("postgres",))
+PROD_COMPOSE = FileContract(
+    "compose.env",
+    allowed=frozenset(CADDY_INTERPOLATION | BACKUP_SETTINGS | {P + n for n in (
+        "FIELD_KEYS_HOST_DIR", "APPLE_KEY_HOST_DIR", "SYSLOG_DEBUG", "EMAIL_DELIVERY_CONFIGURED",
+    )}),
+    required=frozenset(CADDY_INTERPOLATION | {P + "FIELD_KEYS_HOST_DIR",
+                                              P + "APPLE_KEY_HOST_DIR"}),
+    forbidden=frozenset(COMPOSE.forbidden | {P + "BACKUP_AGE_IDENTITY"}),
+    secret_bearing=False,
+)
+PROD_CONTRACTS = (PROD_COMMON, PROD_API, PROD_WORKER, PROD_SCHEDULER, MIGRATE, PROD_POSTGRES,
+                  PROD_COMPOSE)
+APPLE_BLANKED = frozenset({P + "APPLE_SIGN_IN_ENABLED", P + "APPLE_PRIVATE_KEY",
+                           P + "APPLE_PRIVATE_KEY_FILE"})
+POSTGRES_ENVIRONMENT = frozenset({"POSTGRES_DB", "POSTGRES_USER", "POSTGRES_PASSWORD",
+                                  P + "MIGRATION_DB_PASSWORD", P + "DB_PASSWORD"})
+
+PROD = Profile(
+    name="prod", label="PROD", root_variable="MYKHAYA_PROD_CONFIG_ROOT",
+    contracts=PROD_CONTRACTS, common_contract=PROD_COMMON, compose_contract=PROD_COMPOSE,
+    pinned=PROD_PINNED, pinned_source="compose.production.yml/compose.yml",
+    json_lists=frozenset(JSON_LIST_NAMES | {P + "CORS_ORIGINS", P + "TRUSTED_HOSTS"}),
+    service_env_files={
+        "api": ("common.env", "api.env"),
+        "worker": ("common.env", "worker.env"),
+        "scheduler": ("common.env", "scheduler.env"),
+        "migrate": ("common.env", "migrate.env"),
+    },
+    restated={
+        "api": PROD_PINS | BUILD_METADATA | APNS | {P + "SYSLOG_DEBUG"},
+        "worker": PROD_PINS,
+        "scheduler": PROD_PINS | BUILD_METADATA | APNS | {P + "SYSLOG_DEBUG"},
+        "migrate": PROD_PINS | BUILD_METADATA | APNS | FIELD_KEY_ENV_FALLBACK | APPLE_BLANKED,
+        "postgres": POSTGRES_ENVIRONMENT,
+    },
+    resolved_allowed={
+        "api": PROD_COMMON.allowed | PROD_API.allowed | PROD_PINNED | APNS,
+        "worker": PROD_COMMON.allowed | PROD_WORKER.allowed | PROD_PINNED,
+        "scheduler": PROD_COMMON.allowed | PROD_SCHEDULER.allowed | PROD_PINNED | APNS,
+        "migrate": PROD_COMMON.allowed | MIGRATE.allowed | PROD_PINNED | APNS
+                   | FIELD_KEY_ENV_FALLBACK | APPLE_BLANKED,
+        "postgres": POSTGRES_ENVIRONMENT,
+    },
+    must_be_blank=MUST_BE_BLANK, expected_mounts=EXPECTED_MOUNTS, legacy_renames={},
+    admin_password_name=P + "POSTGRES_ADMIN_PASSWORD", foreign_kind="development",
+    foreign_path=_is_development_path, allow_unprovisioned_keys=True,
+    # compose.yml (worker) and compose.production.yml (worker) interpolate these.
+    worker_interpolated_defaults={
+        P + "APNS_DELIVERY_CONFIGURED": "false", P + "APNS_TEAM_ID": "", P + "APNS_KEY_ID": "",
+        P + "APNS_BUNDLE_ID": DEVELOPMENT_APNS_BUNDLE_ID, P + "APNS_PRIVATE_KEY": "",
+        P + "FCM_DELIVERY_CONFIGURED": "false", P + "FCM_PROJECT_ID": "",
+        P + "FCM_CLIENT_EMAIL": "", P + "FCM_PRIVATE_KEY": "",
+    },
+    host_only=frozenset({P + "PRODUCTION"}),
+)
+PROFILES = {"dev": DEV, "prod": PROD}
+
+
+def check_provenance(model: dict, root: Path, profile: Profile | None = None) -> list[str]:
+    """Prove each service's merged environment comes only from the config root.
 
     Works with any Compose version: the merged environment must contain
     exactly the overlay's restated names plus the names in that service's own
@@ -1213,9 +1510,10 @@ def check_provenance(model: dict, root: Path) -> list[str]:
     any other source) still being loaded would add names. Values are compared
     in memory; only names are reported.
     """
+    profile = profile or DEV
     errors: list[str] = []
     services = model.get("services", {})
-    for service, file_names in SERVICE_ENV_FILES.items():
+    for service, file_names in profile.service_env_files.items():
         if service not in services:
             errors.append(f"{service}: missing from the merged Compose model")
             continue
@@ -1225,50 +1523,90 @@ def check_provenance(model: dict, root: Path) -> list[str]:
             if path.is_file():
                 values, _ = parse_env_file(path)
                 supplied.update(values)
-        restated = RESTATED_ENVIRONMENT[service]
+        restated = profile.restated[service]
         env = services[service].get("environment") or {}
         for name in sorted(set(env) - restated - set(supplied)):
-            errors.append(f"{service}: receives {name} from outside MYKHAYA_DEV_CONFIG_ROOT")
+            errors.append(f"{service}: receives {name} from outside {profile.root_variable}")
         for name in sorted(set(supplied) - restated):
             if name not in env:
                 errors.append(f"{service}: {name} from its file does not reach the container")
             # `compose config` prints every literal "$" as "$$".
             elif str(env[name]).replace("$$", "$") != supplied[name]:
                 errors.append(f"{service}: {name} differs from its file (another source wins)")
+    if profile.name == "prod":
+        errors += check_production_bootstrap_provenance(services, root)
     return errors
 
 
-def check_resolved_model(model: dict, repo_root: Path) -> list[str]:
+def check_production_bootstrap_provenance(services: dict, root: Path) -> list[str]:
+    """PROD only: PostgreSQL's bootstrap passwords come from postgres.env by
+    interpolation and must reach no other service, under any variable name,
+    except each application's own database URL (proved equal to its file)."""
+    errors: list[str] = []
+    path = root / "postgres.env"
+    values, _ = parse_env_file(path) if path.is_file() else ({}, [])
+    admin = values.get(P + "POSTGRES_ADMIN_PASSWORD", "")
+    migration = values.get(P + "MIGRATION_DB_PASSWORD", "")
+    runtime = values.get(P + "DB_PASSWORD", "")
+    postgres = (services.get("postgres") or {}).get("environment") or {}
+    expected = {"POSTGRES_DB": "mykhaya", "POSTGRES_USER": "postgres",
+                "POSTGRES_PASSWORD": admin, P + "MIGRATION_DB_PASSWORD": migration,
+                P + "DB_PASSWORD": runtime}
+    for name, value in expected.items():
+        if str(postgres.get(name, "")).replace("$$", "$") != value or name not in postgres:
+            errors.append(f"postgres: {name} does not come unchanged from postgres.env")
+    for name in sorted(set(postgres) - set(expected)):
+        errors.append(f"postgres: receives {name} from outside MYKHAYA_PROD_CONFIG_ROOT")
+    secrets_by_role = (("administrator", admin, set()),
+                       ("migration", migration, {("migrate", P + "DATABASE_URL")}),
+                       ("runtime", runtime, {(s, P + "DATABASE_URL")
+                                             for s in ("api", "worker", "scheduler")}))
+    for service, definition in services.items():
+        if service == "postgres":
+            continue
+        env = (definition or {}).get("environment") or {}
+        for name, raw in env.items():
+            text = str(raw if raw is not None else "").replace("$$", "$")
+            for role, secret, permitted in secrets_by_role:
+                if secret and secret in text and (service, name) not in permitted:
+                    errors.append(f"{service}: {name} contains the PostgreSQL {role} password")
+    return errors
+
+
+def check_resolved_model(model: dict, repo_root: Path, profile: Profile | None = None
+                         ) -> list[str]:
     """Allow-list the merged Compose model by variable name and mount target."""
+    profile = profile or DEV
     errors: list[str] = []
     services = model.get("services", {})
     for name, service in services.items():
         env = service.get("environment") or {}
-        allowed = RESOLVED_ALLOWED.get(name)
+        allowed = profile.resolved_allowed.get(name)
         if allowed is not None:
             for var in sorted(set(env) - allowed):
                 errors.append(f"{name}: receives {var}, which is outside its contract")
         if name not in {"postgres"}:
             for var in sorted(set(env) & BOOTSTRAP_PASSWORDS):
                 errors.append(f"{name}: receives database bootstrap credential {var}")
-        for var in sorted(MUST_BE_BLANK.get(name, set()) & set(env)):
+        for var in sorted(profile.must_be_blank.get(name, set()) & set(env)):
             if env[var] not in ("", None):
                 errors.append(f"{name}: {var} must be blank for this service")
         mounts = service.get("volumes") or []
         targets = {m.get("target") for m in mounts}
-        if name in EXPECTED_MOUNTS and targets != EXPECTED_MOUNTS[name]:
+        if name in profile.expected_mounts and targets != profile.expected_mounts[name]:
             errors.append(f"{name}: mounts {sorted(t for t in targets if t)} but the contract is "
-                          f"{sorted(EXPECTED_MOUNTS[name])}")
+                          f"{sorted(profile.expected_mounts[name])}")
         for mount in mounts:
             if mount.get("target") in SECRET_MOUNT_TARGETS:
                 if not mount.get("read_only"):
                     errors.append(f"{name}: secret mount {mount['target']} is not read-only")
                 source = str(mount.get("source", ""))
-                if _is_production_path(source):
-                    errors.append(f"{name}: secret mount {mount['target']} uses a production path")
+                if profile.foreign_path(source):
+                    errors.append(f"{name}: secret mount {mount['target']} uses a "
+                                  f"{profile.foreign_kind} path")
                 if _inside(Path(source).resolve(), repo_root.resolve()):
                     errors.append(f"{name}: secret mount {mount['target']} comes from the repository")
-            elif name not in EXPECTED_MOUNTS and name not in {"postgres", "caddy", "redis"} and \
+            elif name not in profile.expected_mounts and name not in {"postgres", "caddy", "redis"} and \
                     mount.get("type") == "bind":
                 errors.append(f"{name}: unexpected bind mount {mount.get('target')}")
             if mount.get("type") == "bind" and Path(str(mount.get("source", ""))).name == ".env":
@@ -1302,10 +1640,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parents[2])
     parser.add_argument("--skip-permissions", action="store_true",
                         help="only for non-POSIX development hosts; never on the DEV server")
+    parser.add_argument("--profile", choices=sorted(PROFILES), default="dev",
+                        help="dev (default) or prod: which environment's contract applies")
     parser.add_argument("--probe-image", metavar="IMAGE",
                         help="with --root: the locally built API image used to inspect the "
                              "protected key directories as the service identity (never pulled)")
     args = parser.parse_args(argv)
+    profile = PROFILES[args.profile]
     if args.split_legacy_env:
         if args.out is None:
             parser.error("--split-legacy-env requires --out")
@@ -1314,8 +1655,8 @@ def main(argv: list[str] | None = None) -> int:
             for problem in problems:
                 print(f"ERROR: {problem}", file=sys.stderr)
             return 1
-        files, report = split_legacy_env(legacy)
-        write_split(files, args.out)
+        files, report = split_legacy_env(legacy, profile)
+        write_split(files, args.out, profile)
         print(f"Wrote {len(files)} files to {args.out} (values not shown).")
         for heading, names in report.items():
             print(f"{heading}: {', '.join(names) if names else 'none'}")
@@ -1333,16 +1674,16 @@ def main(argv: list[str] | None = None) -> int:
         finally:
             if source is not sys.stdin:
                 source.close()
-        errors = check_resolved_model(model, args.repo_root)
+        errors = check_resolved_model(model, args.repo_root, profile)
         if args.config_root is not None:
-            errors += check_provenance(model, args.config_root)
+            errors += check_provenance(model, args.config_root, profile)
         for error in errors:
             print(f"- {error}", file=sys.stderr)
         if errors:
-            print("Merged DEV Compose model violates the service configuration contract",
-                  file=sys.stderr)
+            print(f"Merged {profile.label} Compose model violates the service configuration "
+                  "contract", file=sys.stderr)
             return 1
-        print("Merged DEV Compose model matches the service configuration contract")
+        print(f"Merged {profile.label} Compose model matches the service configuration contract")
         return 0
     check_perms = not args.skip_permissions
     if check_perms and os.name != "posix":
@@ -1357,15 +1698,16 @@ def main(argv: list[str] | None = None) -> int:
             print(f"ERROR: key-directory probe: {exc}", file=sys.stderr)
             return 1
     report = validate_root(args.root, repo_root=args.repo_root, check_perms=check_perms,
-                           probe=probe)
+                           probe=probe, profile=profile)
     for warning in report.warnings:
         print(f"WARNING: {warning}", file=sys.stderr)
     if report.errors:
-        print("DEV service configuration validation failed:", file=sys.stderr)
+        print(f"{profile.label} service configuration validation failed:", file=sys.stderr)
         for error in report.errors:
             print(f"- {error}", file=sys.stderr)
         return 1
-    print(f"DEV service configuration validation passed ({len(CONTRACTS)} files checked"
+    print(f"{profile.label} service configuration validation passed "
+          f"({len(profile.contracts)} files checked"
           f"{'' if check_perms else '; permissions NOT checked'})")
     return 0
 

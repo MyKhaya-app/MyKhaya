@@ -22,3 +22,16 @@ if [ -e "$state" ] || [ -L "$state" ]; then
   printf 'Use the DEV deployment commands instead: make dev-up, dev-update, dev-down, dev-logs, dev-health.\n' >&2
   exit 1
 fi
+
+# The PROD host is identified the same way (F-03): its cutover state file, or
+# the PROD configuration root that the migration requires before it starts.
+# There these targets would bypass prod-deploy.sh and the active configuration,
+# and `make reset` would delete production volumes.
+prod_state=${MYKHAYA_PROD_SERVICE_ENV_STATE:-/etc/mykhaya/prod/.service-env-state}
+prod_root=$(dirname -- "$prod_state")
+if [ -e "$prod_state" ] || [ -L "$prod_state" ] || [ -d "$prod_root" ]; then
+  printf 'ERROR: make %s is a local-workstation command and is refused on the PROD host (%s exists).\n' \
+    "$target" "$prod_root" >&2
+  printf 'Use the production commands instead: make prod-update, prod-health, prod-logs, prod-backup.\n' >&2
+  exit 1
+fi

@@ -156,35 +156,15 @@ check_resolved_service_env() {
     die "merged DEV Compose model violates the service configuration contract"
 }
 
+# Shared with the production scripts (cutover-state.sh).
+. "$SCRIPT_DIR/cutover-state.sh"
+
 read_state() {
-  if [ -L "$STATE_FILE" ]; then
-    die "cutover state $STATE_FILE must be a regular file, not a symbolic link"
-  fi
-  if [ ! -e "$STATE_FILE" ]; then
-    printf 'legacy\n'
-    return 0
-  fi
-  state=$(sed -n '1p' "$STATE_FILE" | tr -d '\r')
-  case "$state" in
-    legacy|pending|active|rollback-pending) printf '%s\n' "$state" ;;
-    *) die "cutover state $STATE_FILE is unrecognised; refusing to deploy.\nInspect it, then restore the last known state (legacy, pending, active or rollback-pending)" ;;
-  esac
+  cutover_read_state "$STATE_FILE"
 }
 
 write_state() {
-  new_state=$1
-  state_dir=$(dirname -- "$STATE_FILE")
-  [ -d "$state_dir" ] || die "cutover state directory $state_dir does not exist"
-  temporary="$state_dir/.service-env-state.tmp.$$"
-  # Atomic replacement: an interruption leaves either the old or the new state.
-  (
-    umask 027
-    printf '%s\nupdated=%s commit=%s by=%s\n' "$new_state" \
-      "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$(git rev-parse --short HEAD 2>/dev/null || echo unknown)" \
-      "$(id -un 2>/dev/null || echo unknown)" >"$temporary"
-  ) || die "could not write the cutover state"
-  mv -f "$temporary" "$STATE_FILE" || { rm -f "$temporary"; die "could not record the cutover state"; }
-  printf 'Cutover state: %s\n' "$new_state"
+  cutover_write_state "$STATE_FILE" "$1"
 }
 
 check_config_mode() {
