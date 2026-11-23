@@ -3,7 +3,7 @@ from logging.config import fileConfig
 
 from alembic import context
 from sqlalchemy import pool
-from sqlalchemy.ext.asyncio import async_engine_from_config
+from sqlalchemy.ext.asyncio import create_async_engine
 
 from mykhaya import models  # noqa: F401
 from mykhaya.config import get_migration_settings
@@ -14,13 +14,17 @@ if config.config_file_name:
     fileConfig(config.config_file_name)
 # MigrationSettings, not Settings: migrations never need MYKHAYA_SECRET_KEY,
 # and nothing imported here may construct the application Settings.
-config.set_main_option("sqlalchemy.url", get_migration_settings().database_url)
+# The URL stays a SQLAlchemy URL object (SEC-086/086a): it is never written
+# into Alembic's configuration, whose interpolation would also misread a
+# percent-encoded password, and a file-backed password is attached in-process.
+database_url = get_migration_settings().database_connect_url()
 target_metadata = Base.metadata
 
 
 def run_migrations_offline() -> None:
+    # Offline mode only renders SQL; it never connects, so no password is needed.
     context.configure(
-        url=config.get_main_option("sqlalchemy.url"),
+        url=database_url.set(password=None),
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
@@ -37,11 +41,7 @@ def do_run_migrations(connection: object) -> None:
 
 
 async def run_async_migrations() -> None:
-    engine = async_engine_from_config(
-        config.get_section(config.config_ini_section, {}),
-        prefix="sqlalchemy.",
-        poolclass=pool.NullPool,
-    )
+    engine = create_async_engine(database_url, poolclass=pool.NullPool)
     async with engine.connect() as connection:
         await connection.run_sync(do_run_migrations)
     await engine.dispose()

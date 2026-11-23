@@ -155,6 +155,26 @@ class SensitiveDataInfrastructureTests(unittest.TestCase):
         self.assertIn("MYKHAYA_BACKUP_AGE_IDENTITY", self.restore)
         self.assertIn("age -d -i", self.restore)
 
+    def test_containers_never_copy_secret_files_into_the_environment(self) -> None:
+        """MK-SEC-001 SEC-093: application secret files are read in-process by
+        the central registry (apps/api/mykhaya/secret_registry.py). No image
+        or shell script may read /run/secrets and export the value instead."""
+        candidates = [
+            *ROOT.glob("apps/*/Dockerfile"),
+            *ROOT.glob("infrastructure/**/*.sh"),
+            *ROOT.glob("infrastructure/**/Dockerfile*"),
+            *ROOT.glob("apps/*/*entrypoint*"),
+            *ROOT.glob("infrastructure/**/*entrypoint*"),
+        ]
+        self.assertIn(ROOT / "apps/api/Dockerfile", candidates)
+        offenders = sorted(
+            str(path.relative_to(ROOT))
+            for path in candidates
+            if path.is_file()
+            and "/run/secrets" in path.read_text(encoding="utf-8", errors="replace")
+        )
+        self.assertEqual(offenders, [])
+
     def test_key_and_backup_material_is_gitignored(self) -> None:
         for pattern in ("/secrets/", "backups/", "*.age"):
             self.assertIn(pattern, self.gitignore.splitlines())

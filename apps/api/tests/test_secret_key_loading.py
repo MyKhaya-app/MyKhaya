@@ -270,8 +270,15 @@ def test_representations_mask_the_key(key_from_file: KeyFileWriter) -> None:
 def test_migration_settings_never_hold_the_key(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("MYKHAYA_SECRET_KEY", KEY)
     settings = MigrationSettings(_env_file=None)  # type: ignore[call-arg]
-    # process_role (WP-2) is non-secret; no field can hold a credential.
-    assert set(MigrationSettings.model_fields) == {"environment", "database_url", "process_role"}
+    # process_role (WP-2) is non-secret. The only credential field is the
+    # migrator's own file-backed database password (WP-3, K-03).
+    assert set(MigrationSettings.model_fields) == {
+        "environment",
+        "database_url",
+        "database_password",
+        "database_password_file",
+        "process_role",
+    }
     assert not hasattr(settings, "secret_key")
     assert KEY not in repr(settings) and KEY not in settings.model_dump_json()
 

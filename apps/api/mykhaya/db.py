@@ -8,12 +8,16 @@ from mykhaya.config import get_settings
 from mykhaya.db_base import Base as Base  # re-exported; defined without side effects
 
 settings = get_settings()
+# A URL object, not a string: in file-backed mode it carries the password from
+# MYKHAYA_DATABASE_PASSWORD_FILE as a structured field (SEC-086/086a).
 if settings.environment == "test":
     # Pytest creates isolated event loops; pooled asyncpg connections cannot cross them.
-    engine = create_async_engine(settings.database_url, pool_pre_ping=True, poolclass=NullPool)
+    engine = create_async_engine(
+        settings.database_connect_url(), pool_pre_ping=True, poolclass=NullPool
+    )
 else:
     engine = create_async_engine(
-        settings.database_url, pool_pre_ping=True, pool_size=10, max_overflow=10
+        settings.database_connect_url(), pool_pre_ping=True, pool_size=10, max_overflow=10
     )
 
 

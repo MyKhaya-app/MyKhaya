@@ -78,28 +78,86 @@ declaration (so settings never read a file) is recommended as a small, separatel
 approved application change.
 
 Alembic (`apps/api/migrations/env.py`) reads only `MigrationSettings`
-(`environment` and `database_url`, from the process environment; it has no
-`.env` fallback) and imports the model metadata through the
+(`environment`, `database_url` and the optional migration password file, from
+the process environment; it has no `.env` fallback) and imports the model
+metadata through the
 side-effect-free `mykhaya.db_base`, so migrations no longer construct the
 application `Settings` and run with `MYKHAYA_SECRET_KEY` absent. The application
 services still require the key and fail closed at startup without it. The
 deployment contracts are not narrowed yet: DEV and PROD `migrate.env` still carry
 the key until a separately approved change removes it.
 
-`MYKHAYA_SECRET_KEY_FILE` is an alternative source for the session secret, read
-by the shared hardened reader `mykhaya.secret_files` (MK-SEC-001 SEC-017). The
-path must be absolute, normalised and inside `/run/secrets/` (where Compose file
-secrets are mounted); a symbolic link anywhere in the path is refused. The file
-is opened without following links or blocking and validated through its open
-descriptor: it must be a regular, single-line UTF-8 file of at most 4 KiB with no
-NUL bytes, and no more than 4 KiB plus one byte is ever read. One trailing line
-ending is removed and nothing else, so the value is used byte for byte. Errors
-name only the setting and the failure category, never the path or the value.
-Setting both `MYKHAYA_SECRET_KEY` and `MYKHAYA_SECRET_KEY_FILE` is rejected, and
-a blank variable means unset. Platforms without descriptor-relative, no-follow
-opening (Windows) refuse the file source. No deployment uses it yet. The Apple
-private-key and field-keyring file loaders are unchanged and do not use this
-reader yet.
+### File-backed secrets (application-side; no deployment uses them yet)
+
+Every secret that can be supplied as a file is declared once in the central
+registry `apps/api/mykhaya/secret_registry.py` (MK-SEC-001 v1.2 SEC-093): the
+setting it fills, its `*_FILE` variable, its §6.3 credential identifier, its
+format and whether it is required. The roles allowed to hold each one come from
+the §6.3 grants in `mykhaya.process_roles`. **No deployment sets any `*_FILE`
+variable yet.** With none set, configuration behaves exactly as before.
+
+| Variable | Credential | Format |
+|---|---|---|
+| `MYKHAYA_SECRET_KEY_FILE` | K-01 (required, by either form) | single line |
+| `MYKHAYA_DATABASE_PASSWORD_FILE` | K-02 (application), K-03 (migrator) | single line |
+| `MYKHAYA_SMTP_PASSWORD_FILE` | K-06 | single line |
+| `MYKHAYA_VAPID_PRIVATE_KEY_FILE` | K-07 | single line |
+| `MYKHAYA_APNS_PRIVATE_KEY_FILE` | K-08 | PEM |
+| `MYKHAYA_FCM_PRIVATE_KEY_FILE` | K-09 | PEM |
+| `MYKHAYA_GOOGLE_CLIENT_SECRET_FILE` | K-11 | single line |
+| `MYKHAYA_STRIPE_SECRET_KEY_FILE` | K-12 | single line |
+| `MYKHAYA_STRIPE_WEBHOOK_SECRET_FILE` | K-13 | single line |
+| `MYKHAYA_DVLA_UAT_API_KEY_FILE` | K-14 | single line |
+| `MYKHAYA_DVLA_PRODUCTION_API_KEY_FILE` | K-15 | single line |
+| `MYKHAYA_DVSA_CLIENT_ID_FILE`, `MYKHAYA_DVSA_CLIENT_SECRET_FILE`, `MYKHAYA_DVSA_API_KEY_FILE` | K-16 | single line |
+| `MYKHAYA_MONITORING_WATCHDOG_URL_FILE` | K-17 | single line |
+
+Each file is read in-process by the shared hardened reader
+`mykhaya.secret_files` (SEC-017), never by an entrypoint script and never
+through pydantic's `secrets_dir`. The path must be absolute, normalised and
+inside `/run/secrets/` (where Compose file secrets are mounted); a symbolic link
+anywhere in the path is refused. The file is opened without following links or
+blocking and validated through its open descriptor: it must be a regular UTF-8
+file with no NUL bytes. A single-line secret is at most 4 KiB and must have no
+embedded line breaks or surrounding whitespace; one trailing line ending is
+removed and nothing else, so the value is used byte for byte. A PEM key is at
+most 16 KiB and must be exactly one `BEGIN`/`END` block with nothing around it;
+`\n` and `\r\n` line endings are both accepted. A JSON document is at most
+64 KiB and must be one object with no duplicate keys. No more than the limit
+plus one byte is ever read.
+
+Setting a literal and its `*_FILE` variable together is rejected, and a blank
+variable means unset. Under `MYKHAYA_PROCESS_ROLE`, a role never even opens a
+file for a credential it is not granted. File values go straight into the same
+masked (`SecretStr`) settings and the same validation as the environment form;
+nothing is cached, copied into the environment or logged. Errors name only the
+setting and the failure category, never the path or the value. Platforms
+without descriptor-relative, no-follow opening (Windows) refuse every file
+source.
+
+Three file settings keep their established loaders for compatibility: the Apple
+sign-in key (`MYKHAYA_APPLE_PRIVATE_KEY_FILE`, K-10) and the field-encryption
+and blind-index keyrings (`MYKHAYA_FIELD_ENCRYPTION_KEYS_FILE`,
+`MYKHAYA_BLIND_INDEX_KEYS_FILE`, K-18 and K-19). They are declared in the
+registry but are not yet read by the hardened reader, which would refuse
+symbolic links and paths outside `/run/secrets/` that those loaders accept
+today. Moving them needs the deployed file layout confirmed first.
+
+### Database credentials (SEC-086, SEC-086a)
+
+`MYKHAYA_DATABASE_URL` may carry the password, as every deployment does today,
+or omit it and take it from `MYKHAYA_DATABASE_PASSWORD_FILE`. In file-backed
+mode the password is attached to SQLAlchemy's structured `URL` object inside the
+process (`mykhaya.db_credentials`), for both the application engine
+(`mykhaya.db`) and Alembic. It is never percent-encoded by hand, written back
+into a URL string or an environment variable, or shown in a diagnostic.
+Alembic receives the URL object directly rather than through its configuration
+file, which would misread a percent-encoded password. A URL that still contains a
+password, or names no user, is rejected when a password file is set. There is no
+literal `MYKHAYA_DATABASE_PASSWORD` variable. The application (`mykhaya_app`,
+K-02) and the migrator (`mykhaya_migrator`, K-03) each resolve their own URL and
+password, and process roles keep each to its own identity. A legacy
+password-bearing URL is used exactly as before and is not newly validated.
 
 ### Process roles (application-side; not enabled in any deployment)
 
@@ -122,7 +180,8 @@ of inherited values keeps working.
 | `test` | synthetic values | requires `MYKHAYA_ENVIRONMENT=test`; refuses live Stripe keys |
 
 Application roles require `MYKHAYA_DATABASE_URL` with the `mykhaya_app` role and a
-password; `migrate` requires the `mykhaya_migrator` role. `cli` has no §6.3 row
+password (in the URL or from `MYKHAYA_DATABASE_PASSWORD_FILE`); `migrate`
+requires the `mykhaya_migrator` role. `cli` has no §6.3 row
 and provisionally follows `api` in code; that does not authorise enabling the
 role for administrative tasks that need different privileges. The API holds the
 VAPID key (K-07) because the Control Centre sends Web Push test messages itself;

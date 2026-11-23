@@ -12,8 +12,9 @@ service credential-access matrix:
 This module holds non-secret policy only: credential identifiers, the names
 that carry them, and which role may hold which. It never reads, logs or
 returns a credential value, and every error names variables and credential
-identifiers only. The identifiers are intended to seed the central secret
-registry (SEC-093), which is not implemented here.
+identifiers only. The central secret registry (SEC-093,
+mykhaya.secret_registry) maps file-backed secrets to these identifiers and
+takes its authorised roles from ROLE_GRANTS.
 
 Not enforced here (future deployment work): Redis ACL credentials (K-05,
 Phase 2B, D-3), whether a value is real or synthetic (beyond refusing live
@@ -62,9 +63,15 @@ CREDENTIALS: dict[str, CredentialSpec] = {
         CredentialSpec(
             "K-01", "application secret key", ("secret_key",), _env("secret_key", "secret_key_file")
         ),
-        # K-02/K-03/K-04 are carried in MYKHAYA_DATABASE_URL (by its user) and
-        # by the PostgreSQL bootstrap variables below.
-        CredentialSpec("K-02", "application database password", env=_env("db_password")),
+        # K-02/K-03/K-04 are carried in MYKHAYA_DATABASE_URL (by its user), in
+        # MYKHAYA_DATABASE_PASSWORD_FILE (see DATABASE_PASSWORD_ENV) and by the
+        # PostgreSQL bootstrap variables below.
+        CredentialSpec(
+            "K-02",
+            "application database password",
+            ("database_password",),
+            _env("db_password"),
+        ),
         CredentialSpec("K-03", "migration database password", env=_env("migration_db_password")),
         CredentialSpec(
             "K-04",
@@ -72,12 +79,27 @@ CREDENTIALS: dict[str, CredentialSpec] = {
             env=("POSTGRES_PASSWORD", *_env("postgres_admin_password")),
         ),
         CredentialSpec("K-05", "Redis connection (password from Phase 2B)", env=_env("redis_url")),
-        CredentialSpec("K-06", "SMTP password", ("smtp_password",), _env("smtp_password")),
         CredentialSpec(
-            "K-07", "VAPID private key", ("vapid_private_key",), _env("vapid_private_key")
+            "K-06", "SMTP password", ("smtp_password",), _env("smtp_password", "smtp_password_file")
         ),
-        CredentialSpec("K-08", "APNs private key", ("apns_private_key",), _env("apns_private_key")),
-        CredentialSpec("K-09", "FCM private key", ("fcm_private_key",), _env("fcm_private_key")),
+        CredentialSpec(
+            "K-07",
+            "VAPID private key",
+            ("vapid_private_key",),
+            _env("vapid_private_key", "vapid_private_key_file"),
+        ),
+        CredentialSpec(
+            "K-08",
+            "APNs private key",
+            ("apns_private_key",),
+            _env("apns_private_key", "apns_private_key_file"),
+        ),
+        CredentialSpec(
+            "K-09",
+            "FCM private key",
+            ("fcm_private_key",),
+            _env("fcm_private_key", "fcm_private_key_file"),
+        ),
         CredentialSpec(
             "K-10",
             "Apple sign-in key",
@@ -85,35 +107,53 @@ CREDENTIALS: dict[str, CredentialSpec] = {
             _env("apple_private_key", "apple_private_key_file"),
         ),
         CredentialSpec(
-            "K-11", "Google client secret", ("google_client_secret",), _env("google_client_secret")
+            "K-11",
+            "Google client secret",
+            ("google_client_secret",),
+            _env("google_client_secret", "google_client_secret_file"),
         ),
         CredentialSpec(
-            "K-12", "Stripe secret key", ("stripe_secret_key",), _env("stripe_secret_key")
+            "K-12",
+            "Stripe secret key",
+            ("stripe_secret_key",),
+            _env("stripe_secret_key", "stripe_secret_key_file"),
         ),
         CredentialSpec(
             "K-13",
             "Stripe webhook secret",
             ("stripe_webhook_secret",),
-            _env("stripe_webhook_secret"),
+            _env("stripe_webhook_secret", "stripe_webhook_secret_file"),
         ),
-        CredentialSpec("K-14", "DVLA UAT API key", ("dvla_uat_api_key",), _env("dvla_uat_api_key")),
+        CredentialSpec(
+            "K-14",
+            "DVLA UAT API key",
+            ("dvla_uat_api_key",),
+            _env("dvla_uat_api_key", "dvla_uat_api_key_file"),
+        ),
         CredentialSpec(
             "K-15",
             "DVLA production API key",
             ("dvla_production_api_key",),
-            _env("dvla_production_api_key"),
+            _env("dvla_production_api_key", "dvla_production_api_key_file"),
         ),
         CredentialSpec(
             "K-16",
             "DVSA client ID, client secret and API key",
             ("dvsa_client_id", "dvsa_client_secret", "dvsa_api_key"),
-            _env("dvsa_client_id", "dvsa_client_secret", "dvsa_api_key"),
+            _env(
+                "dvsa_client_id",
+                "dvsa_client_secret",
+                "dvsa_api_key",
+                "dvsa_client_id_file",
+                "dvsa_client_secret_file",
+                "dvsa_api_key_file",
+            ),
         ),
         CredentialSpec(
             "K-17",
             "monitoring watchdog URL",
             ("monitoring_watchdog_url",),
-            _env("monitoring_watchdog_url"),
+            _env("monitoring_watchdog_url", "monitoring_watchdog_url_file"),
         ),
         CredentialSpec(
             "K-18",
@@ -172,6 +212,10 @@ PRESENCE_FLAGS: tuple[str, ...] = _env(
     "dvsa_credentials_present",
     "stripe_webhook_secret_present",
 )
+# The database password file carries whichever database credential the URL's
+# user identifies: K-02 for application roles, K-03 for the migrator. It is
+# checked against the role through that user, not listed under one credential.
+DATABASE_PASSWORD_ENV = "MYKHAYA_DATABASE_PASSWORD_FILE"  # noqa: S105 — a variable name
 # Any other credential-shaped variable is unrelated to migrations.
 _SECRET_SUFFIXES = (
     "_PASSWORD",
@@ -182,6 +226,10 @@ _SECRET_SUFFIXES = (
     "_KEY_FILE",
     "_KEYS",
     "_KEYS_FILE",
+    "_PASSWORD_FILE",
+    "_SECRET_FILE",
+    "_ID_FILE",
+    "_URL_FILE",
 )
 
 
@@ -239,6 +287,7 @@ def application_role_violations(
     *,
     database_url: str,
     database_url_explicit: bool,
+    database_password_present: bool = False,
     environ: Mapping[str, str] | None = None,
 ) -> list[str]:
     """Problems for an application process (api, worker, scheduler, cli).
@@ -271,7 +320,7 @@ def application_role_violations(
     if (
         not database_url_explicit
         or user != APP_DB_USER
-        or not database_url_has_password(database_url)
+        or not (database_password_present or database_url_has_password(database_url))
     ):
         problems.append(
             f"requires MYKHAYA_DATABASE_URL with the {APP_DB_USER} database role (K-02)"
@@ -312,7 +361,11 @@ def synthetic_role_violations(values: Mapping[str, object]) -> list[str]:
 
 
 def migrate_role_violations(
-    environ: Mapping[str, str], *, database_url: str, database_url_explicit: bool
+    environ: Mapping[str, str],
+    *,
+    database_url: str,
+    database_url_explicit: bool,
+    database_password_present: bool = False,
 ) -> list[str]:
     """SEC-089: the migrate role holds the migration database credential and
     nothing else: no application key (K-01, D-4), no Redis (K-05), no other
@@ -332,7 +385,7 @@ def migrate_role_violations(
             _is_present(value)
             and name.startswith("MYKHAYA_")
             and name not in known
-            and name != "MYKHAYA_DATABASE_URL"
+            and name not in ("MYKHAYA_DATABASE_URL", DATABASE_PASSWORD_ENV)
             and name.endswith(_SECRET_SUFFIXES)
         ):
             forbidden.append((name, "unrelated credential"))
@@ -342,7 +395,7 @@ def migrate_role_violations(
     if (
         not database_url_explicit
         or user != MIGRATION_DB_USER
-        or not database_url_has_password(database_url)
+        or not (database_password_present or database_url_has_password(database_url))
     ):
         problems.append(
             f"requires MYKHAYA_DATABASE_URL with the {MIGRATION_DB_USER} database role (K-03)"

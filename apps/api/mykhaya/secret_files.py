@@ -1,8 +1,9 @@
 """Hardened reading of file-backed secrets (MK-SEC-001 SEC-017).
 
-This is the single primitive for reading a secret from a file. It is meant to
-be the reader behind the future central secret registry (SEC-093); it is not a
-registry itself and knows nothing about which settings exist.
+This is the single primitive for reading a secret from a file, and the reader
+behind the central secret registry (SEC-093, mykhaya.secret_registry). It is
+not a registry itself and knows nothing about which settings exist; it offers
+one bounded reader per declared format (single line, PEM, JSON).
 
 Every protection works on file descriptors, never by checking a path and then
 reopening it:
@@ -24,13 +25,19 @@ relative, no-follow opening (Windows) fail closed.
 """
 
 import errno
+import json
 import os
 import posixpath
 import stat
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
+from typing import Literal
 
 APPROVED_SECRET_ROOTS: tuple[str, ...] = ("/run/secrets",)
 SINGLE_LINE_MAX_BYTES = 4096
+PEM_MAX_BYTES = 16384
+JSON_MAX_BYTES = 65536
+
+SecretFormat = Literal["single_line", "pem", "json"]
 
 
 class SecretFileError(ValueError):
@@ -183,3 +190,79 @@ def read_single_line_secret(
     if value != value.strip():
         raise SecretFileError(setting, "must not have leading or trailing whitespace")
     return value
+
+
+def _decode_text(setting: str, data: bytes) -> str:
+    if b"\x00" in data:
+        raise SecretFileError(setting, "contains a NUL byte")
+    try:
+        return data.decode("utf-8")
+    except UnicodeDecodeError:
+        raise SecretFileError(setting, "is not valid UTF-8") from None
+
+
+def read_pem_secret(setting: str, path_value: str, *, roots: Sequence[str] | None = None) -> str:
+    """Read exactly one PEM block (at most 16 KiB), such as an APNs or FCM key.
+
+    The file must start with ``-----BEGIN <label>-----`` and end with the
+    matching ``-----END <label>-----`` line; only trailing line endings are
+    removed. Blank lines, stray whitespace, text around the block (for example
+    OpenSSL "Bag Attributes") and a second block are refused. Whether the key
+    is the right type for its provider stays with that provider's validation.
+    """
+    data = read_secret_file_bytes(setting, path_value, max_bytes=PEM_MAX_BYTES, roots=roots)
+    text = _decode_text(setting, data).rstrip("\r\n")
+    lines = text.replace("\r\n", "\n").split("\n")
+    first, last = lines[0], lines[-1]
+    if (
+        len(lines) < 3
+        or not (first.startswith("-----BEGIN ") and first.endswith("-----"))
+        or last != "-----END " + first.removeprefix("-----BEGIN ")
+        or any(line.startswith("-----") for line in lines[1:-1])
+        or any(not line or line != line.strip() for line in lines)
+    ):
+        raise SecretFileError(setting, "must contain exactly one PEM block")
+    return text
+
+
+def _unique_object(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    keys = [key for key, _ in pairs]
+    if len(keys) != len(set(keys)):
+        raise ValueError("duplicate key")
+    return dict(pairs)
+
+
+def read_json_secret(setting: str, path_value: str, *, roots: Sequence[str] | None = None) -> str:
+    """Read a JSON object document (at most 64 KiB), such as a keyring.
+
+    The text is returned unchanged for its consumer's own parser. It is parsed
+    here only to refuse malformed documents, non-object documents and duplicate
+    keys; the parsed copy is discarded.
+    """
+    data = read_secret_file_bytes(setting, path_value, max_bytes=JSON_MAX_BYTES, roots=roots)
+    text = _decode_text(setting, data)
+    try:
+        document = json.loads(text, object_pairs_hook=_unique_object)
+    except ValueError:
+        raise SecretFileError(setting, "is not a valid JSON document") from None
+    if not isinstance(document, dict):
+        raise SecretFileError(setting, "must contain a JSON object")
+    return text
+
+
+_READERS: dict[str, Callable[..., str]] = {
+    "single_line": read_single_line_secret,
+    "pem": read_pem_secret,
+    "json": read_json_secret,
+}
+
+
+def read_secret(
+    setting: str,
+    path_value: str,
+    secret_format: SecretFormat,
+    *,
+    roots: Sequence[str] | None = None,
+) -> str:
+    """Read a secret file in its declared format (the registry's entry point)."""
+    return _READERS[secret_format](setting, path_value, roots=roots)
