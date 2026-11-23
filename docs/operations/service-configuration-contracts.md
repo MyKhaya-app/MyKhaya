@@ -101,6 +101,62 @@ opening (Windows) refuse the file source. No deployment uses it yet. The Apple
 private-key and field-keyring file loaders are unchanged and do not use this
 reader yet.
 
+### Process roles (application-side; not enabled in any deployment)
+
+`MYKHAYA_PROCESS_ROLE` (`api`, `worker`, `scheduler`, `migrate`, `test`, `cli`)
+names the process a configuration belongs to (MK-SEC-001 v1.2 SEC-103). **No
+deployment sets it yet.** While it is unset, configuration behaves exactly as
+before. When it is set, the application enforces the MK-SEC-001 §6.3
+credential-access matrix (`apps/api/mykhaya/process_roles.py`): a credential the
+role is not granted is rejected if present, a credential another role needs is
+never required of this one (SEC-102), and errors name variables and credential
+identifiers, never values. Blank variables count as absent, so Compose's blanking
+of inherited values keeps working.
+
+| Role | Holds | Rejected if present |
+|---|---|---|
+| `api`, `cli` | application key, app database role, SMTP, VAPID, Apple, Google, Stripe key and webhook secret, DVLA UAT and production keys, DVSA, keyrings | migration or superuser database credential, APNs key, FCM key, monitoring watchdog URL |
+| `worker` | application key, app database role, SMTP, VAPID, APNs, FCM, keyrings | Apple, Google, Stripe, DVLA, DVSA, watchdog URL, migration or superuser credential |
+| `scheduler` | application key, app database role, SMTP, Stripe key, watchdog URL, keyrings | VAPID, APNs, FCM, Apple, Google, Stripe webhook secret, DVLA, DVSA, migration or superuser credential |
+| `migrate` | migration database role only (`MigrationSettings`) | application key (including `_FILE`), every other credential, Redis URL, presence flags |
+| `test` | synthetic values | requires `MYKHAYA_ENVIRONMENT=test`; refuses live Stripe keys |
+
+Application roles require `MYKHAYA_DATABASE_URL` with the `mykhaya_app` role and a
+password; `migrate` requires the `mykhaya_migrator` role. `cli` has no §6.3 row
+and provisionally follows `api` in code; that does not authorise enabling the
+role for administrative tasks that need different privileges. The API holds the
+VAPID key (K-07) because the Control Centre sends Web Push test messages itself;
+it does not hold the FCM key (K-09), which only the worker uses to send. The DVLA
+UAT/production split is not enforced by role, because DEV is authorised to call
+the production DVLA and DVSA APIs, with its own isolated credentials and provider
+permissions. Redis credentials (K-05) are Phase 2B.
+
+The scheduler's monitoring needs only to know whether DVLA, DVSA and Stripe
+webhooks are configured (SEC-101). Under the `scheduler` role it reads the
+non-secret flags `MYKHAYA_DVLA_API_KEY_PRESENT`, `MYKHAYA_DVSA_CREDENTIALS_PRESENT` and
+`MYKHAYA_STRIPE_WEBHOOK_SECRET_PRESENT` instead of the credentials, with the same check
+outcomes. A flag is required whenever its provider is selected (DVLA environment
+set, DVSA enabled or configured, Stripe billing configured), so a missing flag
+can never silently mark a check "not configured". The flags are ignored for every
+other role.
+
+Before any deployment sets a role, these differences from today's contracts must
+be resolved:
+
+- **Migrator (SEC-089).** Deploy this code first; then remove
+  `MYKHAYA_SECRET_KEY` from `migrate.env` and make the `MIGRATE` contract in
+  `infrastructure/scripts/service_env_contract.py` forbid it (it currently
+  requires it); set `MYKHAYA_PROCESS_ROLE=migrate` for migrate only; and stop
+  pinning `MYKHAYA_APNS_DELIVERY_CONFIGURED` for migrate (the shared
+  `apns-disabled` block), because the role rejects presence flags.
+- **Scheduler (SEC-101).** Replace the scheduler's DVLA keys, DVSA credentials
+  and Stripe webhook secret with the presence flags, and update the `SCHEDULER`
+  contract to match.
+- **API.** The contract still allows the FCM private key, which the matrix denies
+  to the API. Its only use there is the Control Centre push-health card's
+  "FCM configured" indicator, which would read "not configured" without the key;
+  that card needs a presence source before the `api` role is enabled.
+
 ## Service contracts
 
 ### API

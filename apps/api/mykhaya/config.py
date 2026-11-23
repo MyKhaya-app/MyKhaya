@@ -11,6 +11,17 @@ from cryptography.hazmat.primitives.asymmetric.ec import SECP256R1, EllipticCurv
 from pydantic import Field, SecretStr, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from mykhaya.process_roles import (
+    ProcessRole,
+    ProcessRoleError,
+    application_role_violations,
+    grants,
+    migrate_role_violations,
+    normalise_role,
+    raise_if_problems,
+    scheduler_presence_problems,
+    synthetic_role_violations,
+)
 from mykhaya.secret_files import read_single_line_secret
 from mykhaya.url_validation import is_valid_http_url
 
@@ -38,10 +49,14 @@ class MigrationSettings(BaseSettings):
 
     It deliberately declares no secret_key: schema migrations never sign, hash
     or decrypt anything, so the migrate role can run with MYKHAYA_SECRET_KEY
-    absent. A key that is present is ignored and never stored here. Every
-    application role keeps using Settings, which still requires the key and
-    fails closed without it. It reads the process environment only: unlike
-    Settings it declares no .env fallback (see service-configuration-contracts).
+    absent. With MYKHAYA_PROCESS_ROLE unset a key that is present is ignored and
+    never stored here (legacy deployments still pass one). With
+    MYKHAYA_PROCESS_ROLE=migrate, the process may hold only the migration
+    database credential: the key, any other credential and any presence flag
+    are rejected (MK-SEC-001 SEC-089). Every application role keeps using
+    Settings, which still requires the key and fails closed without it. It
+    reads the process environment only: unlike Settings it declares no .env
+    fallback (see service-configuration-contracts).
     """
 
     model_config = SettingsConfigDict(
@@ -50,6 +65,31 @@ class MigrationSettings(BaseSettings):
 
     environment: Literal["development", "test", "production"] = "development"
     database_url: str = "postgresql+asyncpg://mykhaya:mykhaya@postgres:5432/mykhaya"
+    process_role: ProcessRole | None = None
+
+    @field_validator("process_role", mode="before")
+    @classmethod
+    def blank_process_role_means_unset(cls, value: object) -> object:
+        return normalise_role(value)
+
+    @model_validator(mode="after")
+    def enforce_migrate_role(self) -> "MigrationSettings":
+        if self.process_role is None:
+            return self
+        if self.process_role != "migrate":
+            raise ProcessRoleError(
+                f"MYKHAYA_PROCESS_ROLE={self.process_role}: migrations run only with the "
+                "migrate role"
+            )
+        raise_if_problems(
+            "migrate",
+            migrate_role_violations(
+                os.environ,
+                database_url=self.database_url,
+                database_url_explicit="database_url" in self.model_fields_set,
+            ),
+        )
+        return self
 
 
 class Settings(BaseSettings):
@@ -64,6 +104,10 @@ class Settings(BaseSettings):
     registration_mode: Literal["closed", "invitation_only", "open"] = "open"
     version: str = Field(default_factory=resolve_app_version)
     database_url: str = "postgresql+asyncpg://mykhaya:mykhaya@postgres:5432/mykhaya"
+    # MK-SEC-001 SEC-103: which process this configuration belongs to. Unset
+    # (the default, and every current deployment) changes nothing; when set,
+    # credentials follow the §6.3 matrix in mykhaya.process_roles.
+    process_role: ProcessRole | None = None
     redis_url: str = "redis://redis:6379/0"
     secret_key: SecretStr = Field(min_length=32)
     # Optional file source for secret_key (MYKHAYA_SECRET_KEY_FILE), resolved by
@@ -255,6 +299,14 @@ class Settings(BaseSettings):
     dvsa_client_id: SecretStr | None = None
     dvsa_client_secret: SecretStr | None = None
     dvsa_api_key: SecretStr | None = None
+    # MK-SEC-001 SEC-101: non-secret presence flags. The scheduler's monitoring
+    # only needs to know whether a provider is configured, so under
+    # MYKHAYA_PROCESS_ROLE=scheduler these replace the DVLA keys, the DVSA
+    # credentials and the Stripe webhook secret, which that role must not hold.
+    # Ignored unless the role is scheduler; no deployment sets them yet.
+    dvla_api_key_present: bool | None = None
+    dvsa_credentials_present: bool | None = None
+    stripe_webhook_secret_present: bool | None = None
     dvsa_timeout_seconds: float = Field(default=10.0, ge=1.0, le=30.0)
     # How long persisted MOT data counts as fresh before an "if stale"
     # refresh (vehicle detail open) calls DVSA again.
@@ -576,7 +628,8 @@ class Settings(BaseSettings):
         if self.fcm_project_id and self.fcm_project_id != "mykhaya-prod":
             raise ValueError("MYKHAYA_FCM_PROJECT_ID must be mykhaya-prod in production")
 
-        if self.fcm_delivery_configured:
+        # SEC-102: only a role granted the FCM key (K-09) is required to hold it.
+        if self.fcm_delivery_configured and grants(self.process_role, "K-09"):
             if not (self.fcm_project_id and self.fcm_client_email and self.fcm_private_key):
                 raise ValueError(
                     "Production FCM delivery requires project ID, client email, and private key"
@@ -690,11 +743,22 @@ class Settings(BaseSettings):
                     "configured before new paid acquisition can be enabled."
                 )
             return self
+        # SEC-102: a credential is required only of a role granted it (always,
+        # with MYKHAYA_PROCESS_ROLE unset). The scheduler states the webhook
+        # secret's presence with MYKHAYA_STRIPE_WEBHOOK_SECRET_PRESENT (SEC-101).
+        required: list[tuple[str, object]] = []
+        if grants(self.process_role, "K-12"):
+            required.append(("MYKHAYA_STRIPE_SECRET_KEY", self.stripe_secret_key))
+        if grants(self.process_role, "K-13"):
+            required.append(("MYKHAYA_STRIPE_WEBHOOK_SECRET", self.stripe_webhook_secret))
+        elif self.process_role == "scheduler":
+            required.append(
+                ("MYKHAYA_STRIPE_WEBHOOK_SECRET_PRESENT", self.stripe_webhook_secret_present)
+            )
         missing = [
             name
             for name, value in (
-                ("MYKHAYA_STRIPE_SECRET_KEY", self.stripe_secret_key),
-                ("MYKHAYA_STRIPE_WEBHOOK_SECRET", self.stripe_webhook_secret),
+                *required,
                 ("MYKHAYA_STRIPE_FAMILY_MONTHLY_PRICE_ID", self.stripe_family_monthly_price_id),
                 ("MYKHAYA_STRIPE_FAMILY_ANNUAL_PRICE_ID", self.stripe_family_annual_price_id),
             )
@@ -720,6 +784,8 @@ class Settings(BaseSettings):
                 "MYKHAYA_STRIPE_BILLING_CONFIGURED is true but required settings are "
                 f"missing: {', '.join(missing)}."
             )
+        if self.stripe_secret_key is None and not grants(self.process_role, "K-12"):
+            return self
         secret_value = self.stripe_secret_key.get_secret_value() if self.stripe_secret_key else ""
         is_live_key = secret_value.startswith("sk_live_")
         is_test_key = secret_value.startswith("sk_test_")
@@ -858,7 +924,12 @@ class Settings(BaseSettings):
         """True only when an environment is selected and that environment's
         endpoint and API key are both present. An unset environment, or a
         selected environment missing either value, is "Not configured" — the
-        provider must never guess or partially operate."""
+        provider must never guess or partially operate.
+
+        Under MYKHAYA_PROCESS_ROLE=scheduler the key is not held: its presence
+        comes from MYKHAYA_DVLA_API_KEY_PRESENT (SEC-101), with the same outcome."""
+        if self.process_role == "scheduler":
+            return bool(self.dvla_active_endpoint) and bool(self.dvla_api_key_present)
         return bool(self.dvla_active_endpoint) and self.dvla_active_api_key is not None
 
     @property
@@ -869,13 +940,52 @@ class Settings(BaseSettings):
 
     @property
     def dvsa_configured(self) -> bool:
-        """Every credential present. Never partially operates."""
+        """Every credential present. Never partially operates.
+
+        Under MYKHAYA_PROCESS_ROLE=scheduler the credentials are not held:
+        MYKHAYA_DVSA_CREDENTIALS_PRESENT states that all three are configured (SEC-101)."""
+        if self.process_role == "scheduler":
+            return bool(self.dvsa_token_url) and bool(self.dvsa_credentials_present)
         return bool(
             self.dvsa_token_url
             and self.dvsa_client_id
             and self.dvsa_client_secret
             and self.dvsa_api_key
         )
+
+    @field_validator("process_role", mode="before")
+    @classmethod
+    def blank_process_role_means_unset(cls, value: object) -> object:
+        return normalise_role(value)
+
+    @model_validator(mode="after")
+    def enforce_process_role(self) -> "Settings":
+        """MK-SEC-001 SEC-102/SEC-103: with MYKHAYA_PROCESS_ROLE set, the
+        credentials this process holds must follow the §6.3 matrix. Defined
+        last so every other validator (including *_FILE resolution) has run.
+        Errors name variables and credential identifiers, never values."""
+        role = self.process_role
+        if role is None:
+            return self
+        if role == "migrate":
+            raise ProcessRoleError(
+                "MYKHAYA_PROCESS_ROLE=migrate: the migrator must not load the application "
+                "Settings (it uses MigrationSettings and holds no application key)"
+            )
+        values = {name: getattr(self, name) for name in type(self).model_fields}
+        if role == "test":
+            raise_if_problems(role, synthetic_role_violations(values))
+            return self
+        problems = application_role_violations(
+            role,
+            values,
+            database_url=self.database_url,
+            database_url_explicit="database_url" in self.model_fields_set,
+        )
+        if role == "scheduler":
+            problems.extend(scheduler_presence_problems(values))
+        raise_if_problems(role, problems)
+        return self
 
 
 @lru_cache

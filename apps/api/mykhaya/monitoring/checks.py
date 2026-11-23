@@ -28,7 +28,7 @@ from redis.asyncio import Redis
 from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker
 
-from mykhaya.billing.config import resolve_stripe_config
+from mykhaya.billing.config import StripeConfig, resolve_stripe_config
 from mykhaya.config import Settings
 from mykhaya.mailer import SmtpConfig, resolve_smtp_config
 from mykhaya.models import (
@@ -811,10 +811,24 @@ async def check_stripe_api(ctx: CheckContext) -> CheckResult:
     )
 
 
+def stripe_webhook_configured(settings: Settings, config: StripeConfig) -> bool:
+    """Whether a webhook signing secret is configured. Under
+    MYKHAYA_PROCESS_ROLE=scheduler an environment-sourced secret is not held:
+    MYKHAYA_STRIPE_WEBHOOK_SECRET_PRESENT states it instead (MK-SEC-001 SEC-101), so
+    the check's outcome is unchanged."""
+    if config.webhook_secret:
+        return True
+    return (
+        settings.process_role == "scheduler"
+        and config.source == "environment"
+        and bool(settings.stripe_webhook_secret_present)
+    )
+
+
 async def check_stripe_webhooks(ctx: CheckContext) -> CheckResult:
     async with ctx.session_factory() as db:
         config = await resolve_stripe_config(ctx.settings, db)
-        if not config.configured or not config.webhook_secret:
+        if not config.configured or not stripe_webhook_configured(ctx.settings, config):
             if config.source == "unconfigured":
                 return CheckResult.not_applicable("Stripe is not configured in this environment.")
             return CheckResult.failure("auth_config", "Stripe is enabled but not fully configured.")
