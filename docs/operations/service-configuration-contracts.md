@@ -77,10 +77,29 @@ writable by the runtime user. Regression tests in
 declaration (so settings never read a file) is recommended as a small, separately
 approved application change.
 
-Alembic imports `get_settings()` from `apps/api/migrations/env.py`; migrations
-therefore currently construct the complete settings model. The intended
-migration contract is narrow, but removing import-time dependencies requires a
-separate application change and approval.
+Alembic (`apps/api/migrations/env.py`) reads only `MigrationSettings`
+(`environment` and `database_url`, from the process environment; it has no
+`.env` fallback) and imports the model metadata through the
+side-effect-free `mykhaya.db_base`, so migrations no longer construct the
+application `Settings` and run with `MYKHAYA_SECRET_KEY` absent. The application
+services still require the key and fail closed at startup without it. The
+deployment contracts are not narrowed yet: DEV and PROD `migrate.env` still carry
+the key until a separately approved change removes it.
+
+`MYKHAYA_SECRET_KEY_FILE` is an alternative source for the session secret, read
+by the shared hardened reader `mykhaya.secret_files` (MK-SEC-001 SEC-017). The
+path must be absolute, normalised and inside `/run/secrets/` (where Compose file
+secrets are mounted); a symbolic link anywhere in the path is refused. The file
+is opened without following links or blocking and validated through its open
+descriptor: it must be a regular, single-line UTF-8 file of at most 4 KiB with no
+NUL bytes, and no more than 4 KiB plus one byte is ever read. One trailing line
+ending is removed and nothing else, so the value is used byte for byte. Errors
+name only the setting and the failure category, never the path or the value.
+Setting both `MYKHAYA_SECRET_KEY` and `MYKHAYA_SECRET_KEY_FILE` is rejected, and
+a blank variable means unset. Platforms without descriptor-relative, no-follow
+opening (Windows) refuse the file source. No deployment uses it yet. The Apple
+private-key and field-keyring file loaders are unchanged and do not use this
+reader yet.
 
 ## Service contracts
 
@@ -231,8 +250,10 @@ Runtime findings (2026-11-19):
   scheduler are started afterwards they drain them (about 9 jobs/s) to Mailpit
   before a newly enqueued probe is reached; two suite rows with deliberately
   minimal payloads fail with `KeyError` and back off as designed.
-- Migrations need only the migration DB URL plus `MYKHAYA_SECRET_KEY` and the
-  common values that `Settings` validates at Alembic import time.
+- At the time of this verification, migrations needed the migration DB URL plus
+  `MYKHAYA_SECRET_KEY` and the common values that `Settings` validated at Alembic
+  import time. Migrations now read only `MigrationSettings` (see above); the
+  contract still supplies the key until it is narrowed.
 - The scheduler's Stripe webhook IP-feed sync runs without any Stripe secret;
   with no egress it records a sanitised `ConnectError` and continues.
 - Images contain no `.env`, and `/app` is not writable by the runtime user, so the

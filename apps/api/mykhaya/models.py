@@ -28,7 +28,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.orm import relationship as orm_relationship
 
 from mykhaya.colour_palette import DEFAULT_LABEL_COLOUR_HEX, ColourToken
-from mykhaya.db import Base
+from mykhaya.db_base import Base
 from mykhaya.ids import uuid7
 
 # Duplicated from mykhaya.security._HOME_CODE_ALPHABET deliberately: security.py

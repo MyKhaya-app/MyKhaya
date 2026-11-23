@@ -3,7 +3,7 @@ from email.utils import parseaddr
 from functools import lru_cache
 from ipaddress import ip_network
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 from urllib.parse import urlsplit
 
 from cryptography.hazmat.primitives import serialization
@@ -11,6 +11,7 @@ from cryptography.hazmat.primitives.asymmetric.ec import SECP256R1, EllipticCurv
 from pydantic import Field, SecretStr, ValidationInfo, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from mykhaya.secret_files import read_single_line_secret
 from mykhaya.url_validation import is_valid_http_url
 
 
@@ -32,8 +33,31 @@ def resolve_app_version() -> str:
     return "dev"
 
 
+class MigrationSettings(BaseSettings):
+    """The only configuration the Alembic migrator reads (migrations/env.py).
+
+    It deliberately declares no secret_key: schema migrations never sign, hash
+    or decrypt anything, so the migrate role can run with MYKHAYA_SECRET_KEY
+    absent. A key that is present is ignored and never stored here. Every
+    application role keeps using Settings, which still requires the key and
+    fails closed without it. It reads the process environment only: unlike
+    Settings it declares no .env fallback (see service-configuration-contracts).
+    """
+
+    model_config = SettingsConfigDict(
+        env_prefix="MYKHAYA_", extra="ignore", hide_input_in_errors=True
+    )
+
+    environment: Literal["development", "test", "production"] = "development"
+    database_url: str = "postgresql+asyncpg://mykhaya:mykhaya@postgres:5432/mykhaya"
+
+
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_prefix="MYKHAYA_", env_file=".env", extra="ignore")
+    # hide_input_in_errors: a validation error must never echo the raw input,
+    # which includes the session secret and credential-bearing URLs.
+    model_config = SettingsConfigDict(
+        env_prefix="MYKHAYA_", env_file=".env", extra="ignore", hide_input_in_errors=True
+    )
 
     environment: Literal["development", "test", "production"] = "development"
     legal_test_mode_production_allowed: bool = False
@@ -42,6 +66,10 @@ class Settings(BaseSettings):
     database_url: str = "postgresql+asyncpg://mykhaya:mykhaya@postgres:5432/mykhaya"
     redis_url: str = "redis://redis:6379/0"
     secret_key: SecretStr = Field(min_length=32)
+    # Optional file source for secret_key (MYKHAYA_SECRET_KEY_FILE), resolved by
+    # load_secret_key_file before validation so secret_key keeps its type and
+    # its length and placeholder checks. Exactly one source may be set.
+    secret_key_file: str | None = None
     # Sensitive-field keyrings (mykhaya.crypto) — deliberately independent of
     # secret_key so rotating the session secret can never make encrypted
     # household data unreadable. Production supplies them as read-only files
@@ -438,6 +466,26 @@ class Settings(BaseSettings):
             ip_network(network, strict=False)
         return value
 
+    @model_validator(mode="before")
+    @classmethod
+    def load_secret_key_file(cls, data: Any) -> Any:
+        """Resolve MYKHAYA_SECRET_KEY_FILE into secret_key.
+
+        A blank variable means unset, matching the keyring variables. Setting
+        both sources is rejected rather than silently preferring one.
+        """
+        if not isinstance(data, dict):
+            return data
+        path = data.get("secret_key_file")
+        if path is None or (isinstance(path, str) and not path.strip()):
+            return data
+        current = data.get("secret_key")
+        if current is not None and not (isinstance(current, str) and not current.strip()):
+            raise ValueError("Set MYKHAYA_SECRET_KEY or MYKHAYA_SECRET_KEY_FILE, not both")
+        # SEC-017: absolute path under /run/secrets, no symlinks, descriptor-
+        # validated regular file, bounded single-line read (mykhaya.secret_files).
+        return {**data, "secret_key": read_single_line_secret("MYKHAYA_SECRET_KEY_FILE", str(path))}
+
     @field_validator("secret_key")
     @classmethod
     def reject_default_secret(cls, value: SecretStr) -> SecretStr:
@@ -833,3 +881,8 @@ class Settings(BaseSettings):
 @lru_cache
 def get_settings() -> Settings:
     return Settings()
+
+
+@lru_cache
+def get_migration_settings() -> MigrationSettings:
+    return MigrationSettings()
