@@ -159,6 +159,83 @@ K-02) and the migrator (`mykhaya_migrator`, K-03) each resolve their own URL and
 password, and process roles keep each to its own identity. A legacy
 password-bearing URL is used exactly as before and is not newly validated.
 
+In production (Owner decision D-WP4-01), both the application and the migrator
+refuse to start unless `MYKHAYA_DATABASE_URL` was set explicitly. They never use
+the class default URL, and they refuse the placeholder passwords this repository
+ships. Those are the default's `mykhaya` and the env-template markers
+(`replace-with-…`, `CHANGE_ME…`, `GENERATE_A_…`, `__SET_IN_…`), refused whether
+they arrive in the URL (including percent-encoded) or in
+`MYKHAYA_DATABASE_PASSWORD_FILE`. Errors never quote the URL or password.
+Development and test keep the default URL temporarily for legacy compatibility.
+
+### Alembic (SEC-088)
+
+`apps/api/migrations/env.py` builds its engine directly from the `URL` object of
+`MigrationSettings` and never writes a URL into Alembic's configuration. Offline
+(`--sql`) runs use the same URL with the password removed, so generated SQL holds
+no credentials. `apps/api/alembic.ini` keeps only a password-free placeholder
+that nothing reads. The migrator runs `alembic upgrade head` with no URL or
+password on its command line, migration revisions import no application code,
+and SQLAlchemy's connection errors name the user but never the password. WP-1's
+keyless `MigrationSettings` and WP-2's migrate-role enforcement are unchanged.
+Offline SQL can be rendered only up to revision `0015_colour_palette`, because
+revision `0016` reads table data; every revision runs online.
+
+### PostgreSQL bootstrap passwords
+
+`infrastructure/docker/init-db.sh` creates the `mykhaya_migrator` and
+`mykhaya_app` roles on the first start of an empty data volume. The postgres
+image never runs it against an existing volume, so a deployed database cannot be
+re-initialised or have its passwords changed by it. Each role's password comes
+from exactly one of `MYKHAYA_MIGRATION_DB_PASSWORD` or
+`MYKHAYA_MIGRATION_DB_PASSWORD_FILE`, and of `MYKHAYA_DB_PASSWORD` or
+`MYKHAYA_DB_PASSWORD_FILE`; setting both, or neither, stops initialisation. A
+file is checked with the same rules as the application's reader (see
+*File-backed secrets*): absolute, normalised, under `/run/secrets/`, no
+symbolic links, a regular file of at most 4 KiB, no NUL bytes, valid UTF-8,
+one line with one trailing line ending removed, not empty and no surrounding
+whitespace. The database and the application therefore always use the same
+bytes. A shell cannot read without following links the way the application
+does, so the script checks each path component before opening the file and
+then reads only through that open descriptor.
+
+Passwords reach `psql` only through its standard input, written by shell
+builtins, and are quoted by `psql` itself. They never appear in a process's
+arguments. Statement logging, error-statement logging and activity tracking
+are switched off for that session, and `psql` reports errors tersely, so no log
+repeats the statement. Messages name variables and failure categories only.
+The superuser password uses the postgres image's own `POSTGRES_PASSWORD` or
+`POSTGRES_PASSWORD_FILE`, which the image passes to `initdb` through a file
+descriptor and refuses to accept together. An empty legacy password now stops
+initialisation; previously it created a role that could not log in.
+
+If initialisation stops part-way, the image leaves a partly initialised data
+directory, and a restart skips initialisation. This risk applies only to a newly
+created, empty volume. An operator removes that disposable volume before
+retrying, after confirming it holds no data. Nothing removes or re-initialises a
+volume automatically, and an existing persistent volume is never re-initialised
+(Owner decision D-WP4-02: the image's entrypoint is not redesigned in WP-4).
+
+### Continuous integration
+
+The `quality` workflow runs `infrastructure/scripts/check-phase1-secrets.sh`
+after building the images. With disposable containers and synthetic values it:
+- bootstraps PostgreSQL from file and legacy passwords containing quotes,
+  backslashes, URL delimiters, shell syntax and non-ASCII characters;
+- proves real SCRAM logins and refusals from another container;
+- checks every refused file case and that an existing volume is never
+  re-initialised;
+- runs the migrate role with no key present (upgrade, downgrade, upgrade) using
+  a file-backed password, and confirms it refuses the key;
+- renders offline SQL and checks failed connections, logs, `psql` arguments and
+  every process argument for credentials;
+- connects the `api` role with a file-backed password.
+
+Static guards in `infrastructure/tests/test_phase1_secret_guards.py` and
+`apps/api/tests/test_security_guards.py` keep Compose credential interpolation
+to the listed legacy values, keep passwords off command lines and pin the
+registry, the role grants and this documentation.
+
 ### Process roles (application-side; not enabled in any deployment)
 
 `MYKHAYA_PROCESS_ROLE` (`api`, `worker`, `scheduler`, `migrate`, `test`, `cli`)
@@ -278,11 +355,12 @@ keyrings; no support attachments, legal evidence or Apple key.
 
 ### Migrate
 
-Functional requirement is the migration DB URL plus the minimum values required
-by current `Settings` construction during Alembic import. It must not receive
-provider, notification, field-key, Apple private-key or PostgreSQL administrator
-credentials. If current validation requires one, report it as a compatibility
-finding rather than silently changing application behaviour.
+Functional requirement is the migration DB URL (and, in file-backed mode, its
+password file). Alembic reads only `MigrationSettings`, so it needs no
+application key. It must not receive provider, notification, field-key, Apple
+private-key or PostgreSQL administrator credentials. If current validation
+requires one, report it as a compatibility finding rather than silently changing
+application behaviour.
 
 ### PostgreSQL, Redis, Web and Caddy
 

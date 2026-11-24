@@ -167,13 +167,24 @@ class SensitiveDataInfrastructureTests(unittest.TestCase):
             *ROOT.glob("infrastructure/**/*entrypoint*"),
         ]
         self.assertIn(ROOT / "apps/api/Dockerfile", candidates)
+        # Explicit exceptions, each reviewed (MK-SEC-001 WP-4):
+        allowed = {
+            # The PostgreSQL bootstrap reads its own password files and hands
+            # them to psql on standard input; it never exports them.
+            "infrastructure/docker/init-db.sh",
+            # The CI check mounts synthetic secrets into disposable containers.
+            "infrastructure/scripts/check-phase1-secrets.sh",
+        }
         offenders = sorted(
-            str(path.relative_to(ROOT))
+            path.relative_to(ROOT).as_posix()
             for path in candidates
             if path.is_file()
             and "/run/secrets" in path.read_text(encoding="utf-8", errors="replace")
+            and path.relative_to(ROOT).as_posix() not in allowed
         )
         self.assertEqual(offenders, [])
+        bootstrap = (ROOT / "infrastructure/docker/init-db.sh").read_text(encoding="utf-8")
+        self.assertNotRegex(bootstrap, r"(?m)^\s*(export|declare\s+-x)\b")
 
     def test_key_and_backup_material_is_gitignored(self) -> None:
         for pattern in ("/secrets/", "backups/", "*.age"):

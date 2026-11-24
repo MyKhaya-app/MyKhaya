@@ -26,6 +26,12 @@ from sqlalchemy.exc import ArgumentError
 
 UNPARSEABLE = "<unparseable database URL>"
 
+# Database passwords this repository ships as placeholders: the settings
+# classes' default URL (``mykhaya``) and the markers used by the env templates
+# (.env.example, .env.production.example and the DEV service templates).
+_PLACEHOLDER_PASSWORDS = frozenset({"mykhaya"})
+_PLACEHOLDER_MARKERS = ("replace-with-", "change_me", "changeme", "generate_a_", "__set_in_")
+
 
 def _parse(database_url: str) -> URL | None:
     try:
@@ -55,6 +61,31 @@ def database_credential_problems(database_url: str, password: SecretStr | None) 
             "MYKHAYA_DATABASE_PASSWORD_FILE is set"
         )
     return problems
+
+
+def is_placeholder_password(value: str) -> bool:
+    lowered = value.strip().casefold()
+    return lowered in _PLACEHOLDER_PASSWORDS or any(m in lowered for m in _PLACEHOLDER_MARKERS)
+
+
+def production_database_problems(
+    database_url: str, *, explicit: bool, password: SecretStr | None
+) -> list[str]:
+    """Owner decision D-WP4-01: production never falls back to placeholder
+    database credentials. The URL must have been configured explicitly (the
+    class default is refused), and neither its password nor a file-backed
+    password may be a known placeholder, whichever source supplied it.
+    Development and test keep their defaults. Errors never quote a value."""
+    if not explicit:
+        return ["MYKHAYA_DATABASE_URL must be set explicitly in production"]
+    url = _parse(database_url)
+    if url is None:
+        return ["MYKHAYA_DATABASE_URL is not a valid database URL"]
+    source = "MYKHAYA_DATABASE_PASSWORD_FILE" if password is not None else "MYKHAYA_DATABASE_URL"
+    secret: str | None = password.get_secret_value() if password is not None else url.password
+    if secret is not None and is_placeholder_password(secret):
+        return [f"{source} holds a placeholder database password, which production refuses"]
+    return []
 
 
 def connection_url(database_url: str, password: SecretStr | None) -> URL:

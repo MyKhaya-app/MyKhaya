@@ -12,7 +12,11 @@ from pydantic import Field, SecretStr, ValidationInfo, field_validator, model_va
 from pydantic_settings import BaseSettings, SettingsConfigDict
 from sqlalchemy.engine import URL
 
-from mykhaya.db_credentials import connection_url, database_credential_problems
+from mykhaya.db_credentials import (
+    connection_url,
+    database_credential_problems,
+    production_database_problems,
+)
 from mykhaya.process_roles import (
     ProcessRole,
     ProcessRoleError,
@@ -94,6 +98,12 @@ class MigrationSettings(BaseSettings):
     @model_validator(mode="after")
     def validate_database_credentials(self) -> "MigrationSettings":
         problems = database_credential_problems(self.database_url, self.database_password)
+        if self.environment == "production":
+            problems += production_database_problems(
+                self.database_url,
+                explicit="database_url" in self.model_fields_set,
+                password=self.database_password,
+            )
         if problems:
             raise ValueError("; ".join(problems))
         return self
@@ -1004,8 +1014,16 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def validate_database_credentials(self) -> "Settings":
         """SEC-086a: with MYKHAYA_DATABASE_PASSWORD_FILE set, the URL must be
-        password-free. The legacy password-bearing URL is not re-validated."""
+        password-free. D-WP4-01: production requires an explicitly configured
+        URL and refuses placeholder passwords; development and test keep the
+        default, and a legacy password-bearing URL is otherwise unchanged."""
         problems = database_credential_problems(self.database_url, self.database_password)
+        if self.environment == "production":
+            problems += production_database_problems(
+                self.database_url,
+                explicit="database_url" in self.model_fields_set,
+                password=self.database_password,
+            )
         if problems:
             raise ValueError("; ".join(problems))
         return self

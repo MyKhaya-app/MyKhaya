@@ -68,6 +68,14 @@ jobs:
         run: docker compose build web api worker scheduler migrate
       - name: Migration rollback smoke test
         run: docker compose run --rm migrate sh -c 'alembic downgrade base && alembic upgrade head'
+      - name: Phase 1 secret handling (bootstrap, keyless migrator, file-backed passwords)
+        # MK-SEC-001 v1.2: disposable containers and synthetic secrets only.
+        # PostgreSQL bootstrap from file and legacy passwords; the migrate role
+        # without the application key and refusing it; upgrade/downgrade with
+        # a file-backed password; credential-free offline SQL, errors, logs
+        # and process arguments. Uses the images built above; never touches
+        # this project's own volumes.
+        run: bash infrastructure/scripts/check-phase1-secrets.sh
       - name: Shut down
         if: always()
         run: docker compose --profile tools down -v
