@@ -20,6 +20,7 @@ from mykhaya.db_credentials import (
 from mykhaya.process_roles import (
     ProcessRole,
     ProcessRoleError,
+    api_presence_problems,
     application_role_violations,
     grants,
     migrate_role_violations,
@@ -28,6 +29,7 @@ from mykhaya.process_roles import (
     scheduler_presence_problems,
     synthetic_role_violations,
 )
+from mykhaya.secret_files import read_secret
 from mykhaya.secret_registry import (
     MIGRATION_SECRET_REGISTRY,
     SECRET_REGISTRY,
@@ -368,6 +370,10 @@ class Settings(BaseSettings):
     dvla_api_key_present: bool | None = None
     dvsa_credentials_present: bool | None = None
     stripe_webhook_secret_present: bool | None = None
+    # The API is not granted the FCM key (K-09); the Control Centre's push
+    # health card only states whether FCM is configured. Under the api (or cli)
+    # role this flag replaces the key for that indicator. Never used to send.
+    fcm_private_key_present: bool | None = None
     dvsa_timeout_seconds: float = Field(default=10.0, ge=1.0, le=30.0)
     # How long persisted MOT data counts as fresh before an "if stale"
     # refresh (vehicle detail open) calls DVSA again.
@@ -637,7 +643,15 @@ class Settings(BaseSettings):
                 "MYKHAYA_APPLE_PRIVATE_KEY and MYKHAYA_APPLE_PRIVATE_KEY_FILE must not both "
                 "be configured"
             )
-        if key_file:
+        if key_file and self.process_role is not None:
+            # With a process role the hardened reader applies (SEC-017), and a
+            # role not granted the key never opens it: enforce_process_role,
+            # which runs last, refuses the setting itself.
+            if not grants(self.process_role, "K-10"):
+                return self
+            env_key = read_secret("MYKHAYA_APPLE_PRIVATE_KEY_FILE", key_file, "pem")
+            self.apple_private_key = SecretStr(env_key)
+        elif key_file:
             path = Path(key_file)
             try:
                 if not path.is_file():
@@ -1059,6 +1073,8 @@ class Settings(BaseSettings):
         )
         if role == "scheduler":
             problems.extend(scheduler_presence_problems(values))
+        elif role in ("api", "cli"):
+            problems.extend(api_presence_problems(values))
         raise_if_problems(role, problems)
         return self
 

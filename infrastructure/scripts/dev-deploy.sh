@@ -22,17 +22,42 @@ DEV_CONFIG_ROOT=${DEV_CONFIG_ROOT%/}
 # to the root .env. The state never changes credentials, volumes or data.
 STATE_FILE=${MYKHAYA_DEV_SERVICE_ENV_STATE:-/etc/mykhaya/dev/.service-env-state}
 LEGACY_ROLLBACK=${MYKHAYA_DEV_LEGACY_ENV_ROLLBACK:-0}
+# Docker Secrets (MK-SEC-001): MYKHAYA_DEV_SECRETS=1, on top of an active F-03
+# cutover, uses the generated file-backed root inside the DEV root and adds
+# compose.dev.secrets.yml. Its own state file has the same four values ("legacy"
+# meaning not started), with the same rule: once started, the F-03
+# configuration is refused unless MYKHAYA_DEV_SECRETS_ROLLBACK=1 is set.
+# docs/operations/dev-docker-secrets-migration.md.
+SECRETS=${MYKHAYA_DEV_SECRETS:-0}
+SECRETS_ROLLBACK=${MYKHAYA_DEV_SECRETS_ROLLBACK:-0}
+SECRETS_STATE_FILE=$(dirname -- "$STATE_FILE")/.secrets-state
+CONTRACT_PROFILE=dev
+BASE_ROOT=$DEV_CONFIG_ROOT
 if [ -n "$DEV_CONFIG_ROOT" ]; then
   CONFIG_MODE=service-env
-  ENV_SOURCE="$DEV_CONFIG_ROOT/compose.env"
+  # Exported without the file-backed suffix: validate_backend_config.py and a
+  # re-executed update derive it again from MYKHAYA_DEV_SECRETS.
   export MYKHAYA_DEV_CONFIG_ROOT="$DEV_CONFIG_ROOT"
+  if [ "$SECRETS" = 1 ]; then
+    CONFIG_MODE=secrets
+    CONTRACT_PROFILE=dev-secrets
+    DEV_CONFIG_ROOT="$DEV_CONFIG_ROOT/file-backed"
+    export MYKHAYA_DEV_SECRETS
+  fi
+  ENV_SOURCE="$DEV_CONFIG_ROOT/compose.env"
 else
   CONFIG_MODE=legacy
   ENV_SOURCE=.env
 fi
 
 compose() {
-  if [ "$CONFIG_MODE" = service-env ]; then
+  if [ "$CONFIG_MODE" = secrets ]; then
+    MYKHAYA_DB_PASSWORD= MYKHAYA_MIGRATION_DB_PASSWORD= MYKHAYA_POSTGRES_ADMIN_PASSWORD= \
+      MYKHAYA_APNS_PRIVATE_KEY= MYKHAYA_DEV_CONFIG_ROOT="$DEV_CONFIG_ROOT" \
+      docker compose --env-file "$DEV_CONFIG_ROOT/compose.env" \
+      -f compose.yml -f compose.dev.yml -f compose.dev.service-env.yml \
+      -f compose.dev.secrets.yml "$@"
+  elif [ "$CONFIG_MODE" = service-env ]; then
     # Secrets that compose.yml/compose.dev.yml interpolate are forced blank:
     # the overlay removes those keys, and no shell-exported value can leak in.
     MYKHAYA_DB_PASSWORD= MYKHAYA_MIGRATION_DB_PASSWORD= MYKHAYA_POSTGRES_ADMIN_PASSWORD= \
@@ -129,7 +154,7 @@ validate_service_env() {
   # container from the locally built API image. Without an image the check
   # fails closed; it is never skipped.
   probe_image=$(api_image) || probe_image=
-  set -- --root "$DEV_CONFIG_ROOT" --repo-root "$REPO_ROOT"
+  set -- --profile "$CONTRACT_PROFILE" --root "$DEV_CONFIG_ROOT" --repo-root "$REPO_ROOT"
   [ -z "$probe_image" ] || set -- "$@" --probe-image "$probe_image"
   "$PYTHON" infrastructure/scripts/service_env_contract.py "$@" ||
     die "DEV service configuration is invalid; nothing was built, stopped or restarted"
@@ -151,8 +176,8 @@ check_resolved_service_env() {
   # It also proves provenance: each service receives exactly the overlay's
   # restated names plus its own files, so a root .env still being loaded fails.
   compose --profile tools config --format json |
-    "$PYTHON" infrastructure/scripts/service_env_contract.py --check-resolved - \
-      --config-root "$DEV_CONFIG_ROOT" --repo-root "$REPO_ROOT" ||
+    "$PYTHON" infrastructure/scripts/service_env_contract.py --profile "$CONTRACT_PROFILE" \
+      --check-resolved - --config-root "$DEV_CONFIG_ROOT" --repo-root "$REPO_ROOT" ||
     die "merged DEV Compose model violates the service configuration contract"
 }
 
@@ -167,16 +192,61 @@ write_state() {
   cutover_write_state "$STATE_FILE" "$1"
 }
 
+read_secrets_state() {
+  cutover_read_state "$SECRETS_STATE_FILE"
+}
+
+write_secrets_state() {
+  cutover_write_state "$SECRETS_STATE_FILE" "$1"
+}
+
+check_secrets_mode() {
+  case "$SECRETS" in
+    0|1) ;;
+    *) die "MYKHAYA_DEV_SECRETS must be 0 or 1" ;;
+  esac
+  secrets_state=$(read_secrets_state) || exit 1
+  if [ "$SECRETS" = 1 ]; then
+    [ -n "$BASE_ROOT" ] || die "MYKHAYA_DEV_SECRETS=1 needs MYKHAYA_DEV_CONFIG_ROOT"
+    [ "$SECRETS_ROLLBACK" != 1 ] ||
+      die "MYKHAYA_DEV_SECRETS=1 and MYKHAYA_DEV_SECRETS_ROLLBACK=1 are both set; choose one"
+    [ "$current_state" = active ] ||
+      die "Docker Secrets need an active F-03 cutover (state: $current_state)"
+    return 0
+  fi
+  [ "$secrets_state" != legacy ] || return 0
+  [ "$CONFIG_MODE" = service-env ] ||
+    die "Docker Secrets are $secrets_state; roll them back to the F-03 configuration first"
+  [ "$SECRETS_ROLLBACK" = 1 ] ||
+    die "Docker Secrets are $secrets_state ($SECRETS_STATE_FILE).\nTo continue with them: set MYKHAYA_DEV_SECRETS=1 and rerun.\nTo roll back deliberately: infrastructure/scripts/dev-secrets-cutover.sh rollback"
+}
+
+require_secrets_approval() {
+  # The first transition into file-backed secrets is started only by
+  # dev-secrets-cutover.sh, after its checks and the Owner's confirmation.
+  [ "$CONFIG_MODE" = secrets ] || return 0
+  [ "$(read_secrets_state)" = active ] || [ "${MYKHAYA_DEV_SECRETS_APPROVED:-0}" = 1 ] ||
+    die "start the Docker Secrets cutover with infrastructure/scripts/dev-secrets-cutover.sh"
+}
+
+check_existing_database() {
+  # File-backed mode migrates an existing database; it never creates one.
+  [ "$CONFIG_MODE" = secrets ] || return 0
+  docker volume inspect mykhaya_postgres_data >/dev/null 2>&1 ||
+    die "the persistent PostgreSQL volume does not exist; refusing to initialise a new database"
+}
+
 check_config_mode() {
   # Runs before any Docker interaction so a wrong mode fails immediately.
   current_state=$(read_state)
   printf 'Configuration mode: %s (cutover state: %s)\n' "$CONFIG_MODE" "$current_state"
-  if [ "$CONFIG_MODE" = service-env ]; then
+  check_secrets_mode
+  if [ "$CONFIG_MODE" != legacy ]; then
     [ "$LEGACY_ROLLBACK" != "1" ] ||
       die "MYKHAYA_DEV_CONFIG_ROOT and MYKHAYA_DEV_LEGACY_ENV_ROLLBACK=1 are both set; choose one"
     # Legacy runs find the state only at this path, so it must live in the root.
-    [ "$(dirname -- "$STATE_FILE")" = "$DEV_CONFIG_ROOT" ] ||
-      die "the cutover state file must be inside MYKHAYA_DEV_CONFIG_ROOT ($DEV_CONFIG_ROOT)"
+    [ "$(dirname -- "$STATE_FILE")" = "$BASE_ROOT" ] ||
+      die "the cutover state file must be inside MYKHAYA_DEV_CONFIG_ROOT ($BASE_ROOT)"
     return 0
   fi
   case "$current_state" in
@@ -192,7 +262,10 @@ check_config_mode() {
 begin_transition() {
   # Called after every validation and before the first container recreation.
   current_state=$(read_state)
-  if [ "$CONFIG_MODE" = service-env ]; then
+  if [ "$CONFIG_MODE" = secrets ]; then
+    [ "$(read_secrets_state)" = active ] || write_secrets_state pending
+  elif [ "$CONFIG_MODE" = service-env ]; then
+    [ "$(read_secrets_state)" = legacy ] || write_secrets_state rollback-pending
     [ "$current_state" = active ] || write_state pending
   elif [ "$current_state" != legacy ]; then
     write_state rollback-pending
@@ -202,7 +275,10 @@ begin_transition() {
 complete_transition() {
   # Called only after the deployment's health and readiness checks passed.
   current_state=$(read_state)
-  if [ "$CONFIG_MODE" = service-env ]; then
+  if [ "$CONFIG_MODE" = secrets ]; then
+    [ "$(read_secrets_state)" = active ] || write_secrets_state active
+  elif [ "$CONFIG_MODE" = service-env ]; then
+    [ "$(read_secrets_state)" = legacy ] || write_secrets_state legacy
     [ "$current_state" = active ] || write_state active
   elif [ "$current_state" = rollback-pending ]; then
     write_state legacy
@@ -210,7 +286,7 @@ complete_transition() {
 }
 
 validate_env() {
-  if [ "$CONFIG_MODE" = service-env ]; then
+  if [ "$CONFIG_MODE" != legacy ]; then
     validate_service_env
     return 0
   fi
@@ -298,7 +374,7 @@ check_branch() {
 check_deployment_changes() {
   [ "${MYKHAYA_DEV_ALLOW_DEPLOYMENT_CHANGES:-0}" = "1" ] && return 0
   changes=$(git status --porcelain -- Makefile compose.yml compose.dev.yml .env.dev.example \
-    compose.dev.service-env.yml '.env.dev.*.example' \
+    compose.dev.secrets.yml compose.dev.service-env.yml '.env.dev.*.example' \
     infrastructure/caddy/Caddyfile.dev infrastructure/scripts 2>/dev/null || true)
   [ -z "$changes" ] || die "uncommitted tracked deployment changes detected:\n$changes"
 }
@@ -342,6 +418,7 @@ preflight() {
   check_deployment_changes
   [ "$CONFIG_MODE" = legacy ] || check_compose_overrides_supported
   validate_env
+  check_existing_database
 
   bind_address=$(env_value MYKHAYA_DEV_BIND_ADDRESS)
   host_port=$(env_value MYKHAYA_DEV_HOST_PORT)
@@ -427,8 +504,8 @@ migrate_networks() {
   preflight
   # It recreates the application tier outside the normal deployment sequence,
   # so it must never run in the middle of a cutover or rollback.
-  case "$CONFIG_MODE:$(read_state)" in
-    service-env:active|legacy:legacy) ;;
+  case "$CONFIG_MODE:$(read_state):$(read_secrets_state)" in
+    secrets:active:active|service-env:active:legacy|legacy:legacy:legacy) ;;
     *) die "network migration is only allowed in a settled state (legacy, or service-env active); finish or roll back the cutover first" ;;
   esac
   if compose config --format json | "$PYTHON" infrastructure/scripts/check_dev_networks.py; then
@@ -451,6 +528,7 @@ migrate_networks() {
 }
 
 deploy() {
+  require_secrets_approval
   preflight
   check_network_drift
   report_new_env_variables
@@ -543,7 +621,7 @@ case "${1:-}" in
     # Configuration only: no builds, pulls, port or Git changes, and no service
     # container is touched. The only container is the short-lived, isolated
     # key-directory probe (service_env_contract.py), removed on exit.
-    [ "$CONFIG_MODE" = service-env ] || die "config-check validates the service-specific layout; set MYKHAYA_DEV_CONFIG_ROOT"
+    [ "$CONFIG_MODE" != legacy ] || die "config-check validates the service-specific layout; set MYKHAYA_DEV_CONFIG_ROOT"
     PYTHON=$(find_python) || die "Python 3 is unavailable (required for configuration validation)"
     export PYTHON
     command -v docker >/dev/null 2>&1 || die "Docker is unavailable"
@@ -556,6 +634,7 @@ case "${1:-}" in
   state)
     printf 'Configuration mode: %s\nCutover state: %s\n' "$CONFIG_MODE" "$(read_state)"
     [ -f "$STATE_FILE" ] && sed -n '2p' "$STATE_FILE"
+    printf 'Docker Secrets state: %s\n' "$(read_secrets_state)"
     true
     ;;
   state-init)

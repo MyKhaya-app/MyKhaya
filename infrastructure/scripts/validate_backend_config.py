@@ -37,6 +37,7 @@ PRODUCTION_APNS_BUNDLE_ID = "app.mykhaya.mobile.prod"
 MARKER = "MYKHAYA_RUNTIME_CONFIG="
 PROBE_PROJECT_PREFIX = "mykhaya-config-probe"
 SERVICE_ENV_OVERLAY = "compose.dev.service-env.yml"
+SECRETS_OVERLAY = "compose.dev.secrets.yml"
 PROD_SERVICE_ENV_OVERLAY = "compose.production.service-env.yml"
 # compose.yml/compose.dev.yml interpolate these secrets; the service-env overlay
 # removes the keys, and the validator forces them blank so no shell value leaks.
@@ -61,7 +62,16 @@ def service_env_root() -> str | None:
     """
     if is_production():
         return os.environ.get("MYKHAYA_PROD_CONFIG_ROOT") or None
-    return os.environ.get("MYKHAYA_DEV_CONFIG_ROOT") or None
+    root = os.environ.get("MYKHAYA_DEV_CONFIG_ROOT") or None
+    if root is not None and file_backed():
+        # dev-deploy.sh exports the F-03 root; this mode uses its subdirectory.
+        return f"{root.rstrip('/')}/file-backed"
+    return root
+
+
+def file_backed() -> bool:
+    """DEV only: credentials come from Compose file secrets."""
+    return not is_production() and os.environ.get("MYKHAYA_DEV_SECRETS") == "1"
 
 
 def base_compose_args() -> list[str]:
@@ -77,10 +87,11 @@ def base_compose_args() -> list[str]:
             "--env-file", f"{root}/postgres.env",
             "-f", "compose.yml", "-f", "compose.production.yml", "-f", PROD_SERVICE_ENV_OVERLAY,
         ]
-    return [
+    command = [
         "docker", "compose", "--env-file", f"{root}/compose.env",
         "-f", "compose.yml", "-f", "compose.dev.yml", "-f", SERVICE_ENV_OVERLAY,
     ]
+    return [*command, "-f", SECRETS_OVERLAY] if file_backed() else command
 
 
 # PROD: these come from postgres.env and must not be overridden from the shell;
@@ -99,6 +110,8 @@ def compose_environment() -> dict[str, str] | None:
         env.update({name: "" for name in PROD_BLANKED})
         return env
     env.update({name: "" for name in BLANKED_INTERPOLATION})
+    if file_backed():
+        env["MYKHAYA_DEV_CONFIG_ROOT"] = service_env_root() or ""
     return env
 
 
@@ -406,8 +419,19 @@ def cleanup_probe(context: ProbeContext) -> None:
         pass
 
 
+MIGRATE_PROBE = (
+    "import json; from urllib.parse import urlsplit; "
+    "from mykhaya.config import MigrationSettings; "
+    "s=MigrationSettings(); u=urlsplit(s.database_url); "
+    "print('MYKHAYA_RUNTIME_CONFIG='+json.dumps({'database_hash':'','database_length':0,"
+    "'database_target':f\"{u.scheme}://{u.hostname or ''}:{u.port or ''}{u.path}\","
+    "'redis_hash':'','redis_length':0,'secret_hash':'','secret_length':0,'smtp_host':'',"
+    "'smtp_port':0,'apns_delivery_configured':False,'environment':s.environment}))"
+)
+
+
 def container_probe(service: str, context: ProbeContext) -> RuntimeConfig:
-    code = (
+    code = MIGRATE_PROBE if service == "migrate" and file_backed() else (
         "import hashlib, json; "
         "from mykhaya.config import get_settings; "
         "s=get_settings(); "
@@ -497,7 +521,11 @@ def validate(configs: list[RuntimeConfig], *, service_env: bool = False) -> list
         migrate.redis_hash != api.redis_hash or migrate.redis_length != api.redis_length
     ):
         errors.append("migrate redis_url differs from api")
-    if migrate.secret_hash != api.secret_hash or migrate.secret_length != api.secret_length:
+    # The file-backed migrator holds no session secret at all (SEC-089).
+    if not file_backed() and (
+        migrate.secret_hash != api.secret_hash
+        or migrate.secret_length != api.secret_length
+    ):
         errors.append("migrate session secret differs from api")
     if not service_env and (migrate.smtp_host, migrate.smtp_port) != (api.smtp_host, api.smtp_port):
         errors.append("migrate SMTP connection differs from api")
@@ -513,10 +541,15 @@ def contract_errors(resolved: dict) -> list[str]:
         sys.path.pop(0)
     root = service_env_root()
     assert root is not None
-    profile = service_env_contract.PROD if is_production() else service_env_contract.DEV
-    return service_env_contract.check_resolved_model(
-        resolved, Path(__file__).resolve().parents[2], profile
-    ) + service_env_contract.check_provenance(resolved, Path(root), profile)
+    profile = service_env_contract.PROD if is_production() else (
+        service_env_contract.DEV_SECRETS if file_backed() else service_env_contract.DEV)
+    return (
+        service_env_contract.check_resolved_model(
+            resolved, Path(__file__).resolve().parents[2], profile
+        )
+        + service_env_contract.check_provenance(resolved, Path(root), profile)
+        + service_env_contract.check_secret_mounts(resolved, Path(root), profile)
+    )
 
 
 def main() -> int:

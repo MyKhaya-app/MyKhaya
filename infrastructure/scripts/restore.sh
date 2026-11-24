@@ -12,6 +12,7 @@
 # The identity is read by `age -d` directly; it is never copied, logged or
 # written next to the backups.
 set -eu
+# $RESTORE_OWNER_OPTION (one option or nothing) comes from the configuration mode.
 . "$(dirname "$0")/backup-config-mode.sh"
 test "$#" -eq 1 || { echo "Usage: restore.sh /absolute/path/backup.sql.gz[.age]" >&2; exit 2; }
 source_file="$1"
@@ -32,13 +33,13 @@ case "$source_file" in
       { echo "Backup failed decryption or integrity verification." >&2; exit 1; }
     age -d -i "$identity" "$source_file" | gzip -dc |
       stack_compose exec -T postgres pg_restore --username postgres --dbname mykhaya \
-        --clean --if-exists --no-owner
+        --clean --if-exists $RESTORE_OWNER_OPTION
     ;;
   *.sql.gz)
     echo "WARNING: restoring a legacy UNENCRYPTED backup." >&2
     gzip -t "$source_file"
     gzip -dc "$source_file" | stack_compose exec -T postgres pg_restore --username postgres \
-      --dbname mykhaya --clean --if-exists --no-owner
+      --dbname mykhaya --clean --if-exists $RESTORE_OWNER_OPTION
     ;;
   *)
     echo "Unrecognised backup file name; expected .sql.gz.age or .sql.gz" >&2

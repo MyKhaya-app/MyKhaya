@@ -40,6 +40,10 @@ JSON_MAX_BYTES = 65536
 SecretFormat = Literal["single_line", "pem", "json"]
 
 
+# The one category that means "no such file".
+SECRET_FILE_MISSING = "is missing"  # noqa: S105 — an error category
+
+
 class SecretFileError(ValueError):
     """A secret file was refused. The message is safe to log."""
 
@@ -89,7 +93,7 @@ def _open_error(
     setting: str, exc: OSError, *, final: bool, name: str, dir_fd: int
 ) -> SecretFileError:
     if exc.errno == errno.ENOENT:
-        return SecretFileError(setting, "is missing")
+        return SecretFileError(setting, SECRET_FILE_MISSING)
     if exc.errno in (errno.EACCES, errno.EPERM):
         return SecretFileError(setting, "is not readable (permission denied)")
     if exc.errno in (errno.ELOOP, errno.ENOTDIR, getattr(errno, "EMLINK", errno.ELOOP)):

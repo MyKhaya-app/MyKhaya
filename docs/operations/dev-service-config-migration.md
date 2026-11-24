@@ -9,7 +9,8 @@ This runbook moves the persistent DEV deployment from the single repository root
 enforces is defined in
 [`infrastructure/scripts/service_env_contract.py`](../../infrastructure/scripts/service_env_contract.py)
 and explained in [service-configuration-contracts.md](service-configuration-contracts.md).
-PROD is unaffected: it never loads `compose.dev.service-env.yml`.
+PROD is unaffected: it never loads `compose.dev.service-env.yml`. The next stage, after
+this one is active, is [dev-docker-secrets-migration.md](dev-docker-secrets-migration.md).
 
 ## What changes
 

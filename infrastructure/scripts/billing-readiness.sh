@@ -13,4 +13,15 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 REPO_ROOT=$(CDPATH= cd -- "$SCRIPT_DIR/../.." && pwd)
 cd "$REPO_ROOT"
 
-docker compose run --rm --no-deps api python -m mykhaya.billing_readiness "$@"
+# DEV after a cutover uses its own overlays; everywhere else this is unchanged.
+die() { printf '%b\n' "ERROR: $*" >&2; exit 1; }
+DEV_TOOL_MODE=legacy
+if [ "${MYKHAYA_PRODUCTION:-}" != 1 ]; then
+  . "$SCRIPT_DIR/dev-config-mode.sh"
+  dev_select_mode "$SCRIPT_DIR"
+fi
+if [ "$DEV_TOOL_MODE" = legacy ]; then
+  docker compose run --rm --no-deps api python -m mykhaya.billing_readiness "$@"
+else
+  dev_tool_compose run --rm --no-deps api python -m mykhaya.billing_readiness "$@"
+fi

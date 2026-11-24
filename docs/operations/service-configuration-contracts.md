@@ -87,7 +87,17 @@ services still require the key and fail closed at startup without it. The
 deployment contracts are not narrowed yet: DEV and PROD `migrate.env` still carry
 the key until a separately approved change removes it.
 
-### File-backed secrets (application-side; no deployment uses them yet)
+### DEV file-backed secrets (implemented; not deployed)
+
+The `dev-secrets` profile in `service_env_contract.py` and `compose.dev.secrets.yml`
+add a third DEV mode after F-03: Compose file secrets with exact per-service grants and
+a process role per service. `SECRET_FILE_SPECS` is the single list of secrets and the
+services that receive each; tests keep it equal to the application's role matrix. The
+cutover, its rollback and the remaining limits are in
+[dev-docker-secrets-migration.md](dev-docker-secrets-migration.md). PROD and the F-03
+DEV profile are unchanged and refuse Compose secrets.
+
+### File-backed secrets (application side)
 
 Every secret that can be supplied as a file is declared once in the central
 registry `apps/api/mykhaya/secret_registry.py` (MK-SEC-001 v1.2 SEC-093): the
@@ -236,11 +246,11 @@ Static guards in `infrastructure/tests/test_phase1_secret_guards.py` and
 to the listed legacy values, keep passwords off command lines and pin the
 registry, the role grants and this documentation.
 
-### Process roles (application-side; not enabled in any deployment)
+### Process roles (enabled only by the DEV file-backed mode)
 
 `MYKHAYA_PROCESS_ROLE` (`api`, `worker`, `scheduler`, `migrate`, `test`, `cli`)
-names the process a configuration belongs to (MK-SEC-001 v1.2 SEC-103). **No
-deployment sets it yet.** While it is unset, configuration behaves exactly as
+names the process a configuration belongs to (MK-SEC-001 v1.2 SEC-103). **Only
+`compose.dev.secrets.yml` sets it; nothing deployed does yet.** While it is unset, configuration behaves exactly as
 before. When it is set, the application enforces the MK-SEC-001 §6.3
 credential-access matrix (`apps/api/mykhaya/process_roles.py`): a credential the
 role is not granted is rejected if present, a credential another role needs is
@@ -276,8 +286,12 @@ set, DVSA enabled or configured, Stripe billing configured), so a missing flag
 can never silently mark a check "not configured". The flags are ignored for every
 other role.
 
-Before any deployment sets a role, these differences from today's contracts must
-be resolved:
+The Apple sign-in key and the keyrings use the hardened reader whenever a role is set,
+and a role not granted the Apple key never opens it. With no role, their loaders are
+unchanged.
+
+The DEV file-backed mode resolves these differences from the F-03 contracts (PROD would
+need the same):
 
 - **Migrator (SEC-089).** Deploy this code first; then remove
   `MYKHAYA_SECRET_KEY` from `migrate.env` and make the `MIGRATE` contract in
@@ -290,8 +304,9 @@ be resolved:
   contract to match.
 - **API.** The contract still allows the FCM private key, which the matrix denies
   to the API. Its only use there is the Control Centre push-health card's
-  "FCM configured" indicator, which would read "not configured" without the key;
-  that card needs a presence source before the `api` role is enabled.
+  "FCM configured" indicator, which reads the non-secret
+  `MYKHAYA_FCM_PRIVATE_KEY_PRESENT` under the `api` role. The flag is required whenever
+  FCM delivery is configured, and is never used to send.
 
 ## Service contracts
 

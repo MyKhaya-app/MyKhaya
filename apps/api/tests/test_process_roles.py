@@ -364,7 +364,16 @@ def test_production_fcm_key_is_required_only_of_roles_granted_it() -> None:
         Settings(_env_file=None, **PRODUCTION)  # type: ignore[arg-type]
     with pytest.raises(ValidationError, match="requires project ID"):
         Settings(_env_file=None, process_role="worker", database_url=APP_URL, **PRODUCTION)  # type: ignore[arg-type]
-    api = Settings(_env_file=None, process_role="api", database_url=APP_URL, **PRODUCTION)  # type: ignore[arg-type]
+    # The API states the key's presence with a non-secret flag instead.
+    with pytest.raises(ValidationError, match="requires MYKHAYA_FCM_PRIVATE_KEY_PRESENT"):
+        Settings(_env_file=None, process_role="api", database_url=APP_URL, **PRODUCTION)  # type: ignore[arg-type]
+    api = Settings(
+        _env_file=None,  # type: ignore[call-arg]
+        process_role="api",
+        database_url=APP_URL,
+        fcm_private_key_present=True,
+        **PRODUCTION,  # type: ignore[arg-type]
+    )
     assert api.fcm_private_key is None
 
 

@@ -42,6 +42,14 @@ checked for an exposed identity. In legacy mode and outside production the
 commands are exactly as before. Backups and restores work in every cutover
 state, including an interrupted one.
 
+### DEV per-service configuration
+
+On the DEV host the same scripts select the F-03 or file-backed DEV configuration from
+its cutover state (`dev-config-mode.sh`), including during an interrupted cutover.
+In those modes a restore keeps the original object ownership, so migrations still work
+afterwards. The legacy and PROD restore still uses `--no-owner`, which leaves restored
+objects owned by `postgres`: check ownership before running migrations there.
+
 ## Production deployment preflight
 
 `infrastructure/scripts/backup-preflight.sh` runs inside `prod-deploy.sh validate`, and as the **first step of `prod-deploy.sh update`**, before any fetch, checkout, build, migration or restart. If any check fails, the deployment stops with nothing changed. It verifies:

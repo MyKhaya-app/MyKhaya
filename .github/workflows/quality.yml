@@ -76,6 +76,10 @@ jobs:
         # and process arguments. Uses the images built above; never touches
         # this project's own volumes.
         run: bash infrastructure/scripts/check-phase1-secrets.sh
+      - name: DEV Docker Secrets migration rehearsal
+        # Legacy -> F-03 -> file-backed secrets -> rollback with the real DEV
+        # scripts and images, inside a disposable nested Docker daemon.
+        run: bash infrastructure/scripts/check-dev-secrets-migration.sh
       - name: Shut down
         if: always()
         run: docker compose --profile tools down -v

@@ -174,6 +174,9 @@ class SensitiveDataInfrastructureTests(unittest.TestCase):
             "infrastructure/docker/init-db.sh",
             # The CI check mounts synthetic secrets into disposable containers.
             "infrastructure/scripts/check-phase1-secrets.sh",
+            # The migration rehearsal (synthetic credentials, nested disposable
+            # daemon) checks the mounts' names and permissions.
+            "infrastructure/tests/dev_secrets_rehearsal.sh",
         }
         offenders = sorted(
             path.relative_to(ROOT).as_posix()

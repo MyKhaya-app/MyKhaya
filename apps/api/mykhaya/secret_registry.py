@@ -20,16 +20,17 @@ literal value and a file for the same secret, and does nothing at all when no
 Nothing is cached here: the value goes straight into the settings model, and
 errors name settings and credential identifiers only, never a value or path.
 
-Two entries keep their own established loaders for compatibility and are
-declared here for coverage only (``loader`` other than "registry"):
+Two entries keep their own loaders and are declared here for coverage only
+(``loader`` other than "registry"). Both use the hardened reader whenever a
+process role is set, and their legacy path rules while it is not:
 
 * the Apple sign-in key (K-10), whose MYKHAYA_APPLE_PRIVATE_KEY_FILE loader
   in mykhaya.config predates SEC-017 and is used by deployed configuration;
 * the field-encryption and blind-index keyrings (K-18, K-19), whose loader in
   mykhaya.crypto.config treats a missing default file as "not provisioned".
 
-Moving those to the hardened reader tightens their path rules and needs the
-deployed file layout confirmed first.
+With no role set (every legacy deployment, including production) neither
+loader changes.
 """
 
 from collections.abc import Mapping

@@ -211,6 +211,7 @@ PRESENCE_FLAGS: tuple[str, ...] = _env(
     "dvla_api_key_present",
     "dvsa_credentials_present",
     "stripe_webhook_secret_present",
+    "fcm_private_key_present",
 )
 # The database password file carries whichever database credential the URL's
 # user identifies: K-02 for application roles, K-03 for the migrator. It is
@@ -344,6 +345,16 @@ def scheduler_presence_problems(values: Mapping[str, object]) -> list[str]:
             "requires MYKHAYA_DVSA_CREDENTIALS_PRESENT when DVSA is enabled or configured"
         )
     return problems
+
+
+def api_presence_problems(values: Mapping[str, object]) -> list[str]:
+    """The API is denied the FCM key, so it must be told whether the worker has
+    one; otherwise the Control Centre would silently report FCM unconfigured."""
+    if values.get("fcm_delivery_configured") and values.get("fcm_private_key_present") is None:
+        return [
+            "requires MYKHAYA_FCM_PRIVATE_KEY_PRESENT when MYKHAYA_FCM_DELIVERY_CONFIGURED is true"
+        ]
+    return []
 
 
 def synthetic_role_violations(values: Mapping[str, object]) -> list[str]:

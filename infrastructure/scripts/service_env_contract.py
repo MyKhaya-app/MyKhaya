@@ -28,7 +28,7 @@ import secrets
 import stat
 import subprocess
 import sys
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path, PurePosixPath
 from urllib.parse import unquote, urlsplit
 
@@ -225,6 +225,8 @@ COMPOSE = FileContract(
         "TRUSTED_PROXY_CIDRS", "ADMIN_ALLOWED_NETWORKS", "DEFAULT_TIMEZONE",
         "DEFAULT_LOCALE", "WEEK_START", "FIELD_KEYS_HOST_DIR", "APPLE_KEY_HOST_DIR",
         "SYSLOG_DEBUG", "EMAIL_DELIVERY_CONFIGURED",
+        # Read by the backup scripts on the host, never by a container.
+        "BACKUP_DIR", "BACKUP_AGE_RECIPIENTS_FILE",
     )}),
     required=frozenset({P + "ADMIN_ALLOWED_NETWORKS", P + "FIELD_KEYS_HOST_DIR",
                         P + "APPLE_KEY_HOST_DIR"}),
@@ -864,10 +866,11 @@ def parse_probe_output(text: str) -> KeyDirListing:
     return KeyDirListing(ids[0], ids[1], tuple(groups), root, entries, error)
 
 
-def probe_command(image: str, source: str, name: str, script: str = PROBE_SCRIPT) -> list[str]:
+def probe_command(image: str, source: str, name: str, script: str = PROBE_SCRIPT,
+                  user: str = f"{SERVICE_UID}:{SERVICE_GID}") -> list[str]:
     return ["docker", "run", "--rm", "--name", name, "--pull", "never",
             "--network", "none", "--read-only", "--cap-drop", "ALL",
-            "--security-opt", "no-new-privileges", "--user", f"{SERVICE_UID}:{SERVICE_GID}",
+            "--security-opt", "no-new-privileges", "--user", user,
             "--label", "app.mykhaya.probe=key-directory",
             "--mount", f"type=bind,source={source},target={PROBE_MOUNT},readonly",
             "--workdir", "/", "--entrypoint", "python", image, "-I", "-S", "-B", "-c", script]
@@ -905,8 +908,10 @@ def verify_probe_image(image: str, run=subprocess.run) -> None:
                            f"{SERVICE_UID}:{SERVICE_GID}")
 
 
-def docker_key_dir_probe(image: str, run=subprocess.run):
-    """Return a probe that lists one key directory as the service identity."""
+def docker_key_dir_probe(image: str, run=subprocess.run,
+                         user: str = f"{SERVICE_UID}:{SERVICE_GID}"):
+    """Return a probe that lists one key directory as the service identity
+    (or, for PostgreSQL's secret directory, as the postgres user)."""
     if not IMAGE_REFERENCE.fullmatch(image):
         raise ProbeFailure("the API image reference is not valid")
     verified = False
@@ -920,7 +925,7 @@ def docker_key_dir_probe(image: str, run=subprocess.run):
             verified = True
         name = f"mykhaya-keydir-probe-{os.getpid()}-{secrets.token_hex(4)}"
         try:
-            result = run(probe_command(image, source, name), capture_output=True, text=True,
+            result = run(probe_command(image, source, name, user=user), capture_output=True, text=True,
                          check=False, timeout=PROBE_TIMEOUT_SECONDS)
         except subprocess.TimeoutExpired:
             run(["docker", "rm", "-f", name], capture_output=True, text=True, check=False)
@@ -1131,7 +1136,8 @@ def check_secret_dirs(compose: dict[str, str], repo_root: Path | None, check_per
 
 
 def validate_root(root: Path, *, repo_root: Path | None = None,
-                  check_perms: bool = True, probe=None, profile: Profile | None = None) -> Report:
+                  check_perms: bool = True, probe=None, profile: Profile | None = None,
+                  postgres_probe=None) -> Report:
     """Validate the seven files; ``probe`` lists key directories (see
     docker_key_dir_probe) and is required whenever permissions are checked."""
     profile = profile or DEV
@@ -1167,7 +1173,14 @@ def validate_root(root: Path, *, repo_root: Path | None = None,
     for name in unexpected:
         report.error(f"{name}: is not a recognised {profile.label} configuration file "
                      "(test configuration is synthetic and tracked in the repository)")
-    check_cross_file(files, report, profile)
+    if profile.file_backed:
+        check_file_backed(files, report)
+        if check_perms:
+            referenced = referenced_secrets(files)
+            for store, store_probe in (("app", probe), ("postgres", postgres_probe)):
+                check_secret_store(root, store, referenced, store_probe, report)
+    else:
+        check_cross_file(files, report, profile)
     check_secret_dirs(files.get("compose.env", {}), repo_root, check_perms, report,
                       probe=probe, files=files, profile=profile)
     return report
@@ -1377,6 +1390,8 @@ class Profile:
     worker_interpolated_defaults: dict[str, str] = field(default_factory=dict)
     host_only: frozenset[str] = frozenset()
     apple_hint: str = ""
+    # DEV only: credentials come from Compose file secrets (MK-SEC-001).
+    file_backed: bool = False
 
 
 DEV = Profile(
@@ -1499,6 +1514,459 @@ PROD = Profile(
     host_only=frozenset({P + "PRODUCTION"}),
 )
 PROFILES = {"dev": DEV, "prod": PROD}
+
+
+# --- DEV file-backed secrets (MK-SEC-001 v1.2) ----------------------------------
+# The third DEV configuration mode: F-03's per-service layout, with every
+# credential moved out of the environment into a Compose file secret, each
+# mounted only into the services granted it, and each process given its role
+# (apps/api/mykhaya/process_roles.py enforces the same matrix at startup).
+#
+# It has its own root (<DEV root>/file-backed), generated from the F-03 files by
+# dev_secrets_migration.py, so the F-03 files stay untouched as the rollback
+# source. Layout:
+#   file-backed/*.env               non-secret settings, one file per service
+#   file-backed/secrets/app/        root:10001 0750, files root:10001 0440
+#   file-backed/secrets/postgres/   root:70 0750, files root:70 0440
+# Every secret file always exists, because Compose needs each bind source. A
+# credential that is not configured is an empty file no setting refers to.
+
+POSTGRES_UID = 70  # the postgres user of the pinned alpine PostgreSQL image
+POSTGRES_GID = 70
+SECRET_TARGET = "/run/secrets/"
+
+
+@dataclass(frozen=True)
+class SecretFile:
+    """One Compose secret: its file name and the services it is mounted into."""
+
+    name: str
+    services: tuple[str, ...]
+    # Variables holding the literal in the F-03 files. Empty: derived from a
+    # database URL or from postgres.env.
+    literals: tuple[str, ...] = ()
+    kind: str = "line"  # line | pem
+    required: bool = False
+
+    @property
+    def store(self) -> str:
+        return "postgres" if self.services == ("postgres",) else "app"
+
+    @property
+    def path(self) -> str:
+        return SECRET_TARGET + self.name
+
+
+SECRET_FILE_SPECS = (
+    SecretFile("secret_key", ("api", "worker", "scheduler"), (P + "SECRET_KEY",), required=True),
+    SecretFile("app_db_password", ("api", "worker", "scheduler"), required=True),
+    SecretFile("migration_db_password", ("migrate",), required=True),
+    SecretFile("smtp_password", ("api", "worker", "scheduler"), (P + "SMTP_PASSWORD",)),
+    SecretFile("vapid_private_key", ("api", "worker"), (P + "VAPID_PRIVATE_KEY",)),
+    SecretFile("apns_private_key", ("worker",), (P + "APNS_PRIVATE_KEY",), "pem"),
+    SecretFile("fcm_private_key", ("worker",), (P + "FCM_PRIVATE_KEY",), "pem"),
+    SecretFile("apple_private_key", ("api",), (P + "APPLE_PRIVATE_KEY",), "pem"),
+    SecretFile("google_client_secret", ("api",), (P + "GOOGLE_CLIENT_SECRET",)),
+    SecretFile("stripe_secret_key", ("api", "scheduler"), (P + "STRIPE_SECRET_KEY",)),
+    SecretFile("stripe_webhook_secret", ("api",), (P + "STRIPE_WEBHOOK_SECRET",)),
+    SecretFile("dvla_uat_api_key", ("api",), (P + "DVLA_UAT_API_KEY",)),
+    SecretFile("dvla_production_api_key", ("api",), (P + "DVLA_PRODUCTION_API_KEY",)),
+    SecretFile("dvsa_client_id", ("api",), (P + "DVSA_CLIENT_ID",)),
+    SecretFile("dvsa_client_secret", ("api",), (P + "DVSA_CLIENT_SECRET",)),
+    SecretFile("dvsa_api_key", ("api",), (P + "DVSA_API_KEY",)),
+    SecretFile("monitoring_watchdog_url", ("scheduler",), (P + "MONITORING_WATCHDOG_URL",)),
+    SecretFile("postgres_admin_password", ("postgres",), required=True),
+    SecretFile("postgres_migration_password", ("postgres",), required=True),
+    SecretFile("postgres_app_password", ("postgres",), required=True),
+)
+SECRETS_BY_NAME = {s.name: s for s in SECRET_FILE_SPECS}
+# The PostgreSQL bootstrap variables the overlay pins to their files.
+POSTGRES_SECRET_ENV = {
+    "POSTGRES_PASSWORD_FILE": "postgres_admin_password",
+    P + "MIGRATION_DB_PASSWORD_FILE": "postgres_migration_password",
+    P + "DB_PASSWORD_FILE": "postgres_app_password",
+}
+DATABASE_PASSWORD_FILE = P + "DATABASE_PASSWORD_FILE"
+PROCESS_ROLE = P + "PROCESS_ROLE"
+ROLE_SERVICES = ("api", "worker", "scheduler", "migrate")
+SCHEDULER_PRESENCE = frozenset(P + n for n in (
+    "DVLA_API_KEY_PRESENT", "DVSA_CREDENTIALS_PRESENT", "STRIPE_WEBHOOK_SECRET_PRESENT"))
+FCM_PRESENCE = P + "FCM_PRIVATE_KEY_PRESENT"
+
+
+def service_secrets(service: str) -> frozenset[str]:
+    """The secret names granted to one service."""
+    return frozenset(s.name for s in SECRET_FILE_SPECS if service in s.services)
+
+
+def file_settings(service: str) -> dict[str, str]:
+    """`*_FILE` variable -> secret name a service may set."""
+    settings = {f"{literal}_FILE": s.name for s in SECRET_FILE_SPECS if service in s.services
+                for literal in s.literals}
+    if service in ("api", "worker", "scheduler"):
+        settings[DATABASE_PASSWORD_FILE] = "app_db_password"
+    if service == "migrate":
+        settings[DATABASE_PASSWORD_FILE] = "migration_db_password"
+    return settings
+
+
+ALL_LITERALS = frozenset(n for s in SECRET_FILE_SPECS for n in s.literals) | FIELD_KEY_ENV_FALLBACK
+ALL_FILE_SETTINGS = frozenset(n for s in ROLE_SERVICES for n in file_settings(s))
+
+
+def _file_backed(base: FileContract, service: str, *, drop: frozenset[str] = frozenset(),
+                 add: frozenset[str] = frozenset()) -> FileContract:
+    """An F-03 contract with every credential literal forbidden and exactly
+    this service's file settings allowed."""
+    settings = frozenset(file_settings(service))
+    allowed = (base.allowed - ALL_LITERALS - drop) | settings | add
+    required = (base.required - ALL_LITERALS) | frozenset(
+        n for n, secret in file_settings(service).items() if SECRETS_BY_NAME[secret].required)
+    forbidden = base.forbidden | ALL_LITERALS | drop | (ALL_FILE_SETTINGS - settings) \
+        | BOOTSTRAP_PASSWORDS
+    return FileContract(base.name, allowed=frozenset(allowed), required=frozenset(required),
+                        forbidden=frozenset(forbidden - allowed), consumers=base.consumers,
+                        secret_bearing=base.secret_bearing)
+
+
+SECRETS_API = _file_backed(API, "api", add=frozenset({FCM_PRESENCE}))
+SECRETS_WORKER = _file_backed(WORKER, "worker")
+SECRETS_SCHEDULER = _file_backed(SCHEDULER, "scheduler", add=SCHEDULER_PRESENCE)
+SECRETS_MIGRATE = _file_backed(MIGRATE, "migrate")
+SECRETS_COMMON = FileContract(
+    "common.env", allowed=COMMON.allowed,
+    forbidden=frozenset(COMMON.forbidden | ALL_FILE_SETTINGS | ALL_LITERALS),
+    secret_bearing=False, consumers=COMMON.consumers)
+# PostgreSQL's three passwords are pinned to files by the overlay.
+SECRETS_POSTGRES = FileContract(
+    "postgres.env", allowed=frozenset(),
+    forbidden=frozenset(BOOTSTRAP_PASSWORDS | set(POSTGRES_SECRET_ENV)), consumers=("postgres",))
+SECRETS_COMPOSE = FileContract(
+    "compose.env", allowed=COMPOSE.allowed, required=COMPOSE.required,
+    forbidden=frozenset(COMPOSE.forbidden | ALL_FILE_SETTINGS), secret_bearing=False)
+MIGRATE_PINS = BUILD_METADATA | {P + "ENVIRONMENT", P + "BUILD_CHANNEL", PROCESS_ROLE}
+_ROLE = frozenset({PROCESS_ROLE})
+
+DEV_SECRETS = replace(
+    DEV, name="dev-secrets", label="DEV file-backed",
+    pinned=PINNED_BY_COMPOSE | _ROLE, pinned_source="the DEV Compose files",
+    common_contract=SECRETS_COMMON, compose_contract=SECRETS_COMPOSE,
+    contracts=(SECRETS_COMMON, SECRETS_API, SECRETS_WORKER, SECRETS_SCHEDULER, SECRETS_MIGRATE,
+               SECRETS_POSTGRES, SECRETS_COMPOSE),
+    restated={
+        "api": RESTATED_ENVIRONMENT["api"] | _ROLE,
+        "worker": RESTATED_ENVIRONMENT["worker"] | _ROLE,
+        "scheduler": RESTATED_ENVIRONMENT["scheduler"] | _ROLE,
+        "migrate": MIGRATE_PINS,
+        "postgres": frozenset({"POSTGRES_DB", "POSTGRES_USER"}) | frozenset(POSTGRES_SECRET_ENV),
+    },
+    resolved_allowed={
+        "api": COMMON.allowed | SECRETS_API.allowed | PINNED_BY_COMPOSE | APNS | _ROLE,
+        "worker": COMMON.allowed | SECRETS_WORKER.allowed | PINNED_BY_COMPOSE | _ROLE,
+        "scheduler": COMMON.allowed | SECRETS_SCHEDULER.allowed | PINNED_BY_COMPOSE | APNS | _ROLE,
+        "migrate": SECRETS_MIGRATE.allowed | MIGRATE_PINS,
+        "postgres": frozenset({"POSTGRES_DB", "POSTGRES_USER"}) | frozenset(POSTGRES_SECRET_ENV),
+    },
+    file_backed=True,
+)
+PROFILES["dev-secrets"] = DEV_SECRETS
+
+
+def _truthy(values: dict[str, str], name: str) -> bool:
+    return values.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+
+def secret_value_problem(kind: str, value: str) -> str | None:
+    """Why a value cannot be stored so the application's hardened reader
+    (apps/api/mykhaya/secret_files.py) returns it unchanged, or None."""
+    data = value.encode("utf-8", "surrogateescape")
+    if b"\x00" in data:
+        return "contains a NUL byte"
+    try:
+        data.decode("utf-8")
+    except UnicodeDecodeError:
+        return "is not valid UTF-8"
+    if kind == "line":
+        if "\n" in value or "\r" in value:
+            return "must be a single line"
+        if value != value.strip():
+            return "has leading or trailing whitespace"
+        if len(data) > 4095:
+            return "is too large"
+        return None
+    if not re.fullmatch(r"-----BEGIN ([A-Z0-9 ]+)-----\n(?:[A-Za-z0-9+/=]+\n)+-----END \1-----",
+                        value):
+        return "is not exactly one PEM block"
+    return "is too large" if len(data) > 16000 else None
+
+
+def normalise_secret(kind: str, value: str) -> str:
+    """PEM keys arrive in dotenv files with escaped or CRLF line breaks, which
+    the application already decodes (notifications/push.py)."""
+    if kind == "pem":
+        text = value.replace("\\n", "\n").replace("\r\n", "\n").strip()
+        return "\n".join(line.strip() for line in text.split("\n"))
+    return value
+
+
+def _split_database_url(url: str) -> tuple[str, str] | None:
+    """(password-free URL, decoded password)."""
+    parts = _db_parts(url)
+    if parts is None or not parts[2] or "@" not in url:
+        return None
+    scheme, rest = url.split("://", 1)
+    userinfo, location = rest.rsplit("@", 1)
+    return f"{scheme}://{userinfo.split(':', 1)[0]}@{location}", parts[2]
+
+
+def derive_file_backed(files: dict[str, dict[str, str]]
+                       ) -> tuple[dict[str, dict[str, str]], dict[str, str], list[str]]:
+    """Convert validated F-03 files: (env files, secret values, problems).
+
+    Pure. Nothing is generated or rotated: every secret is the existing value.
+    Problems name variables only.
+    """
+    problems: list[str] = []
+    values: dict[str, str] = {s.name: "" for s in SECRET_FILE_SPECS}
+    out = {name: dict(content) for name, content in files.items()}
+    env_name = {s: f"{s}.env" for s in ROLE_SERVICES}
+
+    def take(secret: SecretFile, source: str, value: str) -> None:
+        value = normalise_secret(secret.kind, value)
+        problem = secret_value_problem(secret.kind, value)
+        if problem:
+            problems.append(f"{source}: the value {problem}")
+        elif values[secret.name] and values[secret.name] != value:
+            problems.append(f"{source}: differs between service files")
+        else:
+            values[secret.name] = value
+
+    for name in FIELD_KEY_ENV_FALLBACK:
+        if any(content.get(name) for content in files.values()):
+            problems.append(f"{name}: the keyring is supplied through the environment; install it "
+                            "as a key file first (docs/operations/sensitive-field-keys.md)")
+    # Presence flags are stated from what each service's checks read today.
+    scheduler, api, worker = (files.get(f"{s}.env", {}) for s in ("scheduler", "api", "worker"))
+    flags: dict[str, bool] = {}
+    environment = scheduler.get(P + "DVLA_ENVIRONMENT", "").strip()
+    if environment:
+        key = P + ("DVLA_UAT_API_KEY" if environment == "uat" else "DVLA_PRODUCTION_API_KEY")
+        flags[P + "DVLA_API_KEY_PRESENT"] = bool(scheduler.get(key))
+    if _truthy(scheduler, P + "DVSA_ENABLED") or scheduler.get(P + "DVSA_TOKEN_URL"):
+        flags[P + "DVSA_CREDENTIALS_PRESENT"] = all(scheduler.get(P + n) for n in (
+            "DVSA_CLIENT_ID", "DVSA_CLIENT_SECRET", "DVSA_API_KEY"))
+    if _truthy(scheduler, P + "STRIPE_BILLING_CONFIGURED"):
+        flags[P + "STRIPE_WEBHOOK_SECRET_PRESENT"] = bool(
+            scheduler.get(P + "STRIPE_WEBHOOK_SECRET"))
+    for service in ("api", "worker", "scheduler", "migrate"):
+        content = out.get(env_name[service], {})
+        settings = file_settings(service)
+        for secret in SECRET_FILE_SPECS:
+            for literal in secret.literals:
+                value = content.pop(literal, "")
+                # A blank literal means "not configured" to the settings model.
+                if not value.strip():
+                    continue
+                if service in secret.services:
+                    take(secret, f"{env_name[service]}: {literal}", value)
+                    if f"{literal}_FILE" in settings:
+                        content[f"{literal}_FILE"] = secret.path
+        for name in FIELD_KEY_ENV_FALLBACK:
+            content.pop(name, None)
+        split = _split_database_url(content.get(P + "DATABASE_URL", ""))
+        if split is None:
+            problems.append(f"{env_name[service]}: MYKHAYA_DATABASE_URL must be a database URL "
+                            "with a password")
+            continue
+        content[P + "DATABASE_URL"], password = split
+        secret = SECRETS_BY_NAME[settings[DATABASE_PASSWORD_FILE]]
+        take(secret, f"{env_name[service]}: MYKHAYA_DATABASE_URL password", password)
+        content[DATABASE_PASSWORD_FILE] = secret.path
+    if api.get(P + "APPLE_PRIVATE_KEY_FILE"):
+        out["api.env"][P + "APPLE_PRIVATE_KEY_FILE"] = api[P + "APPLE_PRIVATE_KEY_FILE"]
+    for name, present in flags.items():
+        out["scheduler.env"][name] = "true" if present else "false"
+    if _truthy(api, P + "FCM_DELIVERY_CONFIGURED"):
+        out["api.env"][FCM_PRESENCE] = "true" if worker.get(P + "FCM_PRIVATE_KEY") else "false"
+    postgres = files.get("postgres.env", {})
+    for source, name in (("POSTGRES_PASSWORD", "postgres_admin_password"),
+                         (P + "MIGRATION_DB_PASSWORD", "postgres_migration_password"),
+                         (P + "DB_PASSWORD", "postgres_app_password")):
+        take(SECRETS_BY_NAME[name], f"postgres.env: {source}", postgres.get(source, ""))
+    out["postgres.env"] = {}
+    for secret in SECRET_FILE_SPECS:
+        if secret.required and not values[secret.name]:
+            problems.append(f"{secret.name}: the required credential is not configured")
+    for app, bootstrap in (("app_db_password", "postgres_app_password"),
+                           ("migration_db_password", "postgres_migration_password")):
+        if values[app] != values[bootstrap]:
+            problems.append(f"{app}: differs from the password PostgreSQL was initialised with")
+    return out, values, problems
+
+
+def referenced_secrets(files: dict[str, dict[str, str]]) -> set[str]:
+    """Secrets some service is configured to read (PostgreSQL's always are)."""
+    wanted = set(POSTGRES_SECRET_ENV.values())
+    for service in ROLE_SERVICES:
+        content = files.get(f"{service}.env", {})
+        wanted |= {secret for name, secret in file_settings(service).items()
+                   if content.get(name) == SECRET_TARGET + secret}
+    return wanted
+
+
+def check_file_backed(files: dict[str, dict[str, str]], report: Report) -> None:
+    """Cross-file rules of the file-backed DEV layout (replaces check_cross_file)."""
+    api, worker, scheduler, migrate = (files.get(f"{s}.env", {}) for s in ROLE_SERVICES)
+    for service in ROLE_SERVICES:
+        content, name = files.get(f"{service}.env", {}), f"{service}.env"
+        for setting, secret in file_settings(service).items():
+            value = content.get(setting)
+            if value is None or value == SECRET_TARGET + secret:
+                continue
+            if setting == P + "APPLE_PRIVATE_KEY_FILE" and \
+                    re.fullmatch(r"/run/secrets/mykhaya-apple/[A-Za-z0-9._-]+", value) and \
+                    value.rsplit("/", 1)[1] not in {".", ".."}:
+                continue
+            report.error(f"{name}: {setting} must be {SECRET_TARGET + secret}")
+        parts = _db_parts(content.get(P + "DATABASE_URL", ""))
+        user = MIGRATION_DB_USER if service == "migrate" else APP_DB_USER
+        if parts is None or parts[0] != "postgresql+asyncpg":
+            report.error(f"{name}: MYKHAYA_DATABASE_URL must be a postgresql+asyncpg URL")
+            continue
+        if parts[1] != user:
+            report.error(f"{name}: MYKHAYA_DATABASE_URL must use the {user} role")
+        if parts[2]:
+            report.error(f"{name}: MYKHAYA_DATABASE_URL must not contain a password")
+    targets = {(_db_parts(f.get(P + "DATABASE_URL", "")) or ("",) * 5)[3:]
+               for f in (api, worker, scheduler, migrate)}
+    if len(targets) > 1:
+        report.error("MYKHAYA_DATABASE_URL targets different databases between services")
+    if len({f.get(P + "REDIS_URL") for f in (api, worker, scheduler)}) > 1:
+        report.error("MYKHAYA_REDIS_URL differs between api, worker and scheduler")
+    for group in (SMTP, STRIPE_MONITORING, DVLA_MONITORING, DVSA_MONITORING, FCM, VAPID):
+        for other_name, other in (("worker.env", worker), ("scheduler.env", scheduler)):
+            names = {n for g in group for n in (g, f"{g}_FILE")}
+            for name in sorted(names & set(other) & set(api)):
+                if other[name] != api[name]:
+                    report.error(f"{other_name}: {name} differs from api.env")
+    if scheduler.get(P + "DVLA_ENVIRONMENT") and P + "DVLA_API_KEY_PRESENT" not in scheduler:
+        report.error("scheduler.env: MYKHAYA_DVLA_API_KEY_PRESENT is required")
+    if (_truthy(scheduler, P + "DVSA_ENABLED") or scheduler.get(P + "DVSA_TOKEN_URL")) and \
+            P + "DVSA_CREDENTIALS_PRESENT" not in scheduler:
+        report.error("scheduler.env: MYKHAYA_DVSA_CREDENTIALS_PRESENT is required")
+    if _truthy(scheduler, P + "STRIPE_BILLING_CONFIGURED") and \
+            P + "STRIPE_WEBHOOK_SECRET_PRESENT" not in scheduler:
+        report.error("scheduler.env: MYKHAYA_STRIPE_WEBHOOK_SECRET_PRESENT is required")
+    if _truthy(api, P + "FCM_DELIVERY_CONFIGURED") and FCM_PRESENCE not in api:
+        report.error(f"api.env: {FCM_PRESENCE} is required")
+    for name, content in (("scheduler.env", scheduler), ("api.env", api)):
+        for flag in sorted((SCHEDULER_PRESENCE | {FCM_PRESENCE}) & set(content)):
+            if content[flag] not in {"true", "false"}:
+                report.error(f"{name}: {flag} must be true or false")
+    # Monitoring inputs the API uses must still reach the scheduler.
+    for flag in ("EMAIL_DELIVERY_CONFIGURED", "STRIPE_BILLING_CONFIGURED", "DVSA_ENABLED",
+                 "APPLE_SIGN_IN_ENABLED", "GOOGLE_SIGN_IN_ENABLED"):
+        if _truthy(api, P + flag) and not _truthy(scheduler, P + flag):
+            report.error(f"scheduler.env: {P + flag} must be true, as in api.env")
+    check_development_separation(files, report)
+    for name, values in files.items():
+        for key in (P + "FIELD_ENCRYPTION_KEYS_FILE", P + "BLIND_INDEX_KEYS_FILE"):
+            if values.get(key) and not re.fullmatch(r"/run/secrets/mykhaya/[A-Za-z0-9._-]+",
+                                                    values[key]):
+                report.error(f"{name}: {key} must name a file directly inside the read-only "
+                             "/run/secrets/mykhaya/ mount")
+
+
+def check_secret_store(root: Path, store: str, referenced: set[str], probe, report: Report) -> None:
+    """One store directory as its consumers see it: exact file set, ownership,
+    modes, readability, and content present exactly when a setting uses it."""
+    label = f"secrets/{store}"
+    uid, gid = ((POSTGRES_UID, POSTGRES_GID) if store == "postgres" else (SERVICE_UID, SERVICE_GID))
+    if probe is None:
+        report.error(f"{label}: cannot be verified: no API image was given (--probe-image)")
+        return
+    path = root / "secrets" / store
+    try:
+        listing = probe(str(path))
+    except ProbeFailure as exc:
+        report.error(f"{label}: cannot be verified: {exc}")
+        return
+    if (listing.uid, listing.gid) != (uid, gid) or listing.root is None or listing.entries is None:
+        report.error(f"{label}: is not readable by the service account ({uid}:{gid})")
+        return
+
+    def check(entry: KeyEntry, name: str, kind: str, mode: int) -> None:
+        if entry.kind != kind:
+            report.error(f"{name}: must be a regular {kind}, not a {entry.kind}")
+        elif entry.uid != 0 or entry.gid != gid:
+            report.error(f"{name}: must be owned by root with group {gid}")
+        elif entry.mode != mode:
+            report.error(f"{name}: has mode {entry.mode:04o}; expected {mode:04o}")
+        elif not entry.readable:
+            report.error(f"{name}: is not readable by the service account ({uid}:{gid})")
+
+    check(listing.root, label, "directory", 0o750)
+    expected = {s.name for s in SECRET_FILE_SPECS if s.store == store}
+    present = {e.name for e in listing.entries}
+    for name in sorted(expected - present):
+        report.error(f"{label}/{name}: is missing")
+    for name in sorted(present - expected):
+        report.error(f"{label}/{_safe_name(name)}: is not a recognised secret file")
+    for entry in listing.entries:
+        if entry.name not in expected:
+            continue
+        name = f"{label}/{entry.name}"
+        check(entry, name, "file", 0o440)
+        if entry.size is None:
+            report.error(f"{name}: its size could not be checked")
+        elif entry.name in referenced and entry.size == 0:
+            report.error(f"{name}: is empty but a service is configured to read it")
+        elif entry.name not in referenced and entry.size:
+            report.error(f"{name}: holds a value that no service is configured to read")
+
+
+def check_secret_mounts(model: dict, root: Path | None, profile: Profile) -> list[str]:
+    """Exact per-service Compose secret grants; no other profile may use any."""
+    errors: list[str] = []
+    services, declared = model.get("services", {}), model.get("secrets") or {}
+    if not profile.file_backed:
+        for name, service in services.items():
+            if service.get("secrets"):
+                errors.append(f"{name}: Compose secrets are not part of this configuration")
+        return errors
+    for name in sorted(set(declared) - set(SECRETS_BY_NAME)):
+        errors.append(f"Compose secret {name} is not in the contract")
+    for name, secret in SECRETS_BY_NAME.items():
+        definition = declared.get(name) or {}
+        extra = set(definition) - {"name", "file"}
+        source = str(definition.get("file", ""))
+        if extra or not source:
+            errors.append(f"Compose secret {name} must be a plain file secret")
+        elif root is not None and PurePosixPath(source) != PurePosixPath(
+                (root / "secrets" / secret.store / name).as_posix()):
+            errors.append(f"Compose secret {name} does not come from {profile.root_variable}")
+    for name, service in services.items():
+        granted = []
+        for entry in service.get("secrets") or []:
+            source, target = entry.get("source"), entry.get("target") or entry.get("source")
+            granted.append(source)
+            if target not in {source, SECRET_TARGET + str(source)}:
+                errors.append(f"{name}: secret {source} is mounted at an unexpected path")
+            if set(entry) - {"source", "target"}:
+                errors.append(f"{name}: secret {source} sets uid, gid or mode, which Compose "
+                              "ignores for file secrets")
+        for extra in sorted(set(granted) - service_secrets(name)):
+            errors.append(f"{name}: must not receive secret {extra}")
+        for missing in sorted(service_secrets(name) - set(granted)):
+            errors.append(f"{name}: does not receive secret {missing}")
+        env = service.get("environment") or {}
+        if name in ROLE_SERVICES and env.get(PROCESS_ROLE) != name:
+            errors.append(f"{name}: {PROCESS_ROLE} must be {name}")
+        if name == "postgres":
+            for setting, secret_name in POSTGRES_SECRET_ENV.items():
+                if env.get(setting) != SECRET_TARGET + secret_name:
+                    errors.append(f"postgres: {setting} must be {SECRET_TARGET + secret_name}")
+    return errors
 
 
 def check_provenance(model: dict, root: Path, profile: Profile | None = None) -> list[str]:
@@ -1675,6 +2143,7 @@ def main(argv: list[str] | None = None) -> int:
             if source is not sys.stdin:
                 source.close()
         errors = check_resolved_model(model, args.repo_root, profile)
+        errors += check_secret_mounts(model, args.config_root, profile)
         if args.config_root is not None:
             errors += check_provenance(model, args.config_root, profile)
         for error in errors:
@@ -1690,15 +2159,18 @@ def main(argv: list[str] | None = None) -> int:
         print("ERROR: permission checks need a POSIX host; pass --skip-permissions only for "
               "local synthetic validation", file=sys.stderr)
         return 2
-    probe = None
+    probe = postgres_probe = None
     if check_perms and args.probe_image:
         try:
             probe = docker_key_dir_probe(args.probe_image)
+            if profile.file_backed:
+                postgres_probe = docker_key_dir_probe(args.probe_image,
+                                                      user=f"{POSTGRES_UID}:{POSTGRES_GID}")
         except ProbeFailure as exc:
             print(f"ERROR: key-directory probe: {exc}", file=sys.stderr)
             return 1
     report = validate_root(args.root, repo_root=args.repo_root, check_perms=check_perms,
-                           probe=probe, profile=profile)
+                           probe=probe, profile=profile, postgres_probe=postgres_probe)
     for warning in report.warnings:
         print(f"WARNING: {warning}", file=sys.stderr)
     if report.errors:

@@ -215,9 +215,9 @@ from mykhaya.notifications.default_templates import (
 )
 from mykhaya.notifications.engine import enqueue_native_push, notify
 from mykhaya.notifications.push import (
+    fcm_indicated,
     generate_vapid_keypair,
     resolve_apns_config,
-    resolve_fcm_config,
     resolve_push_config,
     send_push,
 )
@@ -6498,9 +6498,9 @@ async def internal_health(
     # are surfaced but never alone degrade the top-level state).
     push_config = await resolve_push_config(settings, db)
     apns_config = resolve_apns_config(settings)
-    fcm_config = resolve_fcm_config(settings)
+    fcm_configured = fcm_indicated(settings)
     any_push_provider_configured = (
-        push_config.configured or apns_config.configured or fcm_config.configured
+        push_config.configured or apns_config.configured or fcm_configured
     )
     active_subscriptions = (
         await db.scalar(

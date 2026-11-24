@@ -3,17 +3,18 @@
 from __future__ import annotations
 
 import asyncio
-import os
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+
+from mykhaya.config import get_settings
 
 
 EMAIL = "google.synthetic@e2e.mykhaya.dev"
 
 
 async def verify() -> None:
-    engine = create_async_engine(os.environ["MYKHAYA_DATABASE_URL"])
+    engine = create_async_engine(get_settings().database_connect_url())
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     async with sessions() as db:
         user = (await db.execute(text("""
