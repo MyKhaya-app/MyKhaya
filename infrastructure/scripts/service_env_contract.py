@@ -1174,7 +1174,7 @@ def validate_root(root: Path, *, repo_root: Path | None = None,
         report.error(f"{name}: is not a recognised {profile.label} configuration file "
                      "(test configuration is synthetic and tracked in the repository)")
     if profile.file_backed:
-        check_file_backed(files, report)
+        check_file_backed(files, report, profile)
         if check_perms:
             referenced = referenced_secrets(files)
             for store, store_probe in (("app", probe), ("postgres", postgres_probe)):
@@ -1390,7 +1390,7 @@ class Profile:
     worker_interpolated_defaults: dict[str, str] = field(default_factory=dict)
     host_only: frozenset[str] = frozenset()
     apple_hint: str = ""
-    # DEV only: credentials come from Compose file secrets (MK-SEC-001).
+    # Credentials come from Compose file secrets (MK-SEC-001).
     file_backed: bool = False
 
 
@@ -1516,13 +1516,13 @@ PROD = Profile(
 PROFILES = {"dev": DEV, "prod": PROD}
 
 
-# --- DEV file-backed secrets (MK-SEC-001 v1.2) ----------------------------------
-# The third DEV configuration mode: F-03's per-service layout, with every
+# --- File-backed secrets (MK-SEC-001 v1.2) --------------------------------------
+# The third configuration mode, DEV and PROD: F-03's per-service layout, with every
 # credential moved out of the environment into a Compose file secret, each
 # mounted only into the services granted it, and each process given its role
 # (apps/api/mykhaya/process_roles.py enforces the same matrix at startup).
 #
-# It has its own root (<DEV root>/file-backed), generated from the F-03 files by
+# It has its own root (<DEV or PROD root>/file-backed), generated from the F-03 files by
 # dev_secrets_migration.py, so the F-03 files stay untouched as the rollback
 # source. Layout:
 #   file-backed/*.env               non-secret settings, one file per service
@@ -1671,6 +1671,45 @@ DEV_SECRETS = replace(
 )
 PROFILES["dev-secrets"] = DEV_SECRETS
 
+# PROD: the same grants on the PROD F-03 layout. The migrate role holds only the
+# migration credential, so it loses common.env (installation settings and key
+# paths) and every other pinned name.
+PROD_SECRETS_API = _file_backed(PROD_API, "api", add=frozenset({FCM_PRESENCE}))
+PROD_SECRETS_WORKER = _file_backed(PROD_WORKER, "worker")
+PROD_SECRETS_SCHEDULER = _file_backed(PROD_SCHEDULER, "scheduler", add=SCHEDULER_PRESENCE)
+PROD_SECRETS_COMMON = FileContract(
+    "common.env", allowed=PROD_COMMON.allowed, required=PROD_COMMON.required,
+    forbidden=frozenset(PROD_COMMON.forbidden | ALL_FILE_SETTINGS | ALL_LITERALS),
+    secret_bearing=False, consumers=("api", "worker", "scheduler"))
+PROD_SECRETS_COMPOSE = FileContract(
+    "compose.env", allowed=PROD_COMPOSE.allowed, required=PROD_COMPOSE.required,
+    forbidden=frozenset(PROD_COMPOSE.forbidden | ALL_FILE_SETTINGS), secret_bearing=False)
+PROD_SECRETS = replace(
+    PROD, name="prod-secrets", label="PROD file-backed",
+    pinned=PROD_PINNED | _ROLE, pinned_source="the production Compose files",
+    common_contract=PROD_SECRETS_COMMON, compose_contract=PROD_SECRETS_COMPOSE,
+    contracts=(PROD_SECRETS_COMMON, PROD_SECRETS_API, PROD_SECRETS_WORKER,
+               PROD_SECRETS_SCHEDULER, SECRETS_MIGRATE, SECRETS_POSTGRES, PROD_SECRETS_COMPOSE),
+    service_env_files={**PROD.service_env_files, "migrate": ("migrate.env",)},
+    restated={
+        **{s: PROD.restated[s] | _ROLE for s in ("api", "worker", "scheduler")},
+        "migrate": MIGRATE_PINS,
+        "postgres": DEV_SECRETS.restated["postgres"],
+    },
+    resolved_allowed={
+        "api": PROD_COMMON.allowed | PROD_SECRETS_API.allowed | PROD_PINNED | APNS | _ROLE,
+        "worker": PROD_COMMON.allowed | PROD_SECRETS_WORKER.allowed | PROD_PINNED | _ROLE,
+        "scheduler": PROD_COMMON.allowed | PROD_SECRETS_SCHEDULER.allowed | PROD_PINNED | APNS
+                     | _ROLE,
+        "migrate": SECRETS_MIGRATE.allowed | MIGRATE_PINS,
+        "postgres": DEV_SECRETS.resolved_allowed["postgres"],
+    },
+    file_backed=True,
+)
+PROFILES["prod-secrets"] = PROD_SECRETS
+# Each F-03 profile's file-backed successor.
+FILE_BACKED = {"dev": DEV_SECRETS, "prod": PROD_SECRETS}
+
 
 def _truthy(values: dict[str, str], name: str) -> bool:
     return values.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
@@ -1719,13 +1758,14 @@ def _split_database_url(url: str) -> tuple[str, str] | None:
     return f"{scheme}://{userinfo.split(':', 1)[0]}@{location}", parts[2]
 
 
-def derive_file_backed(files: dict[str, dict[str, str]]
+def derive_file_backed(files: dict[str, dict[str, str]], profile: Profile | None = None
                        ) -> tuple[dict[str, dict[str, str]], dict[str, str], list[str]]:
     """Convert validated F-03 files: (env files, secret values, problems).
 
     Pure. Nothing is generated or rotated: every secret is the existing value.
-    Problems name variables only.
+    Problems name variables only. ``profile`` is the F-03 profile (default DEV).
     """
+    profile = profile or DEV
     problems: list[str] = []
     values: dict[str, str] = {s.name: "" for s in SECRET_FILE_SPECS}
     out = {name: dict(content) for name, content in files.items()}
@@ -1789,7 +1829,7 @@ def derive_file_backed(files: dict[str, dict[str, str]]
     if _truthy(api, P + "FCM_DELIVERY_CONFIGURED"):
         out["api.env"][FCM_PRESENCE] = "true" if worker.get(P + "FCM_PRIVATE_KEY") else "false"
     postgres = files.get("postgres.env", {})
-    for source, name in (("POSTGRES_PASSWORD", "postgres_admin_password"),
+    for source, name in ((profile.admin_password_name, "postgres_admin_password"),
                          (P + "MIGRATION_DB_PASSWORD", "postgres_migration_password"),
                          (P + "DB_PASSWORD", "postgres_app_password")):
         take(SECRETS_BY_NAME[name], f"postgres.env: {source}", postgres.get(source, ""))
@@ -1814,8 +1854,10 @@ def referenced_secrets(files: dict[str, dict[str, str]]) -> set[str]:
     return wanted
 
 
-def check_file_backed(files: dict[str, dict[str, str]], report: Report) -> None:
-    """Cross-file rules of the file-backed DEV layout (replaces check_cross_file)."""
+def check_file_backed(files: dict[str, dict[str, str]], report: Report,
+                      profile: Profile | None = None) -> None:
+    """Cross-file rules of the file-backed layout (replaces check_cross_file)."""
+    profile = profile or DEV_SECRETS
     api, worker, scheduler, migrate = (files.get(f"{s}.env", {}) for s in ROLE_SERVICES)
     for service in ROLE_SERVICES:
         content, name = files.get(f"{service}.env", {}), f"{service}.env"
@@ -1868,7 +1910,10 @@ def check_file_backed(files: dict[str, dict[str, str]], report: Report) -> None:
                  "APPLE_SIGN_IN_ENABLED", "GOOGLE_SIGN_IN_ENABLED"):
         if _truthy(api, P + flag) and not _truthy(scheduler, P + flag):
             report.error(f"scheduler.env: {P + flag} must be true, as in api.env")
-    check_development_separation(files, report)
+    if profile is PROD_SECRETS:
+        check_production_separation(files, report)
+    else:
+        check_development_separation(files, report)
     for name, values in files.items():
         for key in (P + "FIELD_ENCRYPTION_KEYS_FILE", P + "BLIND_INDEX_KEYS_FILE"):
             if values.get(key) and not re.fullmatch(r"/run/secrets/mykhaya/[A-Za-z0-9._-]+",

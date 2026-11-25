@@ -52,6 +52,11 @@ UNCHANGED_SERVICES = ("postgres", "redis", "web", "caddy")
 IMAGE_SERVICES = ("api", "worker", "scheduler", "migrate", "web")
 MAX_BACKUP_AGE = dt.timedelta(hours=2)
 IN_FLIGHT_STATUSES = ("uploaded", "importing")
+# The same rule as dev-secrets-cutover.sh: only a completed import sets
+# completed_at; expired and discarded packages are terminal without it. Failed
+# imports can be retried, and unknown or contradictory rows are unsafe.
+FINISHED_PACKAGE = ("(status = 'completed' and completed_at is not null) or "
+                    "(status in ('expired', 'discarded') and completed_at is null)")
 MIN_COMPOSE = (2, 24, 4)
 SNAPSHOT_NAME = ".cutover-snapshot.json"
 SERVICE_FILES = tuple(c.name for c in PROFILE.contracts)
@@ -66,8 +71,9 @@ def run(args: list[str], *, env: dict[str, str] | None = None, input_bytes: byte
         if input_bytes is not None:
             return subprocess.run(args, input=input_bytes, capture_output=True, check=False,
                                   timeout=timeout, env=env, cwd=cwd)
-        return subprocess.run(args, capture_output=True, text=True, check=False, timeout=timeout,
-                              env=env, cwd=cwd)
+        # No stdin: a child must never swallow the operator's typed approval.
+        return subprocess.run(args, stdin=subprocess.DEVNULL, capture_output=True, text=True,
+                              check=False, timeout=timeout, env=env, cwd=cwd)
     except (OSError, subprocess.SubprocessError) as exc:
         return subprocess.CompletedProcess(args, 127, "", f"{type(exc).__name__}")
 
@@ -95,6 +101,14 @@ class Paths:
     @property
     def snapshot(self) -> Path:
         return self.root / SNAPSHOT_NAME
+
+    @property
+    def secrets_state(self) -> Path:
+        return self.root / ".secrets-state"
+
+    @property
+    def secrets_root(self) -> Path:
+        return self.root / "file-backed"
 
     @classmethod
     def from_environment(cls, environ: dict[str, str] | None = None) -> Paths:
@@ -211,6 +225,12 @@ def compose_command(paths: Paths, mode: str, root: Path | None = None,
         env.pop(name, None)
     env.update({P + "APNS_PRIVATE_KEY": "", P + "FCM_PRIVATE_KEY": "",
                 "MYKHAYA_PROD_CONFIG_ROOT": str(root)})
+    if mode == "secrets":  # root is the file-backed root
+        env.update({P + n: "" for n in ("DB_PASSWORD", "MIGRATION_DB_PASSWORD",
+                                        "POSTGRES_ADMIN_PASSWORD")})
+        return ["docker", "compose", "--env-file", str(root / "compose.env"), *files,
+                "-f", str(paths.repo / "compose.production.service-env.yml"),
+                "-f", str(paths.repo / "compose.production.secrets.yml")], env
     return ["docker", "compose", "--env-file", str(root / "compose.env"),
             "--env-file", str(root / "postgres.env"), *files,
             "-f", str(paths.repo / "compose.production.service-env.yml")], env
@@ -398,6 +418,11 @@ def host_matches(expected: str) -> bool:
 
 
 class Migration:
+    report_prefix = "f03-prod"
+    # True while resuming: an interrupted deployment may have left an
+    # application container stopped, which must not prevent the resume.
+    tolerate_stopped = False
+
     def __init__(self, paths: Paths, args: argparse.Namespace, findings: Findings) -> None:
         self.paths = paths
         self.args = args
@@ -425,7 +450,10 @@ class Migration:
         return found[0].get("Id") if len(found) == 1 else None
 
     def read_state(self) -> str:
-        state_file = self.paths.state
+        return self.read_state_file(self.paths.state)
+
+    @staticmethod
+    def read_state_file(state_file: Path) -> str:
         if state_file.is_symlink():
             return "linked"
         if not state_file.exists():
@@ -434,12 +462,16 @@ class Migration:
         value = lines[0].strip() if lines else ""
         return value if value in {"legacy", "pending", "active", "rollback-pending"} else "unrecognised"
 
-    def write_state(self, value: str) -> bool:
+    def approve_transition(self) -> bool:
+        """prod-security-migrate.sh asks for a typed approval here."""
+        return True
+
+    def write_state(self, value: str, state_file: Path | None = None) -> bool:
         """Through cutover-state.sh, the one implementation of the state file."""
         script = ('die() { printf "%s\\n" "$*" >&2; exit 1; }; . "$1"; '
                   'cutover_write_state "$2" "$3"')
         result = run(["sh", "-c", script, "sh", str(SCRIPTS / "cutover-state.sh"),
-                      str(self.paths.state), value], cwd=self.paths.repo)
+                      str(state_file or self.paths.state), value], cwd=self.paths.repo)
         return result.returncode == 0
 
     def mode_for_state(self) -> str:
@@ -467,7 +499,8 @@ class Migration:
         for name in ("COMPOSE_PROJECT_NAME", "COMPOSE_FILE", "COMPOSE_PROFILES",
                      "COMPOSE_ENV_FILES", "DOCKER_HOST", "DOCKER_CONTEXT",
                      "MYKHAYA_DEV_CONFIG_ROOT", "MYKHAYA_PROD_LEGACY_ENV_ROLLBACK",
-                     "MYKHAYA_PROD_SERVICE_ENV_CUTOVER"):
+                     "MYKHAYA_PROD_SERVICE_ENV_CUTOVER", "MYKHAYA_PROD_SECRETS",
+                     "MYKHAYA_PROD_SECRETS_CUTOVER", "MYKHAYA_PROD_SECRETS_ROLLBACK"):
             if os.environ.get(name):
                 f.error(phase, f"{name} is set in the environment; unset it")
         root_override = os.environ.get("MYKHAYA_PROD_CONFIG_ROOT")
@@ -615,6 +648,10 @@ class Migration:
         self.containers = project_containers()
         for service in (*APP_SERVICES, *UNCHANGED_SERVICES):
             found = self.containers.get(service) or []
+            if self.tolerate_stopped and service in APP_SERVICES and (
+                    len(found) != 1 or not (found[0].get("State") or {}).get("Running")):
+                f.warn(phase, f"{service}: is not running (interrupted deployment)")
+                continue
             if len(found) != 1:
                 f.error(phase, f"{service}: expected exactly one container in project "
                                f"{PROJECT}, found {len(found)}")
@@ -644,7 +681,7 @@ class Migration:
             self.images[service] = details
             running = self.containers.get(service) or []
             if running and running[0].get("Image") != details.get("Id"):
-                f.error(phase, f"{service}: the running container does not use the release image")
+                f.error(phase, f"{service}: the container does not use the release image")
         if len(build_times) == 1 and "" not in build_times:
             self.release.build_time = build_times.pop()
         elif self.images:
@@ -652,6 +689,8 @@ class Migration:
         for service in APP_SERVICES:
             running = self.containers.get(service) or []
             env = container_env(running[0]) if running else {}
+            if self.tolerate_stopped and not running:
+                continue
             if env.get(P + "ENVIRONMENT") != "production" or env.get(P + "BUILD_CHANNEL") != "stable":
                 f.error(phase, f"{service}: is not running the production stable channel")
         if not f.failed_since(mark):
@@ -771,14 +810,22 @@ class Migration:
             f.error(phase, "PostgreSQL is not available to check for in-flight migrations")
             return
         statuses = ",".join(f"'{s}'" for s in IN_FLIGHT_STATUSES)
-        ok, count = psql(pg, f"select count(*) from home_migration_packages where status in ({statuses})")
-        if not ok or not count.isdigit():
+        ok, counts = psql(pg, f"select count(*) filter (where status in ({statuses})) || '|' || count(*) "
+                              f"from home_migration_packages where ({FINISHED_PACKAGE}) is not true")
+        in_flight, _, unresolved = counts.partition("|")
+        if not ok or not in_flight.isdigit() or not unresolved.isdigit():
             f.error(phase, "in-flight Home Migration packages could not be counted")
-        elif int(count):
-            f.error(phase, f"{count} Home Migration package(s) are uploaded or importing; finish or "
+        elif int(in_flight):
+            f.error(phase, f"{in_flight} Home Migration package(s) are uploaded or importing; finish or "
                            "discard them first (no override exists)")
+        elif int(unresolved) and str(getattr(self.args, "accept_unresolved_packages", None)) != unresolved:
+            f.error(phase, f"{unresolved} Home Migration package(s) are unresolved or in an unexpected "
+                           "state; discard them, or have the Owner accept exactly that number with "
+                           f"--accept-unresolved-packages {unresolved}")
+        elif int(unresolved):
+            f.warn(phase, f"{unresolved} unresolved Home Migration package(s) accepted by the Owner")
         else:
-            f.ok(phase, "no Home Migration package is in flight; the volume is present and in use")
+            f.ok(phase, "no Home Migration package is unresolved; the volume is present and in use")
 
     # -- phase: configuration -----------------------------------------------------
 
@@ -990,49 +1037,7 @@ class Migration:
             if wanted is None or label != wanted:
                 f.error(phase, f"{service}: its running configuration differs from the PROD root; "
                                "the next update would recreate it (configuration drift)")
-        for service in APP_SERVICES:
-            running = self.containers.get(service) or []
-            if len(running) != 1 or not (running[0].get("State") or {}).get("Running"):
-                f.error(phase, f"{service}: is not running")
-                continue
-            container = running[0]
-            env = container_env(container)
-            from_image = image_env(self.images.get(service))
-            wanted = model_env(candidate, service)
-            names = {n for n in env if n.startswith((P, "POSTGRES_"))}
-            for name in sorted(names - set(wanted) - set(from_image)):
-                f.error(phase, f"{service}: receives {name} from outside the PROD root")
-            for name in sorted(set(wanted) - names):
-                f.error(phase, f"{service}: does not receive {name}")
-            for name in sorted(set(wanted) & names):
-                if env[name] != wanted[name]:
-                    f.error(phase, f"{service}: {name} differs from its service file")
-            allowed = PROFILE.resolved_allowed[service]
-            for name in sorted(set(wanted) - allowed):
-                f.error(phase, f"{service}: receives {name}, which is outside its contract")
-            for name in sorted(PROFILE.must_be_blank.get(service, set()) & set(env)):
-                if env[name]:
-                    f.error(phase, f"{service}: {name} must be blank")
-            labels = (container.get("Config") or {}).get("Labels") or {}
-            # Provenance evidence: Compose records the --env-file paths it used.
-            # Fail closed: absent, malformed or different all mean the source
-            # of this container's configuration cannot be proven.
-            env_files = labels.get("com.docker.compose.project.environment_file")
-            if env_files is None:
-                f.error(phase, f"{service}: has no com.docker.compose.project.environment_file "
-                               "label, so its configuration source cannot be proven")
-            elif env_files != expected_env_files:
-                f.error(phase, f"{service}: was not created from the PROD root's interpolation files")
-            mounts = container_mounts(container)
-            if set(mounts) != PROFILE.expected_mounts[service]:
-                f.error(phase, f"{service}: mounts differ from the contract")
-            if env.get(P + "ENVIRONMENT") != "production" or env.get(P + "BUILD_CHANNEL") != "stable":
-                f.error(phase, f"{service}: is not production/stable")
-            if service != "worker" and (env.get(P + "VERSION") != self.release.tag
-                                        or env.get(P + "COMMIT_SHA") != self.release.head):
-                f.error(phase, f"{service}: reports the wrong release metadata")
-            if container.get("Image") != snapshot["images"].get(service):
-                f.error(phase, f"{service}: does not run the release image it ran before")
+        self.check_app_services(candidate, PROFILE, expected_env_files, snapshot["images"])
         pg = self.postgres_id()
         ok, revision = psql(pg, "select version_num from alembic_version") if pg else (False, "")
         if not ok or revision != snapshot.get("alembic"):
@@ -1052,14 +1057,65 @@ class Migration:
             f.ok(phase, "running services match the PROD contract; data services, keys, volumes, "
                         "schema and release metadata are unchanged; health checks pass")
 
+    def check_app_services(self, candidate: dict, profile: contract.Profile,
+                           expected_env_files: str, images: dict[str, str]) -> None:
+        """The running api, worker and scheduler are exactly the candidate model."""
+        f, phase = self.f, "verify"
+        for service in APP_SERVICES:
+            running = self.containers.get(service) or []
+            if len(running) != 1 or not (running[0].get("State") or {}).get("Running"):
+                f.error(phase, f"{service}: is not running")
+                continue
+            container = running[0]
+            env = container_env(container)
+            from_image = image_env(self.images.get(service))
+            wanted = model_env(candidate, service)
+            names = {n for n in env if n.startswith((P, "POSTGRES_"))}
+            for name in sorted(names - set(wanted) - set(from_image)):
+                f.error(phase, f"{service}: receives {name} from outside the PROD root")
+            for name in sorted(set(wanted) - names):
+                f.error(phase, f"{service}: does not receive {name}")
+            for name in sorted(set(wanted) & names):
+                if env[name] != wanted[name]:
+                    f.error(phase, f"{service}: {name} differs from its service file")
+            allowed = profile.resolved_allowed[service]
+            for name in sorted(set(wanted) - allowed):
+                f.error(phase, f"{service}: receives {name}, which is outside its contract")
+            for name in sorted(profile.must_be_blank.get(service, set()) & set(env)):
+                if env[name]:
+                    f.error(phase, f"{service}: {name} must be blank")
+            labels = (container.get("Config") or {}).get("Labels") or {}
+            # Provenance evidence: Compose records the --env-file paths it used.
+            # Fail closed: absent, malformed or different all mean the source
+            # of this container's configuration cannot be proven.
+            env_files = labels.get("com.docker.compose.project.environment_file")
+            if env_files is None:
+                f.error(phase, f"{service}: has no com.docker.compose.project.environment_file "
+                               "label, so its configuration source cannot be proven")
+            elif env_files != expected_env_files:
+                f.error(phase, f"{service}: was not created from the PROD root's interpolation files")
+            mounts = container_mounts(container)
+            granted = {contract.SECRET_TARGET + s for s in contract.service_secrets(service)} \
+                if profile.file_backed else set()
+            if set(mounts) != profile.expected_mounts[service] | granted:
+                f.error(phase, f"{service}: mounts differ from the contract")
+            if env.get(P + "ENVIRONMENT") != "production" or env.get(P + "BUILD_CHANNEL") != "stable":
+                f.error(phase, f"{service}: is not production/stable")
+            if service != "worker" and (env.get(P + "VERSION") != self.release.tag
+                                        or env.get(P + "COMMIT_SHA") != self.release.head):
+                f.error(phase, f"{service}: reports the wrong release metadata")
+            if container.get("Image") != images.get(service):
+                f.error(phase, f"{service}: does not run the release image it ran before")
+
     # -- report -----------------------------------------------------------------
 
     def write_report(self, action: str) -> Path | None:
         lines = [
-            f"MyKhaya F-03 PROD service configuration migration: {action}",
+            f"MyKhaya PROD configuration migration ({self.report_prefix}): {action}",
             f"time={now_utc().strftime('%Y-%m-%dT%H:%M:%SZ')}",
             f"release={self.release.tag} commit={self.release.head}",
-            f"cutover_state={self.read_state()}",
+            f"cutover_state={self.read_state()} "
+            f"docker_secrets_state={self.read_state_file(self.paths.secrets_state)}",
             "values=never recorded (names and metadata only)",
             "",
         ]
@@ -1070,7 +1126,7 @@ class Migration:
                    "(see docs/operations/prod-service-config-migration.md)")]
         try:
             self.paths.reports.mkdir(mode=0o700, exist_ok=True)
-            path = self.paths.reports / f"f03-prod-{action}-{stamp()}.txt"
+            path = self.paths.reports / f"{self.report_prefix}-{action}-{stamp()}.txt"
             atomic_write(path, "\n".join(lines) + "\n")
             return path
         except OSError:
@@ -1183,6 +1239,10 @@ def action_apply(m: Migration) -> int:
               file=sys.stderr)
         return 1
     f = m.f
+    if not m.approve_transition():
+        m.cleanup_staging()
+        print("Not approved. Nothing was changed.", file=sys.stderr)
+        return 1
     # Snapshot first. While a cutover or rollback is unfinished the original
     # snapshot is kept, so verification compares with the state before the
     # first attempt; with nothing in flight (legacy) it is retaken.
@@ -1213,7 +1273,7 @@ def action_apply(m: Migration) -> int:
     env.update({"MYKHAYA_PRODUCTION": "1", "MYKHAYA_RELEASE_TAG": m.release.tag,
                 "MYKHAYA_PROD_SERVICE_ENV_CUTOVER": "1", "MYKHAYA_PROD_REUSE_IMAGES": "1"})
     deploy = subprocess.run(["sh", str(SCRIPTS / "prod-deploy.sh"), "update"], env=env,
-                            cwd=m.paths.repo, check=False)
+                            cwd=m.paths.repo, stdin=subprocess.DEVNULL, check=False)
     if deploy.returncode != 0:
         f.error("cutover", f"prod-deploy.sh stopped (exit {deploy.returncode}); nothing was rolled "
                            f"back. Cutover state: {m.read_state()}")
@@ -1293,6 +1353,8 @@ def action_backup_config(m: Migration) -> int:
                 "sha256": sha256_file(final), "encryption": "age",
                 "members": [a for a, _ in members],
                 "legacy_env": file_metadata(m.paths.legacy_env),
+                "service_files": {n: file_metadata(m.paths.root / n) for n in SERVICE_FILES
+                                  if (m.paths.root / n).is_file()},
                 "release": os.environ.get("MYKHAYA_RELEASE_TAG", "")}
     atomic_write(out / f"{name}.manifest.json", json.dumps(manifest, indent=2) + "\n")
     print(f"Encrypted configuration backup: {final}\nSHA-256: {manifest['sha256']}\n"
@@ -1383,6 +1445,11 @@ def main(argv: list[str] | None = None) -> int:
     migration = Migration(paths, args, Findings())
     if (args.check or args.apply or args.backup_config) and not args.expect_host:
         parser.error("--expect-host is required")
+    if not (args.status or args.backup_config) and \
+            Migration.read_state_file(paths.secrets_state) != "legacy":
+        print("ERROR: the Docker Secrets migration has started; use prod-security-migrate.sh",
+              file=sys.stderr)
+        return 1
     try:
         if args.check:
             return action_check(migration)

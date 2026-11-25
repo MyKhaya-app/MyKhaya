@@ -32,7 +32,7 @@ if [ "${MYKHAYA_PRODUCTION:-}" = 1 ] && [ -z "${MYKHAYA_ENV_FILE:-}" ]; then
     die() { printf 'ERROR: backup preflight failed:\n  - %b\n' "$*" >&2; exit 1; }
     . "$ROOT/infrastructure/scripts/prod-config-mode.sh"
     prod_select_mode readonly
-    if [ "$PROD_CONFIG_MODE" = service-env ]; then
+    if [ "$PROD_CONFIG_MODE" != legacy ]; then
       env_file=$PROD_ENV_SOURCE
       legacy_env_file="$ROOT/.env"
     fi

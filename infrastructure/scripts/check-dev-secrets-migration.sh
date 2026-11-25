@@ -49,4 +49,4 @@ docker exec "$NAME" docker tag "$WEB_IMAGE" mykhaya-web
 git ls-files -z --cached --others --exclude-standard |
   while IFS= read -r -d '' f; do [ ! -f "$f" ] || printf '%s\0' "$f"; done |
   tar --null -T - -cf - | docker exec -i "$NAME" sh -c 'mkdir -p /srv/mykhaya && tar -xf - -C /srv/mykhaya'
-docker exec "$NAME" bash /srv/mykhaya/infrastructure/tests/dev_secrets_rehearsal.sh
+docker exec "$NAME" bash "/srv/mykhaya/infrastructure/tests/${REHEARSAL:-dev}_secrets_rehearsal.sh"

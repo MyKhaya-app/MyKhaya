@@ -80,6 +80,10 @@ jobs:
         # Legacy -> F-03 -> file-backed secrets -> rollback with the real DEV
         # scripts and images, inside a disposable nested Docker daemon.
         run: bash infrastructure/scripts/check-dev-secrets-migration.sh
+      - name: PROD security migration rehearsal
+        # The same for production, plus interruptions and an isolated restore.
+        # Synthetic only: no deployment, host or credential is involved.
+        run: bash infrastructure/scripts/check-prod-secrets-migration.sh
       - name: Shut down
         if: always()
         run: docker compose --profile tools down -v

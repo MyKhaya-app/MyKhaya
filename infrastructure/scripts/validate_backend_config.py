@@ -39,6 +39,7 @@ PROBE_PROJECT_PREFIX = "mykhaya-config-probe"
 SERVICE_ENV_OVERLAY = "compose.dev.service-env.yml"
 SECRETS_OVERLAY = "compose.dev.secrets.yml"
 PROD_SERVICE_ENV_OVERLAY = "compose.production.service-env.yml"
+PROD_SECRETS_OVERLAY = "compose.production.secrets.yml"
 # compose.yml/compose.dev.yml interpolate these secrets; the service-env overlay
 # removes the keys, and the validator forces them blank so no shell value leaks.
 BLANKED_INTERPOLATION = (
@@ -60,18 +61,19 @@ def service_env_root() -> str | None:
     production scripts set, from the cutover state. A DEV root is never used
     in production.
     """
-    if is_production():
-        return os.environ.get("MYKHAYA_PROD_CONFIG_ROOT") or None
-    root = os.environ.get("MYKHAYA_DEV_CONFIG_ROOT") or None
+    name = "MYKHAYA_PROD_CONFIG_ROOT" if is_production() else "MYKHAYA_DEV_CONFIG_ROOT"
+    root = os.environ.get(name) or None
     if root is not None and file_backed():
-        # dev-deploy.sh exports the F-03 root; this mode uses its subdirectory.
+        # The deployment scripts export the F-03 root; this mode uses its subdirectory.
         return f"{root.rstrip('/')}/file-backed"
     return root
 
 
 def file_backed() -> bool:
-    """DEV only: credentials come from Compose file secrets."""
-    return not is_production() and os.environ.get("MYKHAYA_DEV_SECRETS") == "1"
+    """Credentials come from Compose file secrets. In production the flag is
+    set only by prod-config-mode.sh, from the protected state."""
+    name = "MYKHAYA_PROD_SECRETS" if is_production() else "MYKHAYA_DEV_SECRETS"
+    return os.environ.get(name) == "1"
 
 
 def base_compose_args() -> list[str]:
@@ -79,6 +81,12 @@ def base_compose_args() -> list[str]:
     if root is None:
         return list(COMPOSE_FILES)
     root = root.rstrip("/")
+    if is_production() and file_backed():
+        return [
+            "docker", "compose", "--env-file", f"{root}/compose.env", "-f", "compose.yml",
+            "-f", "compose.production.yml", "-f", PROD_SERVICE_ENV_OVERLAY,
+            "-f", PROD_SECRETS_OVERLAY,
+        ]
     if is_production():
         # Same command as prod-config-mode.sh: postgres.env is an interpolation
         # source for PostgreSQL's unchanged service definition.
@@ -107,6 +115,9 @@ def compose_environment() -> dict[str, str] | None:
     if is_production():
         for name in PROD_FROM_FILE:
             env.pop(name, None)
+        if file_backed():
+            env.update({name: "" for name in PROD_FROM_FILE})
+            env["MYKHAYA_PROD_CONFIG_ROOT"] = service_env_root() or ""
         env.update({name: "" for name in PROD_BLANKED})
         return env
     env.update({name: "" for name in BLANKED_INTERPOLATION})
@@ -541,8 +552,8 @@ def contract_errors(resolved: dict) -> list[str]:
         sys.path.pop(0)
     root = service_env_root()
     assert root is not None
-    profile = service_env_contract.PROD if is_production() else (
-        service_env_contract.DEV_SECRETS if file_backed() else service_env_contract.DEV)
+    profile = service_env_contract.PROFILES[
+        ("prod" if is_production() else "dev") + ("-secrets" if file_backed() else "")]
     return (
         service_env_contract.check_resolved_model(
             resolved, Path(__file__).resolve().parents[2], profile

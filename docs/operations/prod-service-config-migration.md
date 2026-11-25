@@ -29,9 +29,10 @@ receives which value; it does not change how values are delivered:
   or the deployment account) can read these values, for example with
   `docker inspect` or `docker compose config`. The files are `0600`, but that
   protects them only from other unprivileged host users.
-- The final **file-backed Docker secrets** implementation remains outstanding
-  under MK-SEC-001 v1.2. It needs application changes as well as Compose
-  changes: today only the Apple key and the field keyrings are read from files.
+- File-backed Docker Secrets (MK-SEC-001 v1.2) are the next stage, and
+  `prod-security-migrate.sh` runs both stages in order:
+  [prod-docker-secrets-migration.md](prod-docker-secrets-migration.md). Once that stage
+  has started, the commands on this page refuse.
 
 ## What changes, and what does not
 
@@ -166,7 +167,7 @@ It checks, and every failure is reported by name, never by value:
 | release | tag fetched, HEAD exactly the tag, tag on `origin/main`, clean tree, `validate_version.py`, exactly one Alembic head |
 | stack | one running container per service in project `mykhaya`; every application image carries the tag, commit and one build time, and is what the containers run; production/stable; database at the release head |
 | backup | `backup-preflight.sh`; marker no older than **2 hours**; the matching manifest's artefacts exist, are age-encrypted and match their checksums; the latest `backup_runs` row is that successful run |
-| home-migration | `mykhaya_prod_home_migration_data` exists and a container references it; **zero** packages `uploaded` or `importing` (no override exists) |
+| home-migration | `mykhaya_prod_home_migration_data` exists and a container references it; **zero** packages `uploaded` or `importing` (no override exists). `completed`, `expired` and `discarded` do not block; any other state does |
 | configuration | legacy `.env` parses exactly as Compose reads it; every name is placed, pinned, host-only, or explicitly accepted with `--accept-dropped NAME`; the seven files pass the PROD contract (allow/deny lists, permissions, DEV markers, database roles and passwords, protected key directories); the merged model passes allow-lists, provenance and the bootstrap-password scan; runtime `Settings` accept every service |
 | parity | every retained value equals the running container's; mounts keep their sources; postgres, redis, web and caddy keep their configuration hash |
 

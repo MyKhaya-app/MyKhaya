@@ -423,7 +423,7 @@ class HomeMigrationPackageGuard(unittest.TestCase):
 class RepositoryGuards(unittest.TestCase):
     def test_only_dev_tooling_references_the_secrets_overlay(self) -> None:
         for path in ROOT.glob("compose*.yml"):
-            if path != OVERLAY:
+            if path.name not in (OVERLAY.name, "compose.production.secrets.yml"):
                 self.assertNotRegex(path.read_text(encoding="utf-8"), r"(?m)^secrets:", path.name)
         for path in (ROOT / "infrastructure/scripts").glob("prod*"):
             if path.is_file():

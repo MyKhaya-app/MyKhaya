@@ -77,7 +77,7 @@ class ProductionDeploymentTests(unittest.TestCase):
 
     def test_build_precedes_migration_and_application_replacement(self) -> None:
         build = self.script.index("prod_compose build web api worker scheduler migrate")
-        migration = self.script.index("prod_compose run --rm --no-deps migrate", build)
+        migration = self.script.index("prod_compose run --rm --no-deps -T migrate", build)
         replacement = self.script.index(
             "prod_compose up -d --no-build caddy web api worker scheduler", migration
         )
@@ -181,7 +181,7 @@ class ProductionDeploymentTests(unittest.TestCase):
         export = 'export MYKHAYA_VERSION MYKHAYA_COMMIT_SHA="$head_commit"'
         for operation in (
             "prod_compose build web api worker scheduler migrate",
-            "prod_compose run --rm --no-deps migrate",
+            "prod_compose run --rm --no-deps -T migrate",
             "prod_compose up -d --no-build caddy web api worker scheduler",
         ):
             self.assertLess(self.script.index(export), self.script.index(operation))

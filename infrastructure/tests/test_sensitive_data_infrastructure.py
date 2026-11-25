@@ -177,6 +177,7 @@ class SensitiveDataInfrastructureTests(unittest.TestCase):
             # The migration rehearsal (synthetic credentials, nested disposable
             # daemon) checks the mounts' names and permissions.
             "infrastructure/tests/dev_secrets_rehearsal.sh",
+            "infrastructure/tests/prod_secrets_rehearsal.sh",
         }
         offenders = sorted(
             path.relative_to(ROOT).as_posix()

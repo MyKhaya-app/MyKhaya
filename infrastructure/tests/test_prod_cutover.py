@@ -414,7 +414,7 @@ class ProdCutoverTests(unittest.TestCase):
         self.assertEqual(self.cutover_state(), "absent")
         commands = [c.split(" | ")[0] for c in self.calls()]
         legacy = "compose -f compose.yml -f compose.production.yml"
-        for step in ("build web api worker scheduler migrate", "run --rm --no-deps migrate",
+        for step in ("build web api worker scheduler migrate", "run --rm --no-deps -T migrate",
                      "up -d --no-build caddy web api worker scheduler"):
             self.assertIn(f"{legacy} {step}", commands)
         self.assertFalse([c for c in commands if "--env-file" in c or "service-env" in c])
@@ -478,7 +478,7 @@ class ProdCutoverTests(unittest.TestCase):
         self.assertIn("configuration mode: service-env", health.stdout)
 
     def test_failed_migration_leaves_pending_and_resumes_safely(self):
-        result = self.apply(FAKE_FAIL_ON="run --rm --no-deps migrate")
+        result = self.apply(FAKE_FAIL_ON="run --rm --no-deps -T migrate")
         self.assertRefused(result, "INTERRUPTED")
         self.assertEqual(self.cutover_state(), "pending")
         self.assertEqual(self.docker_state()["recreated"], [])

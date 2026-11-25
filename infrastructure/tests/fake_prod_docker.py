@@ -200,7 +200,7 @@ def psql(sql: str, state: dict) -> None:
     elif "backup_runs" in sql:
         print(state["backup_run"])
     elif "home_migration_packages" in sql:
-        print(state["in_flight"])
+        print(f"{state['in_flight']}|{state['in_flight'] + state.get('unresolved', 0)}")
     else:
         sys.exit(1)
 

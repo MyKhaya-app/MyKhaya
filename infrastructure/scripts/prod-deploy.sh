@@ -64,20 +64,23 @@ validate_service_env() {
   # allow-list and provenance. Values never leave the validators.
   check_compose_overrides_supported
   probe_image=$(api_image) || probe_image=
-  set -- --profile prod --root "$PROD_CONFIG_ROOT" --repo-root "$ROOT"
+  contract_profile=prod
+  [ "$PROD_CONFIG_MODE" != secrets ] || contract_profile=prod-secrets
+  set -- --profile "$contract_profile" --root "$PROD_ACTIVE_ROOT" --repo-root "$ROOT"
   [ -z "$probe_image" ] || set -- "$@" --probe-image "$probe_image"
   python3 infrastructure/scripts/service_env_contract.py "$@" ||
     die "PROD service configuration is invalid; nothing was built, stopped or restarted"
   prod_compose --profile tools config --format json |
-    python3 infrastructure/scripts/service_env_contract.py --profile prod --check-resolved - \
-      --config-root "$PROD_CONFIG_ROOT" --repo-root "$ROOT" ||
+    python3 infrastructure/scripts/service_env_contract.py --profile "$contract_profile" --check-resolved - \
+      --config-root "$PROD_ACTIVE_ROOT" --repo-root "$ROOT" ||
     die "merged PROD Compose model violates the service configuration contract"
 }
 
 validate() {
   production
   prod_select_mode deploy
-  printf 'Configuration mode: %s (cutover state: %s)\n' "$PROD_CONFIG_MODE" "$PROD_STATE"
+  printf 'Configuration mode: %s (cutover state: %s, Docker Secrets: %s)\n' \
+    "$PROD_CONFIG_MODE" "$PROD_STATE" "$PROD_SECRETS_STATE"
   if [ "$PROD_CONFIG_MODE" = legacy ]; then
     [ -f .env ] || die "missing production .env"
     require_installation_config
@@ -116,6 +119,29 @@ verify_tag_checkout() {
     die "HEAD is not exactly the requested release tag $MYKHAYA_RELEASE_TAG"
 }
 
+persistent_volumes_exist() {
+  # A missing data volume would be created empty, and PostgreSQL would then
+  # initialise a new database.
+  volumes=$(prod_compose config --format json | python3 -c 'import json, sys
+model = json.load(sys.stdin)
+for key in ("postgres_data", "redis_data", "home_migration_data"):
+    print(model["volumes"][key]["name"])') || return 1
+  [ -n "$volumes" ] || return 1
+  for volume in $volumes; do
+    docker volume inspect "$volume" >/dev/null 2>&1 || return 1
+  done
+}
+
+replace_postgres_for_secrets() {
+  # PostgreSQL's environment holds three passwords, so moving it to file
+  # secrets (or back) recreates its container, once, on the same volume, and
+  # only within that approved transition.
+  [ "$PROD_CONFIG_MODE" != secrets ] || [ "$PROD_SECRETS_STATE" != active ] || return 0
+  [ "$PROD_CONFIG_MODE" = secrets ] || [ "$PROD_SECRETS_STATE" != legacy ] || return 0
+  prod_compose up -d --no-build --no-deps --wait postgres </dev/null ||
+    die "PostgreSQL did not become healthy; application containers were not replaced.\nDocker Secrets state: $(cutover_read_state "$PROD_SECRETS_STATE_FILE")"
+}
+
 reuse_release_images() {
   # Configuration-only deployments (the F-03 cutover and its rollback) reuse
   # the images already built for this exact tag instead of rebuilding: a
@@ -149,7 +175,11 @@ for service in ("api", "worker", "scheduler", "migrate", "web"):
 
 begin_transition() {
   # Called after every validation and before the first container changes.
-  if [ "$PROD_CONFIG_MODE" = service-env ]; then
+  if [ "$PROD_CONFIG_MODE" = secrets ]; then
+    [ "$PROD_SECRETS_STATE" = active ] || cutover_write_state "$PROD_SECRETS_STATE_FILE" pending
+  elif [ "$PROD_SECRETS_STATE" != legacy ]; then
+    cutover_write_state "$PROD_SECRETS_STATE_FILE" rollback-pending
+  elif [ "$PROD_CONFIG_MODE" = service-env ]; then
     [ "$PROD_STATE" = active ] || cutover_write_state "$PROD_STATE_FILE" pending
   elif [ "$PROD_STATE" != legacy ]; then
     cutover_write_state "$PROD_STATE_FILE" rollback-pending
@@ -160,7 +190,12 @@ complete_transition() {
   # Called only after the health checks passed. A cutover becomes active only
   # once prod-service-env-migrate.sh has verified the running services.
   current=$(cutover_read_state "$PROD_STATE_FILE")
-  if [ "$PROD_CONFIG_MODE" = service-env ]; then
+  if [ "$PROD_CONFIG_MODE" = secrets ]; then
+    [ "$PROD_SECRETS_STATE" = active ] ||
+      printf '%s\n' 'Docker Secrets state remains pending until prod-security-migrate.sh verifies the running services.'
+  elif [ "$PROD_SECRETS_STATE" != legacy ]; then
+    printf '%s\n' 'Docker Secrets state remains rollback-pending until prod-security-migrate.sh verifies the running services.'
+  elif [ "$PROD_CONFIG_MODE" = service-env ]; then
     [ "$current" = active ] ||
       printf '%s\n' 'Cutover state remains pending until prod-service-env-migrate.sh verifies the running services.'
   elif [ "$current" = rollback-pending ]; then
@@ -213,10 +248,16 @@ continue_update() {
   previous_revision=$(prod_compose exec -T postgres psql -U postgres -d mykhaya -Atc 'select version_num from alembic_version' 2>/dev/null || true)
   printf 'Previous migration revision: %s\n' "${previous_revision:-unknown}"
   [ "${MYKHAYA_PROD_REUSE_IMAGES:-0}" = 1 ] || prod_compose build web api worker scheduler migrate
+  if [ "$PROD_CONFIG_MODE" = secrets ] || [ "$PROD_SECRETS_STATE" != legacy ]; then
+    persistent_volumes_exist || die "a persistent volume is missing; refusing to create an empty one"
+  fi
   begin_transition
-  prod_compose run --rm --no-deps migrate ||
+  replace_postgres_for_secrets
+  # No terminal input: Compose must never be able to ask whether to recreate a
+  # volume whose recorded labels differ (the answer is always no).
+  prod_compose run --rm --no-deps -T migrate </dev/null ||
     die "migrations failed; application containers were not replaced. Inspect the migration and database state before retrying; never downgrade.\nCutover state: $(cutover_read_state "$PROD_STATE_FILE")"
-  prod_compose up -d --no-build caddy web api worker scheduler ||
+  prod_compose up -d --no-build caddy web api worker scheduler </dev/null ||
     die "application services failed to start.\nCutover state: $(cutover_read_state "$PROD_STATE_FILE")"
   sh infrastructure/scripts/prod-health.sh ||
     die "health checks failed; nothing was rolled back.\nCutover state: $(cutover_read_state "$PROD_STATE_FILE")"
@@ -235,7 +276,8 @@ case "${1:-}" in
   state)
     production
     prod_select_mode readonly
-    printf 'Configuration mode: %s\nCutover state: %s\n' "$PROD_CONFIG_MODE" "$PROD_STATE"
+    printf 'Configuration mode: %s\nCutover state: %s\nDocker Secrets state: %s\n' \
+      "$PROD_CONFIG_MODE" "$PROD_STATE" "$PROD_SECRETS_STATE"
     [ -f "$PROD_STATE_FILE" ] && sed -n '2p' "$PROD_STATE_FILE"
     true
     ;;

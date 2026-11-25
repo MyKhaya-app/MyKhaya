@@ -13,17 +13,13 @@
 # (dev-config-mode.sh). Workstations have no such state, so nothing changes.
 
 stack_compose() { docker compose "$@"; }
-# Historical default. It leaves restored objects owned by postgres, so the
-# migrator cannot manage them; the DEV per-service modes keep the original
-# ownership instead (the roles exist in any database init-db.sh created).
-RESTORE_OWNER_OPTION=--no-owner
 
 if [ "${MYKHAYA_PRODUCTION:-}" = 1 ]; then
   ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)
   die() { printf '%b\n' "ERROR: $*" >&2; exit 1; }
   . "$ROOT/infrastructure/scripts/prod-config-mode.sh"
   prod_select_mode readonly
-  if [ "$PROD_CONFIG_MODE" = service-env ]; then
+  if [ "$PROD_CONFIG_MODE" != legacy ]; then
     stack_compose() { prod_compose "$@"; }
     if [ -z "${MYKHAYA_ENV_FILE:-}" ]; then
       MYKHAYA_ENV_FILE=$PROD_ENV_SOURCE
@@ -37,7 +33,6 @@ else
   dev_select_mode "$ROOT/infrastructure/scripts"
   if [ "$DEV_TOOL_MODE" != legacy ]; then
     stack_compose() { dev_tool_compose "$@"; }
-    RESTORE_OWNER_OPTION=
     if [ -z "${MYKHAYA_ENV_FILE:-}" ]; then
       MYKHAYA_ENV_FILE=$DEV_TOOL_ROOT/compose.env
       export MYKHAYA_ENV_FILE

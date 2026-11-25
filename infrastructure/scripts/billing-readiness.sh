@@ -16,6 +16,15 @@ cd "$REPO_ROOT"
 # DEV after a cutover uses its own overlays; everywhere else this is unchanged.
 die() { printf '%b\n' "ERROR: $*" >&2; exit 1; }
 DEV_TOOL_MODE=legacy
+if [ "${MYKHAYA_PRODUCTION:-}" = 1 ]; then
+  ROOT=$REPO_ROOT
+  . "$SCRIPT_DIR/prod-config-mode.sh"
+  prod_select_mode readonly
+  if [ "$PROD_CONFIG_MODE" != legacy ]; then
+    prod_compose run --rm --no-deps api python -m mykhaya.billing_readiness "$@"
+    exit
+  fi
+fi
 if [ "${MYKHAYA_PRODUCTION:-}" != 1 ]; then
   . "$SCRIPT_DIR/dev-config-mode.sh"
   dev_select_mode "$SCRIPT_DIR"

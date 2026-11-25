@@ -94,8 +94,12 @@ add a third DEV mode after F-03: Compose file secrets with exact per-service gra
 a process role per service. `SECRET_FILE_SPECS` is the single list of secrets and the
 services that receive each; tests keep it equal to the application's role matrix. The
 cutover, its rollback and the remaining limits are in
-[dev-docker-secrets-migration.md](dev-docker-secrets-migration.md). PROD and the F-03
-DEV profile are unchanged and refuse Compose secrets.
+[dev-docker-secrets-migration.md](dev-docker-secrets-migration.md). The F-03 profiles
+(`dev`, `prod`) refuse Compose secrets.
+
+PROD has the same grants in the `prod-secrets` profile and
+`compose.production.secrets.yml` (implemented; not deployed):
+[prod-docker-secrets-migration.md](prod-docker-secrets-migration.md).
 
 ### File-backed secrets (application side)
 

@@ -46,9 +46,17 @@ state, including an interrupted one.
 
 On the DEV host the same scripts select the F-03 or file-backed DEV configuration from
 its cutover state (`dev-config-mode.sh`), including during an interrupted cutover.
-In those modes a restore keeps the original object ownership, so migrations still work
-afterwards. The legacy and PROD restore still uses `--no-owner`, which leaves restored
-objects owned by `postgres`: check ownership before running migrations there.
+
+### Ownership and grants
+
+A restore keeps the ownership and grants recorded in the backup, in every mode, so the
+migration role can manage the restored schema. `restore.sh` first checks that the target
+database has the `mykhaya_migrator` and `mykhaya_app` roles (any database initialised by
+the stack's own PostgreSQL service has them) and refuses otherwise with nothing changed.
+Afterwards it verifies that everything in the public schema belongs to the migration
+role and is readable by the application role, and fails if not. Restores made by earlier
+versions used `--no-owner`, which left objects owned by `postgres` and made the next
+migration fail; restoring the backup again with this version corrects that.
 
 ## Production deployment preflight
 
@@ -94,7 +102,8 @@ Escrow the identity on two independent offline media, kept **apart from the back
 
 ## Restore testing is mandatory
 
-1. Start an isolated stack with new volumes and no public ingress.
+1. Start an isolated stack with new volumes and no public ingress (its own checkout and
+   `COMPOSE_PROJECT_NAME`, with `MYKHAYA_PRODUCTION` unset; start `postgres` only).
 2. Supply the offline identity only for the duration of the restore:
    `MYKHAYA_BACKUP_AGE_IDENTITY=/media/offline/mykhaya-backup-identity.txt make restore FILE=/absolute/path/to/mykhaya-<stamp>.sql.gz.age`
    (decryption and gzip integrity are fully verified before `pg_restore` starts), then
