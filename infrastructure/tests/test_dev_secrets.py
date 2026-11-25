@@ -10,6 +10,7 @@ import importlib.util
 import json
 import os
 import re
+import sqlite3
 import subprocess
 import sys
 import tempfile
@@ -337,6 +338,86 @@ class MergedModelTests(unittest.TestCase):
             self.assertTrue(self.model["services"][name]["read_only"])
         self.assertEqual(self.model["volumes"]["postgres_data"]["name"], "mykhaya_postgres_data")
         self.assertEqual(self.model["name"], "mykhaya")
+
+
+class HomeMigrationPackageGuard(unittest.TestCase):
+    """check_packages ignores finished packages only. The SQL runs in SQLite here;
+    the rehearsal repeats it on PostgreSQL."""
+
+    AT = "2026-01-01"
+    FINISHED = (("completed", AT), ("expired", None), ("discarded", None))
+    UNRESOLVED = ("uploaded", "importing", "failed", "READY_TO_IMPORT", "NOT_SAFE_TO_IMPORT", "ALREADY_COMPLETED")
+
+    @classmethod
+    def setUpClass(cls) -> None:
+        text = (ROOT / "infrastructure/scripts/dev-secrets-cutover.sh").read_text(encoding="utf-8")
+        cls.predicate = re.search(r'(?m)^FINISHED_PACKAGE="(.+)"$', text).group(1)
+        cls.function = re.search(r"(?ms)^check_packages\(\) \{.*?^\}$", text).group(0)
+        cls.query = re.search(r'"(select count.+?)"\)', cls.function).group(1).replace(
+            "$FINISHED_PACKAGE", cls.predicate
+        )
+
+    def blocking(self, *rows: tuple[str | None, str | None]) -> int:
+        db = sqlite3.connect(":memory:")
+        self.addCleanup(db.close)
+        db.execute("create table home_migration_packages (status text, completed_at text)")
+        db.executemany("insert into home_migration_packages values (?, ?)", rows)
+        return db.execute(self.query).fetchone()[0]
+
+    def test_finished_packages_do_not_block(self) -> None:
+        self.assertEqual(0, self.blocking())
+        self.assertEqual(0, self.blocking(*[("expired", None)] * 18))
+        self.assertEqual(0, self.blocking(*self.FINISHED))
+
+    def test_every_unresolved_state_blocks(self) -> None:
+        for status in self.UNRESOLVED:
+            for completed in (None, self.AT):
+                with self.subTest(status=status, completed=completed):
+                    self.assertEqual(1, self.blocking((status, completed), *self.FINISHED))
+
+    def test_unknown_and_inconsistent_states_block(self) -> None:
+        for row in (
+            ("completed", None), ("expired", self.AT), ("discarded", self.AT), ("cancelled", None),
+            ("pending", None), ("Expired", None), ("expired ", None), ("", None), (None, None), (None, self.AT),
+        ):
+            with self.subTest(row=row):
+                self.assertEqual(1, self.blocking(row))
+
+    def test_the_states_match_the_application(self) -> None:
+        api = ROOT / "apps/api/mykhaya"
+        constants = set(re.findall(
+            r'(?m)^MIGRATION_STATUS_\w+ = "(\w+)"', (api / "home_migration_pcc.py").read_text(encoding="utf-8")
+        ))
+        # A dry run stores the status of its own report.
+        tool = (api / "tools/home_migration.py").read_text(encoding="utf-8")
+        inspect = tool.split("async def inspect_import(", 1)[1].split("\nasync def ", 1)[0].split("\ndef ", 1)[0]
+        dry_run = set(re.findall(r'"([A-Z_]+)"', " ".join(re.findall(r"status=[^,]+", inspect))))
+        self.assertTrue(constants and dry_run)
+        self.assertEqual({s for s, _ in self.FINISHED} | set(self.UNRESOLVED), constants | dry_run)
+
+    def test_the_guard_only_reads(self) -> None:
+        self.assertNotRegex(self.function, r"(?i)\b(update|delete|insert|truncate|alter|drop)\b")
+        self.assertEqual(1, self.function.count("psql"))
+
+    @unittest.skipUnless(os.name == "posix", "needs a POSIX shell")
+    def test_the_shell_guard_fails_closed(self) -> None:
+        script = (
+            "set -eu\ndie() { exit 1; }\nok() { :; }\ncontainer() { echo id; }\n"
+            'docker() { printf "%s" "$OUTPUT"; return "$STATUS"; }\n'
+            f'FINISHED_PACKAGE="{self.predicate}"\n{self.function}\ncheck_packages\n'
+        )
+
+        def run(output: str, status: int = 0, accept: str = "0") -> int:
+            return subprocess.run(["sh", "-c", script], env={
+                "PATH": os.environ["PATH"], "OUTPUT": output, "STATUS": str(status),
+                "MYKHAYA_DEV_ACCEPT_OPEN_PACKAGES": accept,
+            }).returncode
+
+        self.assertEqual((0, 1, 0), (run("0"), run("2"), run("2", accept="1")))
+        for output, status in (("", 0), ("error", 0), ("-1", 0), ("0", 1)):
+            for accept in ("0", "1"):
+                with self.subTest(output=output, status=status, accept=accept):
+                    self.assertEqual(1, run(output, status, accept))
 
 
 class RepositoryGuards(unittest.TestCase):

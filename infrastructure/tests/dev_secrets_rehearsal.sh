@@ -184,6 +184,27 @@ deploy sh infrastructure/scripts/backup.sh
 check "mode-aware backup succeeds in F-03 mode" 'ls /srv/backups/*.manifest >/dev/null 2>&1 && grep -q encryption=age /srv/backups/*.manifest'
 tool check
 must "all prerequisites pass" 'says "All automatic prerequisites passed"'
+packages() { docker exec "$(cid postgres)" psql -q -v ON_ERROR_STOP=1 -U postgres -d mykhaya -Atc "$1"; }
+add_packages() { # count, status, completed_at expression
+  packages "insert into home_migration_packages (id, migration_id, package_checksum, storage_key, source_home_id,
+    summary, status, created_by, created_at, completed_at) select gen_random_uuid(), gen_random_uuid(), 'synthetic',
+    gen_random_uuid()::text, gen_random_uuid(), '{}', '$2', gen_random_uuid(), now(), $3 from generate_series(1, $1)"
+}
+add_packages 18 expired null && add_packages 1 discarded null && add_packages 1 completed 'now()'
+must "finished synthetic packages written" '[ "$(packages "select count(*) from home_migration_packages")" = 20 ]'
+ALL_PACKAGES="select md5(string_agg(p::text, chr(10) order by id)) from home_migration_packages p"
+before=$(packages "$ALL_PACKAGES")
+tool check
+check "expired, discarded and completed packages do not block" 'says "All automatic prerequisites passed"'
+check "the check changes no package" '[ -n "$before" ] && [ "$(packages "$ALL_PACKAGES")" = "$before" ]'
+for row in uploaded:null READY_TO_IMPORT:null importing:null failed:null unknown:null completed:null "expired:now()"; do
+  add_packages 1 "${row%%:*}" "${row#*:}"
+  tool check
+  check "a package in state $row blocks" 'says "1 Home Migration packages are unresolved"'
+  packages "delete from home_migration_packages where id = (
+    select id from home_migration_packages order by created_at desc limit 1)"
+done
+packages "delete from home_migration_packages"
 tool COMPOSE_PROJECT_NAME=other check
 check "a different Compose project is refused" 'says "COMPOSE_PROJECT_NAME is set"'
 tool cutover

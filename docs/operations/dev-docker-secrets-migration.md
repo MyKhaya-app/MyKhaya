@@ -62,7 +62,8 @@ with Docker daemon access is root-equivalent and can read any secret.
 5. `MYKHAYA_SECRET_KEY`, both field keyrings and the age identity are escrowed, apart
    from each other and from the backups, and an encrypted off-host copy of
    `/etc/mykhaya/dev` exists.
-6. No Home Migration package is in progress.
+6. No Home Migration package is unresolved. `completed`, `expired` and `discarded`
+   packages do not block; any other, unknown or inconsistent state does.
 7. Nobody is changing Control Centre credentials, MFA or Home join codes during the
    window (the encrypted-data counts are compared before and after).
 

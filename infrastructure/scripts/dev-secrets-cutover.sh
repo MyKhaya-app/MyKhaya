@@ -157,11 +157,19 @@ check_attested() {
   ok "Owner attested a restored backup and escrowed keys"
 }
 
+# Only a completed import sets completed_at; expired and discarded packages are
+# terminal without it (mykhaya.home_migration_pcc). Everything else blocks: a
+# failed import can be retried, and unknown or contradictory rows are unsafe.
+FINISHED_PACKAGE="(status = 'completed' and completed_at is not null) or (status in ('expired', 'discarded') and completed_at is null)"
+
 check_packages() {
   open=$(docker exec "$(container postgres)" psql -U postgres -d mykhaya -Atc \
-    "select count(*) from home_migration_packages where completed_at is null") || die "PostgreSQL could not be queried"
+    "select count(*) from home_migration_packages where ($FINISHED_PACKAGE) is not true") || die "PostgreSQL could not be queried"
+  case "$open" in
+    "" | *[!0-9]*) die "Home Migration packages could not be counted" ;;
+  esac
   [ "$open" = 0 ] || [ "${MYKHAYA_DEV_ACCEPT_OPEN_PACKAGES:-0}" = 1 ] ||
-    die "$open Home Migration packages are in progress; finish them, or set MYKHAYA_DEV_ACCEPT_OPEN_PACKAGES=1"
+    die "$open Home Migration packages are unresolved or in an unexpected state; resolve them, or set MYKHAYA_DEV_ACCEPT_OPEN_PACKAGES=1"
   ok "Home Migration packages checked"
 }
 
