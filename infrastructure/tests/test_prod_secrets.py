@@ -139,6 +139,12 @@ class MergedModelTests(unittest.TestCase):
                 + contract.check_provenance(model, self.root, profile)
                 + contract.check_secret_mounts(model, self.root, profile))
 
+    def test_caddy_is_published_on_localhost_only(self) -> None:
+        published = {name: [(p.get("host_ip"), p["published"], p["target"]) for p in service["ports"]]
+                     for name, service in self.models["secrets"]["services"].items()
+                     if service.get("ports")}
+        self.assertEqual(published, {"caddy": [("127.0.0.1", "80", 80)]})
+
     def test_the_merged_model_satisfies_the_contract(self) -> None:
         self.assertEqual(self.errors(self.model), [])
 

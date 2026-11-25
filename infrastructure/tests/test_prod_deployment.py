@@ -137,7 +137,8 @@ class ProductionDeploymentTests(unittest.TestCase):
         self.assertIn("header_up X-Forwarded-Proto https", self.caddy)
 
     def test_production_publishes_only_the_http_origin_port(self) -> None:
-        self.assertIn('ports: ["80:80"]', self.compose)
+        self.assertEqual(self.compose.count("ports:"), 1)
+        self.assertIn('ports: ["127.0.0.1:80:80"]', self.compose)
         self.assertNotIn("443:443", self.compose)
         self.assertNotIn("443:443/udp", self.compose)
 

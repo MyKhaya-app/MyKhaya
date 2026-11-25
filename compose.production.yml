@@ -1,6 +1,8 @@
 services:
   caddy:
-    ports: ["80:80"]
+    # Localhost only. A port Docker publishes on every interface can bypass the
+    # host firewall.
+    ports: ["127.0.0.1:80:80"]
     environment:
       WEB_DOMAIN: "${WEB_DOMAIN:?Set WEB_DOMAIN in the production .env}"
       API_DOMAIN: "${API_DOMAIN:?Set API_DOMAIN in the production .env}"

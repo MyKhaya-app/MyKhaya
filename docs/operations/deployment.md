@@ -13,7 +13,7 @@ refuses production startup with insecure cookies.
 
 ## Home server and VPS
 
-Use the same immutable `web` and `api` image digests in both environments. Change only domains, secrets, SMTP, resource sizing and backup destinations. Run `docker compose -f compose.yml -f compose.production.yml config` before deployment, then `pull`, `run --rm migrate`, and `up -d`. Only ports 80/443 on Caddy are public. PostgreSQL and Redis remain on an internal network and the host firewall denies them.
+Use the same immutable `web` and `api` image digests in both environments. Change only domains, secrets, SMTP, resource sizing and backup destinations. Run `docker compose -f compose.yml -f compose.production.yml config` before deployment, then `pull`, `run --rm migrate`, and `up -d`. Production Caddy is published on `127.0.0.1:80` only, never on a public interface. PostgreSQL and Redis remain on an internal network and the host firewall denies them.
 
 For Cloudflare, restrict origin ingress to Cloudflare IP ranges, configure Caddy trusted proxies from the published ranges, preserve the direct socket peer as the trust decision, and test client-IP/rate-limit behaviour before enabling proxying.
 

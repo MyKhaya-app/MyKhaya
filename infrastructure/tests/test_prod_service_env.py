@@ -305,6 +305,15 @@ class ProdComposeModelTests(unittest.TestCase):
         self.assertEqual(contract.check_resolved_model(model, ROOT, PROD), [])
         self.assertEqual(contract.check_provenance(model, self.cfg.root, PROD), [])
 
+    def test_caddy_is_published_on_localhost_only(self):
+        for service_env in (False, True):
+            published = {
+                name: [(p.get("host_ip"), p["published"], p["target"]) for p in service["ports"]]
+                for name, service in self.model(service_env=service_env)["services"].items()
+                if service.get("ports")
+            }
+            self.assertEqual(published, {"caddy": [("127.0.0.1", "80", 80)]})
+
     def test_every_retained_value_equals_the_legacy_model(self):
         legacy, new = self.model(service_env=False), self.model(service_env=True)
         for service in ("api", "worker", "scheduler", "migrate", "postgres", "redis", "web", "caddy"):
