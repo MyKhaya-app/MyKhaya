@@ -101,12 +101,22 @@ for f in app migrator admin two_lines with_nul not_utf8 overlong empty spaces la
   docker run --rm -i -v "$SECRETS:/s" "$HELPER_IMAGE" sh -c "cat > /s/$f && chmod 644 /s/$f" <"$WORK/$f"
 done
 docker run --rm -v "$SECRETS:/s" "$HELPER_IMAGE" sh -c 'mkdir /s/dir && ln -s /s/app /s/link'
-# A psql that records every argument vector before running the real one.
+# A psql that records every argument vector before running the real one, and
+# refuses to run if it cannot. The log is in its own tmpfs, not /tmp: with
+# fs.protected_regular (the default on GitHub's runners) even root cannot reopen
+# a file the postgres user created in a sticky, world-writable directory.
 docker run --rm -i -v "$TOOLS:/t" "$HELPER_IMAGE" sh -c 'cat > /t/psql && chmod 755 /t/psql' <<'SH'
 #!/bin/sh
-printf '%s\n' "$*" >> /tmp/psql-argv.log
+printf '%s\n' "$*" >> /argv-log/psql.log || { echo "psql argument capture failed" >&2; exit 97; }
 exec /usr/local/bin/psql "$@"
 SH
+
+# The condition "docker logs | grep -q" is unreliable under pipefail: grep exits at
+# the first match, docker logs can then die of SIGPIPE (141), and the pipeline
+# fails although the text was found. Capture first, then search.
+log_has() { # container, extended regular expression
+  docker logs "$1" >"$WORK/container.log" 2>&1 && grep -qE -- "$2" "$WORK/container.log"
+}
 
 leaks() { grep -F -c -f "$WORK/patterns" "$1" || true; }
 
@@ -117,7 +127,7 @@ pg_run() { # variable to receive the container name, name suffix, docker run arg
   shift 2
   CONTAINERS+=("$pg_name")
   docker run -d --name "$pg_name" --network "$NET" \
-    -v "$SECRETS:/run/secrets:ro" -v "$TOOLS:/opt/argv:ro" \
+    -v "$SECRETS:/run/secrets:ro" -v "$TOOLS:/opt/argv:ro" --tmpfs /argv-log:mode=0777 \
     -v "$INIT_SCRIPT:/docker-entrypoint-initdb.d/10-init.sh:ro" \
     -e PATH=/opt/argv:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
     -e POSTGRES_DB=mykhaya -e POSTGRES_USER=postgres "$@" "$PG_IMAGE" >/dev/null
@@ -127,8 +137,10 @@ pg_ready() { # name: wait for the post-initialisation server
   local _
   for _ in $(seq 1 90); do
     if [ "$(docker inspect -f '{{.State.Running}}' "$1")" != true ]; then return 1; fi
-    if docker exec "$1" pg_isready -q -U postgres -d mykhaya 2>/dev/null &&
-      docker logs "$1" 2>&1 | grep -qE 'init process complete|Skipping initialization'; then
+    # The log line first: before it, pg_isready can answer for the temporary
+    # server the image runs during initialisation.
+    if log_has "$1" 'init process complete|Skipping initialization' &&
+      docker exec "$1" pg_isready -q -U postgres -d mykhaya 2>/dev/null; then
       return 0
     fi
     sleep 1
@@ -160,6 +172,12 @@ login_literal() { # server, role, value file on the host, sent through stdin
     sh "$1" "$2" <"$3" 2>&1
 }
 
+login_refused() { # server, role, secret file: refused by password authentication itself
+  local out
+  out=$(login "$@") || true
+  grep -q "password authentication failed" <<<"$out" && ! grep -qx "$2" <<<"$out"
+}
+
 sql() { docker exec "$1" psql -U postgres -d mykhaya -Atc "$2"; }
 
 echo "== A. PostgreSQL bootstrap"
@@ -176,13 +194,15 @@ check "migrator role logs in with its file password" \
 check "superuser logs in with POSTGRES_PASSWORD_FILE" \
   '[ "$(login "$FILEPG" postgres admin)" = postgres ]'
 check "a wrong password is refused (SCRAM, not trust)" \
-  '! login "$FILEPG" mykhaya_app migrator | grep -qx mykhaya_app'
+  'login_refused "$FILEPG" mykhaya_app migrator'
 check "roles keep their attributes" '[ "$(sql "$FILEPG" "select string_agg(format(\$\$%s:%s%s%s%s%s\$\$, rolname, rolsuper, rolcreatedb, rolcreaterole, rolinherit, rolcanlogin), \$\$,\$\$ order by rolname) from pg_roles where rolname like \$\$mykhaya_%\$\$")" = "mykhaya_app:fffft,mykhaya_migrator:fffft" ]'
 check "database is owned by the migrator" \
   '[ "$(sql "$FILEPG" "select pg_get_userbyid(datdba) from pg_database where datname = \$\$mykhaya\$\$")" = mykhaya_migrator ]'
 check "application role keeps its default privileges" '[ "$(sql "$FILEPG" "select string_agg(format(\$\$%s:%s:%s\$\$, defaclrole::regrole, defaclobjtype, defaclacl), \$\$;\$\$ order by defaclobjtype) from pg_default_acl")" = "mykhaya_migrator:S:{mykhaya_app=rU/mykhaya_migrator};mykhaya_migrator:r:{mykhaya_app=arwd/mykhaya_migrator}" ]'
-docker exec "$FILEPG" cat /tmp/psql-argv.log >"$WORK/argv.log"
-check "psql was invoked (argument capture works)" 'grep -q -- "--dbname mykhaya" "$WORK/argv.log"'
+docker exec "$FILEPG" cat /argv-log/psql.log >"$WORK/argv.log"
+# Both identities: the bootstrap (postgres) and the queries above (root).
+check "psql was invoked (argument capture works)" \
+  'grep -q -- "--dbname mykhaya" "$WORK/argv.log" && grep -q "from pg_default_acl" "$WORK/argv.log"'
 # (The image's own entrypoint passes --no-password; only values matter here.)
 check "no password in any psql argument" '[ "$(leaks "$WORK/argv.log")" -eq 0 ]'
 check "no password in the container log" '[ "$(leaks "$WORK/file.log")" -eq 0 ]'
@@ -202,16 +222,23 @@ DATA="$RUN_ID-data"; VOLUMES+=("$DATA")
 docker volume create "$DATA" >/dev/null
 pg_run FIRST first --env-file "$WORK/legacy.env" -v "$DATA:/var/lib/postgresql/data"
 check "first start initialises the volume" "pg_ready $FIRST"
+check "the first start really ran initialisation" 'log_has "$FIRST" "init process complete"'
+# shellcheck disable=SC2034 # read by the condition check() evaluates.
+CLUSTER=$(sql "$FIRST" "select system_identifier from pg_control_system()")
 docker rm -f "$FIRST" >/dev/null
 pg_run SECOND second -v "$DATA:/var/lib/postgresql/data" \
   -e POSTGRES_PASSWORD_FILE=/run/secrets/admin \
   -e MYKHAYA_DB_PASSWORD_FILE=/run/secrets/app \
   -e MYKHAYA_MIGRATION_DB_PASSWORD_FILE=/run/secrets/migrator
 check "restart with file secrets starts the existing database" "pg_ready $SECOND"
-check "initialisation is skipped" 'docker logs "$SECOND" 2>&1 | grep -q "Skipping initialization"'
+check "initialisation is skipped" \
+  'log_has "$SECOND" "Skipping initialization" && ! grep -qE "init process complete|running bootstrap script" "$WORK/container.log"'
+# Assigned by initdb, so any re-initialisation would change it.
+check "the database cluster identity is unchanged" \
+  '[[ "$CLUSTER" =~ ^[0-9]+$ ]] && [ "$(sql "$SECOND" "select system_identifier from pg_control_system()")" = "$CLUSTER" ]'
 check "existing passwords are unchanged" \
   '[ "$(login_literal "$SECOND" mykhaya_app "$WORK/legacy_app")" = mykhaya_app ]'
-check "new file passwords were not applied" '! login "$SECOND" mykhaya_app app | grep -qx mykhaya_app'
+check "new file passwords were not applied" 'login_refused "$SECOND" mykhaya_app app'
 
 echo "-- refused configurations (fail closed, nothing echoed)"
 refused() { # label, expected message, then extra docker run arguments

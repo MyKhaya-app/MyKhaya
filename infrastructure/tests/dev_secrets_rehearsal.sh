@@ -20,6 +20,9 @@ fail() {
 }
 # A step everything after it depends on: later checks would pass vacuously.
 must() { check "$@"; [ "$FAILURES" -eq 0 ] || { echo "stopping: a required step failed"; exit 1; }; }
+# Not "docker logs | grep -q": under pipefail that fails at random when grep exits
+# first (SIGPIPE). Capture, then search.
+log_has() { docker logs "$1" >"$WORK/container.log" 2>&1 && grep -q -- "$2" "$WORK/container.log"; }
 check() { if eval "$2"; then pass "$1"; else fail "$1"; fi; }
 
 mkdir -p "$WORK" && chmod 777 "$WORK"
@@ -289,9 +292,10 @@ docker exec "$(cid api)" python -m mykhaya.tools.encrypted_secrets_check >"$WORK
 check "application-key encrypted data decrypts" 'says "\"docs_sync_token_readable\": 1" && says "\"docs_sync_token_failed\": 0"'
 docker exec "$(cid scheduler)" python -m mykhaya.monitoring.probe http://api:8000/api/v1/health/ready --expect-json status=ready >"$WORK/out" 2>&1
 check "scheduler monitoring probe reaches the api" '[ $? -eq 0 ]'
+docker exec "$(cid api)" cat /proc/1/environ | tr '\000' '\n' >"$WORK/environ"
 check "api process environment holds no secret file value" \
-  '! docker exec "$(cid api)" cat /proc/1/environ | tr "\000" "\n" | grep -qFf <(cat $ROOT/file-backed/secrets/app/{secret_key,app_db_password,stripe_secret_key,smtp_password})'
-check "postgres skipped initialisation" 'docker logs "$(cid postgres)" 2>&1 | grep -q "Skipping initialization"'
+  'grep -q ^MYKHAYA_PROCESS_ROLE=api "$WORK/environ" && ! grep -qFf <(cat $ROOT/file-backed/secrets/app/{secret_key,app_db_password,stripe_secret_key,smtp_password}) "$WORK/environ"'
+check "postgres skipped initialisation" 'log_has "$(cid postgres)" "Skipping initialization"'
 docker run --rm --network none -e MYKHAYA_PROCESS_ROLE=migrate -e MYKHAYA_SECRET_KEY="$(openssl rand -hex 32)" \
   -e MYKHAYA_DATABASE_URL=postgresql+asyncpg://mykhaya_migrator:x@postgres/mykhaya mykhaya-migrate alembic current >"$WORK/out" 2>&1
 check "the migrate role refuses the application key" 'says "must not receive MYKHAYA_SECRET_KEY (K-01)"'
@@ -326,7 +330,7 @@ PHRASE="MIGRATE DEV" tool "$ATTEST" cutover
 must "a second cutover succeeds" 'says "Automatic acceptance passed"'
 check "F-03 files never changed" '[ "$F03_ENV" = "$(cat "$ROOT"/*.env | sha256sum)" ]'
 check "key files never changed" '[ "$KEYS" = "$(cat /etc/mykhaya/keys/*/* | sha256sum)" ]'
-check "no probe or stray volumes remain" '! docker volume ls -q | grep -q config-probe'
+check "no probe or stray volumes remain" 'volumes=$(docker volume ls -q) && ! grep -q config-probe <<<"$volumes"'
 grep -qFf <(cat $ROOT/file-backed/secrets/app/{secret_key,app_db_password,migration_db_password}) <(docker logs "$(cid postgres)" 2>&1)
 check "no password in the PostgreSQL log" '[ $? -ne 0 ]'
 deploy env MYKHAYA_DEV_CONFIG_ROOT=$ROOT MYKHAYA_DEV_SECRETS=1 FAIL_ON="volume inspect mykhaya_postgres_data" sh infrastructure/scripts/dev-deploy.sh up
