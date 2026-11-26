@@ -21,6 +21,7 @@ import { useNativeKeyboardOpen } from "./use-native-keyboard";
 import { NotificationProvider } from "./notification-state";
 import { useActivityHeartbeat } from "./use-activity-heartbeat";
 import { useProductAnalytics } from "./use-product-analytics";
+import { ConsumerActionDock, ConsumerActionProvider } from "./consumer-action-dock";
 
 export function AppShell({
   children,
@@ -187,6 +188,7 @@ export function AppShell({
 
   return (
     <NotificationProvider>
+      <ConsumerActionProvider>
       <div ref={setShellElement} className={`app-shell${isNativeShell() ? " native-shell-app" : ""}${nativeWideViewport ? " native-wide-viewport" : ""}${nativeCompactRail ? " native-compact-rail" : ""}${nativeRightColumn ? " native-right-column" : ""}${nativeStatusColumn ? " native-status-column" : ""}${keyboardOpen ? " native-keyboard-open" : ""}`}>
       <AppHeader
         user={user}
@@ -207,8 +209,10 @@ export function AppShell({
         </main>
       </div>
       {!keyboardOpen && <BottomNav principalType={user?.principal_type} familyAccess={familyAccess} />}
+      <ConsumerActionDock />
       {!isNativeShell() && <AroundHouseDock />}
       </div>
+      </ConsumerActionProvider>
     </NotificationProvider>
   );
 }

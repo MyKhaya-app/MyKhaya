@@ -19,6 +19,7 @@ from httpx import ASGITransport, AsyncClient
 from pydantic import SecretStr
 from sqlalchemy import select
 
+import mykhaya.routers.billing as billing_router
 from mykhaya.config import get_settings
 from mykhaya.db import SessionFactory
 from mykhaya.main import app
@@ -231,7 +232,7 @@ async def test_a_processing_failure_is_recorded_without_blocking_retry(
             select(StripeWebhookFailure).where(StripeWebhookFailure.stripe_event_id == event_id)
         )
         assert failure_row is not None
-        assert "stripe" not in failure_row.error_message.lower()  # no raw provider payload
+        assert failure_row.error_message == "webhook_processing_failed"
 
     # Stripe's own retry, same event ID, this time with a well-formed payload.
     retry_payload = _valid_subscription_event(home_id, event_id)
@@ -247,6 +248,43 @@ async def test_a_processing_failure_is_recorded_without_blocking_retry(
         )
         assert dedup_row is not None
         assert dedup_row.outcome == "processed"
+
+
+@pytest.mark.asyncio
+async def test_failure_classification_does_not_persist_or_expose_exception_text(
+    client: AsyncClient, admin_client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    home_id = await _make_home(client, uuid.uuid4().hex[:10])
+    event_id = f"evt_{uuid.uuid4().hex[:16]}"
+    payload = _valid_subscription_event(home_id, event_id)
+    unsafe_detail = "Authorization: Bearer not-a-real-test-credential"
+
+    async def fail_with_sensitive_detail(*_args: object, **_kwargs: object) -> str:
+        raise RuntimeError(unsafe_detail)
+
+    monkeypatch.setattr(billing_router, "process_webhook_event", fail_with_sensitive_detail)
+    response = await client.post(
+        "/api/v1/billing/stripe/webhook", content=payload, headers=_signed_headers(payload)
+    )
+    assert response.status_code == 500
+
+    async with SessionFactory() as db:
+        failure_row = await db.scalar(
+            select(StripeWebhookFailure).where(StripeWebhookFailure.stripe_event_id == event_id)
+        )
+        assert failure_row is not None
+        assert failure_row.error_message == "webhook_processing_failed"
+        assert unsafe_detail not in failure_row.error_message
+
+    admin = await _make_admin()
+    await _admin_login(admin_client, admin)
+    health = await unsafe(admin_client, "GET", "/api/v1/platform/subscriptions/webhook-health")
+    assert health.status_code == 200
+    exposed_failure = next(
+        item for item in health.json()["recent_failures"] if item["stripe_event_id"] == event_id
+    )
+    assert exposed_failure["error_message"] == "webhook_processing_failed"
+    assert unsafe_detail not in health.text
 
 
 # ---------------------------------------------------------------------------

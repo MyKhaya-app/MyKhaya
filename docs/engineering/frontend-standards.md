@@ -42,12 +42,24 @@ its parent at every width, including WebKit's native date/time controls. See
 
 Reuse established MyKhaya interaction patterns across modules. Segmented
 selectors use the shared `.rr-segmented` container and `.rr-segment` buttons,
-with the appropriate active-state class. A module's primary create action uses
-the shared `.rr-fab` floating `+ Add` control, including its bottom-navigation
-and safe-area clearance. Do not introduce an inline module-specific `+ New`
-variant when the module has a single primary creation flow; preserve the
-existing search, content width, and module-specific content around these
-shared controls.
+with the appropriate active-state class. A module's primary create action is
+registered with `useConsumerPrimaryAction()` and drawn by the shell's shared
+`ConsumerActionDock` (`components/consumer-action-dock.tsx`), which owns its
+placement, bottom-navigation and safe-area clearance; modules never render
+their own floating Add button. The registered action must be a stable
+reference (memoised with `useMemo`), or registration loops on every render.
+On phones the dock is one bottom action row above the navigation: Back (iOS
+shell only; Android keeps its system Back) at bottom-left, Add at
+bottom-right, on the same line and at one compact circular size, each keeping
+its side when the other is absent. The visible label is always `Add`; the
+action's `label` (for example "Add vehicle") is its accessible name and
+tooltip only. On the iPhone Duo / iPad right-hand column the same buttons are
+icon-only rail controls instead. Page tests render through `renderWithConsumerActions()`
+(`components/consumer-action-dock.testing.tsx`), which composes the page with
+the provider and dock the way `AppShell` does. Do not introduce an inline
+module-specific `+ New` variant when the module has a single primary creation
+flow; preserve the existing search, content width, and module-specific content
+around these shared controls.
 
 ## Unresolved authorisation and entitlement state
 

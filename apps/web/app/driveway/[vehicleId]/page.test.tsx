@@ -3,7 +3,7 @@ import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import VehicleDetailPage from "./page";
 
-// Vehicle page (Screen 2): header, Overview | MOT | Details tabs, the MOT
+// Vehicle page (Screen 2): header, Overview | MOT | Tax | Details tabs, the MOT
 // card with refresh, the red reminder action when the MOT needs attention,
 // and the existing photo/edit/remove flows.
 
@@ -40,6 +40,7 @@ vi.mock("@mykhaya/api-client", async (importOriginal) => {
       uploadVehiclePhoto: vi.fn(),
       vehicleMot: vi.fn(),
       refreshVehicleMot: vi.fn(),
+      refreshVehicleDetails: vi.fn(),
     },
   };
 });
@@ -178,7 +179,7 @@ describe("Vehicle page — header and tabs", () => {
     renderPage();
     const tablist = await screen.findByRole("tablist", { name: "Vehicle sections" });
     const tabs = within(tablist).getAllByRole("tab");
-    expect(tabs.map((tab) => tab.textContent)).toEqual(["Overview", "MOT", "Details"]);
+    expect(tabs.map((tab) => tab.textContent)).toEqual(["Overview", "MOT", "Tax", "Details"]);
     expect(tabs[0]).toHaveAttribute("aria-selected", "true");
 
     const user = userEvent.setup();
@@ -186,8 +187,8 @@ describe("Vehicle page — header and tabs", () => {
     expect(within(tablist).getByRole("tab", { name: "MOT" })).toHaveAttribute("aria-selected", "true");
     expect(window.location.search).toBe("?tab=mot");
     await user.keyboard("{ArrowRight}");
-    expect(within(tablist).getByRole("tab", { name: "Details" })).toHaveFocus();
-    expect(window.location.search).toBe("?tab=details");
+    expect(within(tablist).getByRole("tab", { name: "Tax" })).toHaveFocus();
+    expect(window.location.search).toBe("?tab=tax");
   });
 
   it("opens on the tab named in the URL", async () => {
@@ -317,6 +318,75 @@ describe("Vehicle page — Details tab", () => {
     await user.click(within(sheet).getByRole("button", { name: "Remove vehicle" }));
     await waitFor(() => expect(api.deleteVehicle).toHaveBeenCalledWith("home-1", "v1"));
     expect(push).toHaveBeenCalledWith("/driveway");
+  });
+
+  it("refreshes DVLA data from the Details tab", async () => {
+    (api.refreshVehicleDetails as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ...VEHICLE,
+      refresh_outcome: "refreshed",
+      tax_status: "Taxed",
+    });
+    renderPage();
+    const user = userEvent.setup();
+    await user.click(await screen.findByRole("button", { name: "Refresh vehicle details" }));
+    await waitFor(() => expect(api.refreshVehicleDetails).toHaveBeenCalledWith("home-1", "v1"));
+  });
+});
+
+describe("Vehicle page — Tax tab", () => {
+  beforeEach(() => window.history.replaceState(null, "", "/driveway/v1?tab=tax"));
+
+  it("shows persisted DVLA tax fields, last check and a safe refresh action", async () => {
+    (api.vehicle as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ...VEHICLE,
+      tax_status: "Taxed",
+      tax_due_date: "2027-01-01",
+      vehicle_status: "Taxed",
+      co2_emissions: 120,
+      art_end_date: "2027-06-30",
+      last_successful_lookup: "2026-11-17T10:00:00Z",
+    });
+    renderPage();
+    expect(await screen.findByText("Tax status")).toBeInTheDocument();
+    expect(screen.getByText("Tax due date").nextSibling).toHaveTextContent("1 Jan 2027");
+    expect(screen.getByText("CO₂ emissions").nextSibling).toHaveTextContent("120 g/km");
+    expect(screen.getByRole("button", { name: "Refresh DVLA tax details" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Check vehicle tax on GOV.UK/ })).toHaveAttribute("href", "https://www.gov.uk/check-vehicle-tax");
+  });
+
+  it("shows a local VED estimate without presenting it as DVLA-confirmed", async () => {
+    (api.vehicle as ReturnType<typeof vi.fn>).mockResolvedValue({
+      ...VEHICLE,
+      first_registration_date: "2015-05-01",
+      tax_calculation: {
+        status: "calculated",
+        annual_rate: 35,
+        payment_options: { single_12_month_total: 35 },
+        tax_year: "2026-2027",
+        category: "2001-2017 car",
+        assumptions: ["M1/M1G vehicle"],
+        missing_information: [],
+        supplement_message: "The premium supplement is not applied in this estimate.",
+        source: "https://www.gov.uk/vehicle-tax-rate-tables",
+        calculated_at: "2026-11-17T10:00:00Z",
+      },
+    });
+    renderPage();
+    expect(await screen.findByText("Standard annual rate · 2026-2027 tax year")).toBeInTheDocument();
+    expect(screen.getByText("Annual VED").nextSibling).toHaveTextContent("£35");
+    expect(screen.getByText("£35")).toBeInTheDocument();
+    expect(screen.getByText("Payment options")).toBeInTheDocument();
+    expect(screen.getByText("The premium supplement is not applied in this estimate.")).toBeInTheDocument();
+  });
+
+  it("refreshes DVLA data from the Tax tab and renders the refreshed outcome", async () => {
+    const refreshed = { ...VEHICLE, refresh_outcome: "refreshed", tax_status: "Taxed" };
+    (api.vehicle as ReturnType<typeof vi.fn>).mockResolvedValue(VEHICLE);
+    (api.refreshVehicleDetails as ReturnType<typeof vi.fn>).mockResolvedValue(refreshed);
+    renderPage();
+    await userEvent.setup().click(await screen.findByRole("button", { name: "Refresh DVLA tax details" }));
+    await waitFor(() => expect(api.refreshVehicleDetails).toHaveBeenCalledWith("home-1", "v1"));
+    expect(await screen.findByText("Taxed")).toBeInTheDocument();
   });
 });
 

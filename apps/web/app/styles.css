@@ -999,6 +999,313 @@ textarea {
     transition: none;
   }
 }
+
+/* Driveway vehicle reports use the existing Driveway tokens and typography.
+   The report is deliberately a protected route view, not a public share page.
+   Mobile-first: the phone layout is the base; min-width rules widen it. It is
+   not inside .drv-page, so it styles its own buttons rather than relying on
+   the .drv-page .drv-button rules. */
+.drv-report {
+  background: var(--colour-cream);
+  color: var(--colour-slate);
+  /* The two-column section grid depends on the report's own width, not the
+     viewport: beside the tablet rail a 768px viewport leaves ~540px. */
+  container-type: inline-size;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  margin: 0 auto;
+  max-width: 1080px;
+  padding: 14px max(16px, var(--safe-right)) 24px max(16px, var(--safe-left));
+}
+.drv-report-header {
+  background: var(--colour-forest);
+  border-radius: 20px;
+  color: var(--colour-white);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px 20px 20px;
+}
+.drv-report-brand { align-items: center; display: flex; font-size: 17px; font-weight: 800; gap: 10px; }
+.drv-report-header h1 { font-size: 28px; letter-spacing: -0.02em; line-height: 1.15; margin: 0; }
+.drv-report-header p { color: var(--colour-sage-soft); font-size: 14px; margin: 4px 0 0; }
+
+/* Controls: format, household switch and actions */
+.drv-report-toolbar { display: flex; flex-direction: column; gap: 16px; }
+.drv-report-controls {
+  background: var(--colour-white);
+  border: 1px solid var(--colour-line);
+  border-radius: 20px;
+  display: flex;
+  flex-direction: column;
+  padding: 12px 12px 4px;
+}
+.drv-report-controls:not(:has(.drv-report-household)) { padding-bottom: 12px; }
+.rr-segmented.drv-report-format {
+  background: var(--colour-sand);
+  border-radius: 14px;
+  display: grid;
+  gap: 4px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  padding: 4px;
+}
+.drv-report-format .rr-segment { border-radius: 11px; font-size: 15px; min-height: 44px; white-space: nowrap; }
+.drv-report-household {
+  align-items: center;
+  cursor: pointer;
+  display: flex;
+  font-size: 15px;
+  font-weight: 600;
+  gap: 12px;
+  justify-content: space-between;
+  min-height: 56px;
+  padding: 0 4px;
+}
+.drv-report-switch {
+  -webkit-appearance: none;
+  appearance: none;
+  background: var(--colour-sage);
+  border: 0;
+  border-radius: 999px;
+  cursor: pointer;
+  flex: none;
+  height: 32px;
+  margin: 0;
+  min-height: 0;
+  padding: 0;
+  position: relative;
+  transition: background-color 0.2s ease;
+  width: 52px;
+}
+.drv-report-switch::before {
+  background: var(--colour-white);
+  border-radius: 50%;
+  box-shadow: 0 1px 3px rgb(0 0 0 / 25%);
+  content: "";
+  height: 26px;
+  left: 3px;
+  position: absolute;
+  top: 3px;
+  transition: transform 0.2s ease;
+  width: 26px;
+}
+.drv-report-switch:checked { background: var(--colour-forest); }
+.drv-report-switch:checked::before { transform: translateX(20px); }
+.drv-report-switch:focus-visible { outline: 3px solid var(--colour-mustard); outline-offset: 2px; }
+.drv-report-switch:disabled { cursor: default; opacity: 0.6; }
+@media (prefers-reduced-motion: reduce) {
+  .drv-report-switch,
+  .drv-report-switch::before { transition: none; }
+}
+.drv-report-actions { display: flex; flex-direction: column; gap: 10px; }
+.drv-report-primary-actions,
+.drv-report-sharing-buttons { display: grid; gap: 10px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.drv-report-button,
+.drv-report-button:hover {
+  align-items: center;
+  border: 0;
+  border-radius: 14px;
+  box-shadow: none;
+  color: var(--colour-white);
+  cursor: pointer;
+  display: flex;
+  font: inherit;
+  font-size: 16px;
+  font-weight: 700;
+  gap: 8px;
+  height: 52px;
+  justify-content: center;
+  margin: 0;
+  min-height: 0;
+  padding: 0 12px;
+  transform: none;
+  white-space: nowrap;
+}
+.drv-report-button svg { flex: none; }
+.drv-report-button-primary,
+.drv-report-button-primary:hover { background: var(--colour-forest); }
+.drv-report-button-secondary,
+.drv-report-button-secondary:hover { background: var(--colour-sage-dark); }
+.drv-report-button:disabled { cursor: default; opacity: 0.6; }
+.drv-report-sharing {
+  background: var(--colour-sage-soft);
+  border-radius: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 10px;
+}
+.drv-report-button-quiet,
+.drv-report-button-quiet:hover { background: var(--colour-sage); font-size: 15px; height: 44px; }
+/* Unavailable sharing stays readable: the note beneath explains why. */
+.drv-report-button-quiet:disabled { opacity: 1; }
+.drv-report-sharing-note { color: var(--colour-forest-dark); font-size: 13px; line-height: 1.4; margin: 0 4px 2px; text-align: center; }
+
+/* Vehicle summary */
+.drv-report-hero {
+  background: var(--colour-white);
+  border: 1px solid var(--colour-line);
+  border-radius: 20px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.drv-report-photo { background: var(--colour-sand); height: 200px; overflow: hidden; }
+.drv-report-photo > img { display: block; height: 100%; object-fit: cover; width: 100%; }
+.drv-report-hero-body { display: flex; flex: 1; flex-direction: column; gap: 12px; min-width: 0; padding: 18px; }
+.drv-report-hero-heading { align-items: flex-end; display: flex; flex-wrap: wrap; gap: 10px 12px; justify-content: space-between; }
+.drv-report-hero-heading > div { min-width: 0; }
+.drv-report-eyebrow { color: var(--colour-muted); font-size: 14px; margin: 0 0 2px; }
+.drv-report-hero h2 { color: var(--colour-forest-dark); font-size: 28px; letter-spacing: -0.02em; line-height: 1.15; margin: 0; overflow-wrap: anywhere; }
+.drv-report-hero-summary { color: var(--colour-muted); font-size: 14px; margin: 0; }
+.drv-report-plate {
+  background: var(--colour-plate);
+  border: 2px solid var(--colour-slate);
+  border-radius: 7px;
+  color: var(--colour-slate);
+  display: inline-block;
+  font-size: 16px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+  padding: 4px 10px;
+  white-space: nowrap;
+}
+.drv-report-glance { display: grid; gap: 10px; grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 0; }
+.drv-report-glance > div {
+  background: var(--colour-cream);
+  border-radius: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  padding: 12px;
+}
+.drv-report-glance dt { color: var(--colour-muted); font-size: 12px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
+.drv-report-glance dd { color: var(--colour-muted); display: flex; font-size: 13px; margin: 0; }
+
+/* Sections */
+.drv-report-grid { display: grid; gap: 16px; grid-template-columns: minmax(0, 1fr); }
+.drv-report-section {
+  background: var(--colour-white);
+  border: 1px solid var(--colour-line);
+  border-radius: 20px;
+  min-width: 0;
+  padding: 18px;
+}
+.drv-report-section h2 { color: var(--colour-terracotta-ink); font-size: 13px; font-weight: 800; letter-spacing: 0.1em; margin: 0 0 6px; text-transform: uppercase; }
+.drv-report-section dl { margin: 0; }
+.drv-report-row {
+  align-items: center;
+  border-bottom: 1px solid var(--colour-line);
+  display: flex;
+  font-size: 15px;
+  gap: 14px;
+  justify-content: space-between;
+  min-height: 44px;
+  padding: 8px 0;
+}
+.drv-report-row:last-child { border-bottom: 0; }
+.drv-report-row dt { color: var(--colour-muted); min-width: 0; }
+.drv-report-row dd { font-weight: 700; margin: 0; overflow-wrap: anywhere; text-align: right; }
+.drv-report-muted { color: var(--colour-muted); font-size: 14px; line-height: 1.45; margin: 10px 0 0; }
+
+/* VED estimate and payment plans */
+.drv-report-estimate { background: var(--colour-cream); border-radius: 16px; display: flex; flex-direction: column; gap: 4px; margin-top: 12px; padding: 16px; }
+.drv-report-estimate > span { color: var(--colour-muted); font-size: 14px; }
+.drv-report-estimate > strong { color: var(--colour-forest-dark); font-size: 32px; letter-spacing: -0.02em; line-height: 1.15; }
+.drv-report-estimate > small { color: var(--colour-muted); font-size: 12px; line-height: 1.4; }
+.drv-report-payments {
+  background: var(--colour-white);
+  border-collapse: separate;
+  border-radius: 12px;
+  border-spacing: 0;
+  font-size: 14px;
+  margin-top: 10px;
+  overflow: hidden;
+  width: 100%;
+}
+.drv-report-payments thead th {
+  background: var(--colour-sage-soft);
+  color: var(--colour-forest-dark);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  padding: 10px 12px;
+  text-align: right;
+  text-transform: uppercase;
+}
+.drv-report-payments thead th:first-child { text-align: left; }
+.drv-report-payments tbody th,
+.drv-report-payments td { border-top: 1px solid var(--colour-line); padding: 11px 12px; }
+.drv-report-payments tbody th { font-weight: 600; text-align: left; }
+.drv-report-payments td { color: var(--colour-muted); text-align: right; white-space: nowrap; }
+.drv-report-payments td:last-child { color: var(--colour-slate); font-weight: 800; }
+.drv-report-payments-other { margin-top: 8px; }
+.drv-report-source { align-items: flex-start; color: var(--colour-muted); display: flex; font-size: 12px; gap: 7px; line-height: 1.4; margin: 14px 0 0; }
+.drv-report-source svg { flex: none; margin-top: 1px; }
+
+/* MOT tests */
+.drv-report-tests { list-style: none; margin: 8px 0 0; padding: 0; }
+.drv-report-test { border-top: 1px solid var(--colour-line); display: flex; gap: 12px; padding: 12px 0; }
+.drv-report-test-dot { background: var(--colour-sage); border-radius: 50%; flex: none; height: 10px; margin-top: 6px; width: 10px; }
+.drv-report-test-dot-latest { background: var(--colour-forest); }
+.drv-report-test-body { display: flex; flex: 1; flex-direction: column; gap: 3px; min-width: 0; }
+.drv-report-test-top { align-items: center; display: flex; gap: 8px; justify-content: space-between; }
+.drv-report-test-date { font-size: 15px; font-weight: 800; }
+.drv-report-test-miles { color: var(--colour-muted); font-size: 13px; }
+.drv-report-defects { font-size: 13px; line-height: 1.4; margin: 4px 0 0; padding-left: 18px; }
+
+/* Data sources, GOV.UK link and footer */
+.drv-report-note { background: var(--colour-sage-soft); border-color: transparent; }
+.drv-report-note h2 { color: var(--colour-forest-dark); }
+.drv-report-note p { font-size: 14px; line-height: 1.5; margin: 0 0 10px; }
+.drv-report-note p:last-child { margin-bottom: 0; }
+.drv-report-gov-link {
+  align-items: center;
+  border: 1.5px solid var(--colour-forest);
+  border-radius: 14px;
+  color: var(--colour-forest);
+  display: flex;
+  font-size: 15px;
+  font-weight: 700;
+  gap: 8px;
+  justify-content: center;
+  min-height: 48px;
+  text-decoration: none;
+}
+.drv-report-gov-link:focus-visible { outline: 3px solid var(--colour-mustard); outline-offset: 2px; }
+.drv-report-footer { color: var(--colour-muted); display: flex; font-size: 12px; justify-content: space-between; padding: 0 4px; }
+.drv-report-launch { align-self: flex-start; margin-top: 4px; }
+
+@media (min-width: 681px) {
+  .drv-report { gap: 18px; padding: 24px; }
+  .drv-report-header { align-items: center; flex-direction: row; gap: 32px; justify-content: space-between; padding: 24px 30px; }
+  .drv-report-header h1 { font-size: clamp(32px, 4vw, 44px); }
+  .drv-report-toolbar { align-items: start; display: grid; gap: 18px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .drv-report-hero { flex-direction: row; }
+  .drv-report-photo { flex: 0 0 min(320px, 40%); height: auto; min-height: 220px; }
+  .drv-report-hero-body { justify-content: center; padding: 22px 24px; }
+  .drv-report-hero h2 { font-size: clamp(30px, 4vw, 44px); }
+  .drv-report-section { padding: 22px; }
+  .drv-report-gov-link { align-self: flex-start; padding: 0 20px; }
+}
+/* 320px phones: three payment columns need slimmer cell padding to fit the card. */
+@container (max-width: 320px) {
+  .drv-report-payments thead th,
+  .drv-report-payments tbody th,
+  .drv-report-payments td { padding-left: 8px; padding-right: 8px; }
+}
+@container (min-width: 681px) {
+  .drv-report-grid { align-items: start; gap: 18px; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media print {
+  .drv-report { max-width: none; padding: 0; }
+  .drv-report-toolbar, .drv-report-gov-link, .drv-report > .notice { display: none; }
+  .drv-report-header { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  .drv-report-section, .drv-report-hero, .drv-report-test { break-inside: avoid; }
+  .drv-report-section { box-shadow: none; }
+}
 .security-card > .notice,
 .security-panel {
   margin: 0.25rem 0 0.75rem;
@@ -11008,6 +11315,125 @@ select.plan-meal-field-input {
   flex: none;
 }
 
+/* Shared consumer Back/primary-action dock. The shell owns the placement so
+   modules only register an explicit action and never duplicate positioning.
+   One bottom action row spanning the content width, just above the bottom
+   navigation: Back is pinned to the start (left), the primary Add to the end
+   (right) via its auto start margin, so each keeps its side when the other
+   is absent. Both share the row's single vertical position and one compact
+   circular size (--consumer-action-size). */
+.app-shell {
+  --consumer-action-size: 52px;
+  --consumer-action-offset: 0.9rem;
+}
+.consumer-action-dock {
+  align-items: center;
+  bottom: calc(var(--bottom-nav-height) + var(--safe-bottom) + var(--consumer-action-offset));
+  display: flex;
+  flex-direction: row;
+  gap: 0.65rem;
+  justify-content: flex-start;
+  left: max(1rem, var(--safe-left));
+  pointer-events: none;
+  position: fixed;
+  right: max(1rem, var(--safe-right));
+  z-index: 8;
+}
+.consumer-action-dock > .consumer-primary-action {
+  margin-left: auto;
+}
+.consumer-action {
+  align-items: center;
+  border: 1px solid transparent;
+  border-radius: 50%;
+  box-shadow: 0 10px 24px rgb(31 41 51 / 20%);
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  gap: 0.05rem;
+  height: var(--consumer-action-size);
+  justify-content: center;
+  min-width: var(--consumer-action-size);
+  padding: 0;
+  pointer-events: auto;
+  width: var(--consumer-action-size);
+}
+/* Room below the last content so the end of every page can scroll clear of
+   the floating row (phone layouts only; the Duo rail and the desktop/tablet
+   web layout reserve their own space). Browser/PWA: the bottom nav overlays
+   the page, so its height is included. */
+@media (max-width: 759.98px) {
+  .app-shell:not(.native-shell-app):has(> .consumer-action-dock) .app-main {
+    padding-bottom: calc(
+      var(--bottom-nav-height) + var(--safe-bottom) + var(--consumer-action-offset) + var(--consumer-action-size) + 1rem
+    );
+  }
+}
+/* Native phone: the bottom nav is a real flex sibling below the scroll
+   region, so only the row's own height and offset need reserving. */
+html.native-shell .app-shell.native-shell-app:not(.native-wide-viewport, .native-compact-rail, .native-right-column, .native-keyboard-open):has(> .consumer-action-dock) .app-main {
+  padding-bottom: calc(var(--consumer-action-offset) + var(--consumer-action-size) + 1rem);
+}
+/* Phone landscape (wide but too short for the right-hand column): the nav is
+   a rail at the right edge, so the row ends before the rail column instead
+   of putting Add on top of it. */
+.app-shell.native-shell-app.native-wide-viewport:not(.native-right-column) .consumer-action-dock {
+  right: var(--native-rail-column);
+}
+.consumer-action span {
+  font-size: 0.57rem;
+  font-weight: 700;
+  line-height: 1;
+}
+.consumer-back-action {
+  background: var(--colour-cream);
+  border-color: var(--colour-line);
+  color: var(--colour-forest);
+}
+.consumer-primary-action {
+  background: var(--colour-forest);
+  color: var(--colour-white);
+}
+.consumer-action:hover,
+.consumer-action:focus-visible {
+  transform: translateY(-1px);
+}
+.consumer-action:focus-visible {
+  outline: 3px solid var(--colour-sage);
+  outline-offset: 3px;
+}
+
+.app-shell.native-right-column .consumer-action-dock {
+  align-items: center;
+  bottom: calc(var(--native-dock-top) + var(--native-rail-gap));
+  flex-direction: column-reverse;
+  justify-content: flex-start;
+  gap: 0.5rem;
+  left: auto;
+  right: var(--native-rail-inset);
+  width: var(--native-rail-width);
+}
+.app-shell.native-right-column:has(.calendar-page) .calendar-page .calendar-month-row-actions .calendar-add-desktop {
+  display: none;
+}
+/* The rail stacks its controls on its own centre line: no left/right slots. */
+.app-shell.native-right-column .consumer-action-dock > .consumer-primary-action {
+  margin-left: 0;
+}
+.app-shell.native-right-column .consumer-action {
+  height: var(--native-tool-size, 40px);
+  min-width: var(--native-tool-size, 40px);
+  width: var(--native-tool-size, 40px);
+}
+.app-shell.native-right-column .consumer-action span {
+  clip: rect(0 0 0 0);
+  height: 1px;
+  overflow: hidden;
+  position: absolute;
+  white-space: nowrap;
+  width: 1px;
+}
+
 /* --- Driveway (Driveway list, Vehicle, MOT history, MOT nudge) -------------
    Scoped to .drv-page / .drv-* so nothing here reaches other modules.
    Mobile-first: the phone layout is the base; wider screens add columns via
@@ -11303,6 +11729,36 @@ html:has(.drv-page)::-webkit-scrollbar,
 }
 .drv-page .drv-chevron { color: var(--colour-muted); flex: none; }
 
+.drv-page .drv-lookup-card {
+  background: var(--colour-sage-soft);
+  border: 1px solid var(--colour-sand-dark);
+  border-radius: 22px;
+  margin: 18px 0 22px;
+  padding: 18px;
+}
+.drv-page .drv-lookup-card h2 { font-size: 18px; margin: 0; }
+.drv-page .drv-lookup-result { margin-top: 14px; padding: 14px; }
+.drv-page .drv-lookup-result .drv-button { margin-top: 12px; }
+.drv-lookup-result { margin-top: 18px; padding: 18px; }
+.drv-lookup-header { align-items: flex-start; display: flex; gap: 14px; justify-content: space-between; }
+.drv-lookup-header h2 { margin: 0; }
+.drv-plate-chip { background: var(--colour-slate); border-radius: 7px; color: var(--colour-white); font-size: 13px; font-weight: 700; letter-spacing: .06em; padding: 6px 9px; white-space: nowrap; }
+.drv-lookup-section { border-top: 1px solid var(--colour-line); margin-top: 18px; padding-top: 16px; }
+.drv-lookup-section h3 { font-size: 15px; margin: 0 0 10px; }
+.drv-lookup-facts { display: grid; gap: 9px 18px; grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 0; }
+.drv-lookup-facts div { min-width: 0; }
+.drv-lookup-facts dt { color: var(--colour-muted); font-size: 12px; }
+.drv-lookup-facts dd { font-size: 14px; margin: 2px 0 0; overflow-wrap: anywhere; }
+.drv-lookup-tests { display: grid; gap: 10px; margin-top: 12px; }
+.drv-lookup-test { background: var(--colour-sage-soft); border-radius: 12px; display: grid; gap: 4px; padding: 12px; }
+.drv-lookup-test span, .drv-lookup-test li { color: var(--colour-muted); font-size: 13px; }
+.drv-lookup-test ul { margin: 4px 0 0; padding-left: 18px; }
+.drv-lookup-actions { border-top: 1px solid var(--colour-line); margin-top: 18px; padding-top: 16px; }
+@media (max-width: 520px) {
+  .drv-lookup-facts { grid-template-columns: 1fr; }
+  .drv-lookup-header { flex-direction: column; }
+}
+
 /* Empty state */
 .drv-page .drv-empty {
   align-items: center;
@@ -11504,7 +11960,7 @@ html:has(.drv-page)::-webkit-scrollbar,
   border-radius: 16px;
   display: grid;
   gap: 4px;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
   padding: 4px;
 }
 .drv-page .drv-tabs .rr-segment {
@@ -11516,6 +11972,7 @@ html:has(.drv-page)::-webkit-scrollbar,
   min-height: 0;
   padding: 0;
   position: relative;
+  white-space: nowrap;
 }
 .drv-page .drv-tabs .rr-segment::before {
   content: "";
@@ -11524,6 +11981,25 @@ html:has(.drv-page)::-webkit-scrollbar,
 }
 .drv-page .drv-tabs .rr-segment-active { color: var(--colour-white); }
 .drv-page .drv-panel { display: flex; flex-direction: column; gap: 12px; }
+.drv-page .drv-tax-heading {
+  color: var(--colour-slate);
+  font-size: 15px;
+  font-weight: 800;
+  margin: 4px 2px -4px;
+}
+.drv-page .drv-tax-estimate-card { padding: 22px 18px 18px; }
+.drv-page .drv-tax-annual { border-bottom: 1px solid var(--colour-line); padding-bottom: 18px; text-align: center; }
+.drv-page .drv-tax-annual-amount { align-items: baseline; display: flex; gap: 8px; justify-content: center; margin: 0; }
+.drv-page .drv-tax-annual-amount strong { color: var(--colour-forest-dark); font-size: clamp(42px, 12vw, 64px); font-weight: 800; letter-spacing: -0.06em; line-height: 1; }
+.drv-page .drv-tax-annual-amount span { color: var(--colour-slate); font-size: 18px; font-style: italic; }
+.drv-page .drv-tax-annual h2 { color: var(--colour-slate); font-size: 16px; font-weight: 500; margin: 10px 0 0; }
+.drv-page .drv-tax-annual-unavailable { color: var(--colour-muted); font-size: 22px; font-weight: 800; margin: 0; }
+.drv-page .drv-tax-supplement { align-items: center; display: flex; gap: 12px; justify-content: center; padding: 16px 0 0; }
+.drv-page .drv-tax-supplement svg { background: var(--colour-sage-soft); border-radius: 50%; color: var(--colour-forest-dark); flex: none; padding: 4px; }
+.drv-page .drv-tax-supplement p { color: var(--colour-slate); font-size: 15px; line-height: 1.45; margin: 0; max-width: 42rem; text-align: left; }
+.drv-page .drv-tax-payments { overflow: hidden; }
+.drv-page .drv-tax-payments h2 { font-size: 20px; margin: 18px 18px 2px; }
+.drv-page .drv-tax-payments .drv-kv { border: 0; border-radius: 0; }
 
 /* MOT card (Overview) and MOT tab header */
 .drv-page .drv-mot-card {
@@ -12937,7 +13413,7 @@ a.family-feed-row {
    1rem bottom offset) rather than at an offset tuned for one dock height.
    Never lower than their default position when no dock is shown. */
 @media (min-width: 760px) {
-  .app-shell:not(.native-shell-app) :is(.rr-fab, .calendar-fab) {
+  .app-shell:not(.native-shell-app) :is(.rr-fab, .calendar-fab, .consumer-action-dock) {
     bottom: calc(
       max(var(--bottom-nav-height) + 0.9rem, var(--around-house-dock-height, 0px) + 2rem) + var(--safe-bottom)
     );
@@ -13643,5 +14119,37 @@ a.family-feed-row {
   .skeleton-block,
   .skeleton-line {
     animation: none;
+  }
+}
+
+/* Vehicle Report: the browser's own print (Ctrl+P / Print menu). The report's
+   Print button prints the generated PDF instead; this keeps a page print to
+   the report alone. It sits after every shell rule it overrides, and is
+   scoped to a shell that contains a report, so no other page's print output
+   changes. The report's own controls are hidden in its section above. */
+@media print {
+  .app-shell:has(.drv-report) :is(.app-header, .desktop-nav, .bottom-nav, .consumer-action-dock, .around-house-dock, .sheet-backdrop, .bottom-sheet),
+  .app-shell:has(.drv-report) .app-content-scroll-region > :not(.app-main),
+  .app-shell:has(.drv-report) .app-main > :not(.drv-report) {
+    display: none;
+  }
+  /* Browser shell: drop the desktop rail's 224px gutter and the space kept
+     clear for the bottom navigation and floating docks. */
+  .app-shell:has(.drv-report),
+  .app-shell:has(.drv-report) .app-main,
+  .app-shell.native-shell-app:is(.native-wide-viewport, .native-compact-rail):has(.drv-report) .app-main {
+    min-height: 0;
+    padding: 0;
+  }
+  /* Native shell: the page is a fixed-height scroll region on screen, which
+     would clip the printout to one page. */
+  html.native-shell body:has(.drv-report),
+  html.native-shell .app-shell:has(.drv-report) {
+    height: auto;
+    overflow: visible;
+  }
+  html.native-shell .app-shell:has(.drv-report) .app-content-scroll-region {
+    display: block;
+    overflow: visible;
   }
 }

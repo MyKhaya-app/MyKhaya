@@ -1920,6 +1920,11 @@ export class MyKhayaClient {
     this.request<import("@mykhaya/shared-types").Vehicle>(
       `/homes/${encodeURIComponent(homeId)}/vehicles/${encodeURIComponent(vehicleId)}`,
     );
+  refreshVehicleDetails = (homeId: string, vehicleId: string) =>
+    this.request<import("@mykhaya/shared-types").Vehicle>(
+      `/homes/${encodeURIComponent(homeId)}/vehicles/${encodeURIComponent(vehicleId)}/refresh`,
+      { method: "POST" },
+    );
   createVehicle = (homeId: string, body: import("@mykhaya/shared-types").VehicleCreatePayload) =>
     this.request<import("@mykhaya/shared-types").Vehicle>(
       `/homes/${encodeURIComponent(homeId)}/vehicles`,
@@ -1958,6 +1963,22 @@ export class MyKhayaClient {
     this.request<import("@mykhaya/shared-types").VehicleMot>(
       `/homes/${encodeURIComponent(homeId)}/vehicles/${encodeURIComponent(vehicleId)}/mot`,
     );
+  // includeHouseholdDetails=false omits the household-entered nickname and the
+  // vehicle photo, for a report the user intends to share outside the Home.
+  vehicleReportPdf = (homeId: string, vehicleId: string, format: "full" | "essential", includeHouseholdDetails = true) =>
+    this.request<{ filename: string; content_type: string; pdf_base64: string }>(
+      `/homes/${encodeURIComponent(homeId)}/vehicles/${encodeURIComponent(vehicleId)}/report/pdf`,
+      { method: "POST", body: JSON.stringify({ format, include_household_details: includeHouseholdDetails }) },
+    );
+  lookupReportPdf = (homeId: string, reportToken: string, format: "full" | "essential") =>
+    this.request<{ filename: string; content_type: string; pdf_base64: string }>(
+      `/homes/${encodeURIComponent(homeId)}/vehicles/lookup/report/pdf`,
+      { method: "POST", body: JSON.stringify({ format, report_token: reportToken }) },
+    );
+  emailVehicleReport = (homeId: string, vehicleId: string, format: "full" | "essential", includeHouseholdDetails = true) =>
+    this.request<{ status: string }>(`/homes/${encodeURIComponent(homeId)}/vehicles/${encodeURIComponent(vehicleId)}/report/email`, { method: "POST", body: JSON.stringify({ format, include_household_details: includeHouseholdDetails }) });
+  emailLookupReport = (homeId: string, reportToken: string, format: "full" | "essential") =>
+    this.request<{ status: string }>(`/homes/${encodeURIComponent(homeId)}/vehicles/lookup/report/email`, { method: "POST", body: JSON.stringify({ format, report_token: reportToken }) });
   refreshVehicleMot = (homeId: string, vehicleId: string, mode: "if_stale" | "force" = "force") =>
     this.request<import("@mykhaya/shared-types").VehicleMot>(
       `/homes/${encodeURIComponent(homeId)}/vehicles/${encodeURIComponent(vehicleId)}/mot/refresh`,

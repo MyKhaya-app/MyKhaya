@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { renderWithConsumerActions } from "@/components/consumer-action-dock.testing";
 import VehicleRemindersPage from "./page";
 
 // Coverage for Driveway's vehicle Reminders page (Phase 4). Every reminder
@@ -190,6 +191,29 @@ describe("Vehicle Reminders — not found", () => {
     (api.vehicleReminders as ReturnType<typeof vi.fn>).mockRejectedValue(new ApiError(404, "Not found"));
     renderPage();
     expect(await screen.findByText("That vehicle could not be found.")).toBeInTheDocument();
+  });
+});
+
+// A nested route (/driveway/:id/reminders): its primary action is registered
+// with the shared consumer dock, as AppShell renders it.
+describe("Vehicle Reminders — shared Add reminder action", () => {
+  it("registers Add reminder with the shared dock and opens the sheet", async () => {
+    (api.vehicleReminders as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [REMINDER] });
+    const user = userEvent.setup();
+    renderWithConsumerActions(<VehicleRemindersPage params={resolvedParams("v1")} />);
+    await screen.findByText("BMW i4 MOT due");
+    const add = await screen.findByRole("button", { name: "Add reminder" });
+    expect(add).toHaveClass("consumer-primary-action");
+    await user.click(add);
+    expect(screen.getByRole("dialog", { name: "Add reminder" })).toBeInTheDocument();
+  });
+
+  it("offers no Add reminder action for a vehicle that cannot be found", async () => {
+    (api.vehicle as ReturnType<typeof vi.fn>).mockRejectedValue(new ApiError(404, "Not found"));
+    (api.vehicleReminders as ReturnType<typeof vi.fn>).mockRejectedValue(new ApiError(404, "Not found"));
+    renderWithConsumerActions(<VehicleRemindersPage params={resolvedParams("v1")} />);
+    expect(await screen.findByText("That vehicle could not be found.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Add reminder" })).not.toBeInTheDocument();
   });
 });
 

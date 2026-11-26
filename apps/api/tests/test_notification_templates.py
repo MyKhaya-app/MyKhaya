@@ -190,6 +190,7 @@ def test_registry_matches_migration_version() -> None:
         "support.ticket.follow_up",
         "legal_acceptance_confirmation",
         "platform.monitoring_alert",
+        "driveway_vehicle_report",
     }
 
 

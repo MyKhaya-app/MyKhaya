@@ -7,6 +7,11 @@ first, then continuation-pass findings and fixes layered on top) and each findin
 states its final disposition — see the Completion Summary at the end for the final tally, and
 Before Production for what remains before this codebase should be considered launch-ready.
 
+Post-audit update (2026-11-21, documentation only): SEC-18 now has a formal disposition record that
+separates complete source-code remediation, the acknowledged and previously assessed historical Git
+exposure, and the credential revocation that has not been independently verified. Future audits
+cite SEC-18 for commit `32b102ab` rather than raising it again (see "SEC-18 disposition record").
+
 ## Executive Summary
 
 MyKhaya is a modular-monolith FastAPI backend + single Next.js consumer frontend, reused across
@@ -232,7 +237,7 @@ Evidence: local reproduction with the exact CI command and flags; `git log`/`git
 Risk: The DVLA UAT key is a sandbox/test-environment credential (not production vehicle data), which bounds the impact — but it is a real credential tied to the project's registered DVLA developer access, exposed on a public repository with no branch protection, for several days and counting. NCSC/OWASP guidance treats any committed secret as compromised regardless of exposure duration. The nine other findings carried no real risk but were never triaged, which is itself the root cause: once the gate turned red on 2026-08-15 for the (harmless) Stripe test fixtures, nobody could distinguish "still red for the known reason" from "a new, real secret just landed" — the real DVLA key sat undetected inside that noise for days. A continuously-red, unprotected gate is a worse security control than no gate at all, because it creates false confidence that scanning is happening.
 
 ACTION TAKEN:
-- Removed the real value from apps/.env.example (blanked, matching the pattern of every other credential field in that file).
+- Removed the real value from the repository-root .env.example (blanked, matching the pattern of every other credential field in that file). The removal landed in commit d31892e (2026-10-02), which is an ancestor of `dev`.
 - Added 9 new, narrowly-scoped, exact-fingerprint `.gitleaksignore` entries (one per false positive/fixture/documentation-example finding, each with a written explanation, following the project's own established pattern) plus retained a 10th entry for the DVLA finding's historical commit specifically to keep it visibly tracked as reviewed-and-actioned rather than silently dropped.
 - Did NOT touch the 6 synthetic Stripe test values beyond allowlisting them — they are already reasonably distinguishable as fake (abc123/xyz123/db123 suffixes) and editing them carried a real risk of breaking test assertions under this pass's time budget; flagged as an optional future nice-to-have (rename to even more obviously-synthetic strings) rather than done now.
 - Re-ran `gitleaks detect` locally with the exact CI command after remediation: **"no leaks found."**
@@ -251,11 +256,65 @@ Branches/tags affected: main, dev (confirmed via git branch -a --contains); feat
 Affected files: .env.example, .gitleaksignore
 OWASP mapping: ASVS V13.3 (secrets management), NCSC Secure Development — secrets/credential handling
 NCSC mapping: Secrets management; "treat a committed secret as compromised" principle
-Status: **Source remediation complete / external credential rotation outstanding.** The key was removed from source, `.gitleaksignore` was updated with documentation, and `gitleaks detect` is now clean (confirmed with the exact CI command). UAT credential rotation remains an owner action external to this repository — per explicit instruction, this finding is not a blocker for completing this audit, and no new secret value has been or will be recorded anywhere in this report. When rotation is complete, ask for this entry to be updated with the rotation date and a final re-verification that the old value is no longer accepted (if DVLA's UAT environment exposes a way to check that without re-exposing the new key).
+Status: **Source-code remediation complete (re-verified 2026-11-21) / historical Git exposure acknowledged and previously assessed / credential revocation not independently verified.** See "SEC-18 disposition record" immediately below this entry for the current, authoritative disposition and the rules future audits follow. Original audit-time status: the key was removed from source, `.gitleaksignore` was updated with documentation, and `gitleaks detect` is now clean (confirmed with the exact CI command). UAT credential rotation remains an owner action external to this repository — per explicit instruction, this finding is not a blocker for completing this audit, and no new secret value has been or will be recorded anywhere in this report. When rotation is complete, ask for this entry to be updated with the rotation date and a final re-verification that the old value is no longer accepted (if DVLA's UAT environment exposes a way to check that without re-exposing the new key).
 ```
 
-This section was originally a single combined finding. Per explicit instruction, it has been split
-into four distinct findings below — a credential exposure event (SEC-18, above), the repository
+### SEC-18 disposition record: historical DVLA UAT credential exposure
+
+Last updated 2026-11-21 (documentation-only update; no credential, application code or deployment
+configuration was changed). This record is the single authoritative disposition for SEC-18. The
+`.gitleaksignore` entry and
+[CI security scanning](../engineering/ci-security-scanning.md#previously-assessed-historical-findings)
+point here and do not restate it.
+
+The finding has three parts, each with its own status. Do not merge them into one "resolved" claim.
+
+| Part | Status | Evidence |
+|---|---|---|
+| Source-code remediation | **Complete.** | The value was introduced in `32b102ab` (2026-09-29) and removed from the repository-root `.env.example` in `d31892e` (2026-10-02). Re-verified 2026-11-21 against `dev` at `e10f8f2`: `MYKHAYA_DVLA_UAT_API_KEY` is blank in both `.env.example` and `.env.production.example`, and a fixed-string search of every tracked file at that commit found no occurrence of the historical value. The value was compared in memory only and never printed. |
+| Historical Git exposure | **Acknowledged and previously assessed. Not a new vulnerability.** | Commit `32b102ab` remains in published history on `main`, `dev` and the other branches listed in the SEC-18 entry. History is deliberately not rewritten; the reasoning is in the entry's history-rewrite recommendation. The exact fingerprint `32b102ab29fcb88c2ecb27edbb13f4e76b7cd336:.env.example:generic-api-key:70` stays in `.gitleaksignore` as the reviewed record of this one occurrence. |
+| Credential revocation or rotation | **Not independently verified.** | Revocation is an Owner action with DVLA, outside this repository. No repository review, audit or CI job can confirm it, and none has. Until the Owner records the revocation date here, treat the historical value as compromised and possibly still valid. Source-code remediation and the Gitleaks exception do not stand in for revocation. |
+| Residual risk | **Open.** | Remains open until revocation or invalidation of the exposed credential is confirmed and recorded here. SEC-18 is not fully resolved by removing the credential from source control. |
+
+SEC-18 concerns only this one exposed credential. It does not restrict which DVLA or DVSA
+environment DEV uses: DEV may use the live DVLA Vehicle Enquiry Service and DVSA MOT APIs for
+realistic integration testing, under the existing DEV/PROD credential isolation, explicit
+configuration, access controls, provider permissions, quotas and audit logging (see
+[Driveway providers](../operations/driveway-providers.md)).
+
+**Scope of the Gitleaks exception.** The entry is one exact `commit:file:rule:line` fingerprint. It
+covers only the historical occurrence in `32b102ab` at `.env.example` line 70. It does not suppress:
+
+- the same value in any other commit, file or line;
+- any other DVLA key, whether rotated or new;
+- any other `generic-api-key` finding in `.env.example`.
+
+Each of those is reported as a new finding. Never broaden, generalise or duplicate this entry. The
+scanner configuration stays as described in
+[CI security scanning](../engineering/ci-security-scanning.md): full history, no path-wide or
+rule-wide exclusions, no `.gitleaks.toml` allowlist.
+
+**For future security audits and reviews:**
+
+1. Commit `32b102ab` and its `.env.example:70` DVLA UAT key are a known, previously assessed
+   finding. Cite **SEC-18** and do not raise them as a new finding or a new vulnerability.
+2. Report the revocation state as "not independently verified, tracked under SEC-18" until the
+   Owner records it here. That open action belongs to SEC-18; it is not a separate finding.
+3. Raise a **new** finding only on new evidence, for example:
+   - the value, or any real DVLA credential, appears in a commit, file or line other than the
+     fingerprint above;
+   - the `.gitleaksignore` entry is broadened, or secret scanning is weakened;
+   - a credential value reappears in `.env.example` or another tracked file;
+   - there is evidence that the exposed credential was misused.
+4. Verify by metadata only (commit, file, rule, line, fingerprint, value length, in-memory
+   comparison). Never print, copy or record the credential value.
+
+**When the Owner confirms revocation,** update the revocation row with the date and how it was
+confirmed (for example, the old key is rejected by DVLA's UAT service), without recording any key
+value. Then update the outstanding-action references to SEC-18 later in this report.
+
+The CI security-gate investigation above was originally a single combined finding. Per explicit
+instruction, it has been split into four distinct findings below — a credential exposure event (SEC-18, above), the repository
 governance gap that let it go unnoticed (SEC-19), the pre-existing failing test baseline discovered
 while validating this pass's own changes (SEC-20), and the remaining two CI security-scanner jobs
 investigated on priority request (SEC-21, SEC-22). These are four separate problems with four
@@ -863,7 +922,8 @@ git diff --check:            PASS (clean)
 - SEC-18 (CI secrets gate / real DVLA credential): investigated as priority. Real secret removed
   from source; 9 false-positive/fixture findings triaged and narrowly allowlisted with
   documentation; `gitleaks detect` now passes locally with the exact CI command. Credential
-  rotation remains an outstanding user action (see Remediation Outstanding).
+  revocation has not been independently verified and remains an Owner action (see Remediation
+  Outstanding and the SEC-18 disposition record).
 - SEC-21 (filesystem/Trivy — brace-expansion HIGH CVEs): dependency overrides added, lockfile
   regenerated, re-verified with the exact CI command.
 - SEC-22 (semgrep — raw-SQL pattern + Android manifest false positive): raw-SQL pattern eliminated
@@ -913,11 +973,14 @@ git diff --check:            PASS (clean)
 - SEC-16 (vitest major-version bump, uuid): deliberately deferred, dev-only/native-build-only impact.
 - `apps/web/app/control-centre/pcc.css` possible dead CSS (~21 classes): needs manual confirmation
   (dynamic-HTML risk) before deletion — not removed in this pass.
-- **SEC-18 — DVLA UAT API key rotation (user action required, single highest-priority item in this
-  entire report):** the real key removed from `.env.example` in this pass must be rotated via
-  DVLA's developer-access channel; the old value must be treated as permanently compromised
-  regardless of git history. Once rotated, the user should ask for SEC-18 to be updated with the
-  rotation date and a final re-verification (see SEC-18's own entry for the exact follow-up steps).
+- **SEC-18 — DVLA UAT API key revocation (Owner action, not independently verified; single
+  highest-priority item in this entire report):** source-code remediation is complete (the key was
+  removed from `.env.example` and re-verified absent from every tracked file on 2026-11-21), and the
+  historical Git exposure in commit `32b102ab` is acknowledged and previously assessed, so it is not
+  a new finding. What remains is revocation or rotation through DVLA's developer-access channel,
+  which no repository review can confirm. Treat the old value as permanently compromised regardless
+  of Git history. Once revoked, the Owner should ask for the SEC-18 disposition record to be updated
+  with the date and how it was confirmed.
 - **SEC-19 — branch protection:** no branch protection or rulesets exist on `main` or `dev`
   (confirmed via GitHub API); configuring it is a GitHub repository-settings action this audit
   cannot perform without explicit authorisation.
@@ -975,8 +1038,9 @@ Secure configuration:              Reviewed — Dockerfiles non-root/multi-stage
 Supply chain / CI integrity:       Reviewed and actively tested this pass — SEC-14/15/16/21/22.
                                     Partially implemented — SEC-19 branch protection absent.
 Secrets management:                Reviewed and actively tested this pass — SEC-18. One real
-                                    exposure found and remediated in source; rotation outstanding
-                                    (external action, explicitly not a blocker per instruction).
+                                    exposure found and remediated in source; revocation not
+                                    independently verified (external Owner action, explicitly not
+                                    a blocker per instruction).
 Monitoring/logging:                Reviewed via docs/security/logging-and-monitoring.md in Phase 1
                                     (hard invariant against logging credentials — not independently
                                     re-tested against live log output in this pass). Manual
@@ -1158,10 +1222,12 @@ repeated here:
    Confirmed absent. Target state documented above under SEC-19 — requires direct
    GitHub repository-settings configuration by someone with admin access.
 
-3. DVLA UAT credential rotation (SEC-18).
-   Removed from source; rotation is an external owner action. Explicitly not a
-   blocker for this audit per instruction, but should complete before the DVLA
-   integration is relied upon in any further environment.
+3. DVLA UAT credential revocation (SEC-18).
+   Source-code remediation complete; historical Git exposure acknowledged and
+   previously assessed. Revocation is an external Owner action and has not been
+   independently verified. Explicitly not a blocker for this audit per
+   instruction, but should complete before the DVLA integration is relied upon
+   in any further environment.
 
 4. Pre-existing test-baseline triage (SEC-20 web, SEC-23 backend).
    121 web + 15 backend security-subset failures, confirmed pre-existing and
@@ -1206,7 +1272,8 @@ After this pass's remediation, the residual risk profile is:
   features not yet built, test-baseline debt) rather than flaws in what has been built.
 - **The DVLA credential (SEC-18)** is the one item with any live exposure window, and it is bounded
   by scope (UAT/sandbox access, not production vehicle data) and now closed at the source level;
-  residual risk here is entirely the rotation window until the user completes that external step.
+  residual risk here is entirely the window until revocation is completed and confirmed, which has
+  not been independently verified.
 - **PCC (SEC-01)** carries the largest standing architectural risk if it were treated as
   production-ready today — it should not be, and every document that discusses it agrees.
 - **Governance (SEC-19)** is a multiplier on every other risk in this report: without branch
@@ -1233,8 +1300,10 @@ Informational:  7  (SEC-06, SEC-07, SEC-09, SEC-11,
 23 findings total (SEC-01 through SEC-23).
 
 SEC-18 (the DVLA credential exposure itself) is counted as High and "resolved" only in the sense
-that the gate is clean and the value is removed from source — **the credential rotation itself is
-still outstanding and is this report's single highest-priority action item.** SEC-19 (branch
+that the gate is clean and the value is removed from source. **Credential revocation has not been
+independently verified and is this report's single highest-priority action item.** The historical
+Git exposure is a previously assessed part of SEC-18, not a separate or new finding (see the SEC-18
+disposition record). SEC-19 (branch
 protection), SEC-20 (121 pre-existing web test failures), and SEC-23 (15 pre-existing backend
 security-test failures) are each separate, newly-split findings per instruction — none of them
 restates another. SEC-21 and SEC-22 (the `filesystem`/Trivy and `semgrep` CI jobs) were both
@@ -1282,9 +1351,10 @@ push, pending the user applying these changes.
 (`docs/security/MYKHAYA_SECURITY_AUDIT_2026-10.md`, extensively).
 
 **Manual checks outstanding:**
-1. Rotate the exposed DVLA UAT API key (SEC-18) — external owner action, explicitly not a blocker
-   for this audit's completion per instruction. Not performed here; when done, ask for SEC-18 to be
-   updated with the rotation date and a final re-verification.
+1. Revoke or rotate the exposed DVLA UAT API key (SEC-18) — external Owner action, explicitly not a
+   blocker for this audit's completion per instruction. Not performed or independently verified
+   here; when done, ask for the SEC-18 disposition record to be updated with the date and a final
+   re-verification.
 2. Configure GitHub branch protection on `main`/`dev` (SEC-19) — confirmed absent, not configurable
    from this repository checkout; target state documented under SEC-19 above.
 3. Remaining test-baseline follow-up: 86 web (SEC-20, 2 files worth a closer look) and 12 backend
@@ -1334,7 +1404,7 @@ Remediated:        SEC-02, SEC-05, SEC-07, SEC-08, SEC-12, SEC-13 (partial), SEC
                     SEC-18 (source-level), SEC-21, SEC-22 — 11 of 23 findings fixed or resolved
 Outstanding:        SEC-01, SEC-03, SEC-04, SEC-06, SEC-09, SEC-10, SEC-11 (n/a), SEC-13 (remaining
                     modules), SEC-16, SEC-17 (n/a), SEC-19, SEC-20 (remaining), SEC-23 (remaining)
-Manual/external action: SEC-18 (DVLA key rotation — user), SEC-19 (branch protection — user),
+Manual/external action: SEC-18 (DVLA key revocation — Owner, not independently verified), SEC-19 (branch protection — user),
                     SEC-01 (PCC WebAuthn implementation — future work), production infra/DNS/
                     firewall/Play-Console/App-Store/pen-test (all Manual Verification Required)
 
@@ -1379,7 +1449,7 @@ git diff --check: PASS (clean)
 BEFORE PRODUCTION
 - PCC mandatory WebAuthn/passkey implementation and independent review (SEC-01)
 - GitHub branch protection on main/dev (SEC-19)
-- DVLA UAT credential rotation (SEC-18) — external action
+- DVLA UAT credential revocation (SEC-18) — external Owner action, not independently verified
 - Android persistent secure credential storage, once persistent Android login is built (SEC-03)
 - Billing production readiness: ToS/Privacy Policy, VAT decision, real Stripe sandbox run (SEC-10)
 - Data-subject-rights workflows (SEC-04)

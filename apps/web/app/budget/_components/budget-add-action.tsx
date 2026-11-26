@@ -1,11 +1,12 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
-import { ArrowRight, CircleDollarSign, Plus, Receipt, WalletCards } from "lucide-react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
+import { ArrowRight, CircleDollarSign, Receipt, WalletCards } from "lucide-react";
 import { api, type BudgetCategory } from "@mykhaya/api-client";
 import { BottomSheet } from "@/components/bottom-sheet";
 import { FormField, FormLayout, FormRow, FormSheet } from "@/components/form-layout";
 import { BudgetAmountField, useBudgetFieldErrors } from "./budget-form-fields";
+import { useConsumerPrimaryAction } from "@/components/consumer-action-dock";
 
 type AddMode = "menu" | "fixed" | "variable";
 
@@ -27,6 +28,10 @@ export function BudgetAddAction({ homeId, onRefresh, onSpending, onIncome }: { h
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
   const period = currentPeriod();
+  useConsumerPrimaryAction(useMemo(() => ({
+    label: "Add Budget item",
+    onActivate: () => open("menu"),
+  }), [period.year, period.month]));
   const fields = useBudgetFieldErrors({
     category: { missing: "Choose a category." },
     amount: { missing: "Enter an amount." },
@@ -91,10 +96,6 @@ export function BudgetAddAction({ homeId, onRefresh, onSpending, onIncome }: { h
   }
 
   return <>
-    <button type="button" className="rr-fab" aria-label="Add Budget item" onClick={() => open("menu")}>
-      <Plus size={22} aria-hidden="true" />
-      <span aria-hidden="true">Add</span>
-    </button>
     {mode === "menu" && <BottomSheet title="What would you like to add?" onDismiss={close}>
       <div className="budget-picker-list budget-add-picker-list">
         <button type="button" className="budget-picker-row" onClick={() => open("fixed")}><span className="budget-picker-icon"><WalletCards size={21} /></span><span className="budget-picker-copy"><strong>Fixed monthly cost</strong><small>Mortgage, broadband, subscriptions, etc.</small></span><ArrowRight size={19} aria-hidden="true" /></button>

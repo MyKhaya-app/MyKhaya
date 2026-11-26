@@ -127,8 +127,45 @@ is relied on.
 | `defects[].dangerous`, `defects[].text` | `dangerous`, `text` |
 | `motTestDueDate` (vehicles not yet tested) | `mot_first_due_date` |
 
-Not stored: the registration, make, model, colour, fuel, recall flag and any raw
-payload.
+The DVSA MOT history tables do not store the registration or raw provider
+payload. Vehicle-level make, model, colour, fuel and engine values may be used
+to fill missing fields on the parent vehicle, but never replace a non-null DVLA
+or user-entered value. Recall data is not currently requested or stored.
+
+### DVLA VES supplementary mapping
+
+DVLA owns registration, tax and the following vehicle specifications. Values are
+persisted only when the provider returns them; a missing provider value never
+clears an existing value.
+
+| DVLA VES | Driveway storage | Presentation |
+|---|---|---|
+| `co2Emissions` | `vehicles.co2_emissions` | Details / lookup |
+| `euroStatus` | `vehicles.euro_status` | Details / lookup |
+| `typeApproval` | `vehicles.type_approval` | Details / lookup |
+| `wheelPlan` | `vehicles.wheel_plan` | Details / lookup |
+| `revenueWeight` | `vehicles.revenue_weight` | Details / lookup |
+| `markedForExport` | `vehicles.marked_for_export` | Details / lookup |
+| `markedAsScrapped` | `vehicles.marked_as_scrapped` | Stored for future status presentation |
+| `dateOfLastV5CIssued` | `vehicles.date_of_last_v5c_issued` | Details / lookup |
+| `realDrivingEmissions` | `vehicles.real_driving_emissions` | Details / lookup |
+| `vehicleStatus` | `vehicles.vehicle_status` | Details / lookup |
+| `automatedVehicle` | `vehicles.automated_vehicle` | Stored for future status presentation |
+| `artEndDate` | `vehicles.art_end_date` | Details / lookup |
+| `yearOfFirstRegistrationWithDVLA` + `monthOfFirstRegistrationWithDVLA` | `vehicles.first_registration_with_dvla_date` plus precision | Details / lookup |
+
+`yearOfManufacture` remains the primary stored vehicle year. First registration
+is stored with explicit `day`, `month` or `year` precision. When VES supplies
+only year/month, the database date uses day 1 as an internal anchor but the API
+and UI display only the precision actually returned. The separate
+`yearOfFirstRegistrationWithDVLA` / `monthOfFirstRegistrationWithDVLA` values
+are stored independently and are never presented as the vehicle's first
+registration date.
+
+DVSA vehicle-level fields are used only as a fallback for missing non-sensitive
+vehicle fields, with DVLA remaining authoritative wherever it supplies a
+value. DVSA remains authoritative for MOT history, mileage, defects and MOT
+reminders.
 
 The summary status is computed from history:
 - **`valid`:** some passed test expires today or later. The latest passed expiry is
@@ -223,6 +260,46 @@ MOT history tables and the derived MOT columns are not carried in packages. An
 imported vehicle starts "not yet checked" and refreshes in the target environment.
 
 ## Rollout
+
+## Vehicle Lookup security and provider-use review
+
+Vehicle Lookup is a read-only, non-persistent workflow. It uses the existing
+authenticated Home context and `driveway_view` capability, never creates or
+updates a `Vehicle`, never creates reminders, and does not retain unrelated
+enquiries by default.
+
+The arbitrary-registration DVSA path is controlled by
+`MYKHAYA_DVSA_ARBITRARY_LOOKUP_ENABLED`, which defaults to `false`. Before it
+is enabled in any shared environment, the DVSA application owner must confirm
+that the registered API use case covers this consumer vehicle-check workflow.
+The current official material confirms that authorised organisations,
+businesses and individuals may use the API and that the service is intended
+for services which improve road safety, but it does not explicitly approve
+every product workflow. This remains an external contractual confirmation,
+not an assumption made by the application.
+
+Boundary controls:
+
+- authenticated active Home member with `driveway_view`;
+- per-user rate limit from `MYKHAYA_DVSA_ARBITRARY_LOOKUP_RATE_LIMIT`
+  (default 3 requests/hour), plus existing provider throttling;
+- no arbitrary lookup for showcase Homes;
+- no registration, raw response, credential, token or defect text in logs;
+- no database persistence or reminder reconciliation;
+- provider-neutral response only, with generic not-found and failure messages;
+- DVSA access remains disabled until the terms/use-case confirmation is
+  recorded and the deployment setting is explicitly enabled.
+
+The endpoint may use a short-lived in-memory/provider cache in a later change,
+but no persistent cache is enabled by this implementation. A keyed Redis cache
+would require a separate retention and invalidation review because a vehicle
+registration is sensitive data. Existing stored-vehicle MOT refresh remains
+the preferred path and keeps its per-vehicle lock, freshness and reminder
+behaviour.
+
+The assessment is currently **conditionally acceptable for code delivery but
+not production enablement**. DVSA terms/use-case confirmation and an authorised
+DEV credential test are still required.
 
 **DEV commissioning** (not yet done; needs DEV credentials):
 

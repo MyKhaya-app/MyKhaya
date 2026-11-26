@@ -1,7 +1,13 @@
 # Deployment configuration ownership
 
 MyKhaya has one mutable deployment configuration per installation: the
-untracked, permission-protected `.env` file at the repository root. Compose
+untracked, permission-protected `.env` file at the repository root or, once an
+installation has completed the F-03 service-specific migration, the per-service
+files under its configuration root (`/etc/mykhaya/prod/` on PROD, selected
+automatically by the cutover state; see
+[prod-service-config-migration.md](../operations/prod-service-config-migration.md)).
+After that migration the root `.env` is retained only as the rollback source
+and is no longer edited. Compose
 files describe service topology, mounts, networks, health checks and security
 invariants. They must not be edited on a server to change application policy.
 

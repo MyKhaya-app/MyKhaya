@@ -30,3 +30,21 @@ describe("styles.css — Driveway form fields", () => {
     expect(css).not.toMatch(/\.(vehicle-form|vehicle-reminder-form|driveway-form)\b[^{]*\{[^}]*font-size/);
   });
 });
+
+describe("styles.css — Driveway vehicle tabs", () => {
+  it("keeps all four vehicle tabs equal-width and on one row", () => {
+    const tabs = css.match(/\.drv-page \.rr-segmented\.drv-tabs \{[^}]*\}/)?.[0] ?? "";
+    expect(tabs).toContain("grid-template-columns: repeat(4, minmax(0, 1fr));");
+    expect(tabs).not.toContain("repeat(3");
+
+    const segment = css.match(/\.drv-page \.drv-tabs \.rr-segment \{[^}]*\}/)?.[0] ?? "";
+    expect(segment).toContain("white-space: nowrap;");
+  });
+
+  it("keeps the Tax tab cards and action scoped to the Driveway theme", () => {
+    expect(css).toContain(".drv-page .drv-tax-estimate-card");
+    expect(css).toContain(".drv-page .drv-tax-payments");
+    expect(css).toContain(".drv-page .drv-button-full");
+    expect(css).toContain("var(--colour-forest-dark)");
+  });
+});

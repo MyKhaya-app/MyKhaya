@@ -1060,6 +1060,9 @@ export interface Vehicle {
   country_code: string;
   registration: string | null;
   first_registration_date: string | null;
+  first_registration_precision?: "day" | "month" | "year" | null;
+  first_registration_with_dvla_date?: string | null;
+  first_registration_with_dvla_precision?: "day" | "month" | "year" | null;
   // Omitted by the backend (not just null) for a viewer who isn't the
   // vehicle's own owner or a home_admin — see routers.driveway.
   vin: string | null;
@@ -1068,12 +1071,41 @@ export interface Vehicle {
   last_successful_lookup: string | null;
   tax_status: string | null;
   tax_due_date: string | null;
+  co2_emissions: number | null;
+  euro_status: string | null;
+  type_approval: string | null;
+  wheel_plan: string | null;
+  revenue_weight: number | null;
+  marked_for_export: boolean | null;
+  marked_as_scrapped: boolean | null;
+  date_of_last_v5c_issued: string | null;
+  real_driving_emissions: string | null;
+  vehicle_status: string | null;
+  automated_vehicle: boolean | null;
+  art_end_date: string | null;
   inspection_status: string | null;
   inspection_due_date: string | null;
   photo_version: string | null;
   archived: boolean;
   created_at: string;
   updated_at: string;
+  refresh_outcome: "refreshed" | "unchanged" | "busy" | "rate_limited" | "unavailable" | null;
+  tax_calculation: VehicleTaxCalculation | null;
+}
+
+export type VehicleTaxCalculationStatus = "calculated" | "conditional_estimate" | "insufficient_data" | "unsupported_category";
+
+export interface VehicleTaxCalculation {
+  status: VehicleTaxCalculationStatus;
+  annual_rate: number | null;
+  payment_options: Record<string, number>;
+  tax_year: string | null;
+  category: string | null;
+  assumptions: string[];
+  missing_information: string[];
+  supplement_message: string | null;
+  source: string;
+  calculated_at: string;
 }
 
 export interface VehicleListResponse {
@@ -1174,6 +1206,9 @@ export interface VehicleCreatePayload {
   country_code: string;
   registration?: string | null;
   first_registration_date?: string | null;
+  first_registration_precision?: "day" | "month" | "year" | null;
+  first_registration_with_dvla_date?: string | null;
+  first_registration_with_dvla_precision?: "day" | "month" | "year" | null;
   vin?: string | null;
 }
 
@@ -1405,12 +1440,51 @@ export interface VehicleLookupResult {
   fuel_type: string | null;
   engine_size: string | null;
   first_registration_date: string | null;
+  first_registration_precision?: "day" | "month" | "year" | null;
+  first_registration_with_dvla_date?: string | null;
+  first_registration_with_dvla_precision?: "day" | "month" | "year" | null;
   tax_status: string | null;
   tax_due_date: string | null;
   inspection_status: string | null;
   inspection_due_date: string | null;
+  co2_emissions: number | null;
+  euro_status: string | null;
+  type_approval: string | null;
+  wheel_plan: string | null;
+  revenue_weight: number | null;
+  marked_for_export: boolean | null;
+  marked_as_scrapped: boolean | null;
+  date_of_last_v5c_issued: string | null;
+  real_driving_emissions: string | null;
+  vehicle_status: string | null;
+  automated_vehicle: boolean | null;
+  art_end_date: string | null;
+  checked_at: string | null;
+  mot: VehicleLookupMotResult | null;
+  tax_calculation: VehicleTaxCalculation | null;
   capabilities: string[];
   message: string | null;
+  report_token?: string | null;
+}
+
+export interface VehicleLookupMotTest {
+  test_number: string | null;
+  test_date: string;
+  completed_at: string | null;
+  expiry_date: string | null;
+  result: VehicleMotResult;
+  odometer_value: number | null;
+  odometer_unit: "mi" | "km" | null;
+  odometer_result: string | null;
+  defects: Array<{ text: string; category: string; dangerous: boolean }>;
+}
+
+export interface VehicleLookupMotResult {
+  status: string | null;
+  due_date: string | null;
+  first_mot_due_date: string | null;
+  refreshed_at: string | null;
+  tests: VehicleLookupMotTest[];
 }
 
 export interface PlanComparisonRow {

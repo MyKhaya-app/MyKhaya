@@ -12,6 +12,7 @@ import hashlib
 import json
 import os
 import re
+import secrets
 import subprocess
 import sys
 import tempfile
@@ -35,6 +36,94 @@ SERVICES = ("api", "worker", "scheduler", "migrate")
 PRODUCTION_APNS_BUNDLE_ID = "app.mykhaya.mobile.prod"
 MARKER = "MYKHAYA_RUNTIME_CONFIG="
 PROBE_PROJECT_PREFIX = "mykhaya-config-probe"
+SERVICE_ENV_OVERLAY = "compose.dev.service-env.yml"
+SECRETS_OVERLAY = "compose.dev.secrets.yml"
+PROD_SERVICE_ENV_OVERLAY = "compose.production.service-env.yml"
+PROD_SECRETS_OVERLAY = "compose.production.secrets.yml"
+# compose.yml/compose.dev.yml interpolate these secrets; the service-env overlay
+# removes the keys, and the validator forces them blank so no shell value leaks.
+BLANKED_INTERPOLATION = (
+    "MYKHAYA_DB_PASSWORD",
+    "MYKHAYA_MIGRATION_DB_PASSWORD",
+    "MYKHAYA_POSTGRES_ADMIN_PASSWORD",
+    "MYKHAYA_APNS_PRIVATE_KEY",
+)
+
+
+def is_production() -> bool:
+    return os.environ.get("MYKHAYA_PRODUCTION") == "1"
+
+
+def service_env_root() -> str | None:
+    """The selected service-specific configuration root, or None (legacy).
+
+    DEV: MYKHAYA_DEV_CONFIG_ROOT. PROD: MYKHAYA_PROD_CONFIG_ROOT, which only the
+    production scripts set, from the cutover state. A DEV root is never used
+    in production.
+    """
+    name = "MYKHAYA_PROD_CONFIG_ROOT" if is_production() else "MYKHAYA_DEV_CONFIG_ROOT"
+    root = os.environ.get(name) or None
+    if root is not None and file_backed():
+        # The deployment scripts export the F-03 root; this mode uses its subdirectory.
+        return f"{root.rstrip('/')}/file-backed"
+    return root
+
+
+def file_backed() -> bool:
+    """Credentials come from Compose file secrets. In production the flag is
+    set only by prod-config-mode.sh, from the protected state."""
+    name = "MYKHAYA_PROD_SECRETS" if is_production() else "MYKHAYA_DEV_SECRETS"
+    return os.environ.get(name) == "1"
+
+
+def base_compose_args() -> list[str]:
+    root = service_env_root()
+    if root is None:
+        return list(COMPOSE_FILES)
+    root = root.rstrip("/")
+    if is_production() and file_backed():
+        return [
+            "docker", "compose", "--env-file", f"{root}/compose.env", "-f", "compose.yml",
+            "-f", "compose.production.yml", "-f", PROD_SERVICE_ENV_OVERLAY,
+            "-f", PROD_SECRETS_OVERLAY,
+        ]
+    if is_production():
+        # Same command as prod-config-mode.sh: postgres.env is an interpolation
+        # source for PostgreSQL's unchanged service definition.
+        return [
+            "docker", "compose", "--env-file", f"{root}/compose.env",
+            "--env-file", f"{root}/postgres.env",
+            "-f", "compose.yml", "-f", "compose.production.yml", "-f", PROD_SERVICE_ENV_OVERLAY,
+        ]
+    command = [
+        "docker", "compose", "--env-file", f"{root}/compose.env",
+        "-f", "compose.yml", "-f", "compose.dev.yml", "-f", SERVICE_ENV_OVERLAY,
+    ]
+    return [*command, "-f", SECRETS_OVERLAY] if file_backed() else command
+
+
+# PROD: these come from postgres.env and must not be overridden from the shell;
+# the remaining interpolated secrets are forced blank as on DEV.
+PROD_FROM_FILE = BLANKED_INTERPOLATION[:3]
+PROD_BLANKED = ("MYKHAYA_APNS_PRIVATE_KEY", "MYKHAYA_FCM_PRIVATE_KEY")
+
+
+def compose_environment() -> dict[str, str] | None:
+    if service_env_root() is None:
+        return None
+    env = dict(os.environ)
+    if is_production():
+        for name in PROD_FROM_FILE:
+            env.pop(name, None)
+        if file_backed():
+            env.update({name: "" for name in PROD_FROM_FILE})
+            env["MYKHAYA_PROD_CONFIG_ROOT"] = service_env_root() or ""
+        env.update({name: "" for name in PROD_BLANKED})
+        return env
+    env.update({name: "" for name in BLANKED_INTERPOLATION})
+    if file_backed():
+        env["MYKHAYA_DEV_CONFIG_ROOT"] = service_env_root() or ""
+    return env
 
 
 @dataclass(frozen=True)
@@ -52,6 +141,7 @@ class RuntimeConfig:
     apns_delivery_configured: bool
     environment: str = ""
     apns_bundle_id: str = ""
+    email_delivery_configured: bool = False
 
 
 @dataclass(frozen=True)
@@ -61,19 +151,23 @@ class ProbeContext:
     override_path: Path
 
 
+class ProbeIsolationError(RuntimeError):
+    """The probe cannot be proven to own every resource it would create."""
+
+
 def probe_project_name() -> str:
-    """Return a valid, per-process Compose project name.
+    """Return a valid, unique, collision-resistant Compose project name.
 
     A unique project prevents a validator run from joining or removing the
-    persistent ``mykhaya`` networks and one-off containers. The PID also keeps
-    concurrent local validation runs independent without leaving a fixed,
-    reusable project name behind.
+    persistent ``mykhaya`` networks, volumes and one-off containers. The PID
+    keeps concurrent runs apart and the random suffix rules out reuse of a
+    stale project left by an earlier process with the same PID.
     """
-    return f"{PROBE_PROJECT_PREFIX}-{os.getpid()}"
+    return f"{PROBE_PROJECT_PREFIX}-{os.getpid()}-{secrets.token_hex(4)}"
 
 
 def compose_command(project_name: str | None = None) -> list[str]:
-    command = list(COMPOSE_FILES)
+    command = base_compose_args()
     if project_name is not None:
         command[2:2] = ["-p", project_name]
     return command
@@ -134,21 +228,57 @@ def parse_config(service: str, output: str) -> RuntimeConfig:
         apns_delivery_configured=data["apns_delivery_configured"],
         environment=data.get("environment", ""),
         apns_bundle_id=data.get("apns_bundle_id", ""),
+        email_delivery_configured=data.get("email_delivery_configured", False),
     )
 
 
-def resolved_service_images() -> dict[str, str]:
-    """Resolve images from the normal merged project without printing config."""
+def resolved_model() -> dict:
+    """The merged Compose model, held in memory only and never printed."""
     result = subprocess.run(
         [*compose_command(), "config", "--format", "json"],
         capture_output=True,
         text=True,
         check=False,
+        env=compose_environment(),
     )
     if result.returncode != 0:
         raise compose_failure("Compose configuration inspection", result)
     try:
-        resolved = json.loads(result.stdout)
+        return json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"Compose configuration was not valid JSON: {exc}") from exc
+
+
+def probe_owned_volumes(resolved: dict) -> list[str]:
+    """Every declared volume key, each to be renamed into the probe project.
+
+    The probe must never own or reference an application data volume. Compose
+    deletes any non-external volume a project declares on `down --volumes`,
+    even one created by another project, as soon as no container (running or
+    stopped) still holds it. compose.dev.yml and compose.production.yml pin
+    home_migration_data to a fixed name, and an explicit name can also equal
+    the default `<project>_<key>` pattern, so every volume is renamed
+    unconditionally rather than detecting "fixed" names.
+
+    An external volume is by definition an existing real volume that cannot be
+    renamed, so its presence fails validation closed instead of letting the
+    probe mount it.
+    """
+    volumes = resolved.get("volumes") or {}
+    external = sorted(key for key, volume in volumes.items() if (volume or {}).get("external"))
+    if external:
+        raise ProbeIsolationError(
+            "external volumes cannot be isolated from the configuration probe: "
+            + ", ".join(external)
+        )
+    return sorted(volumes)
+
+
+def resolved_service_images(resolved: dict | None = None) -> dict[str, str]:
+    """Resolve images from the normal merged project without printing config."""
+    if resolved is None:
+        resolved = resolved_model()
+    try:
         services = resolved["services"]
         project_name = resolved.get("name") or os.environ.get("COMPOSE_PROJECT_NAME", "mykhaya")
         images = {
@@ -162,10 +292,15 @@ def resolved_service_images() -> dict[str, str]:
     return images
 
 
-def create_probe_context() -> ProbeContext:
+def create_probe_context(resolved: dict | None = None) -> ProbeContext:
     """Create an isolated project override that reuses freshly built images."""
     project_name = probe_project_name()
-    images = resolved_service_images()
+    if resolved is None:
+        resolved = resolved_model()
+    images = resolved_service_images(resolved)
+    # DEV and PROD: rename every declared volume into the probe project, so the
+    # probe never references an application volume.
+    rescoped = probe_owned_volumes(resolved)
     temporary_directory = Path(tempfile.mkdtemp(prefix="mykhaya-config-probe-"))
     override_path = temporary_directory / "images.yml"
     # This is YAML because Compose's !reset tag is needed to remove the
@@ -189,6 +324,10 @@ def create_probe_context() -> ProbeContext:
             "      config: !reset []",
         ]
     )
+    if rescoped:
+        lines.append("volumes:")
+        for key in rescoped:
+            lines.extend([f"  {key}:", f"    name: {json.dumps(f'{project_name}_{key}')}"])
     override_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
     return ProbeContext(
         project_name=project_name,
@@ -197,20 +336,93 @@ def create_probe_context() -> ProbeContext:
     )
 
 
-def cleanup_probe(context: ProbeContext) -> None:
-    """Remove only resources belonging to this validator's project."""
+def docker_volume_exists(name: str) -> bool:
     result = subprocess.run(
-        [*context.compose_args, "down", "--remove-orphans", "--volumes"],
+        ["docker", "volume", "inspect", name], capture_output=True, text=True, check=False
+    )
+    return result.returncode == 0
+
+
+def verify_probe_isolation(context: ProbeContext) -> None:
+    """Prove, before any probe container exists, that the probe owns everything.
+
+    Every volume and network in the effective probe model must carry the probe
+    project's own name prefix, none may be external, and no probe volume may
+    exist yet. Otherwise validation fails closed without creating anything.
+    """
+    result = subprocess.run(
+        [*context.compose_args, "config", "--format", "json"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=compose_environment(),
+    )
+    if result.returncode != 0:
+        raise compose_failure("Probe isolation inspection", result)
+    try:
+        model = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise ProbeIsolationError(f"probe model was not valid JSON: {exc}") from exc
+    prefix = f"{context.project_name}_"
+    problems = []
+    for kind in ("volumes", "networks"):
+        for key, resource in (model.get(kind) or {}).items():
+            resource = resource or {}
+            if resource.get("external"):
+                problems.append(f"{kind[:-1]} {key} is external")
+            elif not str(resource.get("name", "")).startswith(prefix):
+                problems.append(f"{kind[:-1]} {key} is not probe-scoped")
+            elif kind == "volumes" and docker_volume_exists(resource["name"]):
+                problems.append(f"volume {key} already exists")
+    if problems:
+        raise ProbeIsolationError(
+            "configuration probe isolation cannot be guaranteed: " + "; ".join(problems)
+        )
+
+
+def probe_owned_existing_volumes(project_name: str) -> list[str]:
+    """Volumes demonstrably created by this probe: Compose's project label for
+    this probe AND the probe's own name prefix. Application volumes carry
+    their own project's label and can never match."""
+    result = subprocess.run(
+        ["docker", "volume", "ls", "-q", "--filter",
+         f"label=com.docker.compose.project={project_name}"],
         capture_output=True,
         text=True,
         check=False,
     )
     if result.returncode != 0:
-        print(
-            "Warning: isolated backend-config probe cleanup failed: "
-            + sanitize_diagnostics(f"{result.stdout}\n{result.stderr}"),
-            file=sys.stderr,
+        return []
+    return sorted(
+        name for name in result.stdout.split() if name.startswith(f"{project_name}_")
+    )
+
+
+def cleanup_probe(context: ProbeContext) -> None:
+    """Remove only resources belonging to this validator's project.
+
+    Containers and networks go with `down` (no --volumes); volumes are then
+    removed one by one, and only when they carry this probe's project label
+    and name prefix.
+    """
+    warnings = []
+    result = subprocess.run(
+        [*context.compose_args, "down", "--remove-orphans"],
+        capture_output=True,
+        text=True,
+        check=False,
+        env=compose_environment(),
+    )
+    if result.returncode != 0:
+        warnings.append(sanitize_diagnostics("\n".join((result.stdout, result.stderr))))
+    for name in probe_owned_existing_volumes(context.project_name):
+        removed = subprocess.run(
+            ["docker", "volume", "rm", name], capture_output=True, text=True, check=False
         )
+        if removed.returncode != 0:
+            warnings.append(f"probe volume {name} was not removed")
+    for warning in warnings:
+        print(f"Warning: isolated backend-config probe cleanup: {warning}", file=sys.stderr)
     try:
         context.override_path.unlink(missing_ok=True)
         context.override_path.parent.rmdir()
@@ -218,8 +430,19 @@ def cleanup_probe(context: ProbeContext) -> None:
         pass
 
 
+MIGRATE_PROBE = (
+    "import json; from urllib.parse import urlsplit; "
+    "from mykhaya.config import MigrationSettings; "
+    "s=MigrationSettings(); u=urlsplit(s.database_url); "
+    "print('MYKHAYA_RUNTIME_CONFIG='+json.dumps({'database_hash':'','database_length':0,"
+    "'database_target':f\"{u.scheme}://{u.hostname or ''}:{u.port or ''}{u.path}\","
+    "'redis_hash':'','redis_length':0,'secret_hash':'','secret_length':0,'smtp_host':'',"
+    "'smtp_port':0,'apns_delivery_configured':False,'environment':s.environment}))"
+)
+
+
 def container_probe(service: str, context: ProbeContext) -> RuntimeConfig:
-    code = (
+    code = MIGRATE_PROBE if service == "migrate" and file_backed() else (
         "import hashlib, json; "
         "from mykhaya.config import get_settings; "
         "s=get_settings(); "
@@ -234,7 +457,8 @@ def container_probe(service: str, context: ProbeContext) -> RuntimeConfig:
         "'smtp_host':s.smtp_host, 'smtp_port':s.smtp_port, "
         "'apns_delivery_configured':s.apns_delivery_configured, "
         "'environment':s.environment, "
-        "'apns_bundle_id':getattr(s, 'apns_bundle_id', '')}))"
+        "'apns_bundle_id':getattr(s, 'apns_bundle_id', ''), "
+        "'email_delivery_configured':s.email_delivery_configured}))"
     )
     result = subprocess.run(
         [
@@ -251,13 +475,20 @@ def container_probe(service: str, context: ProbeContext) -> RuntimeConfig:
         capture_output=True,
         text=True,
         check=False,
+        env=compose_environment(),
     )
     if result.returncode != 0:
         raise compose_failure(f"{service} backend configuration probe", result)
     return parse_config(service, result.stdout)
 
 
-def validate(configs: list[RuntimeConfig]) -> list[str]:
+def validate(configs: list[RuntimeConfig], *, service_env: bool = False) -> list[str]:
+    """Cross-service consistency of the probed runtime settings.
+
+    service_env: the DEV service-specific layout, where migrate receives no
+    Redis/SMTP settings and the scheduler receives SMTP only when monitoring an
+    environment-configured relay, so those are compared only where supplied.
+    """
     by_service = {item.service: item for item in configs}
     errors: list[str] = []
     api = by_service["api"]
@@ -285,7 +516,10 @@ def validate(configs: list[RuntimeConfig]) -> list[str]:
             errors.append(f"{service} redis_url differs from api")
         if item.secret_hash != api.secret_hash or item.secret_length != api.secret_length:
             errors.append(f"{service} session secret differs from api")
-        if (item.smtp_host, item.smtp_port) != (api.smtp_host, api.smtp_port):
+        compare_smtp = not (
+            service_env and service == "scheduler" and not item.email_delivery_configured
+        )
+        if compare_smtp and (item.smtp_host, item.smtp_port) != (api.smtp_host, api.smtp_port):
             errors.append(f"{service} SMTP connection differs from api")
 
     migrate = by_service["migrate"]
@@ -294,21 +528,59 @@ def validate(configs: list[RuntimeConfig]) -> list[str]:
     # actual database target must still be identical, and Redis/SMTP must match.
     if migrate.database_target != api.database_target:
         errors.append("migrate database target differs from api")
-    if migrate.redis_hash != api.redis_hash or migrate.redis_length != api.redis_length:
+    if not service_env and (
+        migrate.redis_hash != api.redis_hash or migrate.redis_length != api.redis_length
+    ):
         errors.append("migrate redis_url differs from api")
-    if migrate.secret_hash != api.secret_hash or migrate.secret_length != api.secret_length:
+    # The file-backed migrator holds no session secret at all (SEC-089).
+    if not file_backed() and (
+        migrate.secret_hash != api.secret_hash
+        or migrate.secret_length != api.secret_length
+    ):
         errors.append("migrate session secret differs from api")
-    if (migrate.smtp_host, migrate.smtp_port) != (api.smtp_host, api.smtp_port):
+    if not service_env and (migrate.smtp_host, migrate.smtp_port) != (api.smtp_host, api.smtp_port):
         errors.append("migrate SMTP connection differs from api")
     return errors
 
 
+def contract_errors(resolved: dict) -> list[str]:
+    """Names-only allow-list and provenance checks of the service-env model."""
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    try:
+        import service_env_contract
+    finally:
+        sys.path.pop(0)
+    root = service_env_root()
+    assert root is not None
+    profile = service_env_contract.PROFILES[
+        ("prod" if is_production() else "dev") + ("-secrets" if file_backed() else "")]
+    return (
+        service_env_contract.check_resolved_model(
+            resolved, Path(__file__).resolve().parents[2], profile
+        )
+        + service_env_contract.check_provenance(resolved, Path(root), profile)
+        + service_env_contract.check_secret_mounts(resolved, Path(root), profile)
+    )
+
+
 def main() -> int:
     context: ProbeContext | None = None
+    service_env = service_env_root() is not None
     try:
-        context = create_probe_context()
+        resolved = resolved_model()
+        if service_env:
+            errors = contract_errors(resolved)
+            if errors:
+                label = "PROD" if is_production() else "DEV"
+                print(f"Merged {label} Compose model violates the service contract:",
+                      file=sys.stderr)
+                for error in errors:
+                    print(f"- {error}", file=sys.stderr)
+                return 1
+        context = create_probe_context(resolved)
+        verify_probe_isolation(context)
         configs = [container_probe(service, context) for service in SERVICES]
-        errors = validate(configs)
+        errors = validate(configs, service_env=service_env)
     except (RuntimeError, ValueError, json.JSONDecodeError) as exc:
         print(f"Backend runtime configuration validation failed: {exc}", file=sys.stderr)
         return 1

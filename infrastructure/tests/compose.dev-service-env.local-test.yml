@@ -1,0 +1,27 @@
+# Test-only overlay: runs the real DEV merge (compose.yml + compose.dev.yml +
+# compose.dev.service-env.yml) on a workstation with a synthetic configuration
+# root, without touching anything real. Layer it last, with an explicit project:
+#
+#   docker compose -p mykhaya-f03-dev3a --env-file <synthetic-root>/compose.env \
+#     -f compose.yml -f compose.dev.yml -f compose.dev.service-env.yml \
+#     -f infrastructure/tests/compose.dev-service-env.local-test.yml ...
+#
+# Never use it on the DEV server.
+services:
+  # No host ports: nothing is published from the test stack.
+  caddy:
+    ports: !override []
+  mailpit:
+    ports: !override []
+
+networks:
+  # The DEV `edge` network deliberately has internet egress for SMTP/push/OIDC.
+  # The test stack must not, so no provider can ever be contacted.
+  edge:
+    internal: true
+
+volumes:
+  # compose.dev.yml pins this to the real DEV volume name; keep the test's copy
+  # inside the test project so cleanup can never reach it.
+  home_migration_data:
+    name: mykhaya-f03-dev3a_home_migration_data

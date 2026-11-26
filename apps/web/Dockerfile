@@ -38,6 +38,11 @@ LABEL org.opencontainers.image.title="MyKhaya Web" \
 	org.opencontainers.image.created="$MYKHAYA_BUILD_TIME" \
 	org.opencontainers.image.source="https://github.com"
 RUN addgroup -S -g 10001 mykhaya && adduser -S -u 10001 -G mykhaya mykhaya
+# The runtime only runs `node server.js`. The base image's bundled npm, npx and
+# corepack (package-manager tooling, used in the builder stage only) carried
+# every fixable finding in the image scan, so they aren't shipped.
+RUN rm -rf /usr/local/lib/node_modules/npm /usr/local/lib/node_modules/corepack \
+	/usr/local/bin/npm /usr/local/bin/npx /usr/local/bin/corepack
 WORKDIR /app
 COPY --from=builder --chown=mykhaya:mykhaya /workspace/apps/web/.next/standalone ./
 COPY --from=builder --chown=mykhaya:mykhaya /workspace/apps/web/.next/static ./apps/web/.next/static

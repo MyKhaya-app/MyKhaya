@@ -39,6 +39,7 @@ from mykhaya.crypto.keyring import (
     load_keyring_file,
     parse_keyring,
 )
+from mykhaya.secret_files import SECRET_FILE_MISSING, SecretFileError, read_secret
 
 log = structlog.get_logger("sensitive_keys")
 
@@ -55,6 +56,31 @@ class SensitiveKeyStatus:
     @property
     def provisioned(self) -> bool:
         return self.field_source is not None
+
+
+def _load_hardened(
+    *, file_path: str, env_value: str | None, purpose: KeyringPurpose, setting: str
+) -> tuple[StaticKeyring | None, str | None]:
+    """With a process role set, keyring files use the hardened reader (SEC-017).
+
+    Only a file that does not exist counts as "not provisioned", as before. A
+    symbolic link (dangling or not), an unreadable file or directory, or a path
+    outside the approved locations is an error, never a missing keyring.
+    """
+    try:
+        document = read_secret(setting, file_path, "json")
+    except SecretFileError as exc:
+        if exc.category != SECRET_FILE_MISSING:
+            raise KeyConfigurationError(f"The {purpose} keyring: {exc}.") from None
+        if env_value:
+            return parse_keyring(env_value, expected_purpose=purpose), "environment"
+        return None, None
+    if env_value:
+        raise KeyConfigurationError(
+            f"The {purpose} keyring is configured both as a file and as an environment "
+            "variable. Configure exactly one."
+        )
+    return parse_keyring(document, expected_purpose=purpose), "file"
 
 
 def _load(
@@ -93,22 +119,36 @@ def _check_environment(keyring: StaticKeyring, settings: Settings) -> None:
 def load_sensitive_keyrings(
     settings: Settings,
 ) -> tuple[StaticKeyring | None, StaticKeyring | None, SensitiveKeyStatus]:
-    field, field_source = _load(
-        file_path=settings.field_encryption_keys_file,
-        env_value=(
-            settings.field_encryption_keys.get_secret_value()
-            if settings.field_encryption_keys
-            else None
-        ),
-        purpose="field-encryption",
+    field_env = (
+        settings.field_encryption_keys.get_secret_value()
+        if settings.field_encryption_keys
+        else None
     )
-    blind, blind_source = _load(
-        file_path=settings.blind_index_keys_file,
-        env_value=(
-            settings.blind_index_keys.get_secret_value() if settings.blind_index_keys else None
-        ),
-        purpose="blind-index",
-    )
+    blind_env = settings.blind_index_keys.get_secret_value() if settings.blind_index_keys else None
+    if settings.process_role is None:
+        field, field_source = _load(
+            file_path=settings.field_encryption_keys_file,
+            env_value=field_env,
+            purpose="field-encryption",
+        )
+        blind, blind_source = _load(
+            file_path=settings.blind_index_keys_file,
+            env_value=blind_env,
+            purpose="blind-index",
+        )
+    else:
+        field, field_source = _load_hardened(
+            file_path=settings.field_encryption_keys_file,
+            env_value=field_env,
+            purpose="field-encryption",
+            setting="MYKHAYA_FIELD_ENCRYPTION_KEYS_FILE",
+        )
+        blind, blind_source = _load_hardened(
+            file_path=settings.blind_index_keys_file,
+            env_value=blind_env,
+            purpose="blind-index",
+            setting="MYKHAYA_BLIND_INDEX_KEYS_FILE",
+        )
     if (field is None) != (blind is None):
         raise KeyConfigurationError(
             "Field-encryption and blind-index keyrings must be provisioned together."

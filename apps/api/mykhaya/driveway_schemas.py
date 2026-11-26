@@ -29,6 +29,7 @@ class VehicleCreate(StrictModel):
     country_code: str = Field(min_length=2, max_length=2, pattern=r"^[A-Za-z]{2}$")
     registration: str | None = Field(default=None, max_length=20)
     first_registration_date: date | None = None
+    first_registration_precision: Literal["day", "month", "year"] | None = None
     # Sensitive — see Vehicle's model docstring. Never echoed into audit
     # metadata or logs (routers.driveway strips it before calling audit()).
     vin: str | None = Field(default=None, max_length=32)
@@ -36,6 +37,21 @@ class VehicleCreate(StrictModel):
 
 class VehicleUpdate(VehicleCreate):
     expected_updated_at: datetime
+
+
+class VehicleTaxCalculation(BaseModel):
+    status: Literal[
+        "calculated", "conditional_estimate", "insufficient_data", "unsupported_category"
+    ]
+    annual_rate: int | None = None
+    payment_options: dict[str, float] = Field(default_factory=dict)
+    tax_year: str | None = None
+    category: str | None = None
+    assumptions: list[str] = Field(default_factory=list)
+    missing_information: list[str] = Field(default_factory=list)
+    supplement_message: str | None = None
+    source: str
+    calculated_at: datetime
 
 
 class VehicleResponse(BaseModel):
@@ -52,8 +68,26 @@ class VehicleResponse(BaseModel):
     country_code: str
     registration: str | None
     first_registration_date: date | None
+    first_registration_precision: str | None
+    first_registration_with_dvla_date: date | None
+    first_registration_with_dvla_precision: str | None
     tax_status: str | None
     tax_due_date: date | None
+    co2_emissions: int | None
+    euro_status: str | None
+    type_approval: str | None
+    wheel_plan: str | None
+    revenue_weight: int | None
+    marked_for_export: bool | None
+    marked_as_scrapped: bool | None
+    date_of_last_v5c_issued: date | None
+    real_driving_emissions: str | None
+    vehicle_status: str | None
+    automated_vehicle: bool | None
+    art_end_date: date | None
+    lookup_provider: str | None
+    lookup_status: str | None
+    last_successful_lookup: datetime | None
     inspection_status: str | None
     inspection_due_date: date | None
     photo_version: str | None
@@ -63,6 +97,10 @@ class VehicleResponse(BaseModel):
     archived: bool
     created_at: datetime
     updated_at: datetime
+    refresh_outcome: (
+        Literal["refreshed", "unchanged", "busy", "rate_limited", "unavailable"] | None
+    ) = None
+    tax_calculation: VehicleTaxCalculation | None = None
 
 
 class VehicleListResponse(BaseModel):
@@ -72,6 +110,26 @@ class VehicleListResponse(BaseModel):
 class VehicleLookupRequest(StrictModel):
     country_code: str = Field(min_length=2, max_length=2, pattern=r"^[A-Za-z]{2}$")
     registration: str = Field(min_length=2, max_length=20)
+
+
+class VehicleReportRequest(StrictModel):
+    format: Literal["full", "essential"] = "full"
+    # Saved vehicles only: the household-entered nickname and the vehicle
+    # photo. False gives a report suitable for sharing outside the Home.
+    # Ignored for one-off lookups, which never carry household details.
+    include_household_details: bool = True
+
+
+class VehicleLookupMotTestResponse(BaseModel):
+    test_number: str | None = None
+    test_date: date
+    completed_at: datetime | None = None
+    expiry_date: date | None = None
+    result: str
+    odometer_value: int | None = None
+    odometer_unit: str | None = None
+    odometer_result: str | None = None
+    defects: list[dict[str, object]] = []
 
 
 class VehicleLookupResult(BaseModel):
@@ -86,12 +144,46 @@ class VehicleLookupResult(BaseModel):
     fuel_type: str | None = None
     engine_size: str | None = None
     first_registration_date: date | None = None
+    first_registration_precision: Literal["day", "month", "year"] | None = None
+    first_registration_with_dvla_date: date | None = None
+    first_registration_with_dvla_precision: str | None = None
     tax_status: str | None = None
     tax_due_date: date | None = None
     inspection_status: str | None = None
     inspection_due_date: date | None = None
+    co2_emissions: int | None = None
+    euro_status: str | None = None
+    type_approval: str | None = None
+    wheel_plan: str | None = None
+    revenue_weight: int | None = None
+    marked_for_export: bool | None = None
+    marked_as_scrapped: bool | None = None
+    date_of_last_v5c_issued: date | None = None
+    real_driving_emissions: str | None = None
+    vehicle_status: str | None = None
+    automated_vehicle: bool | None = None
+    art_end_date: date | None = None
+    checked_at: datetime | None = None
+    mot: "VehicleLookupMotResult | None" = None
+    tax_calculation: VehicleTaxCalculation | None = None
     capabilities: list[str] = []
     message: str | None = None
+    report_token: str | None = None
+
+
+class VehicleLookupMotResult(BaseModel):
+    status: str | None = None
+    due_date: date | None = None
+    first_mot_due_date: date | None = None
+    refreshed_at: datetime | None = None
+    tests: list[VehicleLookupMotTestResponse] = []
+
+
+VehicleLookupResult.model_rebuild()
+
+
+class VehicleLookupReportRequest(VehicleReportRequest):
+    report_token: str = Field(min_length=32, max_length=12000)
 
 
 class VehicleReminderCreate(StrictModel):

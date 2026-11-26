@@ -388,6 +388,33 @@ async def refresh_vehicle_mot(
         if history is not None:
             summary = compute_summary(history, today=attempted_at.date())
             await _replace_history(db, row, history)
+            # DVSA also returns vehicle-level fields. DVLA remains the
+            # authority for fields it supplies; DVSA fills only genuinely
+            # missing non-sensitive values, so a partial response cannot
+            # erase user-entered or DVLA-backed data.
+            provider_fields = (
+                "model",
+                "make",
+                "colour",
+                "fuel_type",
+                "engine_size",
+                "first_registration_date",
+                "first_registration_precision",
+                "year",
+            )
+            for field in provider_fields:
+                value = {
+                    "model": history.model,
+                    "make": history.make,
+                    "colour": history.colour,
+                    "fuel_type": history.fuel_type,
+                    "engine_size": history.engine_size,
+                    "first_registration_date": history.first_registration_date,
+                    "first_registration_precision": history.first_registration_precision,
+                    "year": history.year_of_manufacture,
+                }[field]
+                if getattr(row, field) is None and value is not None:
+                    setattr(row, field, value)
             row.inspection_status = summary.status
             row.inspection_due_date = summary.due_date
             row.mot_first_due_date = summary.first_mot_due_date

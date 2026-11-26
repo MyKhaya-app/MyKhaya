@@ -384,6 +384,27 @@ def test_normaliser_drops_duplicate_test_numbers_and_sorts_newest_first() -> Non
     assert history.tests[0].test_date >= history.tests[-1].test_date
 
 
+def test_normaliser_keeps_dvsa_vehicle_fields_for_fallback_population() -> None:
+    history = normalise_mot_response(
+        {
+            "registration": "AB12CDE",
+            "make": "FORD",
+            "model": "FOCUS",
+            "primaryColour": "Blue",
+            "fuelType": "Petrol",
+            "engineSize": "1596",
+            "firstUsedDate": "2012-04-01",
+            "manufactureDate": "2012-03-01",
+            "motTests": [],
+        }
+    )
+    assert history.registration == "AB12CDE"
+    assert history.model == "FOCUS"
+    assert history.engine_size == "1596"
+    assert history.first_registration_date == date(2012, 4, 1)
+    assert history.first_registration_precision == "day"
+
+
 # =====================================================================================
 # API tests (real router, service, database, Redis lock and reminders)
 # =====================================================================================

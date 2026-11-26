@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ChangeEvent, KeyboardEvent, use, useCallback, useEffect, useRef, useState } from "react";
-import { Bell, Camera, ChevronLeft, ChevronRight, Pencil, ShieldAlert, ShieldCheck, Trash2 } from "lucide-react";
+import { Bell, Camera, CheckCircle2, ChevronLeft, ChevronRight, ExternalLink, FileText, Pencil, RefreshCw, ShieldAlert, ShieldCheck, Trash2 } from "lucide-react";
 import type { Member, Vehicle, VehicleMot } from "@mykhaya/shared-types";
 import { ApiError, api } from "@mykhaya/api-client";
 import { AppShellContent } from "@/components/app-shell";
@@ -22,6 +22,7 @@ import {
   firstName,
   formatMileage,
   formatPlate,
+  formatRegistrationDate,
   formatShortDate,
   lastMileage,
   motDaysText,
@@ -34,20 +35,21 @@ import {
   type MotState,
 } from "../vehicle-display";
 
-// Driveway vehicle: Overview | MOT | Details. The selected tab is kept in
+// Driveway vehicle: Overview | MOT | Tax | Details. The selected tab is kept in
 // the URL (?tab=mot) so "back" from MOT history lands on the MOT tab.
 
-type Tab = "overview" | "mot" | "details";
+type Tab = "overview" | "mot" | "tax" | "details";
 const TABS: { id: Tab; label: string }[] = [
   { id: "overview", label: "Overview" },
   { id: "mot", label: "MOT" },
+  { id: "tax", label: "Tax" },
   { id: "details", label: "Details" },
 ];
 
 function tabFromUrl(): Tab {
   if (typeof window === "undefined") return "overview";
   const value = new URLSearchParams(window.location.search).get("tab");
-  return value === "mot" || value === "details" ? value : "overview";
+  return value === "mot" || value === "tax" || value === "details" ? value : "overview";
 }
 
 function loadErrorMessage(cause: unknown, fallback: string): string {
@@ -76,6 +78,10 @@ function KeyValues({ rows }: { rows: { label: string; value: React.ReactNode }[]
   );
 }
 
+function formatTaxAmount(amount: number): string {
+  return `£${amount.toFixed(2).replace(/\.00$/, "")}`;
+}
+
 export default function VehicleDetailPage({ params }: { params: Promise<{ vehicleId: string }> }) {
   const { vehicleId } = use(params);
   const { activeHomeId, activeHome } = useActiveHome();
@@ -93,6 +99,8 @@ export default function VehicleDetailPage({ params }: { params: Promise<{ vehicl
   const [photoSheetOpen, setPhotoSheetOpen] = useState(false);
   const [photoBusy, setPhotoBusy] = useState(false);
   const [photoError, setPhotoError] = useState("");
+  const [vehicleRefreshBusy, setVehicleRefreshBusy] = useState(false);
+  const [vehicleRefreshError, setVehicleRefreshError] = useState("");
   const libraryInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const tabRefs = useRef<Array<HTMLButtonElement | null>>([]);
@@ -163,6 +171,19 @@ export default function VehicleDetailPage({ params }: { params: Promise<{ vehicl
     } catch (cause) {
       setDeleteError(cause instanceof ApiError ? cause.message : "Could not remove this vehicle.");
       setDeleteBusy(false);
+    }
+  }
+
+  async function refreshVehicleDetails() {
+    if (!activeHomeId || !vehicle || vehicleRefreshBusy) return;
+    setVehicleRefreshBusy(true);
+    setVehicleRefreshError("");
+    try {
+      setVehicle(await api.refreshVehicleDetails(activeHomeId, vehicle.id));
+    } catch (cause) {
+      setVehicleRefreshError(cause instanceof ApiError ? cause.message : "We couldn't refresh vehicle details right now.");
+    } finally {
+      setVehicleRefreshBusy(false);
     }
   }
 
@@ -246,6 +267,8 @@ export default function VehicleDetailPage({ params }: { params: Promise<{ vehicl
 
   const facts = [
     { label: "Year", value: vehicle.year ? String(vehicle.year) : null },
+    { label: "First registration", value: formatRegistrationDate(vehicle.first_registration_date, vehicle.first_registration_precision ?? (vehicle.lookup_provider === "uk_dvla" ? "month" : "day")) },
+    { label: "First registered with DVLA", value: formatRegistrationDate(vehicle.first_registration_with_dvla_date, vehicle.first_registration_with_dvla_precision) },
     { label: "Fuel", value: vehicle.fuel_type },
     { label: "Colour", value: vehicle.colour },
     { label: "Last recorded mileage", value: mileage },
@@ -256,7 +279,19 @@ export default function VehicleDetailPage({ params }: { params: Promise<{ vehicl
     { label: "Registration", value: formatPlate(vehicle.registration) },
     { label: "Year", value: vehicle.year ? String(vehicle.year) : null },
     { label: "Fuel", value: vehicle.fuel_type },
+    { label: "Engine", value: vehicle.engine_size ? `${vehicle.engine_size} cc` : null },
     { label: "Colour", value: vehicle.colour },
+    { label: "CO₂ emissions", value: vehicle.co2_emissions != null ? `${vehicle.co2_emissions} g/km` : null },
+    { label: "Euro status", value: vehicle.euro_status },
+    { label: "Wheel plan", value: vehicle.wheel_plan },
+    { label: "Type approval", value: vehicle.type_approval },
+    { label: "Revenue weight", value: vehicle.revenue_weight != null ? `${vehicle.revenue_weight} kg` : null },
+    { label: "Export marker", value: vehicle.marked_for_export == null ? null : vehicle.marked_for_export ? "Marked for export" : "Not marked for export" },
+    { label: "Scrapped marker", value: vehicle.marked_as_scrapped == null ? null : vehicle.marked_as_scrapped ? "Marked as scrapped" : "Not marked as scrapped" },
+    { label: "Last V5C issued", value: vehicle.date_of_last_v5c_issued ? formatShortDate(vehicle.date_of_last_v5c_issued) : null },
+    { label: "Vehicle status", value: vehicle.vehicle_status },
+    { label: "Real driving emissions", value: vehicle.real_driving_emissions },
+    { label: "Automated vehicle", value: vehicle.automated_vehicle == null ? null : vehicle.automated_vehicle ? "Yes" : "No" },
     { label: "Country", value: countryName(vehicle.country_code) },
     { label: "Driver", value: isMine ? "You" : owner?.display_name ?? null },
     {
@@ -265,6 +300,31 @@ export default function VehicleDetailPage({ params }: { params: Promise<{ vehicl
         ? `${vehicle.tax_status}${vehicle.tax_due_date ? ` · due ${formatShortDate(vehicle.tax_due_date)}` : ""}`
         : null,
     },
+  ].filter((row): row is { label: string; value: string } => Boolean(row.value));
+
+  const taxDetails = [
+    { label: "Tax status", value: vehicle.tax_status },
+    { label: "Tax due date", value: formatShortDate(vehicle.tax_due_date) },
+    { label: "SORN / vehicle status", value: vehicle.vehicle_status },
+    { label: "CO₂ emissions", value: vehicle.co2_emissions != null ? `${vehicle.co2_emissions} g/km` : null },
+    { label: "Additional-rate end", value: formatShortDate(vehicle.art_end_date) },
+    { label: "Last DVLA check", value: vehicle.last_successful_lookup ? `${formatShortDate(vehicle.last_successful_lookup)} (${checkedAgo(vehicle.last_successful_lookup)})` : null },
+  ].filter((row): row is { label: string; value: string } => Boolean(row.value));
+  const taxCalculation = vehicle.tax_calculation;
+  const taxEstimateDetails = taxCalculation ? ([
+    { label: "Estimate status", value: taxCalculation.status.replaceAll("_", " ") },
+    { label: "Annual VED", value: taxCalculation.annual_rate != null ? `£${taxCalculation.annual_rate}` : null },
+    { label: "Tax year", value: taxCalculation.tax_year },
+    { label: "Category", value: taxCalculation.category },
+    { label: "Payment options", value: Object.entries(taxCalculation.payment_options).map(([name, amount]) => `${name.replaceAll("_", " ")}: £${amount}`).join(" · ") || null },
+  ].filter((row): row is { label: string; value: string } => Boolean(row.value))) : [];
+  const paymentOptions = taxCalculation?.payment_options ?? {};
+  void taxEstimateDetails;
+  const paymentRows = [
+    { label: "12-month payment", value: paymentOptions.single_12_month_total != null ? `${formatTaxAmount(paymentOptions.single_12_month_total)} total` : null },
+    { label: "Monthly Direct Debit", value: paymentOptions.monthly_direct_debit_per_month != null && paymentOptions.monthly_direct_debit_total != null ? `${formatTaxAmount(paymentOptions.monthly_direct_debit_per_month)} per month · ${formatTaxAmount(paymentOptions.monthly_direct_debit_total)} total` : null },
+    { label: "6-month Direct Debit", value: paymentOptions.six_month_direct_debit_payment != null && paymentOptions.six_month_direct_debit_total != null ? `${formatTaxAmount(paymentOptions.six_month_direct_debit_payment)} · ${formatTaxAmount(paymentOptions.six_month_direct_debit_total)} total` : null },
+    { label: "6-month single payment", value: paymentOptions.six_month_single_payment != null && paymentOptions.six_month_single_total != null ? `${formatTaxAmount(paymentOptions.six_month_single_payment)} · ${formatTaxAmount(paymentOptions.six_month_single_total)} total` : null },
   ].filter((row): row is { label: string; value: string } => Boolean(row.value));
 
   const recentTests = mot?.tests.slice(0, 3) ?? [];
@@ -297,6 +357,9 @@ export default function VehicleDetailPage({ params }: { params: Promise<{ vehicl
               <PlateChip registration={vehicle.registration} size="md" />
               <span className="drv-owner-chip">{ownerLabel}</span>
             </div>
+            <Link className="drv-button drv-button-secondary drv-report-launch" href={`/driveway/${vehicle.id}/report`}>
+              <FileText size={18} aria-hidden="true" /> Vehicle Report
+            </Link>
           </div>
         </div>
         {!isNativeShell() && (
@@ -432,9 +495,64 @@ export default function VehicleDetailPage({ params }: { params: Promise<{ vehicl
           </div>
         )}
 
+        {tab === "tax" && (
+          <div className="drv-panel" role="tabpanel" id="drv-panel-tax" aria-labelledby="drv-tab-tax">
+            {!motEligible ? (
+              <p className="empty-mini">DVLA tax information is only available for vehicles registered in the UK.</p>
+            ) : (
+              <>
+                <h2 className="drv-tax-heading">DVLA tax summary</h2>
+                {taxDetails.length > 0 ? <KeyValues rows={taxDetails} /> : <p className="empty-mini">Tax information has not been provided by DVLA yet.</p>}
+                {taxCalculation && (
+                  <>
+                    <section className="drv-card drv-tax-estimate-card" aria-labelledby="drv-tax-estimate-title">
+                      <div className="drv-tax-annual">
+                        {taxCalculation.annual_rate != null && <p className="visually-hidden"><span>Annual VED</span><span>Â£{taxCalculation.annual_rate}</span></p>}
+                        {taxCalculation.annual_rate != null ? (
+                          <p className="drv-tax-annual-amount"><strong>{formatTaxAmount(taxCalculation.annual_rate)}</strong><span>/ year</span></p>
+                        ) : <p className="drv-tax-annual-unavailable">Annual amount unavailable</p>}
+                        <h2 id="drv-tax-estimate-title">Standard annual rate · {taxCalculation.tax_year ?? "current tax year"} tax year</h2>
+                      </div>
+                      <div className="drv-tax-supplement">
+                        <CheckCircle2 size={24} aria-hidden="true" />
+                        <p>{taxCalculation.supplement_message ?? "The premium supplement could not be confirmed from the available vehicle information."}</p>
+                      </div>
+                      {taxCalculation.missing_information.length > 0 && <p className="drv-muted-small">Information still needed: {taxCalculation.missing_information.join(", ")}.</p>}
+                    </section>
+                    {paymentRows.length > 0 && (
+                      <section className="drv-card drv-tax-payments" aria-labelledby="drv-tax-payments-title">
+                        <h2 id="drv-tax-payments-title">Payment options</h2>
+                        <KeyValues rows={paymentRows} />
+                      </section>
+                    )}
+                  </>
+                )}
+                {vehicle.refresh_outcome === "unchanged" && <p className="notice" role="status">Stored DVLA details are still fresh; no new DVLA check was made.</p>}
+                {vehicle.refresh_outcome === "busy" && <p className="notice" role="status">Another DVLA check is already running. These are the currently stored details.</p>}
+                <p className="drv-muted-small">Based on official DVLA V149 rates for the current tax year. This is a local estimate; check GOV.UK for the authoritative amount.</p>
+                {vehicleRefreshError && <p className="notice error" role="alert">{vehicleRefreshError}</p>}
+                <button type="button" className="drv-button drv-button-secondary" onClick={() => void refreshVehicleDetails()} disabled={vehicleRefreshBusy}>
+                  <RefreshCw size={18} aria-hidden="true" className={vehicleRefreshBusy ? "drv-spin" : undefined} />
+                  {vehicleRefreshBusy ? "Refreshing DVLA details…" : "Refresh DVLA tax details"}
+                </button>
+                <a className="drv-button drv-button-primary drv-button-full" href="https://www.gov.uk/check-vehicle-tax" target="_blank" rel="noreferrer">
+                  <ExternalLink size={18} aria-hidden="true" /> Check vehicle tax on GOV.UK
+                </a>
+              </>
+            )}
+          </div>
+        )}
+
         {tab === "details" && (
           <div className="drv-panel" role="tabpanel" id="drv-panel-details" aria-labelledby="drv-tab-details">
             <KeyValues rows={details} />
+            {vehicle.refresh_outcome === "unchanged" && <p className="notice" role="status">Stored DVLA details are still fresh; no new DVLA check was made.</p>}
+            {vehicle.refresh_outcome === "busy" && <p className="notice" role="status">Another DVLA check is already running. These are the currently stored details.</p>}
+            {vehicleRefreshError && <p className="notice error" role="alert">{vehicleRefreshError}</p>}
+            <button type="button" className="drv-button drv-button-secondary" onClick={() => void refreshVehicleDetails()} disabled={vehicleRefreshBusy}>
+              <RefreshCw size={18} aria-hidden="true" className={vehicleRefreshBusy ? "drv-spin" : undefined} />
+              {vehicleRefreshBusy ? "Refreshing vehicle details…" : "Refresh vehicle details"}
+            </button>
             <Link className="drv-button drv-button-secondary" href={`/driveway/${vehicle.id}/details`}>
               <Pencil size={18} aria-hidden="true" /> Edit details
             </Link>

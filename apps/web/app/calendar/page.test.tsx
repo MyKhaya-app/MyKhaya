@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, screen, waitFor, within } from "@testing-library/react";
+import { renderWithConsumerActions } from "@/components/consumer-action-dock.testing";
 import { resolveColour } from "@mykhaya/design-tokens";
 import type { EventPayload, EventUpdatePayload } from "@mykhaya/shared-types";
 import CalendarPage from "./page";
@@ -116,7 +117,7 @@ beforeEach(() => {
 
 describe("Calendar — Month view navigation", () => {
   it("the Previous/Next buttons still move the month and keep the heading in sync", async () => {
-    render(<CalendarPage />);
+    renderWithConsumerActions(<CalendarPage />);
 
     const heading = await screen.findByRole("heading", { level: 1 });
     const initialLabel = heading.textContent;
@@ -133,7 +134,7 @@ describe("Calendar — Month view navigation", () => {
 
   it("a left swipe on the month grid navigates forward and updates the heading, same as Next", async () => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
-    render(<CalendarPage />);
+    renderWithConsumerActions(<CalendarPage />);
 
     const heading = await screen.findByRole("heading", { level: 1 });
     const initialLabel = heading.textContent;
@@ -220,7 +221,7 @@ describe("Calendar — Month view opens Day List first", () => {
 
   it("1. tapping blank area of a populated day opens the Day List", async () => {
     (api.listEvents as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [occ()] });
-    render(<CalendarPage />);
+    renderWithConsumerActions(<CalendarPage />);
     await screen.findByRole("heading", { level: 1 });
     await screen.findByText("Sample event");
 
@@ -233,7 +234,7 @@ describe("Calendar — Month view opens Day List first", () => {
 
   it("2. tapping the date number opens the Day List", async () => {
     (api.listEvents as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [occ()] });
-    render(<CalendarPage />);
+    renderWithConsumerActions(<CalendarPage />);
     await screen.findByRole("heading", { level: 1 });
     await screen.findByText("Sample event");
 
@@ -249,7 +250,7 @@ describe("Calendar — Month view opens Day List first", () => {
 
   it("3. tapping a normal event chip opens the Day List, not the event detail", async () => {
     (api.listEvents as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [occ()] });
-    render(<CalendarPage />);
+    renderWithConsumerActions(<CalendarPage />);
     await screen.findByRole("heading", { level: 1 });
 
     fireEvent.click(await screen.findByText("Sample event"));
@@ -267,7 +268,7 @@ describe("Calendar — Month view opens Day List first", () => {
         occ({ occurrence_id: "occ-2", event_id: "occ-2", title: "Second event" }),
       ],
     });
-    render(<CalendarPage />);
+    renderWithConsumerActions(<CalendarPage />);
     await screen.findByRole("heading", { level: 1 });
 
     fireEvent.click(await screen.findByText("Second event"));
@@ -279,7 +280,7 @@ describe("Calendar — Month view opens Day List first", () => {
 
   it("5. selecting an event from the Day List opens Event Detail", async () => {
     (api.listEvents as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [occ()] });
-    render(<CalendarPage />);
+    renderWithConsumerActions(<CalendarPage />);
     await screen.findByRole("heading", { level: 1 });
     fireEvent.click(await screen.findByText("Sample event"));
     const daySheet = await screen.findByRole("dialog");
@@ -290,7 +291,7 @@ describe("Calendar — Month view opens Day List first", () => {
   });
 
   it("6. tapping an empty day opens an empty Day List", async () => {
-    render(<CalendarPage />);
+    renderWithConsumerActions(<CalendarPage />);
     await screen.findByRole("heading", { level: 1 });
 
     fireEvent.click(dayArticleFor(/16 January 2026, 0 events/));
@@ -301,7 +302,7 @@ describe("Calendar — Month view opens Day List first", () => {
   });
 
   it("7. Add event on this day uses the selected Day List date", async () => {
-    render(<CalendarPage />);
+    renderWithConsumerActions(<CalendarPage />);
     await screen.findByRole("heading", { level: 1 });
     fireEvent.click(dayArticleFor(/16 January 2026, 0 events/));
     const daySheet = await screen.findByRole("dialog");
@@ -315,7 +316,7 @@ describe("Calendar — Month view opens Day List first", () => {
 
   it("8. tapping the current (Today-highlighted) day opens today's Day List", async () => {
     (api.listEvents as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [occ()] });
-    render(<CalendarPage />);
+    renderWithConsumerActions(<CalendarPage />);
     await screen.findByRole("heading", { level: 1 });
 
     const today = document.querySelector(".calendar-day.today") as HTMLElement;
@@ -334,7 +335,7 @@ describe("Calendar — Month view opens Day List first", () => {
         { kind: "holiday", date: "2026-01-15", label: "Summer bank holiday", flag_emoji: "🇬🇧" },
       ],
     });
-    render(<CalendarPage />);
+    renderWithConsumerActions(<CalendarPage />);
     await screen.findByRole("heading", { level: 1 });
 
     expect(document.querySelector(".calendar-birthday-banner")).toBeNull();
@@ -355,7 +356,7 @@ describe("Calendar — Month view opens Day List first", () => {
     (api.listEvents as ReturnType<typeof vi.fn>).mockResolvedValue({
       items: [occ({ start_at: "2025-12-29T09:00:00Z", end_at: "2025-12-29T10:00:00Z" })],
     });
-    render(<CalendarPage />);
+    renderWithConsumerActions(<CalendarPage />);
     await screen.findByRole("heading", { level: 1 });
     // Not findByText("Sample event") here: MonthSwipeView's aria-hidden
     // previous-month peek panel genuinely re-renders 29 Dec in its own
@@ -388,7 +389,7 @@ describe("Calendar — Month view opens Day List first", () => {
         }),
       ],
     });
-    render(<CalendarPage />);
+    renderWithConsumerActions(<CalendarPage />);
     await screen.findByRole("heading", { level: 1 });
 
     fireEvent.click(await screen.findByText("Multi-day trip"));
@@ -402,7 +403,7 @@ describe("Calendar — Month view opens Day List first", () => {
     (api.listEvents as ReturnType<typeof vi.fn>).mockResolvedValue({
       items: [occ({ title: "Weekly standup", recurrence: "weekly" })],
     });
-    render(<CalendarPage />);
+    renderWithConsumerActions(<CalendarPage />);
     await screen.findByRole("heading", { level: 1 });
 
     fireEvent.click(await screen.findByText("Weekly standup"));
@@ -416,7 +417,7 @@ describe("Calendar — Month view opens Day List first", () => {
   });
 
   it("12. clicking the date number does not open the Day List twice (no bubbling double-fire)", async () => {
-    render(<CalendarPage />);
+    renderWithConsumerActions(<CalendarPage />);
     await screen.findByRole("heading", { level: 1 });
 
     const dayNumber = dayArticleFor(/15 January 2026, 0 events/).querySelector(".day-number span")!;
@@ -447,7 +448,7 @@ describe("Calendar — Month view opens Day List first", () => {
         }),
       ],
     });
-    render(<CalendarPage />);
+    renderWithConsumerActions(<CalendarPage />);
     await screen.findByRole("heading", { level: 1 });
     await screen.findByText("Anthony's event");
 
@@ -465,7 +466,7 @@ describe("Calendar — Month view opens Day List first", () => {
 
   it("14. the day cell opens the Day List via keyboard (Enter) as well as click", async () => {
     (api.listEvents as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [occ()] });
-    render(<CalendarPage />);
+    renderWithConsumerActions(<CalendarPage />);
     await screen.findByRole("heading", { level: 1 });
     await screen.findByText("Sample event");
 
@@ -496,7 +497,7 @@ describe("Calendar — Calendars visibility sheet", () => {
   });
 
   async function openCalendarsSheet() {
-    render(<CalendarPage />);
+    renderWithConsumerActions(<CalendarPage />);
     await screen.findByRole("heading", { level: 1 });
     fireEvent.click(screen.getByRole("button", { name: "Calendars" }));
     return screen.findByRole("dialog", { name: "Calendars" });
@@ -669,14 +670,14 @@ describe("Calendar — Tags filter", () => {
   }
 
   async function openTagsSheet() {
-    render(<CalendarPage />);
+    renderWithConsumerActions(<CalendarPage />);
     await screen.findByRole("heading", { level: 1 });
     fireEvent.click(screen.getByRole("button", { name: "Filter by Calendar Tags" }));
     return screen.findByRole("dialog", { name: "Tags" });
   }
 
   it("shows the plain 'Tags' label as its own pill, matching Everyone/Month, when no tag is selected", async () => {
-    render(<CalendarPage />);
+    renderWithConsumerActions(<CalendarPage />);
     await screen.findByRole("heading", { level: 1 });
     const trigger = screen.getByRole("button", { name: "Filter by Calendar Tags" });
     expect(trigger).toHaveTextContent("Tags");
@@ -754,7 +755,7 @@ describe("Calendar — Tags filter", () => {
         }),
       ],
     });
-    render(<CalendarPage />);
+    renderWithConsumerActions(<CalendarPage />);
     await screen.findByRole("heading", { level: 1 });
     await screen.findByText("Alyssa's maths class");
 
@@ -789,7 +790,7 @@ describe("Calendar — Tags filter", () => {
         }),
       ],
     });
-    render(<CalendarPage />);
+    renderWithConsumerActions(<CalendarPage />);
     await screen.findByRole("heading", { level: 1 });
     await screen.findByText("Alyssa's maths class");
     fireEvent.change(screen.getByLabelText("Filter by household member"), {
@@ -854,7 +855,7 @@ describe("Calendar — Tags filter", () => {
 
   it("selecting a tag with commercial_access omitted still filters correctly when Calendar Tags list is empty", async () => {
     (api.listLabels as ReturnType<typeof vi.fn>).mockResolvedValue([]);
-    render(<CalendarPage />);
+    renderWithConsumerActions(<CalendarPage />);
     await screen.findByRole("heading", { level: 1 });
     fireEvent.click(screen.getByRole("button", { name: "Filter by Calendar Tags" }));
     const dialog = await screen.findByRole("dialog", { name: "Tags" });
@@ -941,9 +942,9 @@ describe("Calendar — Add/Edit Event: Calendar vs Calendar Tag", () => {
   });
 
   async function openAddEventSheet() {
-    render(<CalendarPage />);
+    renderWithConsumerActions(<CalendarPage />);
     await screen.findByRole("heading", { level: 1 });
-    fireEvent.click(screen.getByRole("button", { name: "Add calendar event" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Add calendar event" }));
     return screen.findByRole("dialog", { name: "Add event" });
   }
 
@@ -959,7 +960,7 @@ describe("Calendar — Add/Edit Event: Calendar vs Calendar Tag", () => {
 
   async function openViewEventSheet() {
     (api.listEvents as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [existingEvent()] });
-    render(<CalendarPage />);
+    renderWithConsumerActions(<CalendarPage />);
     await screen.findByRole("heading", { level: 1 });
     // MonthSwipeView intentionally renders the previous/current/next month
     // in three panels at once for the swipe-preview animation; the adjacent
@@ -1231,7 +1232,7 @@ describe("Calendar — Add/Edit Event: Calendar vs Calendar Tag", () => {
 
   it("the event chip's colour comes from its Calendar Tag, not the calendar it lives on", async () => {
     (api.listEvents as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [existingEvent()] });
-    render(<CalendarPage />);
+    renderWithConsumerActions(<CalendarPage />);
     await screen.findByRole("button", { name: /Football/ });
 
     const chip = document.querySelector(".month-event") as HTMLElement;
@@ -1349,9 +1350,9 @@ describe("Calendar — Add/Edit Event: plan-restricted calendars are not offered
   });
 
   async function openAddEventSheet() {
-    render(<CalendarPage />);
+    renderWithConsumerActions(<CalendarPage />);
     await screen.findByRole("heading", { level: 1 });
-    fireEvent.click(screen.getByRole("button", { name: "Add calendar event" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Add calendar event" }));
     return screen.findByRole("dialog", { name: "Add event" });
   }
 
@@ -1428,7 +1429,7 @@ describe("Calendar — Add/Edit Event: plan-restricted calendars are not offered
       updated_at: "2026-08-01T00:00:00Z",
     };
     (api.listEvents as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [restrictedEvent] });
-    render(<CalendarPage />);
+    renderWithConsumerActions(<CalendarPage />);
     await screen.findByRole("heading", { level: 1 });
     // MonthSwipeView intentionally renders the previous/current/next month
     // in three panels at once for the swipe-preview animation; the adjacent
@@ -1555,7 +1556,7 @@ describe("Calendar — Recurring event scope chooser", () => {
   // as a real user, rather than reaching the dialog in one click.
   async function openEventDialog(event: Record<string, unknown>) {
     (api.listEvents as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [event] });
-    render(<CalendarPage />);
+    renderWithConsumerActions(<CalendarPage />);
     await screen.findByRole("heading", { level: 1 });
     fireEvent.click(await screen.findByText(event.title as string));
     const daySheet = await screen.findByRole("dialog");
@@ -1829,7 +1830,7 @@ describe("Calendar — Recurring event scope chooser", () => {
     async function openFromMonthChip() {
       const event = crossing();
       (api.listEvents as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [event] });
-      render(<CalendarPage />);
+      renderWithConsumerActions(<CalendarPage />);
       await screen.findByRole("heading", { level: 1 });
       const chip = await waitFor(() => {
         const found = Array.from(document.querySelectorAll<HTMLElement>(".month-event")).find((element) => element.textContent?.includes(event.title));
@@ -1879,7 +1880,7 @@ describe("Calendar — initial view", () => {
 
   it("opens a new phone user in Agenda without rendering the month grid first", async () => {
     setViewport(false);
-    render(<CalendarPage />);
+    renderWithConsumerActions(<CalendarPage />);
     expect(await screen.findByRole("region", { name: "Upcoming events" })).toBeInTheDocument();
     expect(screen.queryByRole("region", { name: "Month view" })).not.toBeInTheDocument();
     expect(screen.getByRole("combobox", { name: "Calendar view" })).toHaveValue("agenda");
@@ -1889,7 +1890,7 @@ describe("Calendar — initial view", () => {
 
   it("keeps Month as the desktop default for a new user", async () => {
     setViewport(true);
-    render(<CalendarPage />);
+    renderWithConsumerActions(<CalendarPage />);
     expect(await screen.findByRole("region", { name: "Month view" })).toBeInTheDocument();
     expect(screen.queryByRole("region", { name: "Upcoming events" })).not.toBeInTheDocument();
   });
@@ -1897,7 +1898,7 @@ describe("Calendar — initial view", () => {
   it("honours a returning phone user's saved Month choice", async () => {
     setViewport(false);
     window.localStorage.setItem(VIEW_KEY, "month");
-    render(<CalendarPage />);
+    renderWithConsumerActions(<CalendarPage />);
     expect(await screen.findByRole("region", { name: "Month view" })).toBeInTheDocument();
     expect(screen.queryByRole("region", { name: "Upcoming events" })).not.toBeInTheDocument();
   });
@@ -1905,14 +1906,14 @@ describe("Calendar — initial view", () => {
   it("honours a returning desktop user's saved Agenda choice", async () => {
     setViewport(true);
     window.localStorage.setItem(VIEW_KEY, "agenda");
-    render(<CalendarPage />);
+    renderWithConsumerActions(<CalendarPage />);
     expect(await screen.findByRole("region", { name: "Upcoming events" })).toBeInTheDocument();
     expect(screen.queryByRole("region", { name: "Month view" })).not.toBeInTheDocument();
   });
 
   it("keeps an explicit choice made on a phone", async () => {
     setViewport(false);
-    render(<CalendarPage />);
+    renderWithConsumerActions(<CalendarPage />);
     const select = await screen.findByRole("combobox", { name: "Calendar view" });
     await screen.findByRole("region", { name: "Upcoming events" });
     fireEvent.change(select, { target: { value: "week" } });
@@ -1923,7 +1924,7 @@ describe("Calendar — initial view", () => {
   it("treats an unrecognised saved value as no preference", async () => {
     setViewport(false);
     window.localStorage.setItem(VIEW_KEY, "timeline");
-    render(<CalendarPage />);
+    renderWithConsumerActions(<CalendarPage />);
     expect(await screen.findByRole("region", { name: "Upcoming events" })).toBeInTheDocument();
   });
 });
@@ -1942,9 +1943,9 @@ describe("Calendar — event editor on the shared form layout", () => {
   });
 
   async function openAddEventSheet() {
-    render(<CalendarPage />);
+    renderWithConsumerActions(<CalendarPage />);
     await screen.findByRole("heading", { level: 1 });
-    fireEvent.click(screen.getByRole("button", { name: "Add calendar event" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Add calendar event" }));
     return screen.findByRole("dialog", { name: "Add event" });
   }
 
@@ -2093,7 +2094,7 @@ describe("Calendar — event editor on the shared form layout", () => {
     expect(api.createEvent).not.toHaveBeenCalled();
 
     (api.createEvent as ReturnType<typeof vi.fn>).mockReturnValue(new Promise(() => {}));
-    fireEvent.click(screen.getByRole("button", { name: "Add calendar event" }));
+    fireEvent.click(await screen.findByRole("button", { name: "Add calendar event" }));
     const reopened = await screen.findByRole("dialog", { name: "Add event" });
     fireEvent.change(within(reopened).getByLabelText("Title"), { target: { value: "Swimming" } });
     fireEvent.click(within(reopened).getByRole("button", { name: "Save event" }));
@@ -2112,7 +2113,7 @@ describe("Calendar — event editor on the shared form layout", () => {
         created_by: "u1", updated_at: "2026-01-01T00:00:00Z",
       }],
     });
-    render(<CalendarPage />);
+    renderWithConsumerActions(<CalendarPage />);
     await screen.findByRole("heading", { level: 1 });
     fireEvent.click(await screen.findByRole("button", { name: /Football/ }));
     const daySheet = await screen.findByRole("dialog");

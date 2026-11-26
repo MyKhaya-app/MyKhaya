@@ -36,6 +36,7 @@ from mykhaya.models import (
     TokenPurpose,
     User,
 )
+from mykhaya.routers.billing import _safe_webhook_failure_code
 from mykhaya.security import derived_token
 
 ORIGIN = "http://localhost:8080"
@@ -62,6 +63,20 @@ def test_webhook_outcome_deduplicates_only_stale_or_successful_results() -> None
     with pytest.raises(WebhookStateApplicationError) as caught:
         _webhook_outcome(result)
     assert caught.value.result is result
+
+
+def test_webhook_failure_classification_never_uses_exception_text() -> None:
+    assert _safe_webhook_failure_code(RuntimeError("provider detail")) == (
+        "webhook_processing_failed"
+    )
+    retryable = WebhookStateApplicationError(
+        SubscriptionStateResult(
+            SubscriptionStateOutcome.UNKNOWN_PRICE_ID,
+            reason="provider detail",
+            retryable=True,
+        )
+    )
+    assert _safe_webhook_failure_code(retryable) == "webhook_state_retryable"
 
 
 @pytest.fixture

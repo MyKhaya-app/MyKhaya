@@ -189,6 +189,7 @@ export function VehicleFields({
               {(control) => (
                 <select {...control} value={values.fuelType} onChange={(event) => onChange({ fuelType: event.target.value })}>
                   <option value="">Not set</option>
+                  {values.fuelType && !FUEL_TYPES.includes(values.fuelType) && <option value={values.fuelType}>{values.fuelType}</option>}
                   {FUEL_TYPES.map((option) => (
                     <option key={option} value={option}>
                       {option}

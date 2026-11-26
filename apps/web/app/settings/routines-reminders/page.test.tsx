@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { fireEvent, render, screen, within } from "@testing-library/react";
+import { fireEvent, screen, within } from "@testing-library/react";
+import { renderWithConsumerActions } from "@/components/consumer-action-dock.testing";
 import userEvent from "@testing-library/user-event";
 import type { Home, Reminder, Routine, Todo, TodoCategory } from "@mykhaya/shared-types";
 import RoutinesRemindersPage from "./page";
@@ -200,7 +201,7 @@ describe("Routines & Reminders — Nudges module gating", () => {
     (api.featureMatrix as ReturnType<typeof vi.fn>).mockResolvedValue({
       features: [{ feature: "nudges", enabled: false }],
     });
-    render(<RoutinesRemindersPage />);
+    renderWithConsumerActions(<RoutinesRemindersPage />);
 
     expect(
       await screen.findByText("Nudges isn't available for this Home yet. Please check back soon."),
@@ -218,7 +219,7 @@ describe("Routines & Reminders — Nudges module gating", () => {
       external_invites_enabled: false,
       nudges_enabled: false,
     });
-    render(<RoutinesRemindersPage />);
+    renderWithConsumerActions(<RoutinesRemindersPage />);
 
     expect(await screen.findByText(/Included with Family/)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "View Family plan" })).toHaveAttribute(
@@ -232,7 +233,7 @@ describe("Routines & Reminders — Nudges module gating", () => {
 describe("Routines & Reminders — combined module", () => {
   it("renders both Routines and Reminders together in the All view, subtly labelled", async () => {
     mockBoth();
-    render(<RoutinesRemindersPage />);
+    renderWithConsumerActions(<RoutinesRemindersPage />);
 
     expect(await screen.findByText("Put bins out")).toBeInTheDocument();
     expect(screen.getByText("Call the dentist")).toBeInTheDocument();
@@ -245,7 +246,7 @@ describe("Routines & Reminders — combined module", () => {
 
   it("Routines filter shows only Routines", async () => {
     mockBoth();
-    render(<RoutinesRemindersPage />);
+    renderWithConsumerActions(<RoutinesRemindersPage />);
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Routines" }));
 
@@ -255,7 +256,7 @@ describe("Routines & Reminders — combined module", () => {
 
   it("Reminders filter shows only Reminders", async () => {
     mockBoth();
-    render(<RoutinesRemindersPage />);
+    renderWithConsumerActions(<RoutinesRemindersPage />);
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Reminders" }));
 
@@ -271,7 +272,7 @@ describe("Routines & Reminders — combined module", () => {
       items: [reminder({ id: "m1", title: "Personal reminder", scope: "personal" })],
     });
 
-    render(<RoutinesRemindersPage />);
+    renderWithConsumerActions(<RoutinesRemindersPage />);
 
     expect(await screen.findByText("Personal reminder")).toBeInTheDocument();
     expect(screen.queryByText("Household routine")).not.toBeInTheDocument();
@@ -291,7 +292,7 @@ describe("Routines & Reminders — combined module", () => {
       items: [reminder({ id: "m1", title: "Earlier reminder", scope: "personal", due_time: "08:00:00" })],
     });
 
-    render(<RoutinesRemindersPage />);
+    renderWithConsumerActions(<RoutinesRemindersPage />);
     await screen.findByText("Earlier reminder");
 
     const upcomingHeading = screen.getByRole("heading", { name: "Today" });
@@ -304,7 +305,7 @@ describe("Routines & Reminders — combined module", () => {
   });
 
   it("shows an empty state when there are no Routines or Reminders at all", async () => {
-    render(<RoutinesRemindersPage />);
+    renderWithConsumerActions(<RoutinesRemindersPage />);
     expect(await screen.findByText(/nothing here yet/i)).toBeInTheDocument();
   });
 
@@ -312,7 +313,7 @@ describe("Routines & Reminders — combined module", () => {
     (api.reminders as ReturnType<typeof vi.fn>).mockResolvedValue({
       items: [reminder({ scope: "personal" })],
     });
-    render(<RoutinesRemindersPage />);
+    renderWithConsumerActions(<RoutinesRemindersPage />);
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Routines" }));
     expect(await screen.findByText("All caught up!")).toBeInTheDocument();
@@ -322,7 +323,7 @@ describe("Routines & Reminders — combined module", () => {
 
 describe("Routines & Reminders — create menu", () => {
   it("offers both New Routine and New Reminder from one Add control", async () => {
-    render(<RoutinesRemindersPage />);
+    renderWithConsumerActions(<RoutinesRemindersPage />);
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Add" }));
 
@@ -331,7 +332,7 @@ describe("Routines & Reminders — create menu", () => {
   });
 
   it("creates a routine via the Routine form", async () => {
-    render(<RoutinesRemindersPage />);
+    renderWithConsumerActions(<RoutinesRemindersPage />);
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Add" }));
     await user.click(screen.getByRole("button", { name: "New Routine" }));
@@ -354,7 +355,7 @@ describe("Routines & Reminders — create menu", () => {
     // way a real user does (userEvent.selectOptions, which respects
     // disabled options) against an entitled Home, and asserts the exact
     // payload sent to the API.
-    render(<RoutinesRemindersPage />);
+    renderWithConsumerActions(<RoutinesRemindersPage />);
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Add" }));
     await user.click(screen.getByRole("button", { name: "New Routine" }));
@@ -379,7 +380,7 @@ describe("Routines & Reminders — create menu", () => {
       external_invites_enabled: false,
       nudges_enabled: true,
     });
-    render(<RoutinesRemindersPage />);
+    renderWithConsumerActions(<RoutinesRemindersPage />);
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Add" }));
     await user.click(screen.getByRole("button", { name: "New Routine" }));
@@ -401,7 +402,7 @@ describe("Routines & Reminders — create menu", () => {
   });
 
   it("creates a reminder via the Reminder form", async () => {
-    render(<RoutinesRemindersPage />);
+    renderWithConsumerActions(<RoutinesRemindersPage />);
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Add" }));
     await user.click(screen.getByRole("button", { name: "New Reminder" }));
@@ -418,7 +419,7 @@ describe("Routines & Reminders — create menu", () => {
 
 describe("Routines & Reminders — creation uses a modal sheet, not an inline form", () => {
   it("tapping Add and then New Routine opens the form as a dialog, not inline on the page", async () => {
-    render(<RoutinesRemindersPage />);
+    renderWithConsumerActions(<RoutinesRemindersPage />);
     const user = userEvent.setup();
 
     // Before opening anything, no creation form is present anywhere —
@@ -436,7 +437,7 @@ describe("Routines & Reminders — creation uses a modal sheet, not an inline fo
   });
 
   it("tapping Add and then New Reminder opens the form as a dialog too", async () => {
-    render(<RoutinesRemindersPage />);
+    renderWithConsumerActions(<RoutinesRemindersPage />);
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Add" }));
     await user.click(screen.getByRole("button", { name: "New Reminder" }));
@@ -452,7 +453,7 @@ describe("Routines & Reminders — creation uses a modal sheet, not an inline fo
     // fixed/safe-area-aware positioning is what keeps them reachable —
     // see components/bottom-sheet.tsx and .sheet-content in styles.css),
     // never rendered as a sibling of the dialog back on the page.
-    render(<RoutinesRemindersPage />);
+    renderWithConsumerActions(<RoutinesRemindersPage />);
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Add" }));
     await user.click(screen.getByRole("button", { name: "New Routine" }));
@@ -463,7 +464,7 @@ describe("Routines & Reminders — creation uses a modal sheet, not an inline fo
   });
 
   it("keeps Reminder actions in the sheet footer outside the scrollable form", async () => {
-    render(<RoutinesRemindersPage />);
+    renderWithConsumerActions(<RoutinesRemindersPage />);
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Add" }));
     await user.click(screen.getByRole("button", { name: "New Reminder" }));
@@ -482,7 +483,7 @@ describe("Routines & Reminders — creation uses a modal sheet, not an inline fo
   });
 
   it("Cancel closes the dialog and discards the draft without saving", async () => {
-    render(<RoutinesRemindersPage />);
+    renderWithConsumerActions(<RoutinesRemindersPage />);
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Add" }));
     await user.click(screen.getByRole("button", { name: "New Routine" }));
@@ -500,7 +501,7 @@ describe("Routines & Reminders — creation uses a modal sheet, not an inline fo
   });
 
   it("Save closes the dialog after a successful create", async () => {
-    render(<RoutinesRemindersPage />);
+    renderWithConsumerActions(<RoutinesRemindersPage />);
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Add" }));
     await user.click(screen.getByRole("button", { name: "New Reminder" }));
@@ -513,7 +514,7 @@ describe("Routines & Reminders — creation uses a modal sheet, not an inline fo
 
   it("preserves the selected type/scope tabs across opening and cancelling the creation dialog", async () => {
     mockBoth();
-    render(<RoutinesRemindersPage />);
+    renderWithConsumerActions(<RoutinesRemindersPage />);
     const user = userEvent.setup();
     await screen.findByText("Put bins out");
 
@@ -530,7 +531,7 @@ describe("Routines & Reminders — creation uses a modal sheet, not an inline fo
 
   it("preserves the selected type/scope tabs after a successful save via the dialog", async () => {
     mockBoth();
-    render(<RoutinesRemindersPage />);
+    renderWithConsumerActions(<RoutinesRemindersPage />);
     const user = userEvent.setup();
     await screen.findByText("Put bins out");
 
@@ -553,7 +554,7 @@ describe("Routines & Reminders — completion dispatches to the right API", () =
     (api.routines as ReturnType<typeof vi.fn>).mockResolvedValue({
       items: [routine({ id: "routine-1", title: "Put bins out", scope: "personal" })],
     });
-    render(<RoutinesRemindersPage />);
+    renderWithConsumerActions(<RoutinesRemindersPage />);
     await screen.findByText("Put bins out");
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: /complete put bins out/i }));
@@ -566,7 +567,7 @@ describe("Routines & Reminders — completion dispatches to the right API", () =
     (api.reminders as ReturnType<typeof vi.fn>).mockResolvedValue({
       items: [reminder({ id: "reminder-1", title: "Call the dentist", scope: "personal" })],
     });
-    render(<RoutinesRemindersPage />);
+    renderWithConsumerActions(<RoutinesRemindersPage />);
     await screen.findByText("Call the dentist");
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: /complete call the dentist/i }));
@@ -579,7 +580,7 @@ describe("Routines & Reminders — completion dispatches to the right API", () =
     (api.reminders as ReturnType<typeof vi.fn>).mockResolvedValue({
       items: [reminder({ id: "reminder-1", title: "Take out recycling", repeat: "weekly", scope: "personal" })],
     });
-    render(<RoutinesRemindersPage />);
+    renderWithConsumerActions(<RoutinesRemindersPage />);
     await screen.findByText("Take out recycling");
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: /complete take out recycling/i }));
@@ -591,7 +592,7 @@ describe("Routines & Reminders — completion dispatches to the right API", () =
     (api.todos as ReturnType<typeof vi.fn>).mockResolvedValue({
       items: [todo({ scope: "personal" })],
     });
-    render(<RoutinesRemindersPage />);
+    renderWithConsumerActions(<RoutinesRemindersPage />);
     await screen.findByText("Sign school trip form");
     const user = userEvent.setup();
     await user.click(screen.getByRole("button", { name: /complete sign school trip form/i }));
@@ -610,7 +611,7 @@ describe("Routines & Reminders — To-do categories", () => {
     (api.todoCategories as ReturnType<typeof vi.fn>).mockResolvedValue({
       items: [todoCategory()],
     });
-    render(<RoutinesRemindersPage />);
+    renderWithConsumerActions(<RoutinesRemindersPage />);
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "To-dos" }));
     // The desktop/tablet "Categories" side panel (browser-only, hidden via
@@ -630,7 +631,7 @@ describe("Routines & Reminders — To-do categories", () => {
     (api.todoCategories as ReturnType<typeof vi.fn>).mockResolvedValue({
       items: [todoCategory()],
     });
-    render(<RoutinesRemindersPage />);
+    renderWithConsumerActions(<RoutinesRemindersPage />);
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Manage categories" }));
     const input = screen.getByPlaceholderText("Category name");
@@ -656,7 +657,7 @@ describe("Routines & Reminders — edit and delete", () => {
     (api.routines as ReturnType<typeof vi.fn>).mockResolvedValue({
       items: [routine({ scope: "household" })],
     });
-    render(<RoutinesRemindersPage />);
+    renderWithConsumerActions(<RoutinesRemindersPage />);
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Household" }));
     await user.click(await screen.findByRole("button", { name: "Edit" }));
@@ -669,7 +670,7 @@ describe("Routines & Reminders — edit and delete", () => {
     (api.reminders as ReturnType<typeof vi.fn>).mockResolvedValue({
       items: [reminder({ scope: "personal" })],
     });
-    render(<RoutinesRemindersPage />);
+    renderWithConsumerActions(<RoutinesRemindersPage />);
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Edit" }));
 
@@ -682,7 +683,7 @@ describe("Routines & Reminders — edit and delete", () => {
     (api.routines as ReturnType<typeof vi.fn>).mockResolvedValue({
       items: [routine({ scope: "household" })],
     });
-    render(<RoutinesRemindersPage />);
+    renderWithConsumerActions(<RoutinesRemindersPage />);
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Household" }));
     await user.click(await screen.findByRole("button", { name: "Delete" }));
@@ -695,7 +696,7 @@ describe("Routines & Reminders — edit and delete", () => {
     (api.reminders as ReturnType<typeof vi.fn>).mockResolvedValue({
       items: [reminder({ scope: "personal" })],
     });
-    render(<RoutinesRemindersPage />);
+    renderWithConsumerActions(<RoutinesRemindersPage />);
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Delete" }));
 
@@ -706,7 +707,7 @@ describe("Routines & Reminders — edit and delete", () => {
 describe("Routines & Reminders — search", () => {
   it("filters the visible list client-side by title as the user types", async () => {
     mockBoth();
-    render(<RoutinesRemindersPage />);
+    renderWithConsumerActions(<RoutinesRemindersPage />);
     await screen.findByText("Put bins out");
     const user = userEvent.setup();
     await user.type(
@@ -724,7 +725,7 @@ describe("Routines & Reminders — search", () => {
 
   it("shows the empty state, scoped to the current search term, when nothing matches", async () => {
     mockBoth();
-    render(<RoutinesRemindersPage />);
+    renderWithConsumerActions(<RoutinesRemindersPage />);
     await screen.findByText("Put bins out");
     const user = userEvent.setup();
     await user.type(
@@ -740,7 +741,7 @@ describe("Routines & Reminders — search", () => {
 describe("Routines & Reminders — filter visibility toggle", () => {
   it("hides and re-shows the Type/Scope segmented controls without touching the underlying filters", async () => {
     mockBoth();
-    render(<RoutinesRemindersPage />);
+    renderWithConsumerActions(<RoutinesRemindersPage />);
     await screen.findByText("Put bins out");
     const user = userEvent.setup();
 
@@ -772,7 +773,7 @@ describe("Routines & Reminders — Upcoming cards", () => {
         }),
       ],
     });
-    render(<RoutinesRemindersPage />);
+    renderWithConsumerActions(<RoutinesRemindersPage />);
 
     const card = await screen.findByRole("button", { name: /Gym Session/ });
     expect(within(card).getByText("Upcoming")).toBeInTheDocument();
@@ -792,7 +793,7 @@ describe("Routines & Reminders — Upcoming cards", () => {
 // existing create/manage flows, not that it's visible at every width.
 describe("Routines & Reminders — desktop/tablet supporting panels", () => {
   it("places the main list and the supporting panels inside one shared two-column layout", async () => {
-    render(<RoutinesRemindersPage />);
+    renderWithConsumerActions(<RoutinesRemindersPage />);
     await screen.findByRole("heading", { name: "Nudges" });
 
     const layout = document.querySelector(".rr-layout");
@@ -813,7 +814,7 @@ describe("Routines & Reminders — desktop/tablet supporting panels", () => {
   });
 
   it("Quick add's Add routine launches the existing New routine create flow, not a duplicate", async () => {
-    render(<RoutinesRemindersPage />);
+    renderWithConsumerActions(<RoutinesRemindersPage />);
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Add routine" }));
 
@@ -822,7 +823,7 @@ describe("Routines & Reminders — desktop/tablet supporting panels", () => {
   });
 
   it("Quick add's Add reminder launches the existing New reminder create flow", async () => {
-    render(<RoutinesRemindersPage />);
+    renderWithConsumerActions(<RoutinesRemindersPage />);
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Add reminder" }));
 
@@ -830,7 +831,7 @@ describe("Routines & Reminders — desktop/tablet supporting panels", () => {
   });
 
   it("Quick add's Add to-do launches the existing New to-do create flow", async () => {
-    render(<RoutinesRemindersPage />);
+    renderWithConsumerActions(<RoutinesRemindersPage />);
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Add to-do" }));
 
@@ -842,7 +843,7 @@ describe("Routines & Reminders — desktop/tablet supporting panels", () => {
     (api.todos as ReturnType<typeof vi.fn>).mockResolvedValue({
       items: [todo({ category: todoCategory() }), todo({ id: "todo-2", title: "Buy stamps" })],
     });
-    render(<RoutinesRemindersPage />);
+    renderWithConsumerActions(<RoutinesRemindersPage />);
     await screen.findByRole("heading", { name: "Nudges" });
 
     const side = document.querySelector(".rr-side") as HTMLElement;
@@ -853,7 +854,7 @@ describe("Routines & Reminders — desktop/tablet supporting panels", () => {
   });
 
   it("Categories panel omits counts/rows gracefully when there are no categories yet, rather than inventing any", async () => {
-    render(<RoutinesRemindersPage />);
+    renderWithConsumerActions(<RoutinesRemindersPage />);
     await screen.findByRole("heading", { name: "Nudges" });
 
     const side = document.querySelector(".rr-side") as HTMLElement;
@@ -862,7 +863,7 @@ describe("Routines & Reminders — desktop/tablet supporting panels", () => {
 
   it("Categories panel's Manage action opens the existing Manage categories flow, not a new one", async () => {
     (api.todoCategories as ReturnType<typeof vi.fn>).mockResolvedValue({ items: [todoCategory()] });
-    render(<RoutinesRemindersPage />);
+    renderWithConsumerActions(<RoutinesRemindersPage />);
     const user = userEvent.setup();
     await screen.findByRole("heading", { name: "Nudges" });
 
@@ -873,7 +874,7 @@ describe("Routines & Reminders — desktop/tablet supporting panels", () => {
   });
 
   it("Nudge settings routes to the existing Notifications settings destination", async () => {
-    render(<RoutinesRemindersPage />);
+    renderWithConsumerActions(<RoutinesRemindersPage />);
     await screen.findByRole("heading", { name: "Nudges" });
 
     const side = document.querySelector(".rr-side") as HTMLElement;
@@ -888,7 +889,7 @@ describe("Routines & Reminders — desktop/tablet supporting panels", () => {
 // accessible wiring, the failed-save path and that the payloads are unchanged.
 describe("Routines & Reminders — editors on the shared form layout", () => {
   async function openEditor(kind: "Routine" | "Reminder" | "To-do", title: string) {
-    render(<RoutinesRemindersPage />);
+    renderWithConsumerActions(<RoutinesRemindersPage />);
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Add" }));
     await user.click(screen.getByRole("button", { name: `New ${kind}` }));

@@ -22,7 +22,24 @@ its exact SHA.
 | `semgrep` | Semgrep 1.172.0, `p/owasp-top-ten` | `apps/` | Any finding |
 | `checkov` | Checkov 3.2.451 | Dockerfiles and GitHub Actions | Any failed check |
 | `sbom` | Syft v1.30.0 | Repository | Generation error |
+| `container-image` | Trivy 0.64.1 | The built `api` (runtime target; also runs worker, scheduler and migrations) and `web` images, including OS packages | HIGH or CRITICAL with a fix available |
 | `security-gate` | — | Aggregates the jobs above | Any job not successful |
+
+### Container image findings
+
+`container-image` covers what `filesystem` can't see: packages that come from
+the base image and `apt`. It publishes a complete JSON report for each image as
+the `trivy-image-api` and `trivy-image-web` artifacts. The report covers every
+severity, including findings with no released fix. The job fails on any HIGH or
+CRITICAL finding that has a fix available.
+
+Nothing is suppressed. A HIGH or CRITICAL finding with no upstream fix (Debian
+status `affected`, `fix_deferred` or `will_not_fix`) can't be cleared by
+updating. It stays in the report and is triaged like any other finding: record
+the package, the reachability assessment, the compensating controls and a
+review date, then recheck it when Debian publishes a fix. A fixable finding is
+remediated by rebuilding on an updated base image or package, never by
+ignoring it.
 
 Because Gitleaks scans every fetched ref, a release branch's security run can
 report a finding that exists only on another branch (for example `dev`). The
@@ -86,6 +103,23 @@ Review findings by rule, file, line, commit and fingerprint only. Never print
 or copy the fixture value. The scan must return no findings after these exact
 dispositions are present; any new fingerprint or any finding outside this
 table requires separate investigation.
+
+### Previously assessed historical findings
+
+These are genuine credential exposures in published history. They have already
+been investigated and given a disposition. A future audit or review cites the
+existing finding ID and does not raise the same historical commit as a new
+finding. The audit report holds the authoritative disposition; this table only
+points to it.
+
+| Finding | Fingerprint | Source remediation | Revocation | Authoritative record |
+|---|---|---|---|---|
+| SEC-18: historical DVLA UAT credential exposure | `32b102ab29fcb88c2ecb27edbb13f4e76b7cd336:.env.example:generic-api-key:70` | Complete (removed in `d31892e`; re-verified 2026-11-21) | Not independently verified (Owner action) | [Security audit 2026-10, SEC-18 disposition record](../security/MYKHAYA_SECURITY_AUDIT_2026-10.md#sec-18-disposition-record-historical-dvla-uat-credential-exposure) |
+
+Each exception is an exact fingerprint for that one historical occurrence. It
+does not cover the same value or any other credential in another commit, file
+or line. A recurrence of that kind is a new finding and follows
+**Genuine credential** triage above.
 
 ## Synthetic fixture conventions
 

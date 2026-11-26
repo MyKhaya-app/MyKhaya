@@ -1,0 +1,230 @@
+{#- MyKhaya Vehicle Report prototype. Icons: lucide (ISC), the set apps/web already ships. -#}
+{%- set ICONS = {
+  "car": '<path d="M19 17h2c.6 0 1-.4 1-1v-3c0-.9-.7-1.7-1.5-1.9C18.7 10.6 16 10 16 10s-1.3-1.4-2.2-2.3c-.5-.4-1.1-.7-1.8-.7H5c-.6 0-1.1.4-1.4.9l-1.4 2.9A3.7 3.7 0 0 0 2 12v4c0 .6.4 1 1 1h2"/><circle cx="7" cy="17" r="2"/><path d="M9 17h6"/><circle cx="17" cy="17" r="2"/>',
+  "coins": '<path d="M13.744 17.736a6 6 0 1 1-7.48-7.48"/><path d="M15 6h1v4"/><path d="m6.134 14.768.866-.5 2 3.464"/><circle cx="16" cy="8" r="6"/>',
+  "shield": '<path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/><path d="m9 12 2 2 4-4"/>',
+  "info": '<circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/>',
+  "calendar": '<path d="M8 2v3"/><path d="M16 2v3"/><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18"/>',
+  "file": '<path d="M6 22a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h8a2.4 2.4 0 0 1 1.704.706l3.588 3.588A2.4 2.4 0 0 1 20 8v12a2 2 0 0 1-2 2z"/><path d="M14 2v5a1 1 0 0 0 1 1h5"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/>',
+  "list": '<rect width="8" height="4" x="8" y="2" rx="1" ry="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M12 11h4"/><path d="M12 16h4"/><path d="M8 11h.01"/><path d="M8 16h.01"/>',
+  "lock": '<rect width="18" height="11" x="3" y="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/>',
+  "bookmark": '<path d="M17 3a2 2 0 0 1 2 2v15a1 1 0 0 1-1.496.868l-4.512-2.578a2 2 0 0 0-1.984 0l-4.512 2.578A1 1 0 0 1 5 20V5a2 2 0 0 1 2-2z"/>',
+  "search": '<path d="m21 21-4.34-4.34"/><circle cx="11" cy="11" r="8"/>',
+} -%}
+{%- macro icon(name, cls="ic") -%}
+<svg class="{{ cls }}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">{{ ICONS[name] | safe }}</svg>
+{%- endmacro -%}
+{%- macro card_head(name, title) -%}
+<div class="card-head"><span class="disc">{{ icon(name) }}</span><h2>{{ title }}</h2></div>
+{%- endmacro -%}
+{%- macro rows(items) -%}
+<dl class="rows">{% for r in items %}<div class="row"><dt>{{ r.label }}</dt><dd>{{ r.value }}</dd></div>{% endfor %}</dl>
+{%- endmacro -%}
+{%- macro rows2(items) -%}
+{%- set half = (items | length + 1) // 2 -%}
+<div class="cols2">{{ rows(items[:half]) }}{{ rows(items[half:]) }}</div>
+{%- endmacro -%}
+{%- macro empty(text) -%}<p class="empty">{{ text }}</p>{%- endmacro -%}
+{%- macro mot_table(tests) -%}
+<div class="mini-table">
+  <div class="mt-title">Recent MOT history</div>
+  <table>
+    <thead><tr><th class="c-dot"></th><th>Date</th><th class="num">Mileage</th><th class="num">Result</th></tr></thead>
+    <tbody>{% for t in tests %}<tr>
+      <td class="c-dot"><span class="dot {{ t.tone }}"></span></td><td class="strong">{{ t.date }}</td>
+      <td class="num">{{ t.mileage }}</td><td class="num result {{ t.tone }}">{{ t.result }}</td>
+    </tr>{% endfor %}</tbody>
+  </table>
+</div>
+{%- endmacro -%}
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<title>Vehicle Report · {{ registration }}</title>
+<meta name="author" content="MyKhaya">
+<style>{{ css | safe }}</style>
+</head>
+<body class="{{ 'is-full' if full else 'is-essential' }}">
+
+<div class="runhead">
+  <img class="rh-logo" src="{{ logo }}" alt="">
+  <span class="rh-brand">MyKhaya</span><span class="rh-sep"></span>
+  <span class="rh-title">Vehicle Report</span>
+  <span class="rh-meta"><span class="rh-plate">{{ registration }}</span>{{ name }}</span>
+</div>
+<div class="runfoot"><span>Generated with <b>MyKhaya</b> on {{ generated }}</span><span class="pageno"></span><span class="site">mykhaya.app</span></div>
+
+<header class="masthead">
+  <div class="mh-brand"><span class="mh-logo"><img src="{{ logo }}" alt=""></span><span class="mh-word">MyKhaya</span></div>
+  <div class="mh-rule"></div>
+  <div class="mh-title"><h1>Vehicle Report</h1><p>Generated {{ generated }}</p></div>
+</header>
+
+<section class="hero card">
+  <div class="hero-photo{% if not photo_uri %} is-empty{% endif %}">
+    {% if photo_uri %}<img src="{{ photo_uri }}" alt="{{ name }}">{% else %}{{ icon("car", "ic-photo") }}{% endif %}
+  </div>
+  <div class="hero-body">
+    <span class="badge">{{ icon("bookmark" if source == "saved" else "search", "ic-badge") }}{{ report_kind }}</span>
+    <p class="eyebrow">{{ eyebrow }}</p>
+    <h2 class="hero-name{% if name | length > 24 %} is-long{% endif %}">{{ name }}</h2>
+    <div class="hero-chips"><span class="plate">{{ registration }}</span>{% for c in chips %}<span class="chip">{{ c }}</span>{% endfor %}</div>
+    <p class="hero-sub">{{ subtitle }}</p>
+  </div>
+</section>
+
+<div class="pair">
+  <section class="card">
+    {{ card_head("car", "Vehicle details") }}
+    {% if details %}{{ rows(details) }}{% else %}{{ empty("DVLA didn’t return vehicle details for this registration.") }}{% endif %}
+  </section>
+  <section class="card">
+    {{ card_head("coins", "Tax and status") }}
+    {% if tax_rows %}{{ rows(tax_rows) }}{% endif %}
+    {% if ved %}
+    <div class="ved">
+      <div class="ved-main"><span class="ved-label">Estimated annual VED</span><span class="ved-amount">{{ ved.annual }}<small> / year</small></span></div>
+      <div class="ved-basis"><span>Estimate basis</span><b>{{ ved.basis }}</b></div>
+    </div>
+    <p class="note">{{ icon("info", "ic-note") }}MyKhaya estimate. GOV.UK confirms the final rate.</p>
+    {% if full and ved.plans %}
+    <table class="plans">
+      <thead><tr><th>Payment option</th><th class="num">Amount</th></tr></thead>
+      <tbody>{% for p in ved.plans[:2] %}<tr><td>{{ icon("calendar", "ic-row") }}{{ p.label }}</td><td class="num">{{ p.amount }}</td></tr>{% endfor %}</tbody>
+    </table>
+    {% endif %}
+    {% elif not tax_rows %}
+    {{ empty("Tax details aren’t available for this vehicle yet.") }}
+    {% else %}
+    <p class="note">{{ icon("info", "ic-note") }}There isn’t enough vehicle information to estimate annual VED.</p>
+    {% endif %}
+  </section>
+</div>
+
+{% if full %}
+<div class="pair">
+  <section class="card">
+    {{ card_head("shield", "MOT summary") }}
+    {% if mot.available %}
+      {% if mot.status %}<span class="pill {{ mot.tone }}">{{ mot.status }}</span>{% endif %}
+      {% if mot.expiry %}{{ rows([{"label": "Expiry date", "value": mot.expiry}]) }}{% endif %}
+      {% if mot.recent %}{{ mot_table(mot.recent) }}{% endif %}
+    {% elif source == "lookup" %}
+      {{ empty("MOT history wasn’t available for this lookup.") }}
+    {% else %}
+      {{ empty("No MOT tests have been recorded for this vehicle yet.") }}
+    {% endif %}
+  </section>
+  <section class="card">
+    {{ card_head("info", "Additional vehicle details") }}
+    {% if additional %}{{ rows(additional) }}{% else %}{{ empty("No additional DVLA details were returned.") }}{% endif %}
+  </section>
+</div>
+{% else %}
+<section class="card mot-wide{% if not mot.recent %} is-compact{% endif %}">
+  <div class="mw-left">
+    {{ card_head("shield", "MOT history") }}
+    {% if mot.available %}
+      {% if mot.status %}<span class="pill {{ mot.tone }}">{{ mot.status }}</span>{% endif %}
+      {% if mot.expiry %}<p class="mw-label">Expiry date</p><p class="mw-date">{{ mot.expiry }}</p>{% endif %}
+    {% endif %}
+  </div>
+  <div class="mw-right">
+    {% if mot.recent %}{{ mot_table(mot.recent) }}
+    {% elif source == "lookup" %}<p class="empty">MOT history wasn’t available for this lookup. Saving the vehicle to your Driveway lets MyKhaya keep its MOT history up to date.</p>
+    {% else %}<p class="empty">No MOT tests have been recorded for this vehicle yet.</p>{% endif %}
+  </div>
+</section>
+{% if additional %}
+<section class="card">
+  {{ card_head("info", "Additional vehicle details") }}
+  {{ rows2(additional) }}
+</section>
+{% endif %}
+{% endif %}
+
+{% if full %}
+<aside class="band">
+  {{ icon("info", "ic-band") }}
+  <p><b>Data sources:</b> Vehicle details and tax status come from DVLA (Driver and Vehicle Licensing Agency){% if dvla_checked %}, last checked {{ dvla_checked }}{% endif %}.{% if mot.available %} MOT results come from DVSA (Driver and Vehicle Standards Agency).{% endif %}{% if ved %} <b>Calculated estimates:</b> Annual VED and payment options are MyKhaya estimates based on the {{ ved.basis }}.{% endif %}</p>
+</aside>
+{% else %}
+<aside class="band">
+  {{ icon("shield", "ic-band") }}
+  <p><b>Privacy and disclaimer:</b> Owner details, VIN and private household information are left out of this report. It isn’t proof of ownership or finance status, and it isn’t a commercial vehicle history check. Vehicle data comes from DVLA{% if dvla_checked %} (checked {{ dvla_checked }}){% endif %}{% if mot.recent %} and DVSA{% endif %}{% if ved %}; the VED figure is a MyKhaya estimate{% endif %}.</p>
+</aside>
+{% endif %}
+
+{% if full %}
+{# ---------------------------------------------------------------- page 2 onward #}
+{% if mot.tests %}
+<section class="section mot-full">
+  <div class="keep-together">
+  {{ card_head("list", "Complete MOT history") }}
+  <div class="stats">
+    <div class="stat"><b>{{ mot.count }}</b><span>{{ "test" if mot.count == 1 else "tests" }} recorded</span></div>
+    <div class="stat"><b>{{ mot.passed }}</b><span>passed</span></div>
+    <div class="stat"><b>{{ mot.failed }}</b><span>failed</span></div>
+    <div class="stat"><b>{{ mot.defect_count }}</b><span>{{ "advisory or defect" if mot.defect_count == 1 else "advisories and defects" }}</span></div>
+    {% if mot.latest_mileage %}<div class="stat wide"><b>{{ mot.latest_mileage }}</b><span>latest recorded mileage</span></div>{% endif %}
+  </div>
+  {% for t in mot.tests %}
+  {% if loop.index == 2 %}</div>{% endif %}
+  <article class="test {{ t.tone }}">
+    <div class="test-top">
+      <div class="t-date">{{ t.date }}</div>
+      <div class="t-miles">{{ t.mileage }}{% if t.delta %} <span>{{ t.delta }}</span>{% endif %}</div>
+      <div class="t-expiry">{% if t.expiry %}<span>Expires</span> {{ t.expiry }}{% endif %}</div>
+      <div class="t-result"><span class="pill {{ t.tone }}">{{ t.result }}</span></div>
+    </div>
+    {% if t.defects %}
+    <ul class="defects">{% for d in t.defects %}<li><span class="tag {{ d.kind }}">{{ d.label }}</span><span class="d-text">{{ d.text }}</span></li>{% endfor %}</ul>
+    {% else %}<p class="clean">No advisories or defects recorded.</p>{% endif %}
+  </article>
+  {% endfor %}
+  {% if mot.tests | length == 1 %}</div>{% endif %}
+</section>
+{% endif %}
+
+<div class="closing">
+{% if more_dvla %}
+<section class="card keep">
+  {{ card_head("file", "More DVLA details") }}
+  {{ rows2(more_dvla) }}
+</section>
+{% endif %}
+
+<div class="keep-together">
+{% if ved %}
+<section class="card keep">
+  {{ card_head("coins", "How the VED estimate was worked out") }}
+  <p class="lede"><b>{{ ved.annual }} a year</b> · {{ ved.tax_year }} tax year · {{ ved.category }}</p>
+  <div class="ved-grid">
+    <div>
+      {% if ved.plans %}
+      <table class="plans">
+        <thead><tr><th>Payment option</th><th class="num">Amount</th><th class="num">Total</th></tr></thead>
+        <tbody>{% for p in ved.plans %}<tr><td>{{ p.label }}</td><td class="num">{{ p.amount }}</td><td class="num">{{ p.total or "" }}</td></tr>{% endfor %}</tbody>
+      </table>
+      {% else %}<p class="body-text">MyKhaya estimates the 12-month amount for this rate category. Monthly and six-monthly payment amounts aren’t estimated.</p>{% endif %}
+      {% if ved.supplement %}<p class="note">{{ icon("info", "ic-note") }}{{ ved.supplement }}</p>{% endif %}
+    </div>
+    <div>
+      {% if ved.assumptions %}<p class="sub first">Assumed</p><ul class="bullets">{% for a in ved.assumptions %}<li>{{ a }}</li>{% endfor %}</ul>{% endif %}
+      {% if ved.missing %}<p class="sub">Not known to MyKhaya</p><ul class="bullets">{% for a in ved.missing %}<li>{{ a }}</li>{% endfor %}</ul>{% endif %}
+    </div>
+  </div>
+</section>
+{% endif %}
+
+<aside class="band keep">
+  {{ icon("shield", "ic-band") }}
+  <p><b>Privacy and disclaimer:</b> Owner details, the full VIN and private household information are never included in a Vehicle Report. This report isn’t proof of ownership or finance status, and it isn’t a commercial vehicle history check.{% if mot.checked %} MOT results were last checked with DVSA on {{ mot.checked }}.{% endif %}{% if ved %} VED figures are MyKhaya estimates; GOV.UK confirms the final rate.{% endif %}</p>
+</aside>
+</div>
+</div>
+{% endif %}
+
+</body>
+</html>

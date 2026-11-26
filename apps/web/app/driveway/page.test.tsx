@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { render, screen, within } from "@testing-library/react";
+import { screen, within } from "@testing-library/react";
+import { renderWithConsumerActions } from "@/components/consumer-action-dock.testing";
 import userEvent from "@testing-library/user-event";
 import DrivewayPage from "./page";
 
@@ -7,8 +8,9 @@ import DrivewayPage from "./page";
 // vehicle cards and the empty state. MOT dates are relative to today so the
 // shared 30-day rule is exercised without fake timers.
 
+const push = vi.hoisted(() => vi.fn());
 vi.mock("next/navigation", () => ({
-  useRouter: () => ({ replace: vi.fn(), push: vi.fn() }),
+  useRouter: () => ({ replace: vi.fn(), push }),
   usePathname: () => "/driveway",
 }));
 
@@ -112,7 +114,7 @@ beforeEach(() => {
 describe("Driveway list — header and filters", () => {
   it("shows the Home eyebrow, title, subtitle and the existing illustration", async () => {
     mockVehicles([BMW]);
-    const { container } = render(<DrivewayPage />);
+    const { container } = renderWithConsumerActions(<DrivewayPage />);
     expect(await screen.findByText("Everyone's vehicles, MOTs and key details in one place.")).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: "Driveway" })).toBeInTheDocument();
     expect(screen.getByText("Home", { selector: ".drv-eyebrow" })).toBeInTheDocument();
@@ -121,7 +123,7 @@ describe("Driveway list — header and filters", () => {
 
   it("offers All, Mine and each other family member, and filters by owner", async () => {
     mockVehicles([BMW, { ...TEST_CAR, owner_user_id: "u2" }]);
-    render(<DrivewayPage />);
+    renderWithConsumerActions(<DrivewayPage />);
     const group = await screen.findByRole("group", { name: "Filter by person" });
     const chips = within(group).getAllByRole("button").map((chip) => chip.textContent);
     expect(chips).toEqual(["All", "Mine", "Megan"]);
@@ -138,10 +140,11 @@ describe("Driveway list — header and filters", () => {
 
   it("shows a friendly empty state with an add action for that person", async () => {
     mockVehicles([BMW]);
-    render(<DrivewayPage />);
+    renderWithConsumerActions(<DrivewayPage />);
     const user = userEvent.setup();
     await user.click(await screen.findByRole("button", { name: "Megan" }));
     expect(screen.getByText("No vehicles for Megan yet")).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Open vehicle lookup" })).toHaveAttribute("href", "/driveway/lookup");
     expect(screen.getByText("Add one with just the registration – we'll look up the MOT.")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Add a vehicle for Megan" })).toHaveAttribute("href", "/driveway/add?owner=u2");
     expect(screen.queryByText(/All MOTs in date/)).not.toBeInTheDocument();
@@ -151,7 +154,7 @@ describe("Driveway list — header and filters", () => {
 describe("Driveway list — vehicle cards", () => {
   it("shows make + model, a formatted plate chip, details, owner and MOT pill", async () => {
     mockVehicles([BMW, TEST_CAR]);
-    render(<DrivewayPage />);
+    renderWithConsumerActions(<DrivewayPage />);
     const link = (await screen.findByText("BMW i4")).closest("a")!;
     expect(link).toHaveAttribute("href", "/driveway/v1");
     expect(within(link).getByText("AP22 OOJ")).toHaveClass("drv-plate");
@@ -167,7 +170,7 @@ describe("Driveway list — vehicle cards", () => {
 
   it("turns the pill and summary strip red at 30 days or fewer", async () => {
     mockVehicles([{ ...BMW, inspection_due_date: iso(12) }]);
-    render(<DrivewayPage />);
+    renderWithConsumerActions(<DrivewayPage />);
     expect(await screen.findByText("MOT due in 12 days")).toHaveClass("drv-pill-soon");
     const strip = screen.getByText(/BMW i4 MOT due in 12 days/).closest("p")!;
     expect(strip).toHaveClass("drv-strip-urgent");
@@ -176,7 +179,7 @@ describe("Driveway list — vehicle cards", () => {
 
   it("uses the singular for one day and flags an expired MOT", async () => {
     mockVehicles([{ ...BMW, inspection_due_date: iso(1) }, { ...BMW, id: "v3", nickname: "Old", make: "Ford", model: "Ka", inspection_status: "expired", inspection_due_date: iso(-4) }]);
-    render(<DrivewayPage />);
+    renderWithConsumerActions(<DrivewayPage />);
     expect(await screen.findByText("MOT due in 1 day")).toBeInTheDocument();
     expect(screen.getByText("MOT expired")).toHaveClass("drv-pill-expired");
     // The most urgent vehicle leads the strip.
@@ -185,7 +188,7 @@ describe("Driveway list — vehicle cards", () => {
 
   it("says all MOTs are in date with the earliest expiry when none are due", async () => {
     mockVehicles([BMW, { ...BMW, id: "v4", inspection_due_date: iso(200) }]);
-    render(<DrivewayPage />);
+    renderWithConsumerActions(<DrivewayPage />);
     const strip = (await screen.findByText(/All MOTs in date · next due/)).closest("p")!;
     expect(strip).not.toHaveClass("drv-strip-urgent");
     expect(within(strip).getByText(short(200))).toBeInTheDocument();
@@ -193,35 +196,39 @@ describe("Driveway list — vehicle cards", () => {
 
   it("shows no MOT pill for a vehicle outside the UK", async () => {
     mockVehicles([{ ...BMW, country_code: "ZA", registration: "CA 123-456" }]);
-    render(<DrivewayPage />);
+    renderWithConsumerActions(<DrivewayPage />);
     await screen.findByText("BMW i4");
     expect(document.querySelector(".drv-pill")).toBeNull();
     expect(screen.queryByText(/MOTs in date|MOT valid/)).not.toBeInTheDocument();
   });
 
-  it("keeps the floating Add vehicle action", async () => {
+  it("keeps the shared Add vehicle action", async () => {
     mockVehicles([BMW]);
-    render(<DrivewayPage />);
+    renderWithConsumerActions(<DrivewayPage />);
     await screen.findByText("BMW i4");
-    const add = screen.getByRole("link", { name: "Add vehicle" });
-    expect(add).toHaveAttribute("href", "/driveway/add");
-    expect(add).toHaveClass("rr-fab");
+    const add = await screen.findByRole("button", { name: "Add vehicle" });
+    expect(add).toHaveClass("consumer-primary-action");
+    push.mockClear();
+    await userEvent.setup().click(add);
+    expect(push).toHaveBeenCalledExactlyOnceWith("/driveway/add");
   });
 });
 
 describe("Driveway list — module/entitlement state", () => {
   it("shows an inline message when the platform feature flag is off", async () => {
     mockModuleState({ featureOn: false, entitled: true });
-    render(<DrivewayPage />);
+    renderWithConsumerActions(<DrivewayPage />);
     expect(await screen.findByText("Driveway isn't available for this Home yet. Please check back soon.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Add vehicle" })).not.toBeInTheDocument();
   });
 
   it("shows the Ultimate upsell and never loads vehicles when not entitled", async () => {
     mockModuleState({ featureOn: true, entitled: false });
     mockVehicles([BMW]);
-    render(<DrivewayPage />);
+    renderWithConsumerActions(<DrivewayPage />);
     expect(await screen.findByText("Included with MyKhaya Ultimate.")).toBeInTheDocument();
     expect(screen.queryByText("BMW i4")).not.toBeInTheDocument();
     expect(api.vehicles).not.toHaveBeenCalled();
+    expect(screen.queryByRole("button", { name: "Add vehicle" })).not.toBeInTheDocument();
   });
 });

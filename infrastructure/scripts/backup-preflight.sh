@@ -23,6 +23,24 @@ set -eu
 # release tag (before that release's prod-deploy.sh exists on the host).
 ROOT="${MYKHAYA_ROOT:-$(CDPATH= cd -- "$(dirname -- "$0")/../.." && pwd)}"
 env_file="${MYKHAYA_ENV_FILE:-$ROOT/.env}"
+# Production with the service-specific configuration (F-03): host values come
+# from the PROD root's compose.env. The retained legacy .env is still checked
+# for an exposed identity below.
+legacy_env_file=""
+if [ "${MYKHAYA_PRODUCTION:-}" = 1 ] && [ -z "${MYKHAYA_ENV_FILE:-}" ]; then
+  if [ -f "$ROOT/infrastructure/scripts/prod-config-mode.sh" ]; then
+    die() { printf 'ERROR: backup preflight failed:\n  - %b\n' "$*" >&2; exit 1; }
+    . "$ROOT/infrastructure/scripts/prod-config-mode.sh"
+    prod_select_mode readonly
+    if [ "$PROD_CONFIG_MODE" != legacy ]; then
+      env_file=$PROD_ENV_SOURCE
+      legacy_env_file="$ROOT/.env"
+    fi
+  elif [ -e "${MYKHAYA_PROD_SERVICE_ENV_STATE:-/etc/mykhaya/prod/.service-env-state}" ]; then
+    printf 'ERROR: backup preflight failed:\n  - this copy predates the PROD service-specific configuration; run the checked-out release'"'"'s own script\n' >&2
+    exit 1
+  fi
+fi
 
 env_value() {
   [ -f "$env_file" ] || return 0
@@ -79,7 +97,11 @@ fi
 [ -z "${MYKHAYA_BACKUP_AGE_IDENTITY:-}" ] ||
   problem "MYKHAYA_BACKUP_AGE_IDENTITY is set in the deployment environment; supply it only at restore time"
 [ -z "$(env_value MYKHAYA_BACKUP_AGE_IDENTITY)" ] ||
-  problem "MYKHAYA_BACKUP_AGE_IDENTITY is set in .env; supply it only at restore time"
+  problem "MYKHAYA_BACKUP_AGE_IDENTITY is set in $(basename "$env_file"); supply it only at restore time"
+if [ -n "$legacy_env_file" ] && [ -f "$legacy_env_file" ] &&
+  [ -n "$(sed -n 's/^MYKHAYA_BACKUP_AGE_IDENTITY=//p' "$legacy_env_file" | tail -n 1 | tr -d '\r')" ]; then
+  problem "MYKHAYA_BACKUP_AGE_IDENTITY is set in the retained legacy .env; supply it only at restore time"
+fi
 if [ -d "$backup_dir" ] && grep -rlI "AGE-SECRET-KEY" "$backup_dir" >/dev/null 2>&1; then
   problem "a file containing an age PRIVATE key is inside the backup directory"
 fi

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, use, useEffect, useRef, useState } from "react";
+import { FormEvent, use, useEffect, useMemo, useRef, useState } from "react";
 import { ChevronLeft, Plus, Trash2 } from "lucide-react";
 import type { Reminder, Vehicle } from "@mykhaya/shared-types";
 import { ApiError, api } from "@mykhaya/api-client";
@@ -11,6 +11,7 @@ import { FormStatus } from "@/components/form-status";
 import { dateInputUnreadable, useFocusFirstInvalid } from "../../vehicle-fields";
 import { useActiveHome } from "@/components/use-active-home";
 import { nudgeCardDateLabel } from "@/app/home/routine-utils";
+import { useConsumerPrimaryAction } from "@/components/consumer-action-dock";
 
 // Driveway's Reminders page — Phase 4. Every row here is an ordinary Nudges
 // Reminder (see mykhaya.driveway_reminders): this page only ever shows/
@@ -41,6 +42,11 @@ export default function VehicleRemindersPage({
   const [notFound, setNotFound] = useState(false);
   const [error, setError] = useState("");
   const [adding, setAdding] = useState(false);
+  useConsumerPrimaryAction(useMemo(() => ({
+    label: "Add reminder",
+    enabled: Boolean(vehicle && !notFound),
+    onActivate: () => setAdding(true),
+  }), [notFound, vehicle]));
 
   async function load() {
     if (!activeHomeId) return;
@@ -152,10 +158,6 @@ export default function VehicleRemindersPage({
                 </article>
               ))}
             </div>
-            <button type="button" className="button rr-fab" aria-label="Add reminder" onClick={() => setAdding(true)}>
-              <Plus size={22} aria-hidden="true" />
-              <span aria-hidden="true">Add</span>
-            </button>
           </>
         )}
 

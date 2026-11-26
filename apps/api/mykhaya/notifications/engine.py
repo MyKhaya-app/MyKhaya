@@ -93,6 +93,18 @@ MANDATORY_EMAIL_TYPES = {
     "platform.monitoring_alert",
 }
 
+# Email the recipient explicitly asked for, on demand, for themselves (e.g.
+# "Email me" on a Vehicle Report). Narrower than MANDATORY_EMAIL_TYPES:
+# - sent even when routine email notifications (email_enabled / category
+#   gates) are off, because the user has just requested this one message;
+# - only ever to the recipient's own account email, and only once it is
+#   verified (never to a caller-supplied address, never with no account);
+# - email only: no in-app or push copy of a message the user is looking at;
+# - every other control still applies: an inactive user or Home suppresses it,
+#   and the templates stay customisable in the Platform Control Centre.
+# Callers must also gate the action itself (vehicle_report_email_enabled).
+REQUESTED_EMAIL_TYPES = frozenset({"driveway_vehicle_report"})
+
 # Notification types whose in-app and push/native-push delivery is mandatory
 # — never suppressible by NotificationPreferences (channel toggles or
 # category gates). Distinct from MANDATORY_EMAIL_TYPES, which forces the
@@ -149,6 +161,8 @@ async def notify(
     attachment_storage_key: str | None = None,
     attachment_filename: str | None = None,
     attachment_evidence_id: str | None = None,
+    attachment_storage_kind: str | None = None,
+    attachment_cleanup: bool = False,
 ) -> Notification | None:
     """Dispatch a notification to a single recipient across their enabled channels.
 
@@ -164,6 +178,12 @@ async def notify(
     passes `recipient_user_id`.
     """
     is_mandatory = notification_type in MANDATORY_EMAIL_TYPES
+    is_requested = notification_type in REQUESTED_EMAIL_TYPES
+    if is_requested and (recipient_user_id is None or recipient_email is not None):
+        raise ValueError(
+            "REQUESTED_EMAIL_TYPES are sent only to the requesting user's own account "
+            "(recipient_user_id), never to a supplied recipient_email"
+        )
 
     # Slice 4.5: a Disabled/Archived Home never gets Home-specific work,
     # full stop — even a MANDATORY_EMAIL_TYPES invitation to an address
@@ -198,6 +218,8 @@ async def notify(
             attachment_storage_key=attachment_storage_key,
             attachment_filename=attachment_filename,
             attachment_evidence_id=attachment_evidence_id,
+            attachment_storage_kind=attachment_storage_kind,
+            attachment_cleanup=attachment_cleanup,
         )
         return None
 
@@ -221,7 +243,9 @@ async def notify(
     force_channels = notification_type in MANDATORY_CHANNEL_TYPES
 
     notification: Notification | None = None
-    if force_channels or (not is_mandatory and prefs.in_app_enabled and category_enabled):
+    if force_channels or (
+        not is_mandatory and not is_requested and prefs.in_app_enabled and category_enabled
+    ):
         in_app_key = f"{idempotency_key}:in_app"
         already_sent = await db.scalar(
             select(NotificationDelivery.id).where(
@@ -252,7 +276,9 @@ async def notify(
                 )
             )
 
-    if force_channels or (not is_mandatory and prefs.push_enabled and category_enabled):
+    if force_channels or (
+        not is_mandatory and not is_requested and prefs.push_enabled and category_enabled
+    ):
         await _enqueue_push(
             db,
             settings=settings,
@@ -269,7 +295,25 @@ async def notify(
             group_id=group_id,
         )
 
-    if allow_email and (is_mandatory or (prefs.email_enabled and category_enabled)):
+    if allow_email and is_requested:
+        # Explicitly requested: preferences don't apply, verification does.
+        if user is not None and user.email and user.email_verified_at is not None:
+            await _enqueue_email(
+                db,
+                recipient_user_id=recipient_user_id,
+                recipient_email=user.email,
+                notification_type=notification_type,
+                title=title,
+                body=body,
+                idempotency_key=idempotency_key,
+                html_body=html_body,
+                group_id=group_id,
+                attachment_storage_key=attachment_storage_key,
+                attachment_filename=attachment_filename,
+                attachment_storage_kind=attachment_storage_kind,
+                attachment_cleanup=attachment_cleanup,
+            )
+    elif allow_email and (is_mandatory or (prefs.email_enabled and category_enabled)):
         resolved_email = recipient_email or (user.email if user else None)
         if resolved_email:
             await _enqueue_email(
@@ -286,6 +330,8 @@ async def notify(
                 attachment_storage_key=attachment_storage_key,
                 attachment_filename=attachment_filename,
                 attachment_evidence_id=attachment_evidence_id,
+                attachment_storage_kind=attachment_storage_kind,
+                attachment_cleanup=attachment_cleanup,
             )
 
     return notification
@@ -306,6 +352,8 @@ async def _enqueue_email(
     attachment_storage_key: str | None = None,
     attachment_filename: str | None = None,
     attachment_evidence_id: str | None = None,
+    attachment_storage_kind: str | None = None,
+    attachment_cleanup: bool = False,
 ) -> None:
     email_key = f"{idempotency_key}:email"
     already_queued = await db.scalar(
@@ -336,6 +384,8 @@ async def _enqueue_email(
             "attachment_storage_key": attachment_storage_key,
             "attachment_filename": attachment_filename,
             "attachment_evidence_id": attachment_evidence_id,
+            "attachment_storage_kind": attachment_storage_kind,
+            "attachment_cleanup": attachment_cleanup,
         },
     )
     db.add(event)

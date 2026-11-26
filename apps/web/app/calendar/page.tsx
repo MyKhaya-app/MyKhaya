@@ -43,6 +43,7 @@ import { isNativeShell } from "@/components/native-runtime";
 import { desktopShellViewport } from "@/components/use-desktop-shell";
 import { NATIVE_COMPACT_RAIL_QUERY, NATIVE_WIDE_QUERY } from "@/components/native-layout";
 import { useActiveHome } from "@/components/use-active-home";
+import { useConsumerPrimaryAction } from "@/components/consumer-action-dock";
 import { syncWidgetSnapshot } from "@/components/widget-bridge";
 import { EXPANDED_MONTH_VISIBLE_ROW_CAP, MonthSwipeView } from "./month-view";
 import { CopyEventSheet, type CopyDestination } from "./copy-event-sheet";
@@ -1387,6 +1388,11 @@ export default function CalendarPage() {
   // tall ones (iPad) keep the default lane cap.
   const [nativeWideShort, setNativeWideShort] = useState(false);
   const [editorDay, setEditorDay] = useState<Date | null>(null);
+  useConsumerPrimaryAction(useMemo(() => ({
+    label: "Add calendar event",
+    enabled: featureEnabled && viewReady,
+    onActivate: () => setEditorDay(focusDate),
+  }), [featureEnabled, focusDate, viewReady]));
   const [selectedEvent, setSelectedEvent] = useState<EventOccurrence | null>(
     null,
   );
@@ -2410,15 +2416,6 @@ export default function CalendarPage() {
             )}
           </section>
         )}
-
-        <button
-          className="calendar-fab"
-          type="button"
-          onClick={() => setEditorDay(focusDate)}
-          aria-label="Add calendar event"
-        >
-          +
-        </button>
 
         {selectedDay && (
           <BottomSheet

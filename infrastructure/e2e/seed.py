@@ -1,7 +1,6 @@
 """Seed only synthetic, disposable E2E prerequisites for the candidate stack."""
 
 import asyncio
-import os
 from datetime import UTC, date, datetime, timedelta
 
 from sqlalchemy import select
@@ -19,6 +18,7 @@ from mykhaya.models import (
     PlatformSetting,
     SignupMode,
 )
+from mykhaya.config import get_settings
 from mykhaya.founding_beta import FOUNDING_BETA_SLUG, invitation_token_hash
 
 
@@ -30,7 +30,7 @@ BETA_INVITATIONS = {
 
 
 async def seed() -> None:
-    engine = create_async_engine(os.environ["MYKHAYA_DATABASE_URL"])
+    engine = create_async_engine(get_settings().database_connect_url())
     sessions = async_sessionmaker(engine, expire_on_commit=False)
     async with sessions() as db:
         terms = await db.scalar(select(LegalDocument).where(LegalDocument.key == "terms"))

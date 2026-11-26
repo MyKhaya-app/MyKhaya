@@ -366,6 +366,20 @@ def resolve_fcm_config(settings: Settings) -> FcmConfig:
     )
 
 
+def fcm_indicated(settings: Settings) -> bool:
+    """Whether FCM is configured, for status displays only.
+
+    A process granted the key answers from the key itself. The api and cli
+    roles are denied it (K-09) and answer from the non-secret presence flag."""
+    if settings.process_role in ("api", "cli"):
+        return settings.fcm_delivery_configured and bool(
+            settings.fcm_project_id
+            and settings.fcm_client_email
+            and settings.fcm_private_key_present
+        )
+    return resolve_fcm_config(settings).configured
+
+
 def _build_fcm_access_token(config: FcmConfig) -> str:
     """Exchange a signed service-account JWT assertion for a short-lived OAuth2
     access token (Google's documented server-to-server flow). Deliberately not

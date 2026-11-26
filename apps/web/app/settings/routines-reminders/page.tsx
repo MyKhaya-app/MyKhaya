@@ -13,7 +13,6 @@ import {
   Clock,
   Home as HomeIcon,
   Pencil,
-  Plus,
   Repeat,
   Search,
   SlidersHorizontal,
@@ -42,6 +41,7 @@ import { useActiveHome } from "@/components/use-active-home";
 import { dueCountdownSuffix, routineDueLabel } from "@/app/home/routine-utils";
 import { syncWidgetSnapshot } from "@/components/widget-bridge";
 import { Toast } from "@/components/toast";
+import { useConsumerPrimaryAction } from "@/components/consumer-action-dock";
 import { formatPlate, formatShortDate, vehicleName } from "@/app/driveway/vehicle-display";
 
 // Routines and Reminders stay separate backend domains (separate models,
@@ -941,6 +941,11 @@ export default function RoutinesRemindersPage() {
   }
 
   const canManageAny = canManageRoutines || canManageReminders;
+  useConsumerPrimaryAction(useMemo(() => ({
+    label: "Add",
+    enabled: moduleReleased === true && canManageAny && formKind === null,
+    onActivate: () => setShowCreateMenu(true),
+  }), [canManageAny, formKind, moduleReleased]));
   const scopeWord = scopeTab === "household" ? "household" : "personal";
   const typeWord = typeTab === "all" ? "items" : typeTab === "todos" ? "to-dos" : typeTab;
 
@@ -1251,15 +1256,6 @@ export default function RoutinesRemindersPage() {
 
         {canManageAny && formKind === null && (
           <>
-            <button
-              type="button"
-              className="rr-fab"
-              aria-label="Add"
-              onClick={() => setShowCreateMenu(true)}
-            >
-              <Plus size={22} aria-hidden="true" />
-              <span aria-hidden="true">Add</span>
-            </button>
             {showCreateMenu && (
               <BottomSheet title="Add" onDismiss={() => setShowCreateMenu(false)}>
                 <nav className="sheet-menu" aria-label="Create">

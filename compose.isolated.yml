@@ -1,0 +1,100 @@
+# Standalone Stage 2 verification stack.
+# It intentionally does not include compose.yml or any deployment overlay.
+name: mykhaya-f03-isolated
+
+services:
+  postgres:
+    image: postgres:17.5-alpine3.22
+    env_file:
+      - ./infrastructure/tests/isolated-postgres.env
+    volumes:
+      - mykhaya_f03_postgres:/var/lib/postgresql/data
+      - ./infrastructure/docker/init-db.sh:/docker-entrypoint-initdb.d/10-init.sh:ro
+    networks: [f03-data]
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U postgres -d mykhaya"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  redis:
+    image: redis:8.0.3-alpine3.21
+    command: [redis-server, --save, "", --appendonly, "no"]
+    networks: [f03-data]
+    healthcheck:
+      test: [CMD, redis-cli, ping]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  mailpit:
+    image: axllent/mailpit:v1.27.1
+    networks: [f03-data]
+
+  migrate:
+    build: { context: ., dockerfile: apps/api/Dockerfile }
+    env_file:
+      - ./infrastructure/tests/isolated-common.env
+      - ./infrastructure/tests/isolated-migrate.env
+    command: [alembic, upgrade, head]
+    depends_on:
+      postgres: { condition: service_healthy }
+    networks: [f03-data]
+
+  api:
+    build: { context: ., dockerfile: apps/api/Dockerfile }
+    env_file:
+      - ./infrastructure/tests/isolated-common.env
+      - ./infrastructure/tests/isolated-api.env
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+    networks: [f03-data]
+
+  worker:
+    build: { context: ., dockerfile: apps/api/Dockerfile }
+    env_file:
+      - ./infrastructure/tests/isolated-common.env
+      - ./infrastructure/tests/isolated-worker.env
+    command: [python, -m, mykhaya.worker]
+    # Same as compose.yml: the image HEALTHCHECK probes the API's HTTP port,
+    # which the worker does not serve. Liveness is its operational heartbeat.
+    healthcheck: { disable: true }
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+      mailpit: { condition: service_started }
+    networks: [f03-data]
+
+  scheduler:
+    build: { context: ., dockerfile: apps/api/Dockerfile }
+    env_file:
+      - ./infrastructure/tests/isolated-common.env
+      - ./infrastructure/tests/isolated-scheduler.env
+    command: [python, -m, mykhaya.scheduler]
+    healthcheck: { disable: true }
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_healthy }
+    networks: [f03-data]
+
+  test:
+    profiles: [tests]
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+      target: test
+    env_file:
+      - ./infrastructure/tests/isolated-test.env
+    command: [python, -m, pytest, tests/test_health.py, tests/test_sensitive_crypto.py, -q]
+    depends_on:
+      postgres: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    networks: [f03-data]
+
+volumes:
+  mykhaya_f03_postgres: {}
+
+networks:
+  f03-data:
+    internal: true

@@ -2,15 +2,16 @@
 
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { Car, ChevronRight, Plus, ShieldCheck } from "lucide-react";
+import { Car, ChevronRight, ShieldCheck } from "lucide-react";
 import type { BillingStatus, Member, Vehicle } from "@mykhaya/shared-types";
 import { ApiError, api } from "@mykhaya/api-client";
 import { AppShellContent } from "@/components/app-shell";
 import { FormStatus } from "@/components/form-status";
 import { useActiveHome } from "@/components/use-active-home";
 import { useAuth } from "@/components/auth-provider";
+import { useConsumerPrimaryAction } from "@/components/consumer-action-dock";
 import { VehiclePhoto } from "@/components/vehicle-photo";
-import { MotPill, OwnerAvatar, PlateChip } from "./driveway-ui";
+import { MotPill, OwnerAvatar, PlateChip, VehicleLookupEntryCard } from "./driveway-ui";
 import {
   dayCount,
   firstName,
@@ -82,6 +83,12 @@ export default function DrivewayPage() {
   const [members, setMembers] = useState<Member[]>([]);
   const [error, setError] = useState("");
   const [filter, setFilter] = useState<Filter>("all");
+  useConsumerPrimaryAction(useMemo(() => ({
+    label: "Add vehicle",
+    enabled: moduleReleased === true && billing?.driveway_enabled === true,
+    href: "/driveway/add",
+    onActivate: () => undefined,
+  }), [billing?.driveway_enabled, moduleReleased]));
 
   useEffect(() => {
     if (!activeHomeId) return;
@@ -233,10 +240,8 @@ export default function DrivewayPage() {
           </div>
         )}
 
-        <Link className="button rr-fab drv-fab" href="/driveway/add">
-          <Plus size={20} strokeWidth={2.4} aria-hidden="true" />
-          <span>Add vehicle</span>
-        </Link>
+        <VehicleLookupEntryCard />
+
       </main>
     </AppShellContent>
   );

@@ -28,7 +28,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 from sqlalchemy.orm import relationship as orm_relationship
 
 from mykhaya.colour_palette import DEFAULT_LABEL_COLOUR_HEX, ColourToken
-from mykhaya.db import Base
+from mykhaya.db_base import Base
 from mykhaya.ids import uuid7
 
 # Duplicated from mykhaya.security._HOME_CODE_ALPHABET deliberately: security.py
@@ -4615,6 +4615,11 @@ class Vehicle(UuidTimeMixin, Base):
     country_code: Mapped[str] = mapped_column(String(2))
     registration: Mapped[str | None] = mapped_column(String(20))
     first_registration_date: Mapped[date | None] = mapped_column(Date())
+    # day, month or year; nullable preserves existing rows whose provider
+    # response did not record the original precision.
+    first_registration_precision: Mapped[str | None] = mapped_column(String(10))
+    first_registration_with_dvla_date: Mapped[date | None] = mapped_column(Date())
+    first_registration_with_dvla_precision: Mapped[str | None] = mapped_column(String(10))
     # Sensitive — defaults to Personal visibility even on a Household-scoped
     # vehicle; never included in audit metadata/logs. See class docstring.
     vin: Mapped[str | None] = mapped_column(String(32))
@@ -4634,6 +4639,20 @@ class Vehicle(UuidTimeMixin, Base):
     # mykhaya.driveway_mot after a successful refresh — never by a client.
     tax_status: Mapped[str | None] = mapped_column(String(30))
     tax_due_date: Mapped[date | None] = mapped_column(Date())
+    # DVLA VES supplementary specifications. These are provider-owned and
+    # refreshed only when DVLA returns a non-null value.
+    co2_emissions: Mapped[int | None] = mapped_column(Integer)
+    euro_status: Mapped[str | None] = mapped_column(String(40))
+    type_approval: Mapped[str | None] = mapped_column(String(20))
+    wheel_plan: Mapped[str | None] = mapped_column(String(80))
+    revenue_weight: Mapped[int | None] = mapped_column(Integer)
+    marked_for_export: Mapped[bool | None] = mapped_column(Boolean)
+    marked_as_scrapped: Mapped[bool | None] = mapped_column(Boolean)
+    date_of_last_v5c_issued: Mapped[date | None] = mapped_column(Date())
+    real_driving_emissions: Mapped[str | None] = mapped_column(String(40))
+    vehicle_status: Mapped[str | None] = mapped_column(String(40))
+    automated_vehicle: Mapped[bool | None] = mapped_column(Boolean)
+    art_end_date: Mapped[date | None] = mapped_column(Date())
     # Normalised MOT status: valid | expired | not_yet_due | no_record.
     inspection_status: Mapped[str | None] = mapped_column(String(30))
     # The next MOT date that matters: the current MOT's expiry, or the first

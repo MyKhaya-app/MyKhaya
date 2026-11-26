@@ -35,7 +35,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Python dependencies
-        run: docker run --rm -v "$PWD/apps/api:/src" -w /src python:3.13.5-slim-bookworm sh -c "python -m pip install --upgrade pip && pip install . pip-audit && pip-audit"
+        run: docker run --rm -v "$PWD/apps/api:/src" -w /src python:3.13.18-slim-bookworm sh -c "python -m pip install --upgrade pip && pip install . pip-audit && pip-audit"
   filesystem:
     runs-on: ubuntu-24.04
     steps:
@@ -71,10 +71,54 @@ jobs:
         run: docker run --rm -v "$PWD:/src" anchore/syft:v1.30.0 dir:/src -o cyclonedx-json=/src/mykhaya-sbom.cdx.json
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with: { name: mykhaya-sbom, path: mykhaya-sbom.cdx.json, retention-days: 30 }
+  # Scans the images we actually ship (the API image also runs the worker,
+  # scheduler and migrations), which `filesystem` above cannot see: OS packages
+  # come from the base image and apt, not from files in the repository.
+  # Two passes over each image, nothing suppressed:
+  #   1. a complete report (every severity, fixed or not) published as an
+  #      artifact for triage, so findings without an upstream fix stay visible;
+  #   2. the gate, failing on any HIGH/CRITICAL finding that has a fix
+  #      available. A finding with no released fix can't be remediated by an
+  #      update; it is tracked from the report under
+  #      docs/engineering/ci-security-scanning.md rather than ignored.
+  container-image:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { name: api, dockerfile: apps/api/Dockerfile, target: runtime }
+          - { name: web, dockerfile: apps/web/Dockerfile, target: "" }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build ${{ matrix.name }} image
+        env:
+          DOCKERFILE: ${{ matrix.dockerfile }}
+          TARGET: ${{ matrix.target }}
+          IMAGE: mykhaya-${{ matrix.name }}:scan
+        run: docker build -f "$DOCKERFILE" ${TARGET:+--target "$TARGET"} -t "$IMAGE" .
+      - name: Full vulnerability report (all severities, nothing suppressed)
+        env:
+          IMAGE: mykhaya-${{ matrix.name }}:scan
+          NAME: ${{ matrix.name }}
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$PWD:/out" \
+            aquasec/trivy:0.64.1 image --scanners vuln --format json -o "/out/trivy-$NAME.json" "$IMAGE"
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+            aquasec/trivy:0.64.1 image --scanners vuln --severity HIGH,CRITICAL --format table "$IMAGE"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: ${{ always() }}
+        with: { name: "trivy-image-${{ matrix.name }}", path: "trivy-${{ matrix.name }}.json", retention-days: 30 }
+      - name: Gate on fixable HIGH/CRITICAL vulnerabilities
+        env:
+          IMAGE: mykhaya-${{ matrix.name }}:scan
+        run: |
+          docker run --rm -v /var/run/docker.sock:/var/run/docker.sock \
+            aquasec/trivy:0.64.1 image --scanners vuln --exit-code 1 --severity HIGH,CRITICAL --ignore-unfixed "$IMAGE"
   security-gate:
     runs-on: ubuntu-24.04
     if: ${{ always() }}
-    needs: [secrets, python-dependencies, filesystem, semgrep, checkov, sbom]
+    needs: [secrets, python-dependencies, filesystem, semgrep, checkov, sbom, container-image]
     steps:
       - name: Require every security scanner to pass
         env:
@@ -84,6 +128,7 @@ jobs:
           SEMGREP_RESULT: ${{ needs.semgrep.result }}
           CHECKOV_RESULT: ${{ needs.checkov.result }}
           SBOM_RESULT: ${{ needs.sbom.result }}
+          CONTAINER_IMAGE_RESULT: ${{ needs.container-image.result }}
         run: |
           set -eu
           failed=0
@@ -93,7 +138,8 @@ jobs:
             "filesystem=${FILESYSTEM_RESULT}" \
             "semgrep=${SEMGREP_RESULT}" \
             "checkov=${CHECKOV_RESULT}" \
-            "sbom=${SBOM_RESULT}"; do
+            "sbom=${SBOM_RESULT}" \
+            "container-image=${CONTAINER_IMAGE_RESULT}"; do
             name="${result%%=*}"
             status="${result#*=}"
             if [ "$status" != "success" ]; then

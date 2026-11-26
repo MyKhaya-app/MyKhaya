@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { renderWithConsumerActions } from "@/components/consumer-action-dock.testing";
 import { BudgetEditEntrySheet } from "./budget-edit-entry-sheet";
 import { BudgetAddAction } from "./budget-add-action";
 import { BudgetItemList } from "./budget-item-list";
@@ -174,7 +175,7 @@ describe("Edit spending entry", () => {
 describe("Add fixed cost", () => {
   it("does not send a blank amount as 0, then saves the entered amount unrounded", async () => {
     apiMock.createBudgetItem.mockResolvedValue({});
-    render(<BudgetAddAction homeId="home-1" onRefresh={vi.fn()} />);
+    renderWithConsumerActions(<BudgetAddAction homeId="home-1" onRefresh={vi.fn()} />);
     fireEvent.click(screen.getByRole("button", { name: "Add Budget item" }));
     fireEvent.click(screen.getByRole("button", { name: /Fixed monthly cost/ }));
     await screen.findByRole("option", { name: "Transport" });
@@ -203,7 +204,7 @@ describe("Add fixed cost", () => {
   });
 
   it("shows an end month before the start month on the End month field", async () => {
-    render(<BudgetAddAction homeId="home-1" onRefresh={vi.fn()} />);
+    renderWithConsumerActions(<BudgetAddAction homeId="home-1" onRefresh={vi.fn()} />);
     fireEvent.click(screen.getByRole("button", { name: "Add Budget item" }));
     fireEvent.click(screen.getByRole("button", { name: /Fixed monthly cost/ }));
     await screen.findByRole("option", { name: "Transport" });

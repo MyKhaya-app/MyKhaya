@@ -2,13 +2,16 @@
 
 // Small presentation pieces shared by the Driveway screens. Styles live in
 // styles.css under the scoped .drv-* selectors.
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
+import Link from "next/link";
 import { RefreshCw } from "lucide-react";
-import type { VehicleMot } from "@mykhaya/shared-types";
+import type { VehicleLookupResult, VehicleMot } from "@mykhaya/shared-types";
 import { ApiError, api } from "@mykhaya/api-client";
 import { contrastText } from "@mykhaya/design-tokens";
 import { memberColour } from "@/components/avatar";
-import { formatPlate, initials, type MotTone } from "./vehicle-display";
+import { FormActions, FormField, FormLayout } from "@/components/form-layout";
+import { useActiveHome } from "@/components/use-active-home";
+import { formatPlate, formatShortDate, initials, type MotTone } from "./vehicle-display";
 
 /** UK number plate chip. */
 export function PlateChip({ registration, size = "sm" }: { registration: string | null | undefined; size?: "sm" | "md" }) {
@@ -85,5 +88,62 @@ export function RefreshButton({ busy, onClick, onGreen = false }: { busy: boolea
     >
       <RefreshCw size={18} aria-hidden="true" className={busy ? "drv-spin" : undefined} />
     </button>
+  );
+}
+
+export function VehicleLookupCard() {
+  const { activeHomeId } = useActiveHome();
+  const [registration, setRegistration] = useState("");
+  const [result, setResult] = useState<VehicleLookupResult | null>(null);
+  const [error, setError] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!activeHomeId || busy || !registration.trim()) return;
+    setBusy(true);
+    setError("");
+    try {
+      setResult(await api.lookupVehicle(activeHomeId, { country_code: "GB", registration: registration.trim().toUpperCase() }));
+    } catch (cause) {
+      setResult(null);
+      setError(cause instanceof ApiError ? cause.message : "We couldn't check that vehicle right now.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="drv-lookup-card" aria-labelledby="drv-lookup-heading">
+      <div className="drv-section-heading"><div><p className="drv-eyebrow">Considering a vehicle?</p><h2 id="drv-lookup-heading">Vehicle lookup</h2></div></div>
+      <FormLayout className="details" onSubmit={submit}>
+        <FormField label="Registration / licence plate">
+          {(control) => <input {...control} value={registration} onChange={(event) => setRegistration(event.target.value)} autoCapitalize="characters" maxLength={20} required />}
+        </FormField>
+        {error && <p className="notice error" role="alert">{error}</p>}
+        <FormActions><button className="button secondary" type="submit" disabled={busy || !registration.trim()}>{busy ? "Checking…" : "Check vehicle"}</button></FormActions>
+      </FormLayout>
+      {result?.found && (
+        <div className="drv-card drv-lookup-result" role="status">
+          <div className="drv-vehicle-meta"><PlateChip registration={result.registration} size="md" /><strong>{[result.make, result.model].filter(Boolean).join(" ") || "Vehicle details"}</strong></div>
+          <p className="drv-muted-small">Checked {result.checked_at ? formatShortDate(result.checked_at) : "just now"}</p>
+          <p className="drv-muted">{[result.year, result.fuel_type, result.colour].filter(Boolean).join(" · ") || "Some vehicle details are unavailable."}</p>
+          <p className="drv-muted">{result.tax_status ? `Tax: ${result.tax_status}` : "Tax status unavailable"}{result.mot ? ` · MOT: ${result.mot.status ?? "unavailable"}` : " · MOT history unavailable"}</p>
+          {result.mot?.tests.map((test) => <div className="drv-muted-small" key={`${test.test_number ?? "test"}-${test.test_date}`}><p>{formatShortDate(test.test_date)} · {test.result} · {test.odometer_value != null ? `${test.odometer_value} ${test.odometer_unit ?? ""}` : "mileage unavailable"}</p>{test.defects.map((defect, index) => <p key={`${test.test_number ?? test.test_date}-defect-${index}`}>{defect.dangerous ? "Dangerous: " : ""}{defect.text}</p>)}</div>)}
+          <Link className="drv-button drv-button-primary" href={`/driveway/add?registration=${encodeURIComponent(result.registration ?? registration)}`}>Add to Driveway</Link>
+        </div>
+      )}
+      {result && !result.found && <p className="notice" role="status">{result.message ?? "We couldn't find that registration."}</p>}
+    </section>
+  );
+}
+
+export function VehicleLookupEntryCard() {
+  return (
+    <section className="drv-lookup-card" aria-labelledby="drv-lookup-entry-heading">
+      <div className="drv-section-heading"><div><p className="drv-eyebrow">Considering a vehicle?</p><h2 id="drv-lookup-entry-heading">Vehicle lookup</h2></div></div>
+      <p className="drv-muted">Check a vehicle you might buy without adding it to your household vehicles.</p>
+      <Link className="drv-button drv-button-secondary" href="/driveway/lookup">Open vehicle lookup</Link>
+    </section>
   );
 }

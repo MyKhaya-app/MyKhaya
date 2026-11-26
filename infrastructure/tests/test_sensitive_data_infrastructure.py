@@ -28,6 +28,9 @@ class SensitiveDataInfrastructureTests(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.compose = (ROOT / "compose.yml").read_text(encoding="utf-8")
         cls.test_compose = (ROOT / "compose.test.yml").read_text(encoding="utf-8")
+        cls.dockerignore = (ROOT / ".dockerignore").read_text(encoding="utf-8")
+        cls.web_dockerfile = (ROOT / "apps/web/Dockerfile").read_text(encoding="utf-8")
+        cls.api_dockerfile = (ROOT / "apps/api/Dockerfile").read_text(encoding="utf-8")
         cls.backup = (ROOT / "infrastructure/scripts/backup.sh").read_text(encoding="utf-8")
         cls.restore = (ROOT / "infrastructure/scripts/restore.sh").read_text(encoding="utf-8")
         cls.gitignore = (ROOT / ".gitignore").read_text(encoding="utf-8")
@@ -40,13 +43,19 @@ class SensitiveDataInfrastructureTests(unittest.TestCase):
     def test_deploy_runs_backup_preflight_before_any_change(self) -> None:
         validate = self.deploy[self.deploy.index("validate() {") :]
         self.assertIn("backup_preflight", validate[: validate.index("\n}\n")])
-        update = self.deploy[self.deploy.index("update() {") :]
+        update = self.deploy[self.deploy.index("\nupdate() {") :]
         update = update[: update.index("\n}\n")]
-        first_change = min(
-            update.index(marker)
-            for marker in ("git fetch", "git checkout", "build", "run --rm", "up -d")
-        )
+        first_change = min(update.index(marker) for marker in ("git fetch", "git checkout"))
         self.assertLess(update.index("backup_preflight"), first_change)
+        # After the checkout, update re-executes the release's own script;
+        # its validate() (which runs the preflight again) precedes every
+        # build, migration and container change.
+        self.assertIn("exec sh", update[update.index("git checkout") :])
+        continued = self.deploy[self.deploy.index("continue_update() {") :]
+        continued = continued[: continued.index("\n}\n")]
+        first_change = min(continued.index(marker)
+                           for marker in ("compose build", "run --rm", "up -d"))
+        self.assertLess(continued.index("\n  validate\n"), first_change)
         self.assertIn("sh infrastructure/scripts/backup-preflight.sh", self.deploy)
 
     def test_preflight_covers_every_required_check(self) -> None:
@@ -146,9 +155,96 @@ class SensitiveDataInfrastructureTests(unittest.TestCase):
         self.assertIn("MYKHAYA_BACKUP_AGE_IDENTITY", self.restore)
         self.assertIn("age -d -i", self.restore)
 
+    def test_containers_never_copy_secret_files_into_the_environment(self) -> None:
+        """MK-SEC-001 SEC-093: application secret files are read in-process by
+        the central registry (apps/api/mykhaya/secret_registry.py). No image
+        or shell script may read /run/secrets and export the value instead."""
+        candidates = [
+            *ROOT.glob("apps/*/Dockerfile"),
+            *ROOT.glob("infrastructure/**/*.sh"),
+            *ROOT.glob("infrastructure/**/Dockerfile*"),
+            *ROOT.glob("apps/*/*entrypoint*"),
+            *ROOT.glob("infrastructure/**/*entrypoint*"),
+        ]
+        self.assertIn(ROOT / "apps/api/Dockerfile", candidates)
+        # Explicit exceptions, each reviewed (MK-SEC-001 WP-4):
+        allowed = {
+            # The PostgreSQL bootstrap reads its own password files and hands
+            # them to psql on standard input; it never exports them.
+            "infrastructure/docker/init-db.sh",
+            # The CI check mounts synthetic secrets into disposable containers.
+            "infrastructure/scripts/check-phase1-secrets.sh",
+            # The migration rehearsal (synthetic credentials, nested disposable
+            # daemon) checks the mounts' names and permissions.
+            "infrastructure/tests/dev_secrets_rehearsal.sh",
+            "infrastructure/tests/prod_secrets_rehearsal.sh",
+        }
+        offenders = sorted(
+            path.relative_to(ROOT).as_posix()
+            for path in candidates
+            if path.is_file()
+            and "/run/secrets" in path.read_text(encoding="utf-8", errors="replace")
+            and path.relative_to(ROOT).as_posix() not in allowed
+        )
+        self.assertEqual(offenders, [])
+        bootstrap = (ROOT / "infrastructure/docker/init-db.sh").read_text(encoding="utf-8")
+        self.assertNotRegex(bootstrap, r"(?m)^\s*(export|declare\s+-x)\b")
+
     def test_key_and_backup_material_is_gitignored(self) -> None:
         for pattern in ("/secrets/", "backups/", "*.age"):
             self.assertIn(pattern, self.gitignore.splitlines())
+
+    def test_dockerignore_excludes_local_sensitive_material(self) -> None:
+        lines = set(self.dockerignore.splitlines())
+        for pattern in (
+            ".env",
+            ".env.*",
+            "!.env.example",
+            "secrets/",
+            "backups/",
+            "**/*.pem",
+            "**/*.p8",
+            "**/*firebase-adminsdk-*.json",
+            "**/google-services.json",
+            "*.sql",
+            "*.sql.gz",
+            "*.dump",
+            "*.bak",
+            "**/node_modules/",
+            "**/.next/",
+            "**/test-results/",
+            "**/coverage/",
+            "**/__pycache__/",
+            "**/.pytest_cache/",
+            "**/.ruff_cache/",
+        ):
+            self.assertIn(pattern, lines)
+
+    def test_dockerignore_preserves_all_explicit_dockerfile_inputs(self) -> None:
+        required_inputs = (
+            "package.json",
+            "pnpm-lock.yaml",
+            "pnpm-workspace.yaml",
+            "packages",
+            "apps/web",
+            "apps/web/public",
+            "apps/web/public/fonts/marketing/",
+            "apps/web/public/images/marketing/mykhaya-logo-256.png",
+            "apps/api/pyproject.toml",
+            "apps/api/mykhaya",
+            "apps/api/tests",
+            "apps/api/migrations",
+            "packages/design-tokens",
+            "apps/api/alembic.ini",
+            "docs",
+        )
+        for required in required_inputs:
+            self.assertTrue((ROOT / required.rstrip("/")).exists(), required)
+        self.assertIn("COPY apps/web ./apps/web", self.web_dockerfile)
+        self.assertIn("/workspace/apps/web/public ./apps/web/public", self.web_dockerfile)
+        self.assertIn("COPY apps/api/mykhaya ./mykhaya", self.api_dockerfile)
+        self.assertIn("COPY apps/api/migrations ./migrations", self.api_dockerfile)
+        self.assertIn("COPY docs ./docs", self.api_dockerfile)
 
 
 if __name__ == "__main__":

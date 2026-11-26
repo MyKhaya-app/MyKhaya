@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { ArrowDown, ArrowUp, ChevronRight, ListChecks, MoreVertical, Plus, Search, Trash2 } from "lucide-react";
 import type { BillingStatus, HouseholdList, ListIcon, ListTemplate, ListTemplateScope } from "@mykhaya/shared-types";
@@ -18,6 +18,7 @@ import {
   listBadgeLabel,
 } from "@/components/lists-entitlement-logic";
 import { useActiveHome } from "@/components/use-active-home";
+import { useConsumerPrimaryAction } from "@/components/consumer-action-dock";
 import { LIST_ICON_OPTIONS, listIconImage } from "./list-icons";
 
 // Lists is a native MyKhaya module built on the HouseholdList/HouseholdListItem
@@ -55,6 +56,13 @@ export default function ListsPage() {
   const [movingBusy, setMovingBusy] = useState(false);
   const [moveError, setMoveError] = useState("");
   const [error, setError] = useState("");
+
+  const primaryAction = useMemo(() => ({
+    label: "Add",
+    enabled: moduleReleased === true && billing?.lists_enabled === true,
+    onActivate: () => (showTemplates ? setCreatingTemplate(true) : setCreating(true)),
+  }), [billing?.lists_enabled, moduleReleased, showTemplates]);
+  useConsumerPrimaryAction(primaryAction);
 
   useEffect(() => {
     if (!activeHomeId) return;
@@ -372,11 +380,6 @@ export default function ListsPage() {
         {billing.list_usage && !canCreateList(billing.list_usage) && (
           <p className="empty-mini">{atListLimitMessage(billing.list_usage)}</p>
         )}
-        <button type="button" className="rr-fab" aria-label="Add" onClick={() => showTemplates ? setCreatingTemplate(true) : setCreating(true)}>
-          <Plus size={22} aria-hidden="true" />
-          <span aria-hidden="true">Add</span>
-        </button>
-
         {actionsFor && (
           <BottomSheet title={actionsFor.name} onDismiss={() => setActionsFor(null)}>
             <div className="meal-actions-sheet">

@@ -15,6 +15,7 @@
 # overwritten; files not in the archive are left alone (storage keys are
 # random UUIDs, so archives never collide with unrelated uploads).
 set -eu
+. "$(dirname "$0")/backup-config-mode.sh"
 test "$#" -eq 1 || { echo "Usage: restore-files.sh /absolute/path/backup-files.tar.gz.age" >&2; exit 2; }
 source_file="$1"
 case "$source_file" in /*) ;; *) echo "Use an absolute backup path" >&2; exit 2;; esac

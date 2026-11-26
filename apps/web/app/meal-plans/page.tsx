@@ -47,6 +47,7 @@ import { FormStatus } from "@/components/form-status";
 import { FormField, FormLayout, FormRow, FormSection, FormSheet } from "@/components/form-layout";
 import { useFormFieldErrors } from "@/components/form-field-errors";
 import { useActiveHome } from "@/components/use-active-home";
+import { useConsumerPrimaryAction } from "@/components/consumer-action-dock";
 import { isNativeShell } from "@/components/native-runtime";
 import { pickAvatarFromGallery } from "@/components/native-avatar-picker";
 import { useDaySwipe } from "./use-day-swipe";
@@ -1665,6 +1666,11 @@ function MealsLibraryTab({
   const [recipeImportOpen, setRecipeImportOpen] = useState(false);
   const [importedDraft, setImportedDraft] = useState<RecipeImportDraft | null>(null);
   const [viewingMealId, setViewingMealId] = useState<string | null>(null);
+  const primaryAction = useMemo(() => ({
+    label: "Add meal",
+    onActivate: () => setAddMealChoiceOpen(true),
+  }), []);
+  useConsumerPrimaryAction(primaryAction);
   const [planning, setPlanning] = useState<PlannableMeal | null>(null);
   const [actionsFor, setActionsFor] = useState<MealSummary | null>(null);
   const [addingIngredientsFor, setAddingIngredientsFor] = useState<
@@ -1771,16 +1777,6 @@ function MealsLibraryTab({
           </button>
         </div>
       </div>
-      <button
-        type="button"
-        className="rr-fab"
-        aria-label="Add meal"
-        onClick={() => setAddMealChoiceOpen(true)}
-      >
-        <Plus size={22} aria-hidden="true" />
-        <span aria-hidden="true">Add</span>
-      </button>
-
       {!query && !favouritesOnly && recent.length > 0 && (
         <div className="meal-recent-section">
           <span className="eyebrow">Recently used</span>

@@ -28,10 +28,18 @@ serialised.
 
 from __future__ import annotations
 
+import base64
+import binascii
+import hashlib
+import hmac
+import json
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
+from typing import Literal, cast
 
 import structlog
 from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile, status
@@ -48,16 +56,34 @@ from mykhaya.audit import audit
 from mykhaya.config import Settings, get_settings
 from mykhaya.db import get_db
 from mykhaya.dependencies import AuthContext, auth_context, membership_for
+from mykhaya.driveway_dvla_controls import (
+    DvlaBudgetExceeded,
+    DvlaRedisUnavailable,
+    failure_is_recent,
+    mark_failure,
+    refresh_lock,
+)
 from mykhaya.driveway_mot import (
     MotRefreshRefused,
+    _replace_history,
+    _sync_reminder,
     clear_mot_data,
+    compute_summary,
     is_mot_eligible,
+    mot_provider_available,
     mot_view,
     refresh_vehicle_mot,
 )
 from mykhaya.driveway_mot_nudges import MotNudgePlan, apply_plan, read_plan, remove_plan
+from mykhaya.driveway_mot_provider import (
+    DvsaMotHistoryProvider,
+    MotHistory,
+    MotLookupError,
+    MotVehicleNotFound,
+)
 from mykhaya.driveway_providers import (
     UKDVLAProvider,
+    VehicleLookup,
     VehicleLookupAuthFailed,
     VehicleLookupNotFound,
     VehicleLookupUnavailable,
@@ -72,6 +98,7 @@ from mykhaya.driveway_reminders import (
 from mykhaya.driveway_schemas import (
     VehicleCreate,
     VehicleListResponse,
+    VehicleLookupReportRequest,
     VehicleLookupRequest,
     VehicleLookupResult,
     VehicleMotNudgePlanRequest,
@@ -81,6 +108,7 @@ from mykhaya.driveway_schemas import (
     VehicleMotRefreshResult,
     VehicleMotResponse,
     VehicleReminderCreate,
+    VehicleReportRequest,
     VehicleResponse,
     VehicleUpdate,
 )
@@ -94,6 +122,7 @@ from mykhaya.driveway_sensitive import (
     set_vehicle_vin,
     vehicle_sensitive_ciphertexts,
 )
+from mykhaya.driveway_tax import calculate_vehicle_tax
 from mykhaya.entitlements import require_entitlement
 from mykhaya.features import require_feature
 from mykhaya.household_permissions import Capability, require_capability
@@ -101,15 +130,24 @@ from mykhaya.models import (
     FeatureKey,
     HouseholdRelationship,
     Membership,
+    NotificationDelivery,
     PlatformSetting,
     RoutineScope,
     Vehicle,
 )
+from mykhaya.notifications.engine import notify
+from mykhaya.notifications.templates import render_notification_email
 from mykhaya.rate_limit import enforce_rate_limit
 from mykhaya.routers.reminders import _to_response as _reminder_response
 from mykhaya.schemas import ReminderListResponse, ReminderResponse
 from mykhaya.showcase.guards import is_showcase_home
 from mykhaya.vehicle_photo_storage import get_vehicle_photo_storage, vehicle_photo_filename
+from mykhaya.vehicle_report_pdf import (
+    VehicleReportUnavailable,
+    render_vehicle_report_pdf,
+    sanitise_report_filename,
+)
+from mykhaya.vehicle_report_storage import get_vehicle_report_storage
 
 
 async def _require_driveway(
@@ -129,20 +167,272 @@ async def _require_driveway(
 router = APIRouter(prefix="/homes", tags=["driveway"], dependencies=[Depends(_require_driveway)])
 log = structlog.get_logger()
 
+_LOOKUP_REPORT_TTL_SECONDS = 600
 
-def _may_see_sensitive_fields(vehicle: Vehicle, auth: AuthContext, membership: Membership) -> bool:
-    if vehicle.owner_user_id == auth.user.id:
+
+def _lookup_report_secret(settings: Settings) -> bytes:
+    return settings.secret_key.get_secret_value().encode("utf-8")
+
+
+def _sign_lookup_report(
+    result: VehicleLookupResult, home_id: uuid.UUID, user_id: uuid.UUID, settings: Settings
+) -> str:
+    payload = {
+        "home_id": str(home_id),
+        "user_id": str(user_id),
+        "expires_at": int(datetime.now(UTC).timestamp()) + _LOOKUP_REPORT_TTL_SECONDS,
+        "result": result.model_dump(mode="json"),
+    }
+    encoded = (
+        base64.urlsafe_b64encode(
+            json.dumps(payload, separators=(",", ":"), sort_keys=True).encode()
+        )
+        .decode()
+        .rstrip("=")
+    )
+    signature = hmac.new(
+        _lookup_report_secret(settings), encoded.encode(), hashlib.sha256
+    ).hexdigest()
+    return f"{encoded}.{signature}"
+
+
+def _verify_lookup_report(
+    token: str, home_id: uuid.UUID, user_id: uuid.UUID, settings: Settings
+) -> VehicleLookupResult:
+    try:
+        encoded, signature = token.rsplit(".", 1)
+        expected = hmac.new(
+            _lookup_report_secret(settings), encoded.encode(), hashlib.sha256
+        ).hexdigest()
+        if not hmac.compare_digest(signature, expected):
+            raise ValueError
+        padded = encoded + "=" * (-len(encoded) % 4)
+        payload = json.loads(base64.urlsafe_b64decode(padded.encode()))
+        if payload["home_id"] != str(home_id) or payload["user_id"] != str(user_id):
+            raise ValueError
+        if int(payload["expires_at"]) < int(datetime.now(UTC).timestamp()):
+            raise ValueError
+        return VehicleLookupResult.model_validate(payload["result"])
+    except (
+        ValueError,
+        KeyError,
+        TypeError,
+        json.JSONDecodeError,
+        UnicodeDecodeError,
+        binascii.Error,
+    ):
+        raise HTTPException(
+            status.HTTP_410_GONE, "This one-off lookup report has expired. Run the lookup again."
+        ) from None
+
+
+def _report_payload(vehicle: VehicleResponse, mot: VehicleMotResponse | None) -> dict[str, object]:
+    payload = vehicle.model_dump(mode="json")
+    payload["tax_calculation"] = (
+        vehicle.tax_calculation.model_dump(mode="json") if vehicle.tax_calculation else None
+    )
+    return {"vehicle": payload, "mot": mot.model_dump(mode="json") if mot else None}
+
+
+# Approved 2026-11-18: one budget per user per hour across both report
+# services (saved and one-off) and both formats. Email keeps its own 3/hour.
+_REPORT_DOWNLOAD_LIMIT = 30
+_REPORT_DOWNLOAD_WINDOW_SECONDS = 3600
+
+
+async def _enforce_report_download_limit(
+    request: Request, settings: Settings, auth: AuthContext
+) -> None:
+    await enforce_rate_limit(
+        request,
+        settings,
+        f"driveway-report-download:{auth.user.id}",
+        _REPORT_DOWNLOAD_LIMIT,
+        _REPORT_DOWNLOAD_WINDOW_SECONDS,
+        per_client=False,
+    )
+
+
+async def _render_report(**kwargs: object) -> bytes:
+    """Render, failing closed with a clear 503 if this deployment can't."""
+    try:
+        return await render_vehicle_report_pdf(**kwargs)
+    except VehicleReportUnavailable:
+        log.error("vehicle_report_unavailable")
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE, "Vehicle Reports are temporarily unavailable."
+        ) from None
+
+
+async def _report_email_preflight(request: Request, auth: AuthContext, settings: Settings) -> None:
+    """Every email gate that doesn't need the PDF, checked before rendering."""
+    if not settings.vehicle_report_email_enabled:
+        raise HTTPException(
+            status.HTTP_403_FORBIDDEN, "Emailing Vehicle Reports isn't available yet."
+        )
+    if auth.user.email_verified_at is None or not auth.user.email:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "Verify your MyKhaya account email before emailing a report."
+        )
+    await enforce_rate_limit(request, settings, f"driveway-report-email:{auth.user.id}", 3, 3600)
+
+
+async def _build_saved_report(
+    *,
+    home_id: uuid.UUID,
+    vehicle_id: uuid.UUID,
+    format: Literal["full", "essential"],
+    include_household_details: bool,
+    auth: AuthContext,
+    db: AsyncSession,
+    settings: Settings,
+) -> tuple[bytes, str, VehicleResponse]:
+    membership = await require_capability(home_id, Capability.driveway_view, auth, db)
+    row = await _get_vehicle(db, home_id, vehicle_id)
+    # The serialised, permission-filtered view (registration already decrypted
+    # through driveway_sensitive), never the stored row.
+    vehicle_view = _vehicle_response(row, auth, membership, settings)
+    mot = VehicleMotResponse.model_validate(
+        await mot_view(db, settings, home_id=home_id, vehicle=row)
+    )
+    payload = _report_payload(vehicle_view, mot)
+    # The photo is read only after the same driveway_view check and Home-scoped
+    # lookup that authorise the rest of the report.
+    photo = (
+        await get_vehicle_photo_storage(settings).load(row.photo_key)
+        if include_household_details and row.photo_key
+        else None
+    )
+    data = await _render_report(
+        vehicle=payload["vehicle"],
+        mot=payload["mot"],
+        format=format,
+        generated_at=datetime.now(UTC),
+        source="saved",
+        photo=photo,
+        include_household_details=include_household_details,
+        settings=settings,
+    )
+    return data, sanitise_report_filename(vehicle_view.registration), vehicle_view
+
+
+def _first_present[T](*values: T | None) -> T | None:
+    """The first value that is set (a blank string counts as unset)."""
+    for value in values:
+        if value is None or (isinstance(value, str) and not value.strip()):
+            continue
+        return value
+    return None
+
+
+def _apply_dvla_lookup(vehicle: Vehicle, result: VehicleLookup, *, checked_at: datetime) -> None:
+    """Apply only values DVLA actually returned; manual/user data survives
+    partial provider responses. ``result`` is a VehicleLookup dataclass."""
+    vehicle.lookup_provider = "uk_dvla"
+    vehicle.lookup_status = "success"
+    vehicle.last_successful_lookup = checked_at
+    for field in (
+        "make",
+        "colour",
+        "year",
+        "fuel_type",
+        "engine_size",
+        "first_registration_date",
+        "first_registration_precision",
+        "first_registration_with_dvla_date",
+        "first_registration_with_dvla_precision",
+        "tax_status",
+        "tax_due_date",
+        "co2_emissions",
+        "euro_status",
+        "type_approval",
+        "wheel_plan",
+        "revenue_weight",
+        "marked_for_export",
+        "marked_as_scrapped",
+        "date_of_last_v5c_issued",
+        "real_driving_emissions",
+        "vehicle_status",
+        "automated_vehicle",
+        "art_end_date",
+    ):
+        value = getattr(result, field, None)
+        # Tax and DVLA supplementary fields are provider-owned. General
+        # vehicle details remain user-editable, so a refresh only fills a
+        # missing value and never replaces a user-entered value.
+        provider_owned = field in {
+            "tax_status",
+            "tax_due_date",
+            "co2_emissions",
+            "euro_status",
+            "type_approval",
+            "wheel_plan",
+            "revenue_weight",
+            "marked_for_export",
+            "marked_as_scrapped",
+            "date_of_last_v5c_issued",
+            "real_driving_emissions",
+            "vehicle_status",
+            "automated_vehicle",
+            "art_end_date",
+        }
+        if value is not None and (provider_owned or getattr(vehicle, field, None) is None):
+            setattr(vehicle, field, value)
+
+
+def _mot_lookup_preview(history: MotHistory, *, checked_at: datetime) -> dict[str, object]:
+    summary = compute_summary(history, today=checked_at.date())
+    tests = [
+        {
+            "test_number": record.test_number,
+            "test_date": record.test_date,
+            "completed_at": record.completed_at,
+            "expiry_date": record.expiry_date,
+            "result": record.result,
+            "odometer_value": record.odometer_value,
+            "odometer_unit": record.odometer_unit,
+            "odometer_result": record.odometer_result,
+            "defects": [
+                {"text": defect.text, "category": defect.category, "dangerous": defect.dangerous}
+                for defect in record.defects
+            ],
+        }
+        for record in history.tests
+    ]
+    return {
+        "status": summary.status,
+        "due_date": summary.due_date,
+        "first_mot_due_date": summary.first_mot_due_date,
+        "refreshed_at": checked_at,
+        "tests": tests,
+    }
+
+
+def _may_see_sensitive_fields(
+    vehicle: Vehicle,
+    auth: AuthContext,
+    membership: Membership,
+    *,
+    user_id: uuid.UUID | None = None,
+) -> bool:
+    if vehicle.owner_user_id == (user_id if user_id is not None else auth.user.id):
         return True
     return membership.relationship == HouseholdRelationship.home_admin
 
 
 def _vehicle_response(
-    vehicle: Vehicle, auth: AuthContext, membership: Membership, settings: Settings
+    vehicle: Vehicle,
+    auth: AuthContext,
+    membership: Membership,
+    settings: Settings,
+    *,
+    user_id: uuid.UUID | None = None,
+    refresh_outcome: str | None = None,
 ) -> VehicleResponse:
     # Visibility is decided BEFORE any VIN is read: get_vehicle_vin (which
     # decrypts when the Phase 2D read flag is on) is only ever called for a
     # viewer already entitled to the VIN — never speculatively.
-    reveal_sensitive = _may_see_sensitive_fields(vehicle, auth, membership)
+    reveal_sensitive = _may_see_sensitive_fields(vehicle, auth, membership, user_id=user_id)
     try:
         registration = get_vehicle_registration(vehicle, settings)
         vin = get_vehicle_vin(vehicle, settings) if reveal_sensitive else None
@@ -168,18 +458,35 @@ def _vehicle_response(
         country_code=vehicle.country_code,
         registration=registration,
         first_registration_date=vehicle.first_registration_date,
+        first_registration_precision=vehicle.first_registration_precision,
+        first_registration_with_dvla_date=vehicle.first_registration_with_dvla_date,
+        first_registration_with_dvla_precision=vehicle.first_registration_with_dvla_precision,
         vin=vin,
         lookup_provider=vehicle.lookup_provider,
         lookup_status=vehicle.lookup_status,
         last_successful_lookup=vehicle.last_successful_lookup,
         tax_status=vehicle.tax_status,
         tax_due_date=vehicle.tax_due_date,
+        co2_emissions=vehicle.co2_emissions,
+        euro_status=vehicle.euro_status,
+        type_approval=vehicle.type_approval,
+        wheel_plan=vehicle.wheel_plan,
+        revenue_weight=vehicle.revenue_weight,
+        marked_for_export=vehicle.marked_for_export,
+        marked_as_scrapped=vehicle.marked_as_scrapped,
+        date_of_last_v5c_issued=vehicle.date_of_last_v5c_issued,
+        real_driving_emissions=vehicle.real_driving_emissions,
+        vehicle_status=vehicle.vehicle_status,
+        automated_vehicle=vehicle.automated_vehicle,
+        art_end_date=vehicle.art_end_date,
         inspection_status=vehicle.inspection_status,
         inspection_due_date=vehicle.inspection_due_date,
         photo_version=vehicle.photo_key,
         archived=vehicle.archived_at is not None,
         created_at=vehicle.created_at,
         updated_at=vehicle.updated_at,
+        refresh_outcome=refresh_outcome,
+        tax_calculation=calculate_vehicle_tax(vehicle),
     )
 
 
@@ -344,7 +651,9 @@ async def lookup_vehicle(
             " the vehicle manually.",
         )
     assert settings.dvla_active_api_key is not None and settings.dvla_active_endpoint is not None
-    provider = UKDVLAProvider(settings.dvla_active_api_key, settings.dvla_active_endpoint)
+    provider = UKDVLAProvider(
+        settings.dvla_active_api_key, settings.dvla_active_endpoint, settings=settings
+    )
     try:
         result = await provider.lookup(body.registration)
     except VehicleLookupNotFound:
@@ -371,8 +680,53 @@ async def lookup_vehicle(
             message="We can't check vehicle details right now. You can try again later or add"
             " the vehicle manually.",
         )
+    except (DvlaBudgetExceeded, DvlaRedisUnavailable):
+        await _record_lookup_health(db, success=False, summary="DVLA request budget unavailable")
+        return VehicleLookupResult(
+            found=False,
+            manual_entry_required=True,
+            message=(
+                "Vehicle checks are busy right now. Please try again shortly or add the "
+                "vehicle manually."
+            ),
+        )
+    checked_at = datetime.now(UTC)
+    mot_preview: dict[str, object] | None = None
+    if settings.dvsa_arbitrary_lookup_enabled and await mot_provider_available(db, settings):
+        await enforce_rate_limit(
+            request,
+            settings,
+            f"driveway-dvsa-lookup:{auth.user.id}",
+            settings.dvsa_arbitrary_lookup_rate_limit,
+            3600,
+        )
+        try:
+            history = await DvsaMotHistoryProvider(settings).fetch(result.registration)
+        except (MotLookupError, MotVehicleNotFound):
+            # DVLA remains useful when DVSA is unavailable. The response
+            # explicitly omits MOT data rather than manufacturing a result.
+            history = None
+        if history is not None:
+            mot_preview = _mot_lookup_preview(history, checked_at=checked_at)
+            if result.model is None:
+                result = replace(result, model=history.model)
     await _record_lookup_health(db, success=True, summary="Vehicle lookup succeeded")
-    return VehicleLookupResult(
+    tax_calculation = calculate_vehicle_tax(
+        cast(
+            Vehicle,
+            SimpleNamespace(
+                country_code=country,
+                lookup_provider=provider.name,
+                first_registration_date=result.first_registration_date,
+                first_registration_precision=result.first_registration_precision,
+                type_approval=result.type_approval,
+                engine_size=result.engine_size,
+                co2_emissions=result.co2_emissions,
+                fuel_type=result.fuel_type,
+            ),
+        ),
+    )
+    lookup_response = VehicleLookupResult(
         found=True,
         provider=provider.name,
         registration=result.registration,
@@ -383,12 +737,283 @@ async def lookup_vehicle(
         fuel_type=result.fuel_type,
         engine_size=result.engine_size,
         first_registration_date=result.first_registration_date,
+        first_registration_precision=result.first_registration_precision,
+        first_registration_with_dvla_date=result.first_registration_with_dvla_date,
+        first_registration_with_dvla_precision=result.first_registration_with_dvla_precision,
         tax_status=result.tax_status,
         tax_due_date=result.tax_due_date,
         inspection_status=result.inspection_status,
         inspection_due_date=result.inspection_due_date,
+        co2_emissions=result.co2_emissions,
+        euro_status=result.euro_status,
+        type_approval=result.type_approval,
+        wheel_plan=result.wheel_plan,
+        revenue_weight=result.revenue_weight,
+        marked_for_export=result.marked_for_export,
+        marked_as_scrapped=result.marked_as_scrapped,
+        date_of_last_v5c_issued=result.date_of_last_v5c_issued,
+        real_driving_emissions=result.real_driving_emissions,
+        vehicle_status=result.vehicle_status,
+        automated_vehicle=result.automated_vehicle,
+        art_end_date=result.art_end_date,
+        checked_at=checked_at,
+        mot=mot_preview,
+        tax_calculation=tax_calculation,
         capabilities=list(result.capabilities),
     )
+    lookup_response.report_token = _sign_lookup_report(
+        lookup_response, home_id, auth.user.id, settings
+    )
+    return lookup_response
+
+
+@router.post("/{home_id}/vehicles/{vehicle_id:uuid}/report/pdf")
+async def download_vehicle_report(
+    home_id: uuid.UUID,
+    vehicle_id: uuid.UUID,
+    body: VehicleReportRequest,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, str]:
+    await _enforce_report_download_limit(request, settings, auth)
+    data, filename, _ = await _build_saved_report(
+        home_id=home_id,
+        vehicle_id=vehicle_id,
+        format=body.format,
+        include_household_details=body.include_household_details,
+        auth=auth,
+        db=db,
+        settings=settings,
+    )
+    audit(
+        db,
+        request,
+        "driveway.vehicle.report.generated",
+        auth.user.id,
+        home_id,
+        "vehicle",
+        vehicle_id,
+        {"format": body.format, "household_details": body.include_household_details},
+    )
+    await db.commit()
+    return {
+        "filename": filename,
+        "content_type": "application/pdf",
+        "pdf_base64": base64.b64encode(data).decode("ascii"),
+    }
+
+
+@router.post("/{home_id}/vehicles/lookup/report/pdf")
+async def download_lookup_report(
+    home_id: uuid.UUID,
+    body: VehicleLookupReportRequest,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, str]:
+    await _enforce_report_download_limit(request, settings, auth)
+    await require_capability(home_id, Capability.driveway_view, auth, db)
+    result = _verify_lookup_report(body.report_token, home_id, auth.user.id, settings)
+    payload = result.model_dump(mode="json")
+    data = await _render_report(
+        vehicle=payload,
+        mot=payload.get("mot"),
+        format=body.format,
+        generated_at=datetime.now(UTC),
+        source="lookup",
+        settings=settings,
+    )
+    filename = sanitise_report_filename(result.registration)
+    audit(
+        db,
+        request,
+        "driveway.lookup.report.generated",
+        auth.user.id,
+        home_id,
+        "lookup",
+        None,
+        {"format": body.format},
+    )
+    await db.commit()
+    return {
+        "filename": filename,
+        "content_type": "application/pdf",
+        "pdf_base64": base64.b64encode(data).decode("ascii"),
+    }
+
+
+async def _queue_vehicle_report_email(
+    *,
+    request: Request,
+    home_id: uuid.UUID,
+    auth: AuthContext,
+    db: AsyncSession,
+    settings: Settings,
+    data: bytes,
+    filename: str,
+    format: str,
+    vehicle_name: str,
+    registration: str | None,
+    vehicle_id: uuid.UUID | None,
+) -> None:
+    # The kill switch, verified-email check and 3/hour limit ran in
+    # _report_email_preflight before the PDF was rendered.
+    if len(data) > settings.vehicle_report_max_pdf_bytes:
+        raise HTTPException(
+            status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "This report is too large to email."
+        )
+    request_key = request.headers.get("Idempotency-Key", "").strip()
+    if not request_key:
+        request_key = hashlib.sha256(data).hexdigest()[:32]
+    idempotency_key = (
+        f"driveway-vehicle-report:{auth.user.id}:{home_id}:"
+        f"{vehicle_id or 'lookup'}:{format}:{request_key}"
+    )
+    if (
+        await db.scalar(
+            select(NotificationDelivery.id).where(
+                NotificationDelivery.idempotency_key == f"{idempotency_key}:email"
+            )
+        )
+        is not None
+    ):
+        return
+    key = f"vehicle-report-{uuid.uuid4()}.pdf"
+    await get_vehicle_report_storage(settings).save(key, data)
+    subject, text, html = await render_notification_email(
+        db,
+        settings,
+        "driveway_vehicle_report",
+        {
+            "user_first_name": (auth.user.display_name or "there").split(" ", 1)[0],
+            "vehicle_name": vehicle_name,
+            "registration": registration or "Unavailable",
+            "report_type": "Full" if format == "full" else "Essential",
+            "generated_date": datetime.now(UTC).date().isoformat(),
+            "link": settings.public_web_url,
+        },
+    )
+    await notify(
+        db,
+        settings=settings,
+        recipient_user_id=auth.user.id,
+        notification_type="driveway_vehicle_report",
+        title=subject,
+        body=text,
+        html_body=html,
+        idempotency_key=idempotency_key,
+        group_id=home_id,
+        related_entity_type="vehicle" if vehicle_id else "lookup",
+        related_entity_id=vehicle_id,
+        attachment_storage_key=key,
+        attachment_filename=filename,
+        attachment_storage_kind="vehicle_report",
+        attachment_cleanup=True,
+    )
+    if (
+        await db.scalar(
+            select(NotificationDelivery.id).where(
+                NotificationDelivery.idempotency_key == f"{idempotency_key}:email"
+            )
+        )
+        is None
+    ):
+        await get_vehicle_report_storage(settings).delete(key)
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "Email delivery is not enabled for this account."
+        )
+    audit(
+        db,
+        request,
+        "driveway.vehicle.report.email_queued",
+        auth.user.id,
+        home_id,
+        "vehicle" if vehicle_id else "lookup",
+        vehicle_id,
+        {"format": format},
+    )
+    await db.commit()
+
+
+@router.post("/{home_id}/vehicles/{vehicle_id:uuid}/report/email", status_code=202)
+async def email_vehicle_report(
+    home_id: uuid.UUID,
+    vehicle_id: uuid.UUID,
+    body: VehicleReportRequest,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, str]:
+    await _report_email_preflight(request, auth, settings)
+    data, filename, vehicle_view = await _build_saved_report(
+        home_id=home_id,
+        vehicle_id=vehicle_id,
+        format=body.format,
+        include_household_details=body.include_household_details,
+        auth=auth,
+        db=db,
+        settings=settings,
+    )
+    name = (
+        " ".join(value for value in (vehicle_view.make, vehicle_view.model) if value)
+        or vehicle_view.nickname
+    )
+    await _queue_vehicle_report_email(
+        request=request,
+        home_id=home_id,
+        auth=auth,
+        db=db,
+        settings=settings,
+        data=data,
+        filename=filename,
+        format=body.format,
+        vehicle_name=name,
+        registration=vehicle_view.registration,
+        vehicle_id=vehicle_id,
+    )
+    return {"status": "queued"}
+
+
+@router.post("/{home_id}/vehicles/lookup/report/email", status_code=202)
+async def email_lookup_report(
+    home_id: uuid.UUID,
+    body: VehicleLookupReportRequest,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> dict[str, str]:
+    await _report_email_preflight(request, auth, settings)
+    await require_capability(home_id, Capability.driveway_view, auth, db)
+    result = _verify_lookup_report(body.report_token, home_id, auth.user.id, settings)
+    payload = result.model_dump(mode="json")
+    data = await _render_report(
+        vehicle=payload,
+        mot=payload.get("mot"),
+        format=body.format,
+        generated_at=datetime.now(UTC),
+        source="lookup",
+        settings=settings,
+    )
+    name = " ".join(value for value in (result.make, result.model) if value) or "Vehicle"
+    await _queue_vehicle_report_email(
+        request=request,
+        home_id=home_id,
+        auth=auth,
+        db=db,
+        settings=settings,
+        data=data,
+        filename=sanitise_report_filename(result.registration),
+        format=body.format,
+        vehicle_name=name,
+        registration=result.registration,
+        vehicle_id=None,
+    )
+    return {"status": "queued"}
 
 
 @router.post("/{home_id}/vehicles", response_model=VehicleResponse, status_code=201)
@@ -400,10 +1025,109 @@ async def create_vehicle(
     db: AsyncSession = Depends(get_db),
     settings: Settings = Depends(get_settings),
 ) -> VehicleResponse:
+    # Captured before the pre-provider rollback below, which expires every ORM
+    # object in the session (auth.user and membership included); reading an
+    # expired attribute later would need an implicit async refresh.
+    user_id = auth.user.id
     membership = await require_capability(home_id, Capability.driveway_manage, auth, db)
     await _require_home_member_owner(db, home_id, body.owner_user_id)
     registration = body.registration.strip() if body.registration else None
     vin = body.vin.strip() if body.vin else None
+    dvla_result = None
+    mot_history: MotHistory | None = None
+    if body.country_code.upper() == "GB" and registration and settings.dvla_configured:
+        enabled = await db.scalar(
+            select(PlatformSetting.value).where(PlatformSetting.key == "driveway_dvla_enabled")
+        )
+        if isinstance(enabled, dict) and enabled.get("value") is True:
+            await db.rollback()
+            try:
+                assert settings.dvla_active_api_key is not None
+                assert settings.dvla_active_endpoint is not None
+                dvla_result = await UKDVLAProvider(
+                    settings.dvla_active_api_key,
+                    settings.dvla_active_endpoint,
+                    settings=settings,
+                ).lookup(registration)
+            except (
+                VehicleLookupNotFound,
+                VehicleLookupAuthFailed,
+                VehicleLookupUnavailable,
+                DvlaBudgetExceeded,
+                DvlaRedisUnavailable,
+            ):
+                dvla_result = None
+    if (
+        body.country_code.upper() == "GB"
+        and registration
+        and settings.dvsa_arbitrary_lookup_enabled
+        and await mot_provider_available(db, settings)
+    ):
+        await enforce_rate_limit(
+            request,
+            settings,
+            f"driveway-dvsa-lookup:{user_id}",
+            settings.dvsa_arbitrary_lookup_rate_limit,
+            3600,
+        )
+        try:
+            mot_history = await DvsaMotHistoryProvider(settings).fetch(registration)
+        except (MotLookupError, MotVehicleNotFound):
+            mot_history = None
+    if dvla_result is not None and dvla_result.registration:
+        registration = dvla_result.registration
+    checked_at = datetime.now(UTC) if dvla_result is not None else None
+    # General vehicle details are user-editable: a value the user submitted
+    # (typically DVLA-prefilled on the form, then corrected) always wins, and
+    # provider data only fills what was left empty. This is the same rule the
+    # DVLA refresh applies (_apply_dvla_lookup). The model never comes from
+    # DVLA unless DVLA actually returned one; the vehicle enquiry service has none.
+    make = _first_present(body.make, dvla_result.make if dvla_result else None, None)
+    model = _first_present(
+        body.model,
+        dvla_result.model if dvla_result else None,
+        mot_history.model if mot_history else None,
+    )
+    colour = _first_present(
+        body.colour,
+        dvla_result.colour if dvla_result else None,
+        mot_history.colour if mot_history else None,
+    )
+    year = _first_present(
+        body.year,
+        dvla_result.year if dvla_result else None,
+        mot_history.year_of_manufacture if mot_history else None,
+    )
+    fuel_type = _first_present(
+        body.fuel_type,
+        dvla_result.fuel_type if dvla_result else None,
+        mot_history.fuel_type if mot_history else None,
+    )
+    engine_size = _first_present(
+        body.engine_size,
+        dvla_result.engine_size if dvla_result else None,
+        mot_history.engine_size if mot_history else None,
+    )
+    # The date and its precision always come from the same source.
+    first_registration_precision: str | None
+    if body.first_registration_date is not None:
+        first_registration_date = body.first_registration_date
+        first_registration_precision = body.first_registration_precision
+    elif dvla_result and dvla_result.first_registration_date is not None:
+        first_registration_date = dvla_result.first_registration_date
+        first_registration_precision = dvla_result.first_registration_precision
+    elif mot_history and mot_history.first_registration_date is not None:
+        first_registration_date = mot_history.first_registration_date
+        first_registration_precision = mot_history.first_registration_precision
+    else:
+        first_registration_date = None
+        first_registration_precision = body.first_registration_precision
+    first_registration_with_dvla_date = (
+        dvla_result.first_registration_with_dvla_date if dvla_result else None
+    )
+    first_registration_with_dvla_precision = (
+        dvla_result.first_registration_with_dvla_precision if dvla_result else None
+    )
     # The id is assigned up front (not left to the flush-time default) because
     # the ciphertext's associated data binds it to this exact row.
     vehicle_id = new_vehicle_id()
@@ -417,25 +1141,55 @@ async def create_vehicle(
         owner_user_id=body.owner_user_id,
         scope=RoutineScope.household,
         nickname=" ".join(body.nickname.strip().split()),
-        make=body.make.strip() if body.make else None,
-        model=body.model.strip() if body.model else None,
-        colour=body.colour.strip() if body.colour else None,
-        year=body.year,
-        fuel_type=body.fuel_type.strip() if body.fuel_type else None,
-        engine_size=body.engine_size.strip() if body.engine_size else None,
+        make=make.strip() if isinstance(make, str) else None,
+        model=model.strip() if isinstance(model, str) else None,
+        colour=colour.strip() if isinstance(colour, str) else None,
+        year=year,
+        fuel_type=fuel_type.strip() if isinstance(fuel_type, str) else None,
+        engine_size=engine_size.strip() if isinstance(engine_size, str) else None,
         country_code=body.country_code.upper(),
         registration=registration,
-        first_registration_date=body.first_registration_date,
+        first_registration_date=first_registration_date,
+        first_registration_precision=first_registration_precision,
+        first_registration_with_dvla_date=first_registration_with_dvla_date,
+        first_registration_with_dvla_precision=first_registration_with_dvla_precision,
         vin=vin,
+        lookup_provider="uk_dvla" if dvla_result is not None else None,
+        lookup_status="success" if dvla_result is not None else None,
+        last_successful_lookup=checked_at,
+        tax_status=dvla_result.tax_status if dvla_result else None,
+        tax_due_date=dvla_result.tax_due_date if dvla_result else None,
+        co2_emissions=dvla_result.co2_emissions if dvla_result else None,
+        euro_status=dvla_result.euro_status if dvla_result else None,
+        type_approval=dvla_result.type_approval if dvla_result else None,
+        wheel_plan=dvla_result.wheel_plan if dvla_result else None,
+        revenue_weight=dvla_result.revenue_weight if dvla_result else None,
+        marked_for_export=dvla_result.marked_for_export if dvla_result else None,
+        marked_as_scrapped=dvla_result.marked_as_scrapped if dvla_result else None,
+        date_of_last_v5c_issued=dvla_result.date_of_last_v5c_issued if dvla_result else None,
+        real_driving_emissions=dvla_result.real_driving_emissions if dvla_result else None,
+        vehicle_status=dvla_result.vehicle_status if dvla_result else None,
+        automated_vehicle=dvla_result.automated_vehicle if dvla_result else None,
+        art_end_date=dvla_result.art_end_date if dvla_result else None,
         **ciphertexts,
     )
     db.add(row)
     await db.flush()
+    if mot_history is not None:
+        summary = compute_summary(mot_history, today=datetime.now(UTC).date())
+        await _replace_history(db, row, mot_history)
+        row.inspection_status = summary.status
+        row.inspection_due_date = summary.due_date
+        row.mot_first_due_date = summary.first_mot_due_date
+        row.mot_refreshed_at = datetime.now(UTC)
+        row.mot_refresh_attempted_at = row.mot_refreshed_at
+        row.mot_refresh_outcome = "success"
+        await _sync_reminder(db, row, summary, user_id)
     audit(
         db,
         request,
         "driveway.vehicle.created",
-        auth.user.id,
+        user_id,
         home_id,
         "vehicle",
         row.id,
@@ -443,7 +1197,11 @@ async def create_vehicle(
     )
     await db.commit()
     await db.refresh(row)
-    return _vehicle_response(row, auth, membership, settings)
+    # Same as the DVLA refresh endpoint: re-read what the commit expired so
+    # response serialisation never performs an implicit async refresh.
+    await db.refresh(auth.user)
+    membership = await membership_for(home_id, auth, db)
+    return _vehicle_response(row, auth, membership, settings, user_id=user_id)
 
 
 @router.get("/{home_id}/vehicles/{vehicle_id}", response_model=VehicleResponse)
@@ -457,6 +1215,147 @@ async def get_vehicle(
     membership = await require_capability(home_id, Capability.driveway_view, auth, db)
     row = await _get_vehicle(db, home_id, vehicle_id)
     return _vehicle_response(row, auth, membership, settings)
+
+
+@router.post("/{home_id}/vehicles/{vehicle_id}/refresh", response_model=VehicleResponse)
+async def refresh_vehicle_details(
+    home_id: uuid.UUID,
+    vehicle_id: uuid.UUID,
+    request: Request,
+    auth: AuthContext = Depends(auth_context),
+    db: AsyncSession = Depends(get_db),
+    settings: Settings = Depends(get_settings),
+) -> VehicleResponse:
+    """Refresh DVLA-owned fields for an existing vehicle. Provider values
+    never replace a non-null field with null, and the registration is checked
+    again before the result is committed."""
+    user_id = auth.user.id
+    membership = await require_capability(home_id, Capability.driveway_view, auth, db)
+    await _require_vehicle_manage(db, home_id, auth)
+    await enforce_rate_limit(
+        request,
+        settings,
+        f"driveway-dvla-refresh:{user_id}",
+        settings.driveway_lookup_rate_limit,
+        3600,
+    )
+    row = await _get_vehicle(db, home_id, vehicle_id)
+    if row.country_code.upper() != "GB":
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "DVLA details are only available for UK vehicles."
+        )
+    if not settings.dvla_configured:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE, "Vehicle checks aren't available right now."
+        )
+    enabled = await db.scalar(
+        select(PlatformSetting.value).where(PlatformSetting.key == "driveway_dvla_enabled")
+    )
+    if not isinstance(enabled, dict) or enabled.get("value") is not True:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE, "Vehicle checks aren't available right now."
+        )
+    registration = get_vehicle_registration(row, settings)
+    if not registration:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, "Add this vehicle's registration to refresh it."
+        )
+    now = datetime.now(UTC)
+    last_lookup = row.last_successful_lookup
+    if last_lookup and last_lookup.tzinfo is None:
+        last_lookup = last_lookup.replace(tzinfo=UTC)
+    if last_lookup and now - last_lookup < timedelta(
+        seconds=settings.dvla_refresh_cooldown_seconds
+    ):
+        return _vehicle_response(
+            row,
+            auth,
+            membership,
+            settings,
+            user_id=user_id,
+            refresh_outcome="unchanged",
+        )
+    try:
+        if await failure_is_recent(settings, vehicle_id):
+            raise HTTPException(
+                status.HTTP_503_SERVICE_UNAVAILABLE,
+                "The DVLA check is temporarily backed off after a provider failure.",
+            )
+    except DvlaRedisUnavailable as exc:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "Vehicle checks are temporarily unavailable.",
+        ) from exc
+    await db.rollback()
+    try:
+        async with refresh_lock(settings, vehicle_id) as lock_acquired:
+            if not lock_acquired:
+                return _vehicle_response(
+                    row,
+                    auth,
+                    membership,
+                    settings,
+                    user_id=user_id,
+                    refresh_outcome="busy",
+                )
+            assert settings.dvla_active_api_key is not None
+            assert settings.dvla_active_endpoint is not None
+            result = await UKDVLAProvider(
+                settings.dvla_active_api_key,
+                settings.dvla_active_endpoint,
+                settings=settings,
+            ).lookup(registration)
+    except VehicleLookupNotFound as exc:
+        raise HTTPException(
+            status.HTTP_404_NOT_FOUND, "We couldn't find that registration."
+        ) from exc
+    except (VehicleLookupAuthFailed, VehicleLookupUnavailable) as exc:
+        try:
+            await mark_failure(settings, vehicle_id)
+        except DvlaRedisUnavailable:
+            pass
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE, "Vehicle checks aren't available right now."
+        ) from exc
+    except DvlaBudgetExceeded as exc:
+        raise HTTPException(
+            status.HTTP_429_TOO_MANY_REQUESTS,
+            "The DVLA request budget is currently in use. Try again shortly.",
+            headers={"Retry-After": "2"},
+        ) from exc
+    except DvlaRedisUnavailable as exc:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE,
+            "Vehicle checks are temporarily unavailable.",
+        ) from exc
+    fresh = await _get_vehicle(db, home_id, vehicle_id, for_update=True)
+    if get_vehicle_registration(fresh, settings) != registration:
+        raise HTTPException(status.HTTP_409_CONFLICT, "This vehicle changed. Reload and try again.")
+    _apply_dvla_lookup(fresh, result, checked_at=datetime.now(UTC))
+    audit(
+        db,
+        request,
+        "driveway.vehicle.dvla_refreshed",
+        user_id,
+        home_id,
+        "vehicle",
+        fresh.id,
+        _audit_metadata(fresh),
+    )
+    await db.commit()
+    await db.refresh(fresh)
+    # The rollback before the provider call expires ORM instances loaded from
+    # that transaction, including `membership`. Re-read it after the commit so
+    # response serialization never performs an implicit async refresh on an
+    # expired object (and keeps the authorization decision home-scoped).
+    # Rollback expires the authenticated User instance as well. Refresh it
+    # explicitly before the standard membership lookup rather than adding a
+    # user-ID override to the shared authorization helper.
+    await db.refresh(auth.user)
+    membership = await membership_for(home_id, auth, db)
+    return _vehicle_response(
+        fresh, auth, membership, settings, user_id=user_id, refresh_outcome="refreshed"
+    )
 
 
 @router.post("/{home_id}/vehicles/{vehicle_id}/photo", response_model=VehicleResponse)
