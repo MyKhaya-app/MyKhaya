@@ -3,8 +3,16 @@ ENV PIP_DISABLE_PIP_VERSION_CHECK=1 PIP_NO_CACHE_DIR=1
 # Vehicle Report PDFs (WeasyPrint): Pango/HarfBuzz text layout only. No system
 # fonts are installed on purpose; reports embed the brand fonts below. The test
 # stage builds on this one, so its PDF tests render exactly as the runtime does.
+# These four exact Debian Security pins remediate CVE-2025-6020 without
+# upgrading unrelated OS packages. When Debian supersedes this version, update
+# both stage pins deliberately; a missing version then fails the build closed.
 RUN apt-get update \
-	&& apt-get install -y --no-install-recommends libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz-subset0 \
+	&& apt-get install -y --no-install-recommends \
+		libpam-modules=1.5.2-6+deb12u3 \
+		libpam-modules-bin=1.5.2-6+deb12u3 \
+		libpam-runtime=1.5.2-6+deb12u3 \
+		libpam0g=1.5.2-6+deb12u3 \
+		libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz-subset0 \
 	&& rm -rf /var/lib/apt/lists/*
 # Brand fonts and logo for reports, copied (never fetched) from the web app.
 COPY apps/web/public/fonts/marketing/ /opt/mykhaya/report-assets/fonts/marketing/
@@ -53,9 +61,15 @@ LABEL org.opencontainers.image.title="MyKhaya API" \
 	org.opencontainers.image.created="$MYKHAYA_BUILD_TIME" \
 	org.opencontainers.image.source="https://github.com"
 RUN groupadd --system --gid 10001 mykhaya && useradd --system --uid 10001 --gid mykhaya --home-dir /app mykhaya
-# Vehicle Report PDF rendering (see the builder stage).
+# Vehicle Report PDF rendering (see the builder stage). The runtime starts from
+# the base image independently, so the security pins are repeated here.
 RUN apt-get update \
-	&& apt-get install -y --no-install-recommends libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz-subset0 \
+	&& apt-get install -y --no-install-recommends \
+		libpam-modules=1.5.2-6+deb12u3 \
+		libpam-modules-bin=1.5.2-6+deb12u3 \
+		libpam-runtime=1.5.2-6+deb12u3 \
+		libpam0g=1.5.2-6+deb12u3 \
+		libpango-1.0-0 libpangoft2-1.0-0 libharfbuzz-subset0 \
 	&& rm -rf /var/lib/apt/lists/*
 COPY --from=builder /opt/mykhaya/report-assets /opt/mykhaya/report-assets
 # The root filesystem is read-only in every environment (compose.yml); the

@@ -41,6 +41,12 @@ review date, then recheck it when Debian publishes a fix. A fixable finding is
 remediated by rebuilding on an updated base image or package, never by
 ignoring it.
 
+When a minimal package-only remediation is safer than a broad OS upgrade, the
+Dockerfile may pin the exact fixed Debian package version in every shipped stage.
+Those pins are deliberate fail-closed build inputs: when Debian supersedes the
+version, the pin must be reviewed and advanced to the next fixed version rather
+than silently resolving an unrelated package set.
+
 Because Gitleaks scans every fetched ref, a release branch's security run can
 report a finding that exists only on another branch (for example `dev`). The
 candidate's `.gitleaksignore` must then carry that fingerprint too.
