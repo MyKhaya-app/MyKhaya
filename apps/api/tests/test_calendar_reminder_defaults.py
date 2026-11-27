@@ -10,7 +10,7 @@ are inserted directly so start times, recurrence and attendance are fully contro
 import uuid
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
-from datetime import UTC, date, datetime, time, timedelta
+from datetime import UTC, date, datetime, time, timedelta, tzinfo
 from zoneinfo import ZoneInfo, available_timezones
 
 import pytest
@@ -421,12 +421,24 @@ def all_day_start(days_ahead: int = 3) -> datetime:
 
 
 @pytest.mark.asyncio
-async def test_all_day_event_reminds_at_each_attendees_all_day_time(client: AsyncClient) -> None:
+async def test_all_day_event_reminds_at_each_attendees_all_day_time(
+    client: AsyncClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
     home = await make_home(client)
     await set_preferences(home.owner_id, all_day_reminder_time=time(9, 0))
     # Includes seconds, which the API allows — they must survive the round trip to delivery.
     await set_preferences(home.member_id, all_day_reminder_time=time(18, 30, 15))
-    start = all_day_start()
+    reference_now = datetime(2026, 11, 27, 12, 0, tzinfo=ZoneInfo("Europe/London"))
+    start = datetime(2026, 11, 30, tzinfo=UTC)
+
+    class FixedDateTime(datetime):
+        @classmethod
+        def now(cls, tz: tzinfo | None = None) -> datetime:
+            if tz is None:
+                return reference_now.replace(tzinfo=None)
+            return reference_now.astimezone(tz)
+
+    monkeypatch.setattr(reminders, "datetime", FixedDateTime)
     event_id = await insert_event(home, start_at=start, is_all_day=True)
 
     owner_due = start.replace(hour=9, minute=0)
@@ -448,7 +460,7 @@ async def test_all_day_event_reminds_at_each_attendees_all_day_time(client: Asyn
     for user_id in (home.owner_id, home.member_id):
         received = await reminders_received(user_id, event_id)
         assert len(received) == 1
-        assert "today" in received[0].body
+        assert received[0].body == "Reminder test starts on Monday 30 November."
 
 
 @pytest.mark.asyncio
