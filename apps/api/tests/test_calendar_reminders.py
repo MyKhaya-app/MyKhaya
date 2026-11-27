@@ -507,7 +507,7 @@ async def test_deliver_reminder_is_idempotent_per_recipient(client: AsyncClient)
 async def test_recurring_weekly_event_reminder_uses_future_occurrence(
     client: AsyncClient,
 ) -> None:
-    await create_verified_user(client, unique_email("recur"), "Recurring Owner")
+    owner_id = await create_verified_user(client, unique_email("recur"), "Recurring Owner")
     home_id = await create_home_with_calendar(client)
     # Base occurrence is far in the past; the scan must find the *next future*
     # occurrence's reminder, not miss the series because the base row is stale.
@@ -540,6 +540,18 @@ async def test_recurring_weekly_event_reminder_uses_future_occurrence(
         assert len(rows) == 1
         occurrence_start = datetime.fromisoformat(rows[0].payload["occurrence_start"])
         assert occurrence_start > datetime.now(UTC)
+        await deliver_event_reminder(db, get_settings(), event_id, occurrence_start.isoformat(), 5)
+        await db.commit()
+
+    async with SessionFactory() as db:
+        notification = await db.scalar(
+            select(Notification).where(
+                Notification.recipient_user_id == owner_id,
+                Notification.notification_type == "event_reminder",
+            )
+        )
+        assert notification is not None
+        assert "starts today at" in notification.body
 
 
 @pytest.mark.asyncio

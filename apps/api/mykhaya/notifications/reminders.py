@@ -126,28 +126,51 @@ def _reminder_when_and_location(
     *,
     is_all_day: bool,
     location_text: str | None,
+    delivered_at: datetime | None = None,
 ) -> tuple[str, str]:
-    """Pre-formats the two dynamic fragments (when the event starts, and an
-    optional location suffix) that calendar.event.reminder's template
-    interpolates — all the actual time-zone/wording logic stays here in
-    Python; the template itself only ever does plain text substitution.
-    `is_all_day`/`location_text` are the EFFECTIVE (possibly occurrence-
-    overridden) values — the caller passes the base event's own when there
-    is no override, so this function never has to know the difference."""
+    """Pre-format the dynamic fragments for the calendar reminder template.
+
+    Relative wording is based on calendar dates in the event's configured
+    timezone, not elapsed UTC hours.  All-day event starts are stored at UTC
+    midnight as a calendar-date value, so their date is read in UTC while the
+    delivery date is read in the calendar timezone.  The effective occurrence
+    is supplied by the caller, which is important for recurring events.
+    """
     tz: tzinfo
     try:
         tz = ZoneInfo(event.timezone)
     except ZoneInfoNotFoundError:
         tz = UTC
     local_start = occurrence_start.astimezone(tz)
-    if reminder_minutes == 0:
-        when = "now"
-    elif is_all_day:
-        when = "today"
+
+    delivery_instant = delivered_at or datetime.now(UTC)
+    delivery_date = delivery_instant.astimezone(tz).date()
+    event_date = occurrence_start.astimezone(UTC).date() if is_all_day else local_start.date()
+    day_delta = (event_date - delivery_date).days
+
+    if is_all_day:
+        if day_delta == 0:
+            when = "today"
+        elif day_delta == 1:
+            when = "tomorrow"
+        else:
+            when = f"on {_calendar_date_text(event_date, delivery_date.year)}"
     else:
-        when = f"at {local_start.strftime('%H:%M')}"
+        time_text = local_start.strftime("%H:%M")
+        if day_delta == 0:
+            when = f"today at {time_text}"
+        elif day_delta == 1:
+            when = f"at {time_text} tomorrow"
+        else:
+            when = f"on {_calendar_date_text(event_date, delivery_date.year)} at {time_text}"
     location = f" at {location_text}" if location_text else ""
     return when, location
+
+
+def _calendar_date_text(value: date, delivery_year: int) -> str:
+    """Format a calendar date, adding the year only across a year boundary."""
+    text = f"{value.strftime('%A')} {value.day} {value.strftime('%B')}"
+    return f"{text} {value.year}" if value.year != delivery_year else text
 
 
 def _minutes(value: Any) -> ColumnElement[timedelta]:
@@ -630,6 +653,7 @@ async def deliver_event_reminder(
         reminder_minutes,
         is_all_day=matching.is_all_day,
         location_text=matching.location_text,
+        delivered_at=datetime.now(UTC),
     )
     _subject, body = await render_notification(
         db,
